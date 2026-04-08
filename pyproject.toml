@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "prompt-runner"
+version = "0.1.0"
+description = "Run prompt/validator pairs from a markdown file through the Claude CLI with a revision loop"
+requires-python = ">=3.11"
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+prompt-runner = "prompt_runner.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src/cli"]
+include = ["prompt_runner*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
