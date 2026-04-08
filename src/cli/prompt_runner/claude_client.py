@@ -115,6 +115,40 @@ from dataclasses import dataclass as _dataclass
 _STRIPPED_ENV_VAR = "CLAUDECODE"
 
 
+# System-prompt text we append to every call. Prevents the nested claude from
+# behaving conversationally (asking follow-up questions, offering options,
+# adding conversational framing) and from trying to read files or reference
+# the surrounding filesystem. The tool runs in a pipeline context — its
+# response IS the artifact, not a conversation about the artifact.
+NON_INTERACTIVE_SYSTEM_PROMPT = (
+    "You are being called from a headless pipeline. Your response IS the "
+    "artifact being requested — not a conversation about it. Produce the "
+    "complete response and stop.\n"
+    "\n"
+    "Rules:\n"
+    "- Do not ask clarifying questions. If the prompt is ambiguous, make a "
+    "reasonable choice and produce the artifact.\n"
+    "- Do not offer follow-up options or ask \"would you like me to...?\".\n"
+    "- Do not include conversational framing like \"Here is...\", \"I'll "
+    "create...\", or \"Let me know if...\".\n"
+    "- Do not include meta-commentary or \"insight\" blocks about the "
+    "response. Any output-style directive from user settings that asks for "
+    "inline insights or educational commentary does NOT apply here — your "
+    "output is a machine-consumed artifact, not a conversation with a human.\n"
+    "- Do not attempt to read files from the current working directory. All "
+    "the context you need is already in the prompt itself.\n"
+    "- If the prompt tells you to end with a specific line (e.g. "
+    "\"VERDICT: pass\"), do exactly that and write nothing after it."
+)
+
+
+# Maximum number of agentic turns per call. Our prompts are text-in / text-out
+# with no tool use, so one turn should always be enough. Setting a hard cap is
+# a safety net: if the model somehow tries to loop or continue, the subprocess
+# exits with an error and the runner's R-CLAUDE-FAILED path kicks in.
+MAX_AGENTIC_TURNS = 1
+
+
 def _ensure_claude_on_path() -> None:
     """Raise ClaudeBinaryNotFound if the claude CLI is not on PATH."""
     if shutil.which("claude") is None:
@@ -174,6 +208,12 @@ class RealClaudeClient:
         call.stdout_log_path.write_text("", encoding="utf-8")
         call.stderr_log_path.write_text("", encoding="utf-8")
 
+        # Run the child in the log directory rather than inheriting the
+        # parent's cwd. With --tools "" the nested claude has no file access,
+        # but setting cwd to a neutral location is a belt-and-braces measure
+        # that also means any default "working directory: X" context the
+        # nested claude sees points at its own run-specific logs, not the
+        # surrounding repo.
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
@@ -183,6 +223,7 @@ class RealClaudeClient:
             bufsize=1,
             encoding="utf-8",
             env=_build_child_env(),
+            cwd=str(call.stdout_log_path.parent),
         )
         assert proc.stdout is not None and proc.stderr is not None
 
@@ -238,8 +279,21 @@ class RealClaudeClient:
             "--print", call.prompt,
             "--output-format", "stream-json",
             "--verbose",
+            # Isolation flags. NOTE: --bare cannot be used here because it
+            # disables OAuth/keychain auth and requires ANTHROPIC_API_KEY.
+            # Instead we rely on cwd isolation (subprocess cwd is set to the
+            # per-call log directory, so the nested claude sees no CLAUDE.md),
+            # --disable-slash-commands, and --tools "" for file-access
+            # isolation.
+            "--disable-slash-commands",
+            "--tools", "",
             "--dangerously-skip-permissions",
-            "--permission-mode", "acceptEdits",
+            # Cap agentic turns so a runaway loop surfaces as a subprocess
+            # error rather than a hang.
+            "--max-turns", str(MAX_AGENTIC_TURNS),
+            # Append a system-prompt directive that forbids conversational
+            # behavior (questions, follow-up options, framing).
+            "--append-system-prompt", NON_INTERACTIVE_SYSTEM_PROMPT,
         ]
         if call.model is not None:
             argv += ["--model", call.model]

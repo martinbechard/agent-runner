@@ -219,17 +219,39 @@ def test_real_client_argv_uses_session_id_on_first_call(monkeypatch, log_paths):
 
     def fake_popen(argv, *a, **k):
         captured["argv"] = argv
+        captured["cwd"] = k.get("cwd")
         return _FakeProcess(stdout_lines=[_assistant_event("x")], stderr_lines=[])
 
     monkeypatch.setattr("subprocess.Popen", fake_popen)
     client = RealClaudeClient()
     client.call(_call(stdout_log, stderr_log))
-    assert "--session-id" in captured["argv"]
-    assert "--resume" not in captured["argv"]
+    argv = captured["argv"]
+    assert "--session-id" in argv
+    assert "--resume" not in argv
     # stream-json format flags must be present.
-    assert "--output-format" in captured["argv"]
-    assert "stream-json" in captured["argv"]
-    assert "--verbose" in captured["argv"]
+    assert "--output-format" in argv
+    assert "stream-json" in argv
+    assert "--verbose" in argv
+    # Isolation flags. --bare is intentionally NOT used (breaks keychain auth).
+    assert "--bare" not in argv
+    assert "--disable-slash-commands" in argv
+    assert "--tools" in argv
+    # --tools is followed by empty string (disable all tools).
+    tools_idx = argv.index("--tools")
+    assert argv[tools_idx + 1] == ""
+    assert "--dangerously-skip-permissions" in argv
+    # Max agentic turns cap.
+    assert "--max-turns" in argv
+    max_turns_idx = argv.index("--max-turns")
+    assert argv[max_turns_idx + 1] == "1"
+    # Non-interactive system prompt is appended.
+    assert "--append-system-prompt" in argv
+    sp_idx = argv.index("--append-system-prompt")
+    sys_prompt = argv[sp_idx + 1]
+    assert "Do not ask clarifying questions" in sys_prompt
+    assert "Do not offer follow-up options" in sys_prompt
+    # Subprocess cwd is set to the log directory (not inherited from parent).
+    assert captured["cwd"] == str(stdout_log.parent)
 
 
 def test_real_client_argv_uses_resume_on_subsequent_call(monkeypatch, log_paths):
