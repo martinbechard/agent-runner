@@ -116,3 +116,82 @@ def test_strips_fences_from_body():
         assert not pair.generation_prompt.endswith("```")
         assert not pair.validation_prompt.startswith("```")
         assert not pair.validation_prompt.endswith("```")
+
+
+def test_error_no_blocks():
+    with pytest.raises(ParseError) as exc_info:
+        parse_file(FIXTURES / "no-blocks.md")
+    err = exc_info.value
+    assert err.error_id == "E-NO-BLOCKS"
+    assert '"Empty Section"' in err.message
+    assert "line 1" in err.message  # heading line
+    assert "Add" in err.message  # repair verb
+
+
+def test_error_missing_validation():
+    with pytest.raises(ParseError) as exc_info:
+        parse_file(FIXTURES / "missing-validator.md")
+    err = exc_info.value
+    assert err.error_id == "E-MISSING-VALIDATION"
+    assert '"Incomplete"' in err.message
+    assert "generation prompt" in err.message
+    assert "validation prompt" in err.message
+    assert "Add" in err.message
+
+
+def test_error_unclosed_generation():
+    with pytest.raises(ParseError) as exc_info:
+        parse_file(FIXTURES / "unclosed-generation.md")
+    err = exc_info.value
+    assert err.error_id == "E-UNCLOSED-GENERATION"
+    assert '"Unclosed Generator"' in err.message
+    assert "generation prompt" in err.message
+    assert "Add" in err.message
+
+
+def test_error_unclosed_validation():
+    with pytest.raises(ParseError) as exc_info:
+        parse_file(FIXTURES / "unclosed-validation.md")
+    err = exc_info.value
+    assert err.error_id == "E-UNCLOSED-VALIDATION"
+    assert '"Unclosed Validator"' in err.message
+    assert "validation prompt" in err.message
+
+
+def test_error_extra_block():
+    with pytest.raises(ParseError) as exc_info:
+        parse_file(FIXTURES / "three-fences.md")
+    err = exc_info.value
+    assert err.error_id == "E-EXTRA-BLOCK"
+    assert '"Too Many Blocks"' in err.message
+    assert "third code block" in err.message
+
+
+def test_no_bare_fence_jargon_in_error_messages():
+    """Every ParseError message must avoid the bare word 'fence'."""
+    fixtures_and_ids = [
+        ("no-blocks.md", "E-NO-BLOCKS"),
+        ("missing-validator.md", "E-MISSING-VALIDATION"),
+        ("unclosed-generation.md", "E-UNCLOSED-GENERATION"),
+        ("unclosed-validation.md", "E-UNCLOSED-VALIDATION"),
+        ("three-fences.md", "E-EXTRA-BLOCK"),
+    ]
+    bare_fence = re.compile(r"\bfence\b", re.IGNORECASE)
+    for filename, _ in fixtures_and_ids:
+        with pytest.raises(ParseError) as exc_info:
+            parse_file(FIXTURES / filename)
+        assert bare_fence.search(exc_info.value.message) is None, (
+            f"{filename}: error message uses bare word 'fence': "
+            f"{exc_info.value.message}"
+        )
+
+
+def test_error_ids_are_stable():
+    from prompt_runner.parser import ERROR_IDS
+    assert ERROR_IDS == (
+        "E-NO-BLOCKS",
+        "E-MISSING-VALIDATION",
+        "E-UNCLOSED-GENERATION",
+        "E-UNCLOSED-VALIDATION",
+        "E-EXTRA-BLOCK",
+    )
