@@ -61,6 +61,12 @@
 - **Filename pattern:** `PascalCase.tsx` for components and pages, `kebab-case.ts` for non-component modules (hooks, utilities).
 - **Tests location:** `tests/web/` — mirror path, `<module>.test.tsx`.
 
+### src/shared/
+- **Purpose:** TypeScript types, interfaces, and constants that are consumed by both the server and the web frontend and must not live in either alone.
+- **Signals:** type or interface shared across `src/server/` and `src/web/`, API contract types, shared enums, cross-boundary DTOs, "both the server and the frontend need to agree on".
+- **Filename pattern:** `kebab-case.ts`
+- **Tests location:** `tests/shared/` — mirror path, `<module>.test.ts`.
+
 ### tests/cli/
 - **Purpose:** Python unit tests mirroring `src/cli/`.
 - **Signals:** `def test_`, `pytest`, fixtures importing from `src/cli/`.
@@ -88,4 +94,5 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-08 — src/shared/ added — TypeScript types shared between server and web frontend have no home in either src/server/ or src/web/; a neutral shared layer is needed.
 <!-- Format: YYYY-MM-DD — <category added> — <one-line reason> -->
