@@ -99,11 +99,20 @@ class DryRunClaudeClient:
         return ClaudeResponse(stdout=placeholder, stderr="", returncode=0)
 
 
+import json
+import os
 import shutil
 import subprocess
 import sys
 import threading
 from dataclasses import dataclass as _dataclass
+
+
+# Environment variable the parent Claude Code process sets. Removing it from
+# the child's environment allows a nested claude -p invocation to work
+# correctly when prompt-runner is itself being run from inside Claude Code.
+# (Without this, the child claude may refuse to start or behave oddly.)
+_STRIPPED_ENV_VAR = "CLAUDECODE"
 
 
 def _ensure_claude_on_path() -> None:
@@ -115,22 +124,40 @@ def _ensure_claude_on_path() -> None:
         )
 
 
+def _build_child_env() -> dict:
+    """Copy the current env and strip CLAUDECODE so a child claude can spawn."""
+    env = os.environ.copy()
+    env.pop(_STRIPPED_ENV_VAR, None)
+    return env
+
+
 @_dataclass
 class RealClaudeClient:
-    """Popen-backed streaming client.
+    """Popen-backed streaming client using stream-json output format.
+
+    Why stream-json rather than text: when claude's stdout is a pipe (not a
+    TTY), it block-buffers text output — so nothing reaches us until a large
+    buffer fills, defeating live streaming. stream-json emits one JSON event
+    per line, explicitly flushed, which gives us true line-by-line streaming.
+    We parse each event's assistant-text blocks and both display them to the
+    terminal live AND accumulate them into a plain-text response string for
+    the runner (which stores it in iter-NN-<role>.md).
 
     On each call():
-      1. Builds an argv for `claude -p --output-format text ...`.
-      2. Spawns the subprocess with pipes for stdin/stdout/stderr.
-      3. Writes the prompt to stdin and closes it.
-      4. Starts a background thread that reads stderr to an in-memory buffer
-         AND the stderr_log_path (prevents pipe-buffer deadlock).
-      5. Iterates stdout line-by-line on the main thread, writing each line to
-         sys.stdout (indented), to an in-memory buffer, and to stdout_log_path.
-      6. Waits for the subprocess, joins the stderr thread, and returns the
-         ClaudeResponse.
-      7. If returncode != 0, raises ClaudeInvocationError carrying the partial
-         response.
+      1. Builds an argv for `claude --print <prompt> --output-format stream-json --verbose ...`.
+      2. Spawns the subprocess with a stripped CLAUDECODE env so a nested
+         claude can work when prompt-runner is itself run from Claude Code.
+      3. Starts a background thread reading stderr into an in-memory buffer
+         and the stderr log file (prevents pipe-buffer deadlock).
+      4. Iterates stdout line by line on the main thread. Each line is:
+           - written verbatim to stdout_log_path (raw NDJSON audit trail),
+           - parsed as a JSON event,
+           - if the event is an assistant-message-with-text-blocks, the text
+             is printed to sys.stdout indented AND appended to an in-memory
+             text buffer that becomes ClaudeResponse.stdout.
+      5. Waits for the subprocess, joins the stderr thread, and returns the
+         ClaudeResponse. Raises ClaudeInvocationError with the partial
+         response if returncode != 0.
     """
 
     def __post_init__(self) -> None:
@@ -149,17 +176,15 @@ class RealClaudeClient:
 
         proc = subprocess.Popen(
             argv,
-            stdin=subprocess.PIPE,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
             bufsize=1,
             encoding="utf-8",
+            env=_build_child_env(),
         )
-        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
-
-        proc.stdin.write(call.prompt)
-        proc.stdin.close()
+        assert proc.stdout is not None and proc.stderr is not None
 
         stderr_buffer: list[str] = []
 
@@ -174,21 +199,32 @@ class RealClaudeClient:
         stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
         stderr_thread.start()
 
-        stdout_buffer: list[str] = []
+        # Reconstructed plain text from assistant events — this becomes
+        # response.stdout, which the runner writes to iter-NN-<role>.md.
+        text_buffer: list[str] = []
+
         with open(call.stdout_log_path, "a", encoding="utf-8") as log:
             for line in proc.stdout:
-                indented = "    " + line if not line.startswith("    ") else line
-                sys.stdout.write(indented)
-                sys.stdout.flush()
-                stdout_buffer.append(line)
+                # Raw NDJSON line goes to the log unchanged.
                 log.write(line)
                 log.flush()
+                # Extract text blocks from assistant events.
+                text = _extract_assistant_text(line)
+                if text:
+                    text_buffer.append(text)
+                    # Display indented so it visually nests under stream_header.
+                    for display_line in text.splitlines(keepends=True):
+                        sys.stdout.write("    " + display_line)
+                    if not text.endswith("\n"):
+                        sys.stdout.write("\n")
+                    sys.stdout.flush()
 
         returncode = proc.wait()
         stderr_thread.join()
 
+        reconstructed = "".join(text_buffer)
         response = ClaudeResponse(
-            stdout="".join(stdout_buffer),
+            stdout=reconstructed,
             stderr="".join(stderr_buffer),
             returncode=returncode,
         )
@@ -198,7 +234,14 @@ class RealClaudeClient:
 
     @staticmethod
     def _build_argv(call: ClaudeCall) -> list[str]:
-        argv = ["claude", "-p", "--output-format", "text"]
+        argv = [
+            "claude",
+            "--print", call.prompt,
+            "--output-format", "stream-json",
+            "--verbose",
+            "--dangerously-skip-permissions",
+            "--permission-mode", "acceptEdits",
+        ]
         if call.model is not None:
             argv += ["--model", call.model]
         if call.new_session:
@@ -206,3 +249,34 @@ class RealClaudeClient:
         else:
             argv += ["--resume", call.session_id]
         return argv
+
+
+def _extract_assistant_text(ndjson_line: str) -> str:
+    """Return the concatenated text of all text blocks in an assistant event.
+
+    Returns empty string if the line is not a parseable JSON object, is not
+    an assistant event, or contains no text blocks. Tool-use blocks and
+    non-assistant event types (system, user, result) are ignored — they are
+    preserved in the raw stdout_log but not surfaced to the runner.
+    """
+    line = ndjson_line.strip()
+    if not line:
+        return ""
+    try:
+        event = json.loads(line)
+    except (json.JSONDecodeError, ValueError):
+        return ""
+    if not isinstance(event, dict) or event.get("type") != "assistant":
+        return ""
+    message = event.get("message", {})
+    if not isinstance(message, dict):
+        return ""
+    pieces: list[str] = []
+    for block in message.get("content", []) or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "text":
+            text_value = block.get("text", "")
+            if isinstance(text_value, str) and text_value:
+                pieces.append(text_value)
+    return "".join(pieces)
