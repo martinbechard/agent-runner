@@ -156,6 +156,7 @@ def test_error_unclosed_validation():
     assert err.error_id == "E-UNCLOSED-VALIDATION"
     assert '"Unclosed Validator"' in err.message
     assert "validation prompt" in err.message
+    assert "Add" in err.message
 
 
 def test_error_extra_block():
