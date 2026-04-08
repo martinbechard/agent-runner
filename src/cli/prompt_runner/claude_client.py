@@ -97,3 +97,112 @@ class DryRunClaudeClient:
             f"model={call.model}, prompt_len={len(call.prompt)}"
         )
         return ClaudeResponse(stdout=placeholder, stderr="", returncode=0)
+
+
+import shutil
+import subprocess
+import sys
+import threading
+from dataclasses import dataclass as _dataclass
+
+
+def _ensure_claude_on_path() -> None:
+    """Raise ClaudeBinaryNotFound if the claude CLI is not on PATH."""
+    if shutil.which("claude") is None:
+        raise ClaudeBinaryNotFound(
+            "cannot find the 'claude' command on PATH. "
+            "Install the Claude CLI and make sure 'claude' is on your PATH."
+        )
+
+
+@_dataclass
+class RealClaudeClient:
+    """Popen-backed streaming client.
+
+    On each call():
+      1. Builds an argv for `claude -p --output-format text ...`.
+      2. Spawns the subprocess with pipes for stdin/stdout/stderr.
+      3. Writes the prompt to stdin and closes it.
+      4. Starts a background thread that reads stderr to an in-memory buffer
+         AND the stderr_log_path (prevents pipe-buffer deadlock).
+      5. Iterates stdout line-by-line on the main thread, writing each line to
+         sys.stdout (indented), to an in-memory buffer, and to stdout_log_path.
+      6. Waits for the subprocess, joins the stderr thread, and returns the
+         ClaudeResponse.
+      7. If returncode != 0, raises ClaudeInvocationError carrying the partial
+         response.
+    """
+
+    def __post_init__(self) -> None:
+        _ensure_claude_on_path()
+
+    def call(self, call: ClaudeCall) -> ClaudeResponse:
+        argv = self._build_argv(call)
+        sys.stdout.write(call.stream_header + "\n")
+        sys.stdout.flush()
+
+        # Truncate log files at the start of the call; we append during streaming.
+        call.stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
+        call.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+        call.stdout_log_path.write_text("", encoding="utf-8")
+        call.stderr_log_path.write_text("", encoding="utf-8")
+
+        proc = subprocess.Popen(
+            argv,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            encoding="utf-8",
+        )
+        assert proc.stdin is not None and proc.stdout is not None and proc.stderr is not None
+
+        proc.stdin.write(call.prompt)
+        proc.stdin.close()
+
+        stderr_buffer: list[str] = []
+
+        def drain_stderr() -> None:
+            assert proc.stderr is not None
+            with open(call.stderr_log_path, "a", encoding="utf-8") as log:
+                for chunk in proc.stderr:
+                    stderr_buffer.append(chunk)
+                    log.write(chunk)
+                    log.flush()
+
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stderr_thread.start()
+
+        stdout_buffer: list[str] = []
+        with open(call.stdout_log_path, "a", encoding="utf-8") as log:
+            for line in proc.stdout:
+                indented = "    " + line if not line.startswith("    ") else line
+                sys.stdout.write(indented)
+                sys.stdout.flush()
+                stdout_buffer.append(line)
+                log.write(line)
+                log.flush()
+
+        returncode = proc.wait()
+        stderr_thread.join()
+
+        response = ClaudeResponse(
+            stdout="".join(stdout_buffer),
+            stderr="".join(stderr_buffer),
+            returncode=returncode,
+        )
+        if returncode != 0:
+            raise ClaudeInvocationError(call, response)
+        return response
+
+    @staticmethod
+    def _build_argv(call: ClaudeCall) -> list[str]:
+        argv = ["claude", "-p", "--output-format", "text"]
+        if call.model is not None:
+            argv += ["--model", call.model]
+        if call.new_session:
+            argv += ["--session-id", call.session_id]
+        else:
+            argv += ["--resume", call.session_id]
+        return argv
