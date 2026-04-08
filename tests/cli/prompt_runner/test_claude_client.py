@@ -232,19 +232,17 @@ def test_real_client_argv_uses_session_id_on_first_call(monkeypatch, log_paths):
     assert "--output-format" in argv
     assert "stream-json" in argv
     assert "--verbose" in argv
-    # Isolation flags. --bare is intentionally NOT used (breaks keychain auth).
+    # --bare is intentionally NOT used (breaks keychain auth).
     assert "--bare" not in argv
-    assert "--disable-slash-commands" in argv
-    assert "--tools" in argv
-    # --tools is followed by empty string (disable all tools).
-    tools_idx = argv.index("--tools")
-    assert argv[tools_idx + 1] == ""
+    # Tool restrictions are intentionally NOT applied — the nested claude
+    # gets full tool access (guarded only by --dangerously-skip-permissions
+    # and the cwd isolation).
+    assert "--tools" not in argv
+    assert "--disable-slash-commands" not in argv
+    assert "--max-turns" not in argv
     assert "--dangerously-skip-permissions" in argv
-    # Max agentic turns cap.
-    assert "--max-turns" in argv
-    max_turns_idx = argv.index("--max-turns")
-    assert argv[max_turns_idx + 1] == "1"
-    # Non-interactive system prompt is appended.
+    # Non-interactive system prompt is appended (governs output shape only,
+    # not tool use).
     assert "--append-system-prompt" in argv
     sp_idx = argv.index("--append-system-prompt")
     sys_prompt = argv[sp_idx + 1]
