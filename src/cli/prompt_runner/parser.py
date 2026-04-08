@@ -52,9 +52,16 @@ class _State(Enum):
     SEEK_EXTRA_CHECK = "seek_extra_check"
 
 
-_HEADING_RE = re.compile(r"^##\s+Prompt\b[\s:\-—0-9]*(.*?)\s*$")
+_HEADING_RE = re.compile(
+    r"^##\s+Prompt\b"       # required prefix
+    r"(?:\s+\d+)?"          # optional heading number (consumed and ignored)
+    r"(?:\s*[:\-—]\s*)?"    # optional separator punctuation
+    r"(.*?)\s*$"            # title (captured)
+)
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_+\-]*\s*$")
 _UNTITLED = "(untitled)"
+_BOUNDARY_HEADING = "heading"
+_BOUNDARY_EOF = "eof"
 
 
 @dataclass
@@ -103,7 +110,7 @@ def parse_text(text: str) -> list[PromptPair]:
         heading_match = _HEADING_RE.match(line)
         if heading_match is not None:
             if current is not None:
-                _raise_for_mid_prompt_heading(state, current, line_number)
+                _raise_for_incomplete_state(state, current, line_number, _BOUNDARY_HEADING)
                 pairs.append(current.to_pair())
             title = heading_match.group(1).strip()
             current = _Accumulator(
@@ -156,70 +163,58 @@ def parse_text(text: str) -> list[PromptPair]:
 
     # End of file handling.
     if current is not None:
-        if state in (_State.SEEK_HEADING, _State.SEEK_EXTRA_CHECK):
+        if state is _State.SEEK_HEADING:
             pairs.append(current.to_pair())
         else:
-            _raise_for_eof(state, current, eof_line=len(lines))
+            _raise_for_incomplete_state(
+                state, current, next_boundary_line=len(lines),
+                boundary_kind=_BOUNDARY_EOF,
+            )
+            # If we reach here, state was SEEK_EXTRA_CHECK (valid terminal).
+            pairs.append(current.to_pair())
 
     return pairs
 
 
-def _raise_for_mid_prompt_heading(
-    state: _State, current: _Accumulator, next_heading_line: int
+def _raise_for_incomplete_state(
+    state: _State,
+    current: _Accumulator,
+    next_boundary_line: int,
+    boundary_kind: str,
 ) -> None:
-    """Raise the appropriate error when a new heading arrives mid-prompt."""
+    """Raise the appropriate error when the parser hits a boundary while still
+    accumulating a prompt. boundary_kind is _BOUNDARY_HEADING or _BOUNDARY_EOF.
+
+    If state is SEEK_EXTRA_CHECK (both blocks captured), this function returns
+    normally — the caller should then finalise the current pair.
+    """
     if state is _State.SEEK_FIRST_FENCE:
         raise ParseError(
             "E-NO-BLOCKS",
-            _format_no_blocks(current, next_boundary_line=next_heading_line,
-                              boundary_kind="heading"),
+            _format_no_blocks(current, next_boundary_line=next_boundary_line,
+                              boundary_kind=boundary_kind),
         )
     if state is _State.SEEK_SECOND_FENCE:
         raise ParseError(
             "E-MISSING-VALIDATION",
-            _format_missing_validation(current, next_boundary_line=next_heading_line,
-                                       boundary_kind="heading"),
+            _format_missing_validation(current, next_boundary_line=next_boundary_line,
+                                       boundary_kind=boundary_kind),
         )
     if state is _State.IN_FIRST_FENCE:
         raise ParseError(
             "E-UNCLOSED-GENERATION",
             _format_unclosed(current, role="generation",
-                             next_boundary_line=next_heading_line,
-                             boundary_kind="heading"),
+                             next_boundary_line=next_boundary_line,
+                             boundary_kind=boundary_kind),
         )
     if state is _State.IN_SECOND_FENCE:
         raise ParseError(
             "E-UNCLOSED-VALIDATION",
             _format_unclosed(current, role="validation",
-                             next_boundary_line=next_heading_line,
-                             boundary_kind="heading"),
+                             next_boundary_line=next_boundary_line,
+                             boundary_kind=boundary_kind),
         )
-
-
-def _raise_for_eof(state: _State, current: _Accumulator, eof_line: int) -> None:
-    if state is _State.SEEK_FIRST_FENCE:
-        raise ParseError(
-            "E-NO-BLOCKS",
-            _format_no_blocks(current, next_boundary_line=eof_line, boundary_kind="eof"),
-        )
-    if state is _State.SEEK_SECOND_FENCE:
-        raise ParseError(
-            "E-MISSING-VALIDATION",
-            _format_missing_validation(current, next_boundary_line=eof_line,
-                                       boundary_kind="eof"),
-        )
-    if state is _State.IN_FIRST_FENCE:
-        raise ParseError(
-            "E-UNCLOSED-GENERATION",
-            _format_unclosed(current, role="generation",
-                             next_boundary_line=eof_line, boundary_kind="eof"),
-        )
-    if state is _State.IN_SECOND_FENCE:
-        raise ParseError(
-            "E-UNCLOSED-VALIDATION",
-            _format_unclosed(current, role="validation",
-                             next_boundary_line=eof_line, boundary_kind="eof"),
-        )
+    assert state is _State.SEEK_EXTRA_CHECK, f"Unhandled state in _raise_for_incomplete_state: {state}"
 
 
 def _format_no_blocks(
@@ -227,7 +222,7 @@ def _format_no_blocks(
 ) -> str:
     boundary_text = (
         f"The next prompt heading was found at line {next_boundary_line}"
-        if boundary_kind == "heading"
+        if boundary_kind == _BOUNDARY_HEADING
         else "The file ended"
     )
     return (
@@ -247,7 +242,7 @@ def _format_missing_validation(
 ) -> str:
     boundary_text = (
         f"The next prompt heading was found at line {next_boundary_line}"
-        if boundary_kind == "heading"
+        if boundary_kind == _BOUNDARY_HEADING
         else "The file ended"
     )
     return (
@@ -265,12 +260,13 @@ def _format_missing_validation(
 def _format_unclosed(
     current: _Accumulator, role: str, next_boundary_line: int, boundary_kind: str
 ) -> str:
+    assert role in ("generation", "validation"), f"Unknown role: {role}"
     opened_line = (
         current.generation_line if role == "generation" else current.validation_line
     )
     boundary_text = (
         f"the next prompt heading (found at line {next_boundary_line})"
-        if boundary_kind == "heading"
+        if boundary_kind == _BOUNDARY_HEADING
         else "the end of the file"
     )
     return (

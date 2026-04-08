@@ -178,9 +178,12 @@ def test_no_bare_fence_jargon_in_error_messages():
         ("three-fences.md", "E-EXTRA-BLOCK"),
     ]
     bare_fence = re.compile(r"\bfence\b", re.IGNORECASE)
-    for filename, _ in fixtures_and_ids:
+    for filename, expected_id in fixtures_and_ids:
         with pytest.raises(ParseError) as exc_info:
             parse_file(FIXTURES / filename)
+        assert exc_info.value.error_id == expected_id, (
+            f"{filename}: expected error_id {expected_id}, got {exc_info.value.error_id}"
+        )
         assert bare_fence.search(exc_info.value.message) is None, (
             f"{filename}: error message uses bare word 'fence': "
             f"{exc_info.value.message}"
@@ -196,3 +199,17 @@ def test_error_ids_are_stable():
         "E-UNCLOSED-VALIDATION",
         "E-EXTRA-BLOCK",
     )
+
+
+def test_title_starting_with_digit_is_preserved():
+    """Regression test: the heading regex must not eat leading digits from the title."""
+    pairs = parse_text(_wrap("## Prompt: 3D rendering"))
+    assert pairs[0].title == "3D rendering"
+
+
+def test_empty_file_returns_empty_list():
+    assert parse_text("") == []
+
+
+def test_file_with_no_prompt_headings_returns_empty_list():
+    assert parse_text("# Introduction\n\nSome prose.\n") == []
