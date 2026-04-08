@@ -12,6 +12,26 @@ intended content. Use the `path` it returns as the target for your Write call.
 
 Do not place files by intuition. The taxonomy is the source of truth.
 
+### Parsing the sub-agent response
+
+The `project-organiser` sub-agent is instructed to return a single fenced
+JSON code block. In practice, Claude Code sub-agents cannot be constrained
+to strict output formats via system prompt alone (see
+[Claude Code sub-agents docs](https://code.claude.com/docs/en/sub-agents.md)
+— no `output_format` / `json_schema` frontmatter is supported), so the
+sub-agent may emit 1-3 sentences of narration before the JSON fence.
+
+**How to parse:** extract the first ```json ... ``` fenced code block from
+the sub-agent's response and ignore everything outside the fence. Do not
+try `JSON.parse` on the whole response — it will fail on the preamble.
+
+The expected JSON shapes are defined in the sub-agent file at
+`.claude/agents/project-organiser.md` (§ "The Contract"). You should
+receive either a success shape with `ok: true, path, rationale,
+taxonomy_extended, extension_summary` or an error shape with
+`ok: false, error_code, error_message`. Act on the `path` only when
+`ok` is true.
+
 ## Stack
 
 - **Python command-line process** — source in `src/cli/`, tests in `tests/cli/`
