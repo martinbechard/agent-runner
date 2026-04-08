@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -39,6 +40,24 @@ REVISION_GENERATOR_PREAMBLE = (
     "complete revised artifact, with no commentary before or after it."
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
+
+# Stable namespace for deterministic session-ID UUID generation.
+# The Claude CLI requires --session-id to be a valid UUID, so we map our
+# logical session labels (gen-prompt-N-<run-id>) through uuid5 to get a
+# deterministic UUID — deterministic so that iteration 2's --resume uses
+# the same UUID as iteration 1's --session-id.
+_SESSION_NAMESPACE = uuid.UUID("00000000-0000-0000-0000-0000000000a1")
+
+
+def _session_id(logical_label: str) -> str:
+    """Derive a deterministic UUID session ID from a logical label.
+
+    The UUID is stable across iterations of the same prompt/role, which is
+    required so that --resume picks up the session that --session-id created.
+    The logical label is preserved only for the ClaudeCall.stream_header,
+    which is human-readable and independent of the wire-format session ID.
+    """
+    return str(uuid.uuid5(_SESSION_NAMESPACE, logical_label))
 
 
 @dataclass(frozen=True)
@@ -164,8 +183,8 @@ def run_prompt(
         raise ValueError(
             f"max_iterations must be >= 1, got {config.max_iterations}"
         )
-    gen_session = f"gen-prompt-{pair.index}-{run_id}"
-    jud_session = f"jud-prompt-{pair.index}-{run_id}"
+    gen_session = _session_id(f"gen-prompt-{pair.index}-{run_id}")
+    jud_session = _session_id(f"jud-prompt-{pair.index}-{run_id}")
     prompt_slug = _prompt_dir_name(pair)
     prompt_dir = run_dir / prompt_slug
     logs_dir = run_dir / "logs" / prompt_slug

@@ -234,7 +234,10 @@ def test_only_flag_runs_single_prompt(tmp_path: Path):
     assert "Prior approved artifacts" not in client.received[0].prompt
 
 
-def test_session_id_naming(tmp_path: Path):
+def test_session_ids_are_valid_uuids_and_distinct(tmp_path: Path):
+    """Claude CLI requires --session-id to be a valid UUID, and generator
+    and judge sessions must be distinct to prevent context contamination."""
+    import uuid as _uuid
     pair = _pair(1, "Alpha")
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
     run_prompt(
@@ -242,9 +245,30 @@ def test_session_id_naming(tmp_path: Path):
         config=RunConfig(), claude_client=client, run_id="myrun",
     )
     gen_call, jud_call = client.received
-    assert gen_call.session_id.startswith("gen-prompt-1-")
-    assert jud_call.session_id.startswith("jud-prompt-1-")
+    # Must be valid UUIDs.
+    _uuid.UUID(gen_call.session_id)
+    _uuid.UUID(jud_call.session_id)
+    # Must be distinct.
     assert gen_call.session_id != jud_call.session_id
+
+
+def test_session_ids_are_deterministic(tmp_path: Path):
+    """Iteration 2's --resume must use the same session ID that iteration 1
+    created with --session-id, so the mapping from logical label to UUID
+    must be stable across iterations."""
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[
+        _pass_response(), _judge_revise(),
+        _pass_response(), _judge_pass(),
+    ])
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=client, run_id="myrun",
+    )
+    # Iteration 1 generator and iteration 2 generator share the same session.
+    assert client.received[0].session_id == client.received[2].session_id
+    # Same for judge.
+    assert client.received[1].session_id == client.received[3].session_id
 
 
 def test_resume_flag_set_on_iterations_after_first(tmp_path: Path):
