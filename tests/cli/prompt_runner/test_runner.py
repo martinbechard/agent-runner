@@ -63,3 +63,281 @@ def test_revision_judge_message_contains_anti_anchoring_and_artifact():
     assert ANTI_ANCHORING_CLAUSE in msg
     assert "NEW-ARTIFACT" in msg
     assert VERDICT_INSTRUCTION in msg
+
+
+from prompt_runner.claude_client import (
+    ClaudeCall,
+    ClaudeInvocationError,
+    ClaudeResponse,
+    FakeClaudeClient,
+)
+from prompt_runner.runner import (
+    PipelineResult,
+    PromptResult,
+    RunConfig,
+    run_pipeline,
+    run_prompt,
+)
+from prompt_runner.verdict import Verdict
+
+
+def _pass_response(text: str = "ARTIFACT") -> ClaudeResponse:
+    return ClaudeResponse(stdout=text, stderr="", returncode=0)
+
+
+def _judge_pass() -> ClaudeResponse:
+    return ClaudeResponse(stdout="All good.\n\nVERDICT: pass", stderr="", returncode=0)
+
+
+def _judge_revise(note: str = "Fix this.") -> ClaudeResponse:
+    return ClaudeResponse(
+        stdout=f"{note}\n\nVERDICT: revise", stderr="", returncode=0
+    )
+
+
+def _judge_escalate() -> ClaudeResponse:
+    return ClaudeResponse(
+        stdout="Cannot continue.\n\nVERDICT: escalate", stderr="", returncode=0
+    )
+
+
+def test_single_prompt_passes_first_try(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response("gen-output"), _judge_pass()])
+    result = run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        run_id="testrun",
+    )
+    assert result.final_verdict == Verdict.PASS
+    assert len(result.iterations) == 1
+    assert len(client.received) == 2  # one generator, one judge
+    assert client.received[0].new_session is True
+    assert client.received[1].new_session is True
+    assert client.received[0].session_id != client.received[1].session_id
+
+
+def test_single_prompt_passes_on_second_iteration(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[
+        _pass_response("gen-1"),
+        _judge_revise("needs work"),
+        _pass_response("gen-2-revised"),
+        _judge_pass(),
+    ])
+    result = run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=client, run_id="testrun",
+    )
+    assert result.final_verdict == Verdict.PASS
+    assert len(result.iterations) == 2
+    assert result.final_artifact == "gen-2-revised"
+    assert len(client.received) == 4
+    # Iteration 1 uses new sessions; iteration 2 resumes.
+    assert client.received[0].new_session is True
+    assert client.received[1].new_session is True
+    assert client.received[2].new_session is False
+    assert client.received[3].new_session is False
+    # Generator's revision call contains the judge's feedback.
+    assert "needs work" in client.received[2].prompt
+
+
+def test_escalation_on_max_iterations(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[
+        _pass_response("g1"), _judge_revise("r1"),
+        _pass_response("g2"), _judge_revise("r2"),
+        _pass_response("g3"), _judge_revise("r3"),
+    ])
+    result = run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(max_iterations=3), claude_client=client,
+        run_id="testrun",
+    )
+    assert result.final_verdict == Verdict.ESCALATE
+    assert len(result.iterations) == 3
+    assert len(client.received) == 6
+
+
+def test_direct_escalation(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response("g1"), _judge_escalate()])
+    result = run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=client, run_id="testrun",
+    )
+    assert result.final_verdict == Verdict.ESCALATE
+    assert len(result.iterations) == 1
+    assert len(client.received) == 2
+
+
+def test_prior_artifacts_injected_into_next_prompt(tmp_path: Path):
+    p1 = _pair(1, "First")
+    p2 = _pair(2, "Second")
+    client = FakeClaudeClient(scripted=[
+        _pass_response("ARTIFACT-ONE"), _judge_pass(),
+        _pass_response("ARTIFACT-TWO"), _judge_pass(),
+    ])
+    result = run_pipeline(
+        pairs=[p1, p2],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+    )
+    assert not result.halted_early
+    # prompt 2's generator call (index 2 in received) should contain ARTIFACT-ONE.
+    assert "ARTIFACT-ONE" in client.received[2].prompt
+    # prompt 1's generator call should not mention "Prior approved artifacts".
+    assert "Prior approved artifacts" not in client.received[0].prompt
+
+
+def test_escalation_halts_pipeline(tmp_path: Path):
+    p1 = _pair(1, "First")
+    p2 = _pair(2, "Second")
+    p3 = _pair(3, "Third")
+    client = FakeClaudeClient(scripted=[
+        _pass_response("a1"), _judge_pass(),    # p1 passes
+        _pass_response("a2"), _judge_escalate(),  # p2 escalates
+        # p3 must not run
+    ])
+    result = run_pipeline(
+        pairs=[p1, p2, p3], run_dir=tmp_path / "run", config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+    )
+    assert result.halted_early
+    assert len(result.prompt_results) == 2
+    assert len(client.received) == 4
+
+
+def test_only_flag_runs_single_prompt(tmp_path: Path):
+    p1 = _pair(1, "First")
+    p2 = _pair(2, "Second")
+    p3 = _pair(3, "Third")
+    client = FakeClaudeClient(scripted=[_pass_response("a2"), _judge_pass()])
+    result = run_pipeline(
+        pairs=[p1, p2, p3], run_dir=tmp_path / "run",
+        config=RunConfig(only=2), claude_client=client,
+        source_file=tmp_path / "source.md",
+    )
+    assert not result.halted_early
+    assert len(client.received) == 2
+    # Prompt 2's generator call should NOT contain any prior-artifact injection.
+    assert "Prior approved artifacts" not in client.received[0].prompt
+
+
+def test_session_id_naming(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=client, run_id="myrun",
+    )
+    gen_call, jud_call = client.received
+    assert gen_call.session_id.startswith("gen-prompt-1-")
+    assert jud_call.session_id.startswith("jud-prompt-1-")
+    assert gen_call.session_id != jud_call.session_id
+
+
+def test_resume_flag_set_on_iterations_after_first(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[
+        _pass_response(), _judge_revise(),
+        _pass_response(), _judge_pass(),
+    ])
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=client, run_id="myrun",
+    )
+    # Iter 1: both calls new_session=True. Iter 2: both calls new_session=False.
+    assert [c.new_session for c in client.received] == [True, True, False, False]
+
+
+def test_log_paths_passed_to_every_call(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_dir = tmp_path / "run"
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=run_dir,
+        config=RunConfig(), claude_client=client, run_id="myrun",
+    )
+    for call in client.received:
+        assert call.stdout_log_path.parent.parent == run_dir / "logs"
+        assert call.stdout_log_path.name.startswith("iter-01-")
+        assert call.stdout_log_path.name.endswith(".stdout.log")
+
+
+def test_logs_dir_created_before_first_call(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    captured = []
+
+    class AssertingClient:
+        def call(self, call):
+            # Capture the existence of the parent dir at the moment of the call.
+            captured.append(call.stdout_log_path.parent.exists())
+            return _pass_response() if "generator" in call.stream_header else _judge_pass()
+
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=AssertingClient(), run_id="myrun",
+    )
+    assert all(captured), "logs directory was not created before a claude call"
+
+
+def test_halt_on_claude_failure_writes_partial_md(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    gen_ok = _pass_response("g1")
+    judge_partial = ClaudeResponse(stdout="PARTIAL-JUDGE-OUTPUT", stderr="oops", returncode=1)
+    # Need a real ClaudeCall for the error's .call field; use any.
+    # The fake client raises this exception on the second call.
+    dummy_call = ClaudeCall(
+        prompt="", session_id="x", new_session=True, model=None,
+        stdout_log_path=Path("/tmp/x"), stderr_log_path=Path("/tmp/x"),
+        stream_header="── test ──",
+    )
+    err = ClaudeInvocationError(dummy_call, judge_partial)
+    client = FakeClaudeClient(scripted=[gen_ok, err])
+    with pytest.raises(ClaudeInvocationError):
+        run_prompt(
+            pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+            config=RunConfig(), claude_client=client, run_id="myrun",
+        )
+    judge_md = tmp_path / "run" / "prompt-01-alpha" / "iter-01-judge.md"
+    assert judge_md.exists()
+    assert judge_md.read_text() == "PARTIAL-JUDGE-OUTPUT"
+
+
+def test_unparseable_verdict_halts_pipeline(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    bad_judge = ClaudeResponse(stdout="no verdict here at all", stderr="", returncode=0)
+    client = FakeClaudeClient(scripted=[_pass_response(), bad_judge])
+    result = run_pipeline(
+        pairs=[pair], run_dir=tmp_path / "run", config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+    )
+    assert result.halted_early
+    assert result.halt_reason is not None
+    assert "R-NO-VERDICT" in result.halt_reason
+
+
+def test_dry_run_makes_no_real_calls(tmp_path: Path):
+    from prompt_runner.claude_client import DryRunClaudeClient
+    pair = _pair(1, "Alpha")
+    client = DryRunClaudeClient()
+    # DryRunClaudeClient returns stdout that has no VERDICT line, so we expect
+    # the pipeline to halt at the first judge call with R-NO-VERDICT — that is
+    # the correct dry-run behaviour because dry-run is about skipping the
+    # subprocess, not about bypassing verdict parsing. The test asserts that no
+    # subprocess-style activity happened (the DryRunClient recorded the call
+    # but didn't spawn anything).
+    result = run_pipeline(
+        pairs=[pair], run_dir=tmp_path / "run",
+        config=RunConfig(dry_run=True), claude_client=client,
+        source_file=tmp_path / "source.md",
+    )
+    # At least the first generator call was recorded.
+    assert len(client.received) >= 1
+    assert result.halted_early  # because DryRun responses have no VERDICT line
