@@ -95,19 +95,20 @@ include = ["prompt_runner*"]
 testpaths = ["tests"]
 ```
 
-- [ ] **Step 0.2: Create the package marker files**
+- [ ] **Step 0.2: Create the package marker file and clean up placeholders**
 
 File: *src/cli/prompt_runner/__init__.py* — empty file.
 
-File: *tests/cli/prompt_runner/__init__.py* — empty file.
+Do NOT create a *tests/cli/prompt_runner/__init__.py*. The tests directory must not be an importable package, because pytest's rootdir-relative discovery prepends the test directory to sys.path and would shadow the real *prompt_runner* package under *src/cli/*. pytest discovers test modules without `__init__.py` as long as *pythonpath* is configured in *pyproject.toml* (which it is).
 
 Shell:
 ```bash
 mkdir -p src/cli/prompt_runner tests/cli/prompt_runner
 touch src/cli/prompt_runner/__init__.py
-touch tests/cli/prompt_runner/__init__.py
 # Delete the .gitkeep placeholder that was in src/cli/
 rm -f src/cli/.gitkeep
+# Delete the .gitkeep placeholder that was in tests/cli/ (if present)
+rm -f tests/cli/.gitkeep
 ```
 
 - [ ] **Step 0.3: Editable install**
@@ -120,6 +121,25 @@ pip install -e ".[dev]"
 ```
 
 Expected: the last line of pip output includes *Successfully installed prompt-runner-0.1.0 ...* and *pytest-8....*.
+
+Then create a minimal *.gitignore* at the project root (create if missing; if the file already exists, only append these lines if they are not already present):
+
+```
+# Virtual environments
+.venv/
+
+# Python build artifacts
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+
+# Pytest
+.pytest_cache/
+```
+
+This prevents the editable install's egg-info and __pycache__ directories from being accidentally staged in a later task.
 
 - [ ] **Step 0.4: Verify pytest discovers zero tests successfully**
 
@@ -142,10 +162,14 @@ Expected: *ok*.
 - [ ] **Step 0.6: Commit**
 
 ```bash
-git add pyproject.toml src/cli/prompt_runner/__init__.py tests/cli/prompt_runner/__init__.py
+git add pyproject.toml src/cli/prompt_runner/__init__.py .gitignore
 git rm src/cli/.gitkeep
+# If tests/cli/.gitkeep existed, stage its removal too:
+# git rm tests/cli/.gitkeep
 git commit -m "chore: bootstrap prompt-runner Python package"
 ```
+
+(The `.gitignore` line is only included if you created or modified the file in Step 0.3 — a fresh repo adds it, an existing repo with a `.venv/` entry leaves it alone.)
 
 ---
 

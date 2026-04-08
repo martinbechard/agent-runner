@@ -8,7 +8,7 @@ import json
 import re
 import uuid
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from prompt_runner.claude_client import (
@@ -58,6 +58,28 @@ def _session_id(logical_label: str) -> str:
     which is human-readable and independent of the wire-format session ID.
     """
     return str(uuid.uuid5(_SESSION_NAMESPACE, logical_label))
+
+
+# Number of stderr lines to include in R-CLAUDE-FAILED halt reasons.
+STDERR_TAIL_LINES = 20
+
+
+def _tail_lines(text: str, n: int) -> str:
+    """Return the last n lines of text, indented by two spaces, or a placeholder."""
+    if not text:
+        return "  (empty)"
+    lines = text.splitlines()
+    tail = lines[-n:] if len(lines) > n else lines
+    return "\n".join(f"  {line}" for line in tail)
+
+
+def _format_wall_time(started_at: datetime, finished_at: datetime) -> str:
+    """Format elapsed wall time as HH:MM:SS."""
+    elapsed: timedelta = finished_at - started_at
+    total_seconds = int(elapsed.total_seconds())
+    hours, remainder = divmod(total_seconds, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
 @dataclass(frozen=True)
@@ -285,7 +307,9 @@ def run_pipeline(
 ) -> PipelineResult:
     run_id = run_dir.name
     run_dir.mkdir(parents=True, exist_ok=True)
-    _write_manifest(run_dir, source_file, config, run_id, started_at=_now_iso())
+    started_at = datetime.now(timezone.utc)
+    _write_manifest(run_dir, source_file, config, run_id,
+                    started_at=_format_iso(started_at))
 
     prior_artifacts: list[tuple[str, str]] = []
     prompt_results: list[PromptResult] = []
@@ -303,16 +327,14 @@ def run_pipeline(
                 f"returned a judge response with no VERDICT line. {err}"
             )
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
-                      halted_early=True, halt_reason=halt_reason)
+                      started_at=started_at, halted_early=True,
+                      halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
         except ClaudeInvocationError as err:
-            halt_reason = (
-                f"R-CLAUDE-FAILED: prompt {pair.index} \"{pair.title}\" "
-                f"{err.call.stream_header} exited with status "
-                f"{err.response.returncode}."
-            )
+            halt_reason = _format_claude_failed_halt_reason(pair, err, run_dir)
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
-                      halted_early=True, halt_reason=halt_reason)
+                      started_at=started_at, halted_early=True,
+                      halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
 
         prompt_results.append(result)
@@ -321,16 +343,47 @@ def run_pipeline(
         else:
             halt_reason = f"prompt {pair.index} escalated"
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
-                      halted_early=True, halt_reason=halt_reason)
+                      started_at=started_at, halted_early=True,
+                      halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
 
     _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
-              halted_early=False, halt_reason=None)
+              started_at=started_at, halted_early=False, halt_reason=None)
     return PipelineResult(prompt_results, halted_early=False, halt_reason=None)
 
 
+def _format_claude_failed_halt_reason(
+    pair: PromptPair, err: ClaudeInvocationError, run_dir: Path,
+) -> str:
+    """Build a multi-line R-CLAUDE-FAILED halt reason per CD-001 §11.2."""
+    partial_md_path = err.call.stdout_log_path.parent.parent.parent / (
+        _prompt_dir_name(pair) + "/" + err.call.stdout_log_path.stem.removesuffix(".stdout") + ".md"
+    )
+    logs_dir = err.call.stdout_log_path.parent
+    stderr_tail = _tail_lines(err.response.stderr, STDERR_TAIL_LINES)
+    return (
+        f"R-CLAUDE-FAILED: prompt {pair.index} \"{pair.title}\" "
+        f"{err.call.stream_header} exited with status "
+        f"{err.response.returncode}.\n"
+        f"\n"
+        f"Last {STDERR_TAIL_LINES} lines of stderr "
+        f"(from {err.call.stderr_log_path}):\n"
+        f"{stderr_tail}\n"
+        f"\n"
+        f"Partial output saved to: {partial_md_path}\n"
+        f"Full logs saved to: {logs_dir}/\n"
+        f"\n"
+        f"To retry, re-run prompt-runner. To investigate, look at the "
+        f".stdout.log and .stderr.log files in the logs directory above."
+    )
+
+
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return _format_iso(datetime.now(timezone.utc))
+
+
+def _format_iso(dt: datetime) -> str:
+    return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _write_manifest(
@@ -358,18 +411,24 @@ def _finalise(
     run_id: str,
     pairs: list[PromptPair],
     prompt_results: list[PromptResult],
+    started_at: datetime,
     halted_early: bool,
     halt_reason: str | None,
 ) -> None:
+    finished_at = datetime.now(timezone.utc)
+    wall_time = _format_wall_time(started_at, finished_at)
+
     # Rewrite manifest.json with finished_at and halt_reason.
     manifest_path = run_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-    manifest["finished_at"] = _now_iso()
+    manifest["finished_at"] = _format_iso(finished_at)
     manifest["halt_reason"] = halt_reason
+    manifest["wall_time"] = wall_time
     _write(manifest_path, json.dumps(manifest, indent=2) + "\n")
 
     _write(run_dir / "summary.txt", _format_summary(
-        source_file, run_dir, pairs, prompt_results, halted_early, halt_reason
+        source_file, run_dir, pairs, prompt_results,
+        halted_early, halt_reason, wall_time,
     ))
 
 
@@ -380,6 +439,7 @@ def _format_summary(
     prompt_results: list[PromptResult],
     halted_early: bool,
     halt_reason: str | None,
+    wall_time: str,
 ) -> str:
     status = "halted" if halted_early else "completed"
     lines = [
@@ -407,6 +467,7 @@ def _format_summary(
     total_calls = sum(len(r.iterations) * 2 for r in prompt_results)
     lines.append("")
     lines.append(f"Total claude calls: {total_calls}")
+    lines.append(f"Wall time: {wall_time}")
     if halt_reason:
         lines.append(f"Halt reason: {halt_reason}")
     lines.append("")

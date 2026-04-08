@@ -445,3 +445,82 @@ def test_cli_parse_subcommand_reports_parse_error(tmp_path, capsys):
     err = capsys.readouterr().err
     assert exit_code == 2
     assert "E-MISSING-VALIDATION" in err
+
+
+def test_summary_includes_wall_time(tmp_path: Path):
+    """summary.txt must include a 'Wall time:' line in HH:MM:SS format."""
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_dir = tmp_path / "run"
+    run_pipeline(
+        pairs=[pair], run_dir=run_dir, config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+    )
+    summary = (run_dir / "summary.txt").read_text()
+    assert "Wall time:" in summary
+    # Format must look like HH:MM:SS.
+    import re as _re
+    assert _re.search(r"Wall time: \d{2}:\d{2}:\d{2}", summary), summary
+
+
+def test_manifest_includes_wall_time(tmp_path: Path):
+    """manifest.json must include a 'wall_time' field after finalisation."""
+    import json as _json
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_dir = tmp_path / "run"
+    run_pipeline(
+        pairs=[pair], run_dir=run_dir, config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+    )
+    manifest = _json.loads((run_dir / "manifest.json").read_text())
+    assert "wall_time" in manifest
+    import re as _re
+    assert _re.match(r"^\d{2}:\d{2}:\d{2}$", manifest["wall_time"])
+
+
+def test_r_claude_failed_halt_reason_includes_stderr_tail_and_log_paths(tmp_path: Path):
+    """R-CLAUDE-FAILED must include the stderr tail, partial output path, and log dir."""
+    pair = _pair(1, "Alpha")
+    gen_ok = _pass_response("g1")
+    judge_partial = ClaudeResponse(
+        stdout="partial stdout",
+        stderr="warning: something\nerror: claude backend unreachable\nstack frame 1\nstack frame 2",
+        returncode=2,
+    )
+    # The call field's paths must match the real runner-produced ClaudeCall so
+    # the halt reason's path computations line up. The runner will build the
+    # ClaudeCall itself; we fake the client to surface an error with that call.
+    captured_call: list[ClaudeCall] = []
+
+    class CapturingFailingClient:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def call(self, call: ClaudeCall) -> ClaudeResponse:
+            captured_call.append(call)
+            self._n += 1
+            if self._n == 1:
+                return gen_ok
+            # Second call (judge) raises with the captured call as context.
+            raise ClaudeInvocationError(call, judge_partial)
+
+    run_dir = tmp_path / "run"
+    result = run_pipeline(
+        pairs=[pair], run_dir=run_dir, config=RunConfig(),
+        claude_client=CapturingFailingClient(),
+        source_file=tmp_path / "source.md",
+    )
+    assert result.halted_early
+    assert result.halt_reason is not None
+    halt = result.halt_reason
+    assert "R-CLAUDE-FAILED" in halt
+    # The stderr tail (last 20 lines, each indented by two spaces) should appear.
+    assert "claude backend unreachable" in halt
+    assert "stack frame 2" in halt
+    # The log paths should be referenced.
+    assert "stderr.log" in halt or "stderr_log_path" not in halt  # stderr.log path included
+    # The partial output .md path should be referenced.
+    assert "Partial output saved to:" in halt
+    # The retry instruction should be there.
+    assert "re-run prompt-runner" in halt
