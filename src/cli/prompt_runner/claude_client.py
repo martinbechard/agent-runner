@@ -201,6 +201,9 @@ class RealClaudeClient:
 
         # Reconstructed plain text from assistant events — this becomes
         # response.stdout, which the runner writes to iter-NN-<role>.md.
+        # Only "text" kind items are appended; thinking, tool_use, tool_result,
+        # and meta items are shown on the terminal but not stored as the
+        # response, because they are not part of the artifact under review.
         text_buffer: list[str] = []
 
         with open(call.stdout_log_path, "a", encoding="utf-8") as log:
@@ -208,15 +211,11 @@ class RealClaudeClient:
                 # Raw NDJSON line goes to the log unchanged.
                 log.write(line)
                 log.flush()
-                # Extract text blocks from assistant events.
-                text = _extract_assistant_text(line)
-                if text:
-                    text_buffer.append(text)
-                    # Display indented so it visually nests under stream_header.
-                    for display_line in text.splitlines(keepends=True):
-                        sys.stdout.write("    " + display_line)
-                    if not text.endswith("\n"):
-                        sys.stdout.write("\n")
+                # Parse the line into 0+ kind-tagged display items.
+                items = _parse_stream_event(line)
+                for kind, content in items:
+                    _display_event_item(kind, content, text_buffer)
+                if items:
                     sys.stdout.flush()
 
         returncode = proc.wait()
@@ -251,32 +250,160 @@ class RealClaudeClient:
         return argv
 
 
-def _extract_assistant_text(ndjson_line: str) -> str:
-    """Return the concatenated text of all text blocks in an assistant event.
+StreamEventKind = str  # "text" | "thinking" | "tool_use" | "tool_result" | "meta"
 
-    Returns empty string if the line is not a parseable JSON object, is not
-    an assistant event, or contains no text blocks. Tool-use blocks and
-    non-assistant event types (system, user, result) are ignored — they are
-    preserved in the raw stdout_log but not surfaced to the runner.
+
+# Tool-command preview length: Bash commands and similar are truncated to this
+# many characters in the tool_use display line so they don't blow up the
+# terminal width.
+TOOL_PREVIEW_MAX_CHARS = 80
+
+
+def _parse_stream_event(ndjson_line: str) -> list[tuple[StreamEventKind, str]]:
+    """Parse one NDJSON stream-json line into a list of display items.
+
+    Each item is a (kind, content) tuple:
+      - "text": an assistant-message text block. Content is the raw text;
+        callers append it to the text buffer that becomes response.stdout.
+      - "thinking": an extended-thinking block. Content is the raw thinking
+        text; callers display it but do NOT store it in response.stdout.
+      - "tool_use": the model invoked a tool. Content is a one-line summary
+        like "Bash: echo hello".
+      - "tool_result": a tool result arrived. Content is a short summary
+        like "(48 chars)".
+      - "meta": a result event carrying final cost/usage. Content is a
+        one-line summary like "3 turns, 12.5s, $0.04".
+
+    Returns an empty list if the line carries nothing worth displaying (a
+    system event, an unparseable line, or an event type we do not handle).
     """
     line = ndjson_line.strip()
     if not line:
-        return ""
+        return []
     try:
         event = json.loads(line)
     except (json.JSONDecodeError, ValueError):
-        return ""
-    if not isinstance(event, dict) or event.get("type") != "assistant":
-        return ""
+        return []
+    if not isinstance(event, dict):
+        return []
+
+    event_type = event.get("type", "")
+
+    if event_type == "assistant":
+        return _parse_assistant_blocks(event)
+
+    if event_type == "user":
+        return _parse_user_tool_results(event)
+
+    if event_type == "result":
+        return _parse_result_event(event)
+
+    # system, session_start, unknown — silent.
+    return []
+
+
+def _parse_assistant_blocks(event: dict) -> list[tuple[StreamEventKind, str]]:
     message = event.get("message", {})
     if not isinstance(message, dict):
-        return ""
-    pieces: list[str] = []
+        return []
+    items: list[tuple[StreamEventKind, str]] = []
     for block in message.get("content", []) or []:
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "text":
+        block_type = block.get("type", "")
+        if block_type == "text":
             text_value = block.get("text", "")
             if isinstance(text_value, str) and text_value:
-                pieces.append(text_value)
-    return "".join(pieces)
+                items.append(("text", text_value))
+        elif block_type == "thinking":
+            thinking_value = block.get("thinking", "")
+            if isinstance(thinking_value, str) and thinking_value:
+                items.append(("thinking", thinking_value))
+        elif block_type == "tool_use":
+            tool_name = block.get("name", "?")
+            tool_input = block.get("input", {}) or {}
+            items.append(("tool_use", _format_tool_use(tool_name, tool_input)))
+    return items
+
+
+def _parse_user_tool_results(event: dict) -> list[tuple[StreamEventKind, str]]:
+    message = event.get("message", {})
+    if not isinstance(message, dict):
+        return []
+    items: list[tuple[StreamEventKind, str]] = []
+    for block in message.get("content", []) or []:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_result":
+            items.append(("tool_result", _format_tool_result(block.get("content", ""))))
+    return items
+
+
+def _parse_result_event(event: dict) -> list[tuple[StreamEventKind, str]]:
+    turns = event.get("num_turns", 0)
+    duration_ms = event.get("duration_ms", 0) or 0
+    duration_s = duration_ms / 1000.0
+    cost = event.get("total_cost_usd", 0.0) or 0.0
+    return [("meta", f"done: {turns} turns, {duration_s:.1f}s, ${cost:.4f}")]
+
+
+def _format_tool_use(tool_name: str, tool_input: dict) -> str:
+    """One-line summary of a tool invocation, including the most-useful arg."""
+    if tool_name in ("Read", "Edit", "Write"):
+        detail = tool_input.get("file_path", "?")
+    elif tool_name == "Bash":
+        detail = tool_input.get("command", "")
+    elif tool_name in ("Grep", "Glob"):
+        detail = tool_input.get("pattern", "?")
+    else:
+        detail = ""
+    if len(detail) > TOOL_PREVIEW_MAX_CHARS:
+        detail = detail[: TOOL_PREVIEW_MAX_CHARS - 3] + "..."
+    if detail:
+        return f"{tool_name}: {detail}"
+    return tool_name
+
+
+def _format_tool_result(content) -> str:
+    """One-line summary of a tool result's size or shape."""
+    if isinstance(content, str):
+        return f"({len(content)} chars)"
+    if isinstance(content, list):
+        return f"({len(content)} items)"
+    return "(result)"
+
+
+def _display_event_item(
+    kind: StreamEventKind, content: str, text_buffer: list[str]
+) -> None:
+    """Write one parsed stream-json item to stdout with kind-specific styling.
+
+    Only "text" items are appended to text_buffer (which becomes
+    response.stdout). Other kinds are shown on the terminal for the user's
+    benefit but do not contribute to the artifact the runner stores.
+    """
+    if kind == "text":
+        text_buffer.append(content)
+        for display_line in content.splitlines(keepends=True):
+            sys.stdout.write("    " + display_line)
+        if not content.endswith("\n"):
+            sys.stdout.write("\n")
+        return
+
+    if kind == "thinking":
+        sys.stdout.write("    [thinking]\n")
+        for display_line in content.splitlines():
+            sys.stdout.write("      " + display_line + "\n")
+        return
+
+    if kind == "tool_use":
+        sys.stdout.write(f"    [tool] {content}\n")
+        return
+
+    if kind == "tool_result":
+        sys.stdout.write(f"    [tool result] {content}\n")
+        return
+
+    if kind == "meta":
+        sys.stdout.write(f"    [{content}]\n")
+        return

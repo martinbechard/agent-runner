@@ -271,3 +271,134 @@ def test_real_client_strips_claudecode_env_var(monkeypatch, log_paths):
     assert "CLAUDECODE" not in captured["env"], (
         f"CLAUDECODE leaked into child env: {captured['env'].get('CLAUDECODE')}"
     )
+
+
+# ─── _parse_stream_event tests ──────────────────────────────────────────────
+
+def _thinking_event(text: str) -> str:
+    import json as _json
+    return _json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "thinking", "thinking": text}]},
+    }) + "\n"
+
+
+def _tool_use_event(name: str, tool_input: dict) -> str:
+    import json as _json
+    return _json.dumps({
+        "type": "assistant",
+        "message": {"content": [{"type": "tool_use", "name": name, "input": tool_input}]},
+    }) + "\n"
+
+
+def _tool_result_event(content: str) -> str:
+    import json as _json
+    return _json.dumps({
+        "type": "user",
+        "message": {"content": [{"type": "tool_result", "content": content}]},
+    }) + "\n"
+
+
+def _result_event(turns: int = 3, duration_ms: int = 12500, cost_usd: float = 0.0421) -> str:
+    import json as _json
+    return _json.dumps({
+        "type": "result",
+        "num_turns": turns,
+        "duration_ms": duration_ms,
+        "total_cost_usd": cost_usd,
+    }) + "\n"
+
+
+def test_parse_stream_event_text_block():
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event(_assistant_event("hello world"))
+    assert items == [("text", "hello world")]
+
+
+def test_parse_stream_event_thinking_block():
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event(_thinking_event("let me think about this"))
+    assert items == [("thinking", "let me think about this")]
+
+
+def test_parse_stream_event_tool_use_bash():
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event(_tool_use_event("Bash", {"command": "echo hi"}))
+    assert items == [("tool_use", "Bash: echo hi")]
+
+
+def test_parse_stream_event_tool_use_read():
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event(_tool_use_event("Read", {"file_path": "/tmp/x.py"}))
+    assert items == [("tool_use", "Read: /tmp/x.py")]
+
+
+def test_parse_stream_event_tool_use_long_bash_truncated():
+    from prompt_runner.claude_client import _parse_stream_event, TOOL_PREVIEW_MAX_CHARS
+    long_cmd = "echo " + "x" * 200
+    items = _parse_stream_event(_tool_use_event("Bash", {"command": long_cmd}))
+    assert len(items) == 1
+    kind, content = items[0]
+    assert kind == "tool_use"
+    assert content.startswith("Bash: ")
+    # The displayed portion (after "Bash: ") must be within the preview limit.
+    displayed = content[len("Bash: "):]
+    assert len(displayed) <= TOOL_PREVIEW_MAX_CHARS
+
+
+def test_parse_stream_event_tool_result():
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event(_tool_result_event("file contents here"))
+    assert items == [("tool_result", "(18 chars)")]
+
+
+def test_parse_stream_event_result_event():
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event(_result_event(turns=3, duration_ms=12500, cost_usd=0.0421))
+    assert items == [("meta", "done: 3 turns, 12.5s, $0.0421")]
+
+
+def test_parse_stream_event_system_event_silent():
+    """System events (hook_started, session_start, etc) must produce no items."""
+    from prompt_runner.claude_client import _parse_stream_event
+    items = _parse_stream_event('{"type":"system","subtype":"hook_started"}\n')
+    assert items == []
+
+
+def test_thinking_does_not_pollute_response_stdout(monkeypatch, log_paths):
+    """Thinking blocks must be displayed but must not end up in response.stdout."""
+    stdout_log, stderr_log = log_paths
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+    lines = [
+        _thinking_event("internal reasoning"),
+        _assistant_event("the actual answer"),
+    ]
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *a, **k: _FakeProcess(stdout_lines=lines, stderr_lines=[]),
+    )
+    client = RealClaudeClient()
+    response = client.call(_call(stdout_log, stderr_log))
+    assert response.stdout == "the actual answer"
+    # The raw log still has both events for debugging.
+    raw = stdout_log.read_text()
+    assert "internal reasoning" in raw
+    assert "the actual answer" in raw
+
+
+def test_tool_use_does_not_pollute_response_stdout(monkeypatch, log_paths):
+    """Tool-use blocks must be displayed but must not end up in response.stdout."""
+    stdout_log, stderr_log = log_paths
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/claude")
+    lines = [
+        _tool_use_event("Bash", {"command": "echo hi"}),
+        _assistant_event("the textual answer"),
+    ]
+    monkeypatch.setattr(
+        "subprocess.Popen",
+        lambda *a, **k: _FakeProcess(stdout_lines=lines, stderr_lines=[]),
+    )
+    client = RealClaudeClient()
+    response = client.call(_call(stdout_log, stderr_log))
+    assert response.stdout == "the textual answer"
+    assert "echo hi" not in response.stdout
