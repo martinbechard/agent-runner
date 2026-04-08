@@ -67,6 +67,18 @@
 - **Filename pattern:** `kebab-case.ts`
 - **Tests location:** `tests/shared/` — mirror path, `<module>.test.ts`.
 
+### docs/plans/
+- **Purpose:** Transient, TDD-style implementation plans — sequential task groups that decompose a finished design into bite-sized, test-first steps. Not a design document (no decisions), not a requirements document, and not acceptance criteria. Historical value once implementation is complete.
+- **Signals:** "task group", "write failing test", "run pytest", "step-N deliverable", references a companion `CD-NNN` or `HLD-NNN` doc, implementation order section, TDD cadence (failing test → minimal implementation → commit).
+- **Filename pattern:** `PLAN-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature being implemented.
+- **Example:** `PLAN-001-prompt-runner.md`
+
+### docs/testing/
+- **Purpose:** Implementation acceptance criteria and test plans — concrete, runnable checks that verify finished code matches a design spec. Not the design itself and not the test code; the layer in between.
+- **Signals:** "AC-NN", "verification method", "run pytest and assert", "grep src/ for", acceptance criteria grouped by deliverable, traces back to a requirement or design section, companion to a `CD-NNN` or `HLD-NNN` doc.
+- **Filename pattern:** `AC-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature.
+- **Example:** `AC-001-prompt-runner.md`
+
 ### tests/cli/
 - **Purpose:** Python unit tests mirroring `src/cli/`.
 - **Signals:** `def test_`, `pytest`, fixtures importing from `src/cli/`.
@@ -94,5 +106,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-08 — docs/plans/ added — TDD implementation plans (sequential task groups decomposing a design into test-first steps) are transient work documents that are neither design, requirements, nor acceptance criteria; a dedicated plan layer is needed.
+- 2026-04-08 — docs/testing/ added — implementation acceptance criteria (runnable checks that the finished code matches a design) have no home in docs/design/, docs/requirements/, or tests/; a dedicated verification-spec layer is needed.
 - 2026-04-08 — src/shared/ added — TypeScript types shared between server and web frontend have no home in either src/server/ or src/web/; a neutral shared layer is needed.
 <!-- Format: YYYY-MM-DD — <category added> — <one-line reason> -->
