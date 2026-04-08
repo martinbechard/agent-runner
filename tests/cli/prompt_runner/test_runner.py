@@ -401,3 +401,23 @@ def test_max_iterations_zero_raises(tmp_path: Path):
             config=RunConfig(max_iterations=0),
             claude_client=client, run_id="testrun",
         )
+
+
+from prompt_runner.__main__ import main
+
+
+def test_cli_parse_subcommand_prints_all_prompts(tmp_path, capsys):
+    fixture = Path(__file__).parent / "fixtures" / "sample-prompts.md"
+    exit_code = main(["parse", str(fixture)])
+    out = capsys.readouterr().out
+    assert exit_code == 0
+    assert "Prompt 1: First Thing" in out
+    assert "Prompt 2: Second Thing" in out
+
+
+def test_cli_parse_subcommand_reports_parse_error(tmp_path, capsys):
+    fixture = Path(__file__).parent / "fixtures" / "missing-validator.md"
+    exit_code = main(["parse", str(fixture)])
+    err = capsys.readouterr().err
+    assert exit_code == 2
+    assert "E-MISSING-VALIDATION" in err

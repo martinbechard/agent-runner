@@ -3,9 +3,19 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
+from prompt_runner.claude_client import (
+    ClaudeBinaryNotFound,
+    DryRunClaudeClient,
+    RealClaudeClient,
+)
 from prompt_runner.parser import ParseError, PromptPair, parse_file
+from prompt_runner.runner import PipelineResult, RunConfig, run_pipeline
+
+
+BANNER_RULE = "═" * 70
 
 
 def _format_pair_summary(pair: PromptPair, full: bool) -> str:
@@ -53,6 +63,68 @@ def _cmd_parse(args: argparse.Namespace) -> int:
     return 0
 
 
+def _default_run_dir(source: Path) -> Path:
+    ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
+    return Path("runs") / f"{ts}-{source.stem}"
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    source = Path(args.file)
+    try:
+        pairs = parse_file(source)
+    except ParseError as err:
+        _print_error_banner(err.error_id, err.message)
+        return 2
+
+    config = RunConfig(
+        max_iterations=args.max_iterations,
+        model=args.model,
+        only=args.only,
+        dry_run=args.dry_run,
+    )
+
+    try:
+        client = DryRunClaudeClient() if args.dry_run else RealClaudeClient()
+    except ClaudeBinaryNotFound as err:
+        _print_error_banner("R-NO-CLAUDE", str(err))
+        return 3
+
+    run_dir = Path(args.output_dir) if args.output_dir else _default_run_dir(source)
+
+    result = run_pipeline(
+        pairs=pairs,
+        run_dir=run_dir,
+        config=config,
+        claude_client=client,
+        source_file=source,
+    )
+
+    if result.halted_early:
+        _print_error_banner("HALT", result.halt_reason or "pipeline halted")
+        # Exit code: 1 for escalation-style halts, 3 for runtime-style halts.
+        reason = result.halt_reason or ""
+        if reason.startswith("R-"):
+            return 3
+        return 1
+
+    _print_success_banner(run_dir)
+    return 0
+
+
+def _print_error_banner(error_id: str, message: str) -> None:
+    sys.stderr.write(f"\n{BANNER_RULE}\nERROR: {error_id}\n{BANNER_RULE}\n")
+    sys.stderr.write(f"{message}\n{BANNER_RULE}\n")
+    sys.stderr.flush()
+
+
+def _print_success_banner(run_dir: Path) -> None:
+    summary_path = run_dir / "summary.txt"
+    summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
+    sys.stdout.write(f"\n{BANNER_RULE}\nPrompt Runner — Run complete\n{BANNER_RULE}\n")
+    sys.stdout.write(f"{summary}\n{BANNER_RULE}\n")
+    sys.stdout.flush()
+
+
 def _build_parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="prompt-runner",
@@ -68,6 +140,37 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Dump complete generator and validator bodies verbatim.",
     )
     parse_cmd.set_defaults(func=_cmd_parse)
+
+    run_cmd = sub.add_parser("run", help="Execute the full pipeline.")
+    run_cmd.add_argument("file", help="Path to the input markdown file.")
+    run_cmd.add_argument(
+        "--output-dir",
+        default=None,
+        help="Run directory (default: ./runs/<timestamp>-<stem>/).",
+    )
+    run_cmd.add_argument(
+        "--max-iterations",
+        type=int,
+        default=3,
+        help="Max revision iterations per prompt (default: 3).",
+    )
+    run_cmd.add_argument(
+        "--model",
+        default=None,
+        help="Passed through as --model to claude -p.",
+    )
+    run_cmd.add_argument(
+        "--only",
+        type=int,
+        default=None,
+        help="Run only prompt number N (debug).",
+    )
+    run_cmd.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Parse and show the planned sequence without calling claude.",
+    )
+    run_cmd.set_defaults(func=_cmd_run)
 
     return root
 
