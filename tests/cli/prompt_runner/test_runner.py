@@ -211,6 +211,11 @@ def test_escalation_halts_pipeline(tmp_path: Path):
     assert result.halted_early
     assert len(result.prompt_results) == 2
     assert len(client.received) == 4
+    # Explicitly verify p3 was never invoked (more robust than len-only check).
+    for call in client.received:
+        assert "prompt-3" not in call.session_id, (
+            f"Prompt 3 should not have been called, but got: {call.session_id}"
+        )
 
 
 def test_only_flag_runs_single_prompt(tmp_path: Path):
@@ -341,3 +346,58 @@ def test_dry_run_makes_no_real_calls(tmp_path: Path):
     # At least the first generator call was recorded.
     assert len(client.received) >= 1
     assert result.halted_early  # because DryRun responses have no VERDICT line
+
+
+def test_summary_txt_is_written_on_halt(tmp_path: Path):
+    """Halting the pipeline must write summary.txt before exit."""
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_escalate()])
+    run_dir = tmp_path / "run"
+    run_pipeline(
+        pairs=[pair], run_dir=run_dir, config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+    )
+    summary_path = run_dir / "summary.txt"
+    assert summary_path.exists()
+    text = summary_path.read_text()
+    assert "alpha" in text
+    assert "escalate" in text
+    assert "halted" in text
+
+
+def test_skipped_prompts_appear_in_summary(tmp_path: Path):
+    """Prompts that never ran (because the pipeline halted earlier) must appear as 'skipped' in summary.txt."""
+    p1 = _pair(1, "First")
+    p2 = _pair(2, "Second")
+    p3 = _pair(3, "Third")
+    client = FakeClaudeClient(scripted=[
+        _pass_response("a1"), _judge_pass(),      # p1 passes
+        _pass_response("a2"), _judge_escalate(),  # p2 escalates
+        # p3 never runs
+    ])
+    run_dir = tmp_path / "run"
+    run_pipeline(
+        pairs=[p1, p2, p3], run_dir=run_dir, config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+    )
+    summary_text = (run_dir / "summary.txt").read_text()
+    # p1 ran and passed
+    assert "first" in summary_text
+    assert "pass" in summary_text
+    # p2 ran and escalated
+    assert "second" in summary_text
+    assert "escalate" in summary_text
+    # p3 never ran — must appear as "skipped"
+    assert "third" in summary_text
+    assert "skipped" in summary_text
+
+
+def test_max_iterations_zero_raises(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[])
+    with pytest.raises(ValueError, match="max_iterations must be >= 1"):
+        run_prompt(
+            pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+            config=RunConfig(max_iterations=0),
+            claude_client=client, run_id="testrun",
+        )

@@ -160,6 +160,10 @@ def run_prompt(
     claude_client: ClaudeClient,
     run_id: str,
 ) -> PromptResult:
+    if config.max_iterations < 1:
+        raise ValueError(
+            f"max_iterations must be >= 1, got {config.max_iterations}"
+        )
     gen_session = f"gen-prompt-{pair.index}-{run_id}"
     jud_session = f"jud-prompt-{pair.index}-{run_id}"
     prompt_slug = _prompt_dir_name(pair)
@@ -279,7 +283,7 @@ def run_pipeline(
                 f"R-NO-VERDICT: prompt {pair.index} \"{pair.title}\" "
                 f"returned a judge response with no VERDICT line. {err}"
             )
-            _finalise(run_dir, source_file, config, run_id, prompt_results,
+            _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
                       halted_early=True, halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
         except ClaudeInvocationError as err:
@@ -288,7 +292,7 @@ def run_pipeline(
                 f"{err.call.stream_header} exited with status "
                 f"{err.response.returncode}."
             )
-            _finalise(run_dir, source_file, config, run_id, prompt_results,
+            _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
                       halted_early=True, halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
 
@@ -297,11 +301,11 @@ def run_pipeline(
             prior_artifacts.append((pair.title, result.final_artifact))
         else:
             halt_reason = f"prompt {pair.index} escalated"
-            _finalise(run_dir, source_file, config, run_id, prompt_results,
+            _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
                       halted_early=True, halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
 
-    _finalise(run_dir, source_file, config, run_id, prompt_results,
+    _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
               halted_early=False, halt_reason=None)
     return PipelineResult(prompt_results, halted_early=False, halt_reason=None)
 
@@ -333,6 +337,7 @@ def _finalise(
     source_file: Path,
     config: RunConfig,
     run_id: str,
+    pairs: list[PromptPair],
     prompt_results: list[PromptResult],
     halted_early: bool,
     halt_reason: str | None,
@@ -345,13 +350,14 @@ def _finalise(
     _write(manifest_path, json.dumps(manifest, indent=2) + "\n")
 
     _write(run_dir / "summary.txt", _format_summary(
-        source_file, run_dir, prompt_results, halted_early, halt_reason
+        source_file, run_dir, pairs, prompt_results, halted_early, halt_reason
     ))
 
 
 def _format_summary(
     source_file: Path,
     run_dir: Path,
+    pairs: list[PromptPair],
     prompt_results: list[PromptResult],
     halted_early: bool,
     halt_reason: str | None,
@@ -365,12 +371,20 @@ def _format_summary(
         "",
         "Prompts:",
     ]
-    for result in prompt_results:
-        slug = _prompt_dir_name(result.pair)
-        iter_count = len(result.iterations)
-        lines.append(
-            f"  {result.pair.index:02d}  {slug:<40s}  {result.final_verdict.value:<9s}  {iter_count} iter"
-        )
+    # Index prompt_results by pair.index for fast lookup.
+    results_by_index = {r.pair.index: r for r in prompt_results}
+    for pair in pairs:
+        slug = _prompt_dir_name(pair)
+        result = results_by_index.get(pair.index)
+        if result is None:
+            lines.append(
+                f"  {pair.index:02d}  {slug:<40s}  skipped"
+            )
+        else:
+            iter_count = len(result.iterations)
+            lines.append(
+                f"  {pair.index:02d}  {slug:<40s}  {result.final_verdict.value:<9s}  {iter_count} iter"
+            )
     total_calls = sum(len(r.iterations) * 2 for r in prompt_results)
     lines.append("")
     lines.append(f"Total claude calls: {total_calls}")
