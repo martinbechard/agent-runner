@@ -13,3 +13,9 @@ build/
 
 # Prompt-runner outputs
 runs/
+
+# Generated documentation workspace
+project/
+
+# macOS
+.DS_Store
