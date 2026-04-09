@@ -28,10 +28,11 @@ class PromptPair:
     index: int
     title: str
     generation_prompt: str
-    validation_prompt: str
+    validation_prompt: str  # empty string when prompt is validator-less
     heading_line: int
     generation_line: int
-    validation_line: int
+    validation_line: int   # 0 when there is no validator
+    interactive: bool = False
 
 
 class ParseError(Exception):
@@ -58,6 +59,7 @@ _HEADING_RE = re.compile(
     r"(?:\s*[:\-—]\s*)?"    # optional separator punctuation
     r"(.*?)\s*$"            # title (captured)
 )
+_INTERACTIVE_RE = re.compile(r"\s*\[interactive\]\s*$", re.IGNORECASE)
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_+\-]*\s*$")
 _UNTITLED = "(untitled)"
 _BOUNDARY_HEADING = "heading"
@@ -75,6 +77,7 @@ class _Accumulator:
     validation_line: int = 0
     generation_lines: list[str] = field(default_factory=list)
     validation_lines: list[str] = field(default_factory=list)
+    interactive: bool = False
 
     def to_pair(self) -> PromptPair:
         return PromptPair(
@@ -85,6 +88,7 @@ class _Accumulator:
             heading_line=self.heading_line,
             generation_line=self.generation_line,
             validation_line=self.validation_line,
+            interactive=self.interactive,
         )
 
 
@@ -112,11 +116,19 @@ def parse_text(text: str) -> list[PromptPair]:
             if current is not None:
                 _raise_for_incomplete_state(state, current, line_number, _BOUNDARY_HEADING)
                 pairs.append(current.to_pair())
-            title = heading_match.group(1).strip()
+            raw_title = heading_match.group(1).strip()
+            interactive_match = _INTERACTIVE_RE.search(raw_title)
+            if interactive_match is not None:
+                title = raw_title[:interactive_match.start()].rstrip()
+                interactive = True
+            else:
+                title = raw_title
+                interactive = False
             current = _Accumulator(
                 index=len(pairs) + 1,
                 title=title,
                 heading_line=line_number,
+                interactive=interactive,
             )
             state = _State.SEEK_FIRST_FENCE
             continue
@@ -170,7 +182,9 @@ def parse_text(text: str) -> list[PromptPair]:
                 state, current, next_boundary_line=len(lines),
                 boundary_kind=_BOUNDARY_EOF,
             )
-            # If we reach here, state was SEEK_EXTRA_CHECK (valid terminal).
+            # If we reach here, state was SEEK_EXTRA_CHECK (valid terminal) or
+            # SEEK_SECOND_FENCE (validator-less single-fence prompt). In both
+            # cases validation_line is already correct (set or 0 by default).
             pairs.append(current.to_pair())
 
     return pairs
@@ -195,11 +209,9 @@ def _raise_for_incomplete_state(
                               boundary_kind=boundary_kind),
         )
     if state is _State.SEEK_SECOND_FENCE:
-        raise ParseError(
-            "E-MISSING-VALIDATION",
-            _format_missing_validation(current, next_boundary_line=next_boundary_line,
-                                       boundary_kind=boundary_kind),
-        )
+        # Validator-less single-fence prompt: accepted as valid. Return normally
+        # so the caller can finalise the pair with validation_prompt="".
+        return
     if state is _State.IN_FIRST_FENCE:
         raise ParseError(
             "E-UNCLOSED-GENERATION",
@@ -214,7 +226,9 @@ def _raise_for_incomplete_state(
                              next_boundary_line=next_boundary_line,
                              boundary_kind=boundary_kind),
         )
-    assert state is _State.SEEK_EXTRA_CHECK, f"Unhandled state in _raise_for_incomplete_state: {state}"
+    assert state is _State.SEEK_EXTRA_CHECK, (
+        f"Unhandled state in _raise_for_incomplete_state: {state}"
+    )
 
 
 def _format_no_blocks(

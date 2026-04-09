@@ -128,15 +128,16 @@ def test_error_no_blocks():
     assert "Add" in err.message  # repair verb
 
 
-def test_error_missing_validation():
-    with pytest.raises(ParseError) as exc_info:
-        parse_file(FIXTURES / "missing-validator.md")
-    err = exc_info.value
-    assert err.error_id == "E-MISSING-VALIDATION"
-    assert '"Incomplete"' in err.message
-    assert "generation prompt" in err.message
-    assert "validation prompt" in err.message
-    assert "Add" in err.message
+def test_single_fence_fixture_now_accepted():
+    """The missing-validator fixture has a single-fence prompt section which is
+    now accepted as a validator-less pair instead of raising E-MISSING-VALIDATION."""
+    pairs = parse_file(FIXTURES / "missing-validator.md")
+    assert len(pairs) == 2
+    assert pairs[0].title == "Incomplete"
+    assert pairs[0].validation_prompt == ""
+    assert pairs[0].validation_line == 0
+    assert pairs[1].title == "Second"
+    assert pairs[1].validation_prompt == "Validator body."
 
 
 def test_error_unclosed_generation():
@@ -172,7 +173,6 @@ def test_no_bare_fence_jargon_in_error_messages():
     """Every ParseError message must avoid the bare word 'fence'."""
     fixtures_and_ids = [
         ("no-blocks.md", "E-NO-BLOCKS"),
-        ("missing-validator.md", "E-MISSING-VALIDATION"),
         ("unclosed-generation.md", "E-UNCLOSED-GENERATION"),
         ("unclosed-validation.md", "E-UNCLOSED-VALIDATION"),
         ("three-fences.md", "E-EXTRA-BLOCK"),
@@ -213,3 +213,167 @@ def test_empty_file_returns_empty_list():
 
 def test_file_with_no_prompt_headings_returns_empty_list():
     assert parse_text("# Introduction\n\nSome prose.\n") == []
+
+
+# ---------------------------------------------------------------------------
+# Interactive marker and optional validator (skill-authoring harness)
+# ---------------------------------------------------------------------------
+
+def test_heading_without_interactive_marker_defaults_to_false():
+    text = """## Prompt 1: Plain title
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 1
+    assert pairs[0].title == "Plain title"
+    assert pairs[0].interactive is False
+
+
+def test_heading_with_interactive_marker_strips_and_sets_flag():
+    text = """## Prompt 1: Author tdd skill [interactive]
+
+```
+mission body
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 1
+    assert pairs[0].title == "Author tdd skill"
+    assert pairs[0].interactive is True
+    assert pairs[0].generation_prompt == "mission body"
+    assert pairs[0].validation_prompt == ""
+
+
+def test_interactive_marker_is_case_insensitive():
+    for marker in ("[interactive]", "[Interactive]", "[INTERACTIVE]"):
+        text = f"""## Prompt 1: Title {marker}
+
+```
+gen
+```
+"""
+        pairs = parse_text(text)
+        assert pairs[0].interactive is True, f"failed for {marker}"
+        assert pairs[0].title == "Title"
+
+
+def test_brackets_earlier_in_title_are_not_interactive_marker():
+    text = """## Prompt 1: Deal with [brackets] in title
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    pairs = parse_text(text)
+    assert pairs[0].title == "Deal with [brackets] in title"
+    assert pairs[0].interactive is False
+
+
+def test_brackets_earlier_with_interactive_at_end():
+    text = """## Prompt 1: Deal with [brackets] in title [interactive]
+
+```
+gen
+```
+"""
+    pairs = parse_text(text)
+    assert pairs[0].title == "Deal with [brackets] in title"
+    assert pairs[0].interactive is True
+
+
+def test_single_fence_prompt_is_accepted_as_validator_less():
+    text = """## Prompt 1: Mission only
+
+```
+this is the mission, no validator follows
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 1
+    assert pairs[0].generation_prompt == "this is the mission, no validator follows"
+    assert pairs[0].validation_prompt == ""
+    assert pairs[0].validation_line == 0
+
+
+def test_single_fence_prompt_followed_by_another_heading():
+    text = """## Prompt 1: First mission
+
+```
+mission one
+```
+
+## Prompt 2: Second mission
+
+```
+mission two
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 2
+    assert pairs[0].generation_prompt == "mission one"
+    assert pairs[0].validation_prompt == ""
+    assert pairs[1].generation_prompt == "mission two"
+    assert pairs[1].validation_prompt == ""
+
+
+def test_mixed_single_fence_and_double_fence_in_same_file():
+    text = """## Prompt 1: With validator
+
+```
+gen
+```
+
+```
+val
+```
+
+## Prompt 2: Without validator [interactive]
+
+```
+mission
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 2
+    assert pairs[0].validation_prompt == "val"
+    assert pairs[0].interactive is False
+    assert pairs[1].validation_prompt == ""
+    assert pairs[1].interactive is True
+
+
+def test_unclosed_generation_block_still_raises():
+    text = """## Prompt 1: Broken
+
+```
+unclosed generation
+"""
+    try:
+        parse_text(text)
+    except ParseError as exc:
+        assert exc.error_id == "E-UNCLOSED-GENERATION"
+        return
+    raise AssertionError("expected E-UNCLOSED-GENERATION")
+
+
+def test_no_blocks_at_all_still_raises():
+    text = """## Prompt 1: Empty
+
+No code blocks here, just prose.
+"""
+    try:
+        parse_text(text)
+    except ParseError as exc:
+        assert exc.error_id == "E-NO-BLOCKS"
+        return
+    raise AssertionError("expected E-NO-BLOCKS")

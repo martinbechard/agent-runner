@@ -731,11 +731,11 @@ def test_cli_parse_subcommand_prints_all_prompts(tmp_path, capsys):
 
 
 def test_cli_parse_subcommand_reports_parse_error(tmp_path, capsys):
-    fixture = Path(__file__).parent / "fixtures" / "missing-validator.md"
+    fixture = Path(__file__).parent / "fixtures" / "no-blocks.md"
     exit_code = main(["parse", str(fixture)])
     err = capsys.readouterr().err
     assert exit_code == 2
-    assert "E-MISSING-VALIDATION" in err
+    assert "E-NO-BLOCKS" in err
 
 
 def test_summary_includes_wall_time(tmp_path: Path):

@@ -36,14 +36,22 @@ Every prompt section starts with a level-2 heading whose first word is *Prompt*.
 - *## Prompt 3 — Agent Roles*
 - *## Prompt* (the prompt will be listed as "(untitled)")
 
+To mark a prompt for interactive execution, append *[interactive]* (case-insensitive) at the very end of the heading:
+
+- *## Prompt 1: Author tdd skill [interactive]*
+
+The marker is stripped from the displayed title and exposed as the `interactive` field on the parsed `PromptPair`. It has no effect on parsing — the runner uses it to decide whether to pause for human input before running the generation step.
+
 Any number in the heading is ignored — the runner assigns each prompt a 1-based index based on its position in the file. If you want prompts to run in a specific order, put them in the file in that order.
 
-## The two code blocks
+## The code blocks
 
-Between a prompt heading and the next prompt heading (or end of file), the parser expects **exactly two fenced code blocks**, in this order:
+Between a prompt heading and the next prompt heading (or end of file), the parser reads one or two fenced code blocks:
 
-1. The **generation prompt** — the body of the first code block.
-2. The **validation prompt** — the body of the second code block.
+1. The **generation prompt** — the body of the first code block (required).
+2. The **validation prompt** — the body of the second code block (optional).
+
+If only one code block is present, the prompt is accepted as *validator-less*: the parsed `PromptPair` has `validation_prompt=""` and `validation_line=0`. The runner skips the judge step for such prompts.
 
 The order determines the role. The parser does not look at sub-headings like *### 1.1 Generation Prompt* — you can use those for readability, or not use them at all. You can put any prose, sub-headings, or notes between the two code blocks; only the code blocks are extracted.
 
@@ -79,7 +87,7 @@ Your validation prompt is what the judge sees on every iteration. When the gener
 If the parser rejects your file, it prints one of these error IDs and a friendly repair instruction:
 
 - **E-NO-BLOCKS** — a prompt heading was found but no code blocks followed before the next heading or end of file.
-- **E-MISSING-VALIDATION** — the generation prompt was found but no validation prompt followed.
+- **E-MISSING-VALIDATION** — reserved; no longer raised (single-fence prompts are accepted as validator-less).
 - **E-UNCLOSED-GENERATION** — the generation prompt's code block was opened but never closed.
 - **E-UNCLOSED-VALIDATION** — the validation prompt's code block was opened but never closed.
 - **E-EXTRA-BLOCK** — more than two code blocks were found inside a single prompt section.
