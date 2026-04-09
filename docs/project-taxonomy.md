@@ -97,6 +97,12 @@
 - **Filename pattern:** `<module>.test.tsx`
 - **Mirrors:** `src/web/`
 
+### docs/prompts/
+- **Purpose:** Hand-authored prompt-runner input files — sequences of LLM generation prompts paired with validator prompts, consumed by the prompt-runner CLI tool to produce design docs, acceptance criteria, plans, or source code. These files drive downstream artifact generation but are not themselves design documents, requirements, acceptance criteria, or plans.
+- **Signals:** `## Prompt N:` section headings, paired fenced code blocks (generation prompt + validation prompt), "max_iterations", "sent to Claude", "judge", intended to be passed as `--input` to the prompt-runner CLI, subject line references a tool or feature being built via the runner.
+- **Filename pattern:** `PR-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the tool or feature the prompts will produce.
+- **Example:** `PR-001-methodology-runner.md`
+
 ### (project root)
 - **Purpose:** Tooling configuration files that must live at the repository root by ecosystem convention.
 - **Signals:** `package.json`, `tsconfig.json`, `pyproject.toml`, `.gitignore`, `README.md`, `CLAUDE.md`, `.editorconfig`, `.prettierrc`, lockfiles.
@@ -106,6 +112,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-08 — docs/prompts/ added — prompt-runner input files (hand-authored LLM prompt sequences with paired validators) are inputs to a tool, not design docs, requirements, plans, or test code; a dedicated prompt-files layer is needed.
 - 2026-04-08 — docs/plans/ added — TDD implementation plans (sequential task groups decomposing a design into test-first steps) are transient work documents that are neither design, requirements, nor acceptance criteria; a dedicated plan layer is needed.
 - 2026-04-08 — docs/testing/ added — implementation acceptance criteria (runnable checks that the finished code matches a design) have no home in docs/design/, docs/requirements/, or tests/; a dedicated verification-spec layer is needed.
 - 2026-04-08 — src/shared/ added — TypeScript types shared between server and web frontend have no home in either src/server/ or src/web/; a neutral shared layer is needed.
