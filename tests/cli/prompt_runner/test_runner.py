@@ -871,3 +871,142 @@ def test_build_revision_judge_message_prepends_prelude():
         "revised artifact", judge_prelude="# JUD REVISE PRELUDE",
     )
     assert msg.startswith("# JUD REVISE PRELUDE")
+
+
+# ---------------------------------------------------------------------------
+# Validator-less path (non-interactive)
+# ---------------------------------------------------------------------------
+
+def test_no_validator_skips_judge_and_marks_pass(tmp_path: Path):
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+    from prompt_runner.runner import run_prompt
+
+    pair = PromptPair(
+        index=1, title="Validator-less",
+        generation_prompt="do the thing",
+        validation_prompt="",  # empty!
+        heading_line=1, generation_line=2, validation_line=0,
+        interactive=False,
+    )
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="artifact body", stderr="", returncode=0),
+        # NO judge response needed — judge is skipped
+    ])
+    result = run_prompt(
+        pair=pair, prior_artifacts=[],
+        run_dir=tmp_path / "run", config=RunConfig(max_iterations=3),
+        claude_client=client, run_id="test-run",
+        workspace_dir=_workspace(tmp_path),
+    )
+    assert result.final_verdict.value == "pass"
+    assert result.iterations[0].judge_output == ""
+    assert len(client.received) == 1  # generator only, no judge
+
+
+# ---------------------------------------------------------------------------
+# Interactive mode
+# ---------------------------------------------------------------------------
+
+def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monkeypatch):
+    """Verify interactive prompts spawn claude via subprocess.run, inherit
+    stdio, and mark the prompt pass regardless of exit code."""
+    from prompt_runner.runner import run_prompt
+    from prompt_runner.claude_client import FakeClaudeClient
+    import subprocess
+
+    # Capture subprocess.run invocations to verify argv and stdio behavior
+    captured: dict = {}
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured["kwargs"] = kwargs
+        # stdio should NOT be captured — kwargs should not contain
+        # stdout/stderr/stdin/capture_output
+        class R: returncode = 0
+        return R()
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    pair = PromptPair(
+        index=1, title="Interactive author",
+        generation_prompt="author the thing",
+        validation_prompt="",
+        heading_line=1, generation_line=2, validation_line=0,
+        interactive=True,
+    )
+    result = run_prompt(
+        pair=pair, prior_artifacts=[],
+        run_dir=tmp_path / "run", config=RunConfig(max_iterations=3),
+        claude_client=FakeClaudeClient(scripted=[]),
+        run_id="test-run",
+        workspace_dir=_workspace(tmp_path),
+    )
+    # claude was invoked, with the mission as the last argv element
+    assert captured["argv"][0] == "claude"
+    assert "author the thing" in captured["argv"][-1]
+    # stdio was NOT captured — no stdout/stderr/stdin/capture_output in kwargs
+    assert "capture_output" not in captured["kwargs"]
+    assert "stdout" not in captured["kwargs"]
+    assert "stderr" not in captured["kwargs"]
+    # Verdict is pass and iterations is empty
+    assert result.final_verdict.value == "pass"
+    assert result.iterations == []
+    # Final artifact marker files written
+    prompt_dir = (tmp_path / "run" / "prompt-01-interactive-author")
+    assert (prompt_dir / "final-verdict.txt").read_text("utf-8").strip() == "pass"
+    assert "interactive prompt" in (prompt_dir / "final-artifact.md").read_text("utf-8").lower()
+
+
+def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch):
+    from prompt_runner.runner import run_prompt
+    from prompt_runner.claude_client import FakeClaudeClient
+    import subprocess
+
+    captured: dict = {}
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        class R: returncode = 0
+        return R()
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    pair = PromptPair(
+        index=1, title="X", generation_prompt="m", validation_prompt="",
+        heading_line=1, generation_line=2, validation_line=0, interactive=True,
+    )
+    run_prompt(
+        pair=pair, prior_artifacts=[],
+        run_dir=tmp_path / "run",
+        config=RunConfig(max_iterations=3, model="opus-test"),
+        claude_client=FakeClaudeClient(scripted=[]),
+        run_id="test-run",
+        workspace_dir=_workspace(tmp_path),
+    )
+    assert "--model" in captured["argv"]
+    assert "opus-test" in captured["argv"]
+
+
+def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
+    from prompt_runner.runner import run_prompt
+    from prompt_runner.claude_client import FakeClaudeClient
+    import subprocess
+
+    workspace = _workspace(tmp_path)
+    def fake_run(argv, **kwargs):
+        # Simulate the user creating a file during the interactive session
+        (workspace / "newly-authored-skill.md").write_text("skill body", encoding="utf-8")
+        class R: returncode = 0
+        return R()
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    pair = PromptPair(
+        index=1, title="Author",
+        generation_prompt="create newly-authored-skill.md",
+        validation_prompt="",
+        heading_line=1, generation_line=2, validation_line=0, interactive=True,
+    )
+    result = run_prompt(
+        pair=pair, prior_artifacts=[],
+        run_dir=tmp_path / "run", config=RunConfig(max_iterations=3),
+        claude_client=FakeClaudeClient(scripted=[]),
+        run_id="test-run",
+        workspace_dir=workspace,
+    )
+    assert any(p.name == "newly-authored-skill.md" for p in result.created_files)

@@ -420,6 +420,86 @@ def _make_call(
     )
 
 
+def _run_interactive_prompt(
+    pair: PromptPair,
+    prior_artifacts: list[PriorArtifact],
+    run_dir: Path,
+    config: RunConfig,
+    workspace_dir: Path,
+) -> PromptResult:
+    """Spawn claude interactively with pair.generation_prompt as the mission.
+
+    Inherits stdin/stdout/stderr so the user sees a real TTY session and
+    can drive claude directly. Waits for the subprocess to exit (human
+    types /exit or Ctrl-C). Marks the prompt pass regardless of exit
+    code — the human is the validator in interactive mode.
+    """
+    import subprocess
+
+    from prompt_runner.verdict import Verdict
+
+    prompt_slug = _prompt_dir_name(pair)
+    prompt_dir = run_dir / prompt_slug
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+
+    snapshot_dir = run_dir / "snapshots" / f"{prompt_slug}-pre"
+    _snapshot_workspace(workspace_dir, snapshot_dir)
+
+    # Build the mission text: prior-artifact context + the pair's
+    # generation prompt. We use the same message builder as the
+    # non-interactive path so the user sees consistent context across
+    # the two modes.
+    mission = build_initial_generator_message(
+        pair, prior_artifacts, generator_prelude=config.generator_prelude,
+    )
+
+    # Spawn claude interactively. stdin/stdout/stderr inherit from this
+    # process so the user sees a real TTY session. Wait for exit.
+    argv = ["claude"]
+    if config.model:
+        argv.extend(["--model", config.model])
+    argv.append(mission)
+
+    print(
+        f"\n{'=' * 70}\n"
+        f"-- prompt {pair.index} '{pair.title}' / INTERACTIVE --\n"
+        f"{'=' * 70}\n"
+        f"Spawning claude interactively. When done, type /exit or Ctrl-C\n"
+        f"to return control to prompt-runner.\n"
+        f"{'=' * 70}\n",
+        flush=True,
+    )
+
+    result = subprocess.run(argv)  # no capture — inherit stdio
+    exit_code = result.returncode
+
+    # Capture files the session created
+    created_files = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+
+    # Write artifact stubs so downstream resume logic can see the pair completed.
+    # There is no generator text to capture (stdio was inherited), so the
+    # artifact file records the fact that this was an interactive session.
+    artifact_stub = (
+        f"[interactive prompt -- stdio inherited, no captured output]\n"
+        f"Mission: {pair.title}\n"
+        f"Exit code: {exit_code}\n"
+    )
+    _write(prompt_dir / "final-artifact.md", artifact_stub)
+    _write(prompt_dir / "final-verdict.txt", Verdict.PASS.value + "\n")
+    _write(
+        prompt_dir / "files-created.txt",
+        "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
+    )
+
+    return PromptResult(
+        pair=pair,
+        iterations=[],  # no iterations in interactive mode
+        final_verdict=Verdict.PASS,
+        final_artifact=artifact_stub,
+        created_files=created_files,
+    )
+
+
 def run_prompt(
     pair: PromptPair,
     prior_artifacts: list[PriorArtifact],
@@ -429,6 +509,10 @@ def run_prompt(
     run_id: str,
     workspace_dir: Path,
 ) -> PromptResult:
+    if pair.interactive:
+        return _run_interactive_prompt(
+            pair, prior_artifacts, run_dir, config, workspace_dir,
+        )
     if config.max_iterations < 1:
         raise ValueError(
             f"max_iterations must be >= 1, got {config.max_iterations}"
@@ -483,6 +567,19 @@ def run_prompt(
         # judge so it knows exactly which files to inspect, rather than
         # having to discover them via Glob.
         files_so_far = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+
+        if not pair.validation_prompt:
+            # Validator-less prompt: accept the generator's output without a
+            # judge call. Mark the iteration as pass so the loop exits.
+            iterations.append(
+                IterationResult(
+                    iteration=iteration_number,
+                    generator_output=gen_response.stdout,
+                    judge_output="",  # no judge call
+                    verdict=Verdict.PASS,
+                )
+            )
+            break
 
         jud_msg = (
             build_initial_judge_message(
