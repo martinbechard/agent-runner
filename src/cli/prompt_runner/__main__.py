@@ -76,11 +76,34 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _print_error_banner(err.error_id, err.message)
         return 2
 
+    generator_prelude: str | None = None
+    judge_prelude: str | None = None
+    if args.generator_prelude:
+        gp_path = Path(args.generator_prelude)
+        if not gp_path.exists():
+            _print_error_banner(
+                "R-PRELUDE-NOT-FOUND",
+                f"--generator-prelude file not found: {gp_path}",
+            )
+            return 2
+        generator_prelude = gp_path.read_text(encoding="utf-8")
+    if args.judge_prelude:
+        jp_path = Path(args.judge_prelude)
+        if not jp_path.exists():
+            _print_error_banner(
+                "R-PRELUDE-NOT-FOUND",
+                f"--judge-prelude file not found: {jp_path}",
+            )
+            return 2
+        judge_prelude = jp_path.read_text(encoding="utf-8")
+
     config = RunConfig(
         max_iterations=args.max_iterations,
         model=args.model,
         only=args.only,
         dry_run=args.dry_run,
+        generator_prelude=generator_prelude,
+        judge_prelude=judge_prelude,
     )
 
     try:
@@ -169,6 +192,25 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Parse and show the planned sequence without calling claude.",
+    )
+    run_cmd.add_argument(
+        "--generator-prelude",
+        default=None,
+        help=(
+            "Path to a text file whose contents are prepended to every "
+            "generator Claude message in this run.  Used by "
+            "methodology-runner to inject phase-specific skill loading "
+            "instructions; opaque text from prompt-runner's perspective."
+        ),
+    )
+    run_cmd.add_argument(
+        "--judge-prelude",
+        default=None,
+        help=(
+            "Path to a text file whose contents are prepended to every "
+            "judge Claude message in this run.  Symmetric to "
+            "--generator-prelude."
+        ),
     )
     run_cmd.set_defaults(func=_cmd_run)
 
