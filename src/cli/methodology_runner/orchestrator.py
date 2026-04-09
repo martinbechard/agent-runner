@@ -220,6 +220,7 @@ def initialize_workspace(config: PipelineConfig) -> Path:
     for subdir in (
         "docs/requirements",
         "docs/features",
+        "docs/architecture",
         "docs/design",
         "docs/simulations",
         "docs/implementation",

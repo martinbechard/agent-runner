@@ -226,15 +226,51 @@ Verify that:
 """,
 
     # ------------------------------------------------------------------
-    # Phase 2: Solution Design
+    # Phase 2: Architecture
     # ------------------------------------------------------------------
-    "PH-002-solution-design": """\
-## Phase 2: Solution Design -- Cross-Reference Checks
+    "PH-002-architecture": """\
+## Phase 2: Architecture -- Cross-Reference Checks
 
 Current phase output: {output_path}
 Prior phase outputs:
   Phase 0 (Requirements Inventory): docs/requirements/requirements-inventory.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
+
+### 1. Traceability
+Read {output_path}.  For each CMP-* component:
+- Read its features_served list.
+- For each FT-NNN, verify it exists in Phase 1.
+Flag any component with an empty features_served list or non-existent feature refs.
+
+### 2. Coverage
+Read docs/features/feature-specification.yaml.  Collect all FT-NNN IDs.
+For each FT-NNN, verify it appears in at least one component's
+features_served list.  Flag any untraced features.
+
+### 3. Consistency
+Verify that:
+- All CMP-NNN IDs are unique.
+- All IP-NNN IDs are unique.
+- Every component in an integration_point's between list exists as a component.
+- Every component has a non-empty expected_expertise list.
+- The rationale field is non-empty and explains decomposition choices.
+
+### 4. Integration
+- Flag components with no features_served entries.
+- Verify integration_points reference two distinct components each.
+- Verify technology choices are coherent with frameworks listed.\
+""",
+
+    # ------------------------------------------------------------------
+    # Phase 3: Solution Design
+    # ------------------------------------------------------------------
+    "PH-003-solution-design": """\
+## Phase 3: Solution Design -- Cross-Reference Checks
+
+Current phase output: {output_path}
+Prior phase outputs:
+  Phase 1 (Feature Specification): docs/features/feature-specification.yaml
+  Phase 2 (Architecture): docs/architecture/stack-manifest.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each CMP-* component:
@@ -263,19 +299,19 @@ Verify that:
 """,
 
     # ------------------------------------------------------------------
-    # Phase 3: Interface Contracts
+    # Phase 4: Interface Contracts
     # ------------------------------------------------------------------
-    "PH-003-interface-contracts": """\
-## Phase 3: Interface Contracts -- Cross-Reference Checks
+    "PH-004-interface-contracts": """\
+## Phase 4: Interface Contracts -- Cross-Reference Checks
 
 Current phase output: {output_path}
 Prior phase outputs:
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 2 (Solution Design): docs/design/solution-design.yaml
+  Phase 3 (Solution Design): docs/design/solution-design.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each CTR-* contract:
-- Verify interaction_ref points to an existing INT-NNN in Phase 2.
+- Verify interaction_ref points to an existing INT-NNN in Phase 3.
 - Verify source_component and target_component match the INT's source/target.
 Flag any CTR-* with a missing or incorrect interaction_ref.
 
@@ -294,24 +330,24 @@ Verify that:
 
 ### 4. Integration
 - Verify contracts are consistent with Phase 1 acceptance criteria.
-- Verify no contract introduces operations not implied by Phase 2 interactions.
-- Verify behavioural specs are achievable given Phase 2 component responsibilities.\
+- Verify no contract introduces operations not implied by Phase 3 interactions.
+- Verify behavioural specs are achievable given Phase 3 component responsibilities.\
 """,
 
     # ------------------------------------------------------------------
-    # Phase 4: Intelligent Simulations
+    # Phase 5: Intelligent Simulations
     # ------------------------------------------------------------------
-    "PH-004-intelligent-simulations": """\
-## Phase 4: Intelligent Simulations -- Cross-Reference Checks
+    "PH-005-intelligent-simulations": """\
+## Phase 5: Intelligent Simulations -- Cross-Reference Checks
 
 Current phase output: {output_path}
 Prior phase outputs:
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 3 (Interface Contracts): docs/design/interface-contracts.yaml
+  Phase 4 (Interface Contracts): docs/design/interface-contracts.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each SIM-* simulation:
-- Verify contract_ref points to an existing CTR-NNN in Phase 3.
+- Verify contract_ref points to an existing CTR-NNN in Phase 4.
 Flag any SIM-* with a missing or incorrect contract_ref.
 
 ### 2. Coverage
@@ -334,37 +370,37 @@ Verify that:
 """,
 
     # ------------------------------------------------------------------
-    # Phase 5: Implementation Plan
+    # Phase 6: Incremental Implementation
     # ------------------------------------------------------------------
-    "PH-005-implementation-plan": """\
-## Phase 5: Implementation Plan -- Cross-Reference Checks
+    "PH-006-incremental-implementation": """\
+## Phase 6: Incremental Implementation -- Cross-Reference Checks
 
 Current phase output: {output_path}
 Prior phase outputs:
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 2 (Solution Design): docs/design/solution-design.yaml
-  Phase 3 (Interface Contracts): docs/design/interface-contracts.yaml
-  Phase 4 (Intelligent Simulations): docs/simulations/simulation-definitions.yaml
+  Phase 3 (Solution Design): docs/design/solution-design.yaml
+  Phase 4 (Interface Contracts): docs/design/interface-contracts.yaml
+  Phase 5 (Intelligent Simulations): docs/simulations/simulation-definitions.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each build_order step:
-- Verify component_ref references an existing CMP-NNN from Phase 2.
-- Verify contracts_implemented references existing CTR-NNN from Phase 3.
-- Verify simulations_used references existing SIM-NNN from Phase 4.
+- Verify component_ref references an existing CMP-NNN from Phase 3.
+- Verify contracts_implemented references existing CTR-NNN from Phase 4.
+- Verify simulations_used references existing SIM-NNN from Phase 5.
 For each unit test:
 - Verify acceptance_criteria_refs reference existing AC-NNN-NN from Phase 1.
-- Verify contract_ref references an existing CTR-NNN from Phase 3.
+- Verify contract_ref references an existing CTR-NNN from Phase 4.
 
 ### 2. Coverage
-- Every CMP-NNN from Phase 2 must appear in the build_order.
-- Every CTR-NNN from Phase 3 must appear in at least one step's
+- Every CMP-NNN from Phase 3 must appear in the build_order.
+- Every CTR-NNN from Phase 4 must appear in at least one step's
   contracts_implemented.
-- Every SIM-NNN from Phase 4 must appear in the simulation_replacement_sequence.
+- Every SIM-NNN from Phase 5 must appear in the simulation_replacement_sequence.
 - Every AC-NNN-NN from Phase 1 must be referenced by at least one test.
 
 ### 3. Consistency
 Verify that:
-- Build order respects the Phase 2 dependency graph: no component is built
+- Build order respects the Phase 3 dependency graph: no component is built
   before its dependencies are built or simulated.
 - Every SIM-* in simulation_replacement_sequence has a valid replaced_at_step.
 - integration_tests_to_rerun references actual integration test names.
@@ -377,17 +413,17 @@ Verify that:
 """,
 
     # ------------------------------------------------------------------
-    # Phase 6: Verification Sweep
+    # Phase 7: Verification Sweep
     # ------------------------------------------------------------------
-    "PH-006-verification-sweep": """\
-## Phase 6: Verification Sweep -- Cross-Reference Checks
+    "PH-007-verification-sweep": """\
+## Phase 7: Verification Sweep -- Cross-Reference Checks
 
 Current phase output: {output_path}
 Prior phase outputs:
   Phase 0 (Requirements Inventory): docs/requirements/requirements-inventory.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 2 (Solution Design): docs/design/solution-design.yaml
-  Phase 5 (Implementation Plan): docs/implementation/implementation-plan.yaml
+  Phase 3 (Solution Design): docs/design/solution-design.yaml
+  Phase 6 (Incremental Implementation): docs/implementation/implementation-plan.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each E2E-* test:
@@ -414,9 +450,9 @@ Verify that:
 - coverage_percentage = (covered / total_requirements) * 100.
 
 ### 4. Integration
-- Verify E2E tests exercise the component interaction paths from Phase 2.
+- Verify E2E tests exercise the component interaction paths from Phase 3.
 - Verify no E2E test references features marked out-of-scope in Phase 1.
-- Verify alignment with the Phase 5 implementation plan.\
+- Verify alignment with the Phase 6 implementation plan.\
 """,
 }
 

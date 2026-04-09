@@ -1,4 +1,4 @@
-"""Phase definitions for the seven methodology phases (PH-000 through PH-006).
+"""Phase definitions for the eight methodology phases (PH-000 through PH-007).
 
 This module is a pure data registry.  Each phase is a frozen PhaseConfig
 instance containing everything the prompt generator needs to produce a
@@ -9,16 +9,17 @@ Output paths align with CD-002 Section 4.5 workspace layout::
 
     docs/requirements/requirements-inventory.yaml   # Phase 0
     docs/features/feature-specification.yaml        # Phase 1
-    docs/design/solution-design.yaml                # Phase 2
-    docs/design/interface-contracts.yaml            # Phase 3
-    docs/simulations/simulation-definitions.yaml    # Phase 4
-    docs/implementation/implementation-plan.yaml    # Phase 5
-    docs/verification/verification-report.yaml      # Phase 6
+    docs/architecture/stack-manifest.yaml           # Phase 2 (NEW)
+    docs/design/solution-design.yaml                # Phase 3
+    docs/design/interface-contracts.yaml            # Phase 4
+    docs/simulations/simulation-definitions.yaml    # Phase 5
+    docs/implementation/implementation-plan.yaml    # Phase 6
+    docs/verification/verification-report.yaml      # Phase 7
 
 Public API
 ----------
 PHASES : list[PhaseConfig]
-    All seven phases in execution order (Phase 0 first, Phase 6 last).
+    All eight phases in execution order (Phase 0 first, Phase 7 last).
 PHASE_MAP : dict[str, PhaseConfig]
     Lookup by phase_id.
 get_phase(phase_id) -> PhaseConfig
@@ -44,11 +45,12 @@ _RAW_REQUIREMENTS_TEMPLATE = "{workspace}/docs/requirements/raw-requirements.md"
 
 _OUTPUT_PHASE_0 = "docs/requirements/requirements-inventory.yaml"
 _OUTPUT_PHASE_1 = "docs/features/feature-specification.yaml"
-_OUTPUT_PHASE_2 = "docs/design/solution-design.yaml"
-_OUTPUT_PHASE_3 = "docs/design/interface-contracts.yaml"
-_OUTPUT_PHASE_4 = "docs/simulations/simulation-definitions.yaml"
-_OUTPUT_PHASE_5 = "docs/implementation/implementation-plan.yaml"
-_OUTPUT_PHASE_6 = "docs/verification/verification-report.yaml"
+_OUTPUT_PHASE_2 = "docs/architecture/stack-manifest.yaml"
+_OUTPUT_PHASE_3 = "docs/design/solution-design.yaml"
+_OUTPUT_PHASE_4 = "docs/design/interface-contracts.yaml"
+_OUTPUT_PHASE_5 = "docs/simulations/simulation-definitions.yaml"
+_OUTPUT_PHASE_6 = "docs/implementation/implementation-plan.yaml"
+_OUTPUT_PHASE_7 = "docs/verification/verification-report.yaml"
 
 
 def _tpl(relative_path: str) -> str:
@@ -281,14 +283,14 @@ _PHASE_1 = PhaseConfig(
 )
 
 # ---------------------------------------------------------------------------
-# Phase 2: Solution Design
+# Phase 2: Architecture
 # ---------------------------------------------------------------------------
 
-_PHASE_2 = PhaseConfig(
-    phase_id="PH-002-solution-design",
-    phase_name="Solution Design",
+_PHASE_2_ARCHITECTURE = PhaseConfig(
+    phase_id="PH-002-architecture",
+    phase_name="Architecture",
     phase_number=2,
-    abbreviation="SD",
+    abbreviation="AR",
     predecessors=["PH-001-feature-specification"],
     input_source_templates=[
         InputSourceTemplate(
@@ -303,13 +305,144 @@ _PHASE_2 = PhaseConfig(
             format="yaml",
             description=(
                 "Requirements inventory for upstream traceability "
-                "verification"
+                "of expected_expertise choices"
             ),
         ),
     ],
     output_artifact_path=_OUTPUT_PHASE_2,
     output_format="yaml",
     expected_output_files=[_OUTPUT_PHASE_2],
+    extraction_focus=(
+        "Component completeness: every feature from the feature spec\n"
+        "must be served by at least one declared component.  Technology\n"
+        "coherence: each component has a single named technology and a\n"
+        "coherent frameworks list.  Expertise articulation: each\n"
+        "component declares a non-empty expected_expertise list of\n"
+        "free-text descriptions of the knowledge needed to build it.\n"
+        "Integration completeness: every cross-component data flow\n"
+        "implied by the features is captured as a named integration\n"
+        "point."
+    ),
+    generation_instructions=(
+        "Read the feature specification and produce a stack manifest YAML\n"
+        "file.  The file decomposes the enhancement into technology\n"
+        "components and declares what knowledge each component needs.\n"
+        "\n"
+        "components:\n"
+        "  - id: CMP-NNN-<slug>\n"
+        "    name: descriptive component name\n"
+        "    role: one-sentence role summary\n"
+        "    technology: e.g. python, typescript, go, rust\n"
+        "    runtime: e.g. python3.12, node22, go1.22\n"
+        "    frameworks: [name1, name2]\n"
+        "    persistence: e.g. postgresql, sqlite, none\n"
+        "    expected_expertise:\n"
+        "      - \"Free-text description of knowledge this component needs\"\n"
+        "      - \"Additional knowledge area\"\n"
+        "    features_served: [FT-NNN, ...]\n"
+        "\n"
+        "integration_points:\n"
+        "  - id: IP-NNN\n"
+        "    between: [CMP-NNN-a, CMP-NNN-b]\n"
+        "    protocol: e.g. HTTP/JSON over TLS\n"
+        "    contract_source: where the contract will be defined\n"
+        "\n"
+        "rationale: |\n"
+        "  Prose explanation of the decomposition choices.\n"
+        "\n"
+        "The expected_expertise field MUST use free-text, human-readable\n"
+        "descriptions (not Claude Code skill IDs).  A later Skill-Selector\n"
+        "agent maps each description to concrete skills from a catalog;\n"
+        "the architect phase is decoupled from the skill catalog so that\n"
+        "architecture outputs are portable across skill pack versions."
+    ),
+    judge_guidance=(
+        "Check for these failure modes:\n"
+        "\n"
+        "1. Feature coverage gaps: every FT-* feature from Phase 1 must\n"
+        "   appear in at least one component's features_served list.\n"
+        "2. Expertise articulation: every component must have a non-empty\n"
+        "   expected_expertise list of free-text descriptions.  Flag any\n"
+        "   component whose expertise list looks like concrete skill IDs\n"
+        "   (e.g., 'python-backend-impl') rather than descriptions\n"
+        "   (e.g., 'Python backend development').\n"
+        "3. Orphan integration points: every integration_point must\n"
+        "   reference two components both present in the components list.\n"
+        "4. Technology coherence: flag components whose frameworks list\n"
+        "   includes items from incompatible ecosystems (e.g., python\n"
+        "   technology with a react framework entry).\n"
+        "5. Missing rationale: the rationale field must explain the\n"
+        "   decomposition, not merely restate the component names."
+    ),
+    artifact_format="yaml",
+    artifact_schema_description=(
+        "components:\n"
+        "  - id: \"CMP-NNN-<slug>\"\n"
+        "    name: \"...\"\n"
+        "    role: \"...\"\n"
+        "    technology: \"...\"\n"
+        "    runtime: \"...\"\n"
+        "    frameworks: [\"...\"]\n"
+        "    persistence: \"...\"\n"
+        "    expected_expertise: [\"...\", \"...\"]\n"
+        "    features_served: [\"FT-NNN\", ...]\n"
+        "\n"
+        "integration_points:\n"
+        "  - id: \"IP-NNN\"\n"
+        "    between: [\"CMP-NNN-a\", \"CMP-NNN-b\"]\n"
+        "    protocol: \"...\"\n"
+        "    contract_source: \"...\"\n"
+        "\n"
+        "rationale: |\n"
+        "  ..."
+    ),
+    checklist_examples_good=[
+        (
+            "Every FT-* feature from Phase 1 appears in the features_served "
+            "list of at least one component in the stack manifest"
+        ),
+        (
+            "Every component has a non-empty expected_expertise list where "
+            "entries are free-text descriptions of required knowledge, not "
+            "concrete Claude Code skill IDs"
+        ),
+    ],
+    checklist_examples_bad=[
+        "The architecture is reasonable",
+        "Technologies are chosen",
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Phase 3: Solution Design
+# ---------------------------------------------------------------------------
+
+_PHASE_3 = PhaseConfig(
+    phase_id="PH-003-solution-design",
+    phase_name="Solution Design",
+    phase_number=3,
+    abbreviation="SD",
+    predecessors=["PH-002-architecture"],
+    input_source_templates=[
+        InputSourceTemplate(
+            ref_template=_tpl(_OUTPUT_PHASE_2),
+            role=InputRole.PRIMARY,
+            format="yaml",
+            description="Stack manifest produced by Phase 2 Architecture",
+        ),
+        InputSourceTemplate(
+            ref_template=_tpl(_OUTPUT_PHASE_1),
+            role=InputRole.UPSTREAM_TRACEABILITY,
+            format="yaml",
+            description=(
+                "Feature specification for upstream traceability "
+                "verification"
+            ),
+        ),
+    ],
+    output_artifact_path=_OUTPUT_PHASE_3,
+    output_format="yaml",
+    expected_output_files=[_OUTPUT_PHASE_3],
     extraction_focus=(
         "Feature realization: every FT-* feature must appear in at least\n"
         "one component's feature_realization_map.  Boundary clarity: each\n"
@@ -396,21 +529,21 @@ _PHASE_2 = PhaseConfig(
 )
 
 # ---------------------------------------------------------------------------
-# Phase 3: Interface Contracts
+# Phase 4: Interface Contracts
 # ---------------------------------------------------------------------------
 
-_PHASE_3 = PhaseConfig(
-    phase_id="PH-003-interface-contracts",
+_PHASE_4 = PhaseConfig(
+    phase_id="PH-004-interface-contracts",
     phase_name="Interface Contracts",
-    phase_number=3,
+    phase_number=4,
     abbreviation="CI",
-    predecessors=["PH-002-solution-design"],
+    predecessors=["PH-003-solution-design"],
     input_source_templates=[
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_2),
+            ref_template=_tpl(_OUTPUT_PHASE_3),
             role=InputRole.PRIMARY,
             format="yaml",
-            description="Solution design with components and interactions from Phase 2",
+            description="Solution design with components and interactions from Phase 3",
         ),
         InputSourceTemplate(
             ref_template=_tpl(_OUTPUT_PHASE_1),
@@ -422,9 +555,9 @@ _PHASE_3 = PhaseConfig(
             ),
         ),
     ],
-    output_artifact_path=_OUTPUT_PHASE_3,
+    output_artifact_path=_OUTPUT_PHASE_4,
     output_format="yaml",
-    expected_output_files=[_OUTPUT_PHASE_3],
+    expected_output_files=[_OUTPUT_PHASE_4],
     extraction_focus=(
         "Interaction coverage: every INT-* interaction from the solution\n"
         "design must have a corresponding CTR-* contract.  Schema precision:\n"
@@ -529,21 +662,21 @@ _PHASE_3 = PhaseConfig(
 )
 
 # ---------------------------------------------------------------------------
-# Phase 4: Intelligent Simulations
+# Phase 5: Intelligent Simulations
 # ---------------------------------------------------------------------------
 
-_PHASE_4 = PhaseConfig(
-    phase_id="PH-004-intelligent-simulations",
+_PHASE_5 = PhaseConfig(
+    phase_id="PH-005-intelligent-simulations",
     phase_name="Intelligent Simulations",
-    phase_number=4,
+    phase_number=5,
     abbreviation="IS",
-    predecessors=["PH-003-interface-contracts"],
+    predecessors=["PH-004-interface-contracts"],
     input_source_templates=[
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_3),
+            ref_template=_tpl(_OUTPUT_PHASE_4),
             role=InputRole.PRIMARY,
             format="yaml",
-            description="Interface contracts from Phase 3",
+            description="Interface contracts from Phase 4",
         ),
         InputSourceTemplate(
             ref_template=_tpl(_OUTPUT_PHASE_1),
@@ -555,9 +688,9 @@ _PHASE_4 = PhaseConfig(
             ),
         ),
     ],
-    output_artifact_path=_OUTPUT_PHASE_4,
+    output_artifact_path=_OUTPUT_PHASE_5,
     output_format="yaml",
-    expected_output_files=[_OUTPUT_PHASE_4],
+    expected_output_files=[_OUTPUT_PHASE_5],
     extraction_focus=(
         "Contract coverage: every CTR-* contract must have at least one\n"
         "SIM-* simulation.  Scenario breadth: each simulation must include\n"
@@ -657,27 +790,27 @@ _PHASE_4 = PhaseConfig(
 )
 
 # ---------------------------------------------------------------------------
-# Phase 5: Implementation Plan
+# Phase 6: Incremental Implementation
 # ---------------------------------------------------------------------------
 
-_PHASE_5 = PhaseConfig(
-    phase_id="PH-005-implementation-plan",
-    phase_name="Implementation Plan",
-    phase_number=5,
+_PHASE_6 = PhaseConfig(
+    phase_id="PH-006-incremental-implementation",
+    phase_name="Incremental Implementation",
+    phase_number=6,
     abbreviation="II",
     predecessors=[
-        "PH-003-interface-contracts",
-        "PH-004-intelligent-simulations",
+        "PH-004-interface-contracts",
+        "PH-005-intelligent-simulations",
     ],
     input_source_templates=[
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_3),
+            ref_template=_tpl(_OUTPUT_PHASE_4),
             role=InputRole.PRIMARY,
             format="yaml",
             description="Interface contracts that define what to build",
         ),
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_4),
+            ref_template=_tpl(_OUTPUT_PHASE_5),
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
@@ -695,7 +828,7 @@ _PHASE_5 = PhaseConfig(
             ),
         ),
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_2),
+            ref_template=_tpl(_OUTPUT_PHASE_3),
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
@@ -704,9 +837,9 @@ _PHASE_5 = PhaseConfig(
             ),
         ),
     ],
-    output_artifact_path=_OUTPUT_PHASE_5,
+    output_artifact_path=_OUTPUT_PHASE_6,
     output_format="yaml",
-    expected_output_files=[_OUTPUT_PHASE_5],
+    expected_output_files=[_OUTPUT_PHASE_6],
     extraction_focus=(
         "Ordering correctness: the component build order must respect\n"
         "the dependency graph from the solution design -- no component\n"
@@ -814,15 +947,15 @@ _PHASE_5 = PhaseConfig(
 )
 
 # ---------------------------------------------------------------------------
-# Phase 6: Verification Sweep
+# Phase 7: Verification Sweep
 # ---------------------------------------------------------------------------
 
-_PHASE_6 = PhaseConfig(
-    phase_id="PH-006-verification-sweep",
+_PHASE_7 = PhaseConfig(
+    phase_id="PH-007-verification-sweep",
     phase_name="Verification Sweep",
-    phase_number=6,
+    phase_number=7,
     abbreviation="VS",
-    predecessors=["PH-005-implementation-plan"],
+    predecessors=["PH-006-incremental-implementation"],
     input_source_templates=[
         InputSourceTemplate(
             ref_template=_tpl(_OUTPUT_PHASE_1),
@@ -834,7 +967,7 @@ _PHASE_6 = PhaseConfig(
             ),
         ),
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_5),
+            ref_template=_tpl(_OUTPUT_PHASE_6),
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
@@ -843,7 +976,7 @@ _PHASE_6 = PhaseConfig(
             ),
         ),
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_2),
+            ref_template=_tpl(_OUTPUT_PHASE_3),
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
@@ -861,9 +994,9 @@ _PHASE_6 = PhaseConfig(
             ),
         ),
     ],
-    output_artifact_path=_OUTPUT_PHASE_6,
+    output_artifact_path=_OUTPUT_PHASE_7,
     output_format="yaml",
-    expected_output_files=[_OUTPUT_PHASE_6],
+    expected_output_files=[_OUTPUT_PHASE_7],
     extraction_focus=(
         "Chain completeness: every RI-* requirement traces through FT-*\n"
         "features and AC-* acceptance criteria to at least one E2E-*\n"
@@ -984,13 +1117,14 @@ _PHASE_6 = PhaseConfig(
 PHASES: list[PhaseConfig] = [
     _PHASE_0,
     _PHASE_1,
-    _PHASE_2,
+    _PHASE_2_ARCHITECTURE,
     _PHASE_3,
     _PHASE_4,
     _PHASE_5,
     _PHASE_6,
+    _PHASE_7,
 ]
-"""All seven phases in execution order (Phase 0 first, Phase 6 last)."""
+"""All eight phases in execution order (Phase 0 first, Phase 7 last)."""
 
 PHASE_MAP: dict[str, PhaseConfig] = {phase.phase_id: phase for phase in PHASES}
 """Lookup PhaseConfig by phase_id."""

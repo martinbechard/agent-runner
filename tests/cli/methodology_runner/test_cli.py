@@ -266,28 +266,29 @@ class TestDownstreamPhaseIds:
 
     def test_root_phase_cascades_to_all(self) -> None:
         ids = _downstream_phase_ids("PH-000-requirements-inventory")
-        assert len(ids) == 7
+        assert len(ids) == 8
         assert ids[0] == "PH-000-requirements-inventory"
 
     def test_terminal_phase_cascades_to_self(self) -> None:
-        ids = _downstream_phase_ids("PH-006-verification-sweep")
-        assert ids == ["PH-006-verification-sweep"]
+        ids = _downstream_phase_ids("PH-007-verification-sweep")
+        assert ids == ["PH-007-verification-sweep"]
 
     def test_mid_phase_cascades_downstream(self) -> None:
-        ids = _downstream_phase_ids("PH-003-interface-contracts")
-        assert "PH-003-interface-contracts" in ids
-        assert "PH-005-implementation-plan" in ids
-        assert "PH-006-verification-sweep" in ids
-        # Phase 0, 1, 2 should NOT be included
+        ids = _downstream_phase_ids("PH-004-interface-contracts")
+        assert "PH-004-interface-contracts" in ids
+        assert "PH-006-incremental-implementation" in ids
+        assert "PH-007-verification-sweep" in ids
+        # Phase 0, 1, 2, 3 should NOT be included
         assert "PH-000-requirements-inventory" not in ids
         assert "PH-001-feature-specification" not in ids
-        assert "PH-002-solution-design" not in ids
+        assert "PH-002-architecture" not in ids
+        assert "PH-003-solution-design" not in ids
 
     def test_phase_4_cascades_to_5_and_6(self) -> None:
-        ids = _downstream_phase_ids("PH-004-intelligent-simulations")
-        assert "PH-004-intelligent-simulations" in ids
-        assert "PH-005-implementation-plan" in ids
-        assert "PH-006-verification-sweep" in ids
+        ids = _downstream_phase_ids("PH-005-intelligent-simulations")
+        assert "PH-005-intelligent-simulations" in ids
+        assert "PH-006-incremental-implementation" in ids
+        assert "PH-007-verification-sweep" in ids
         assert len(ids) == 3
 
 
@@ -357,10 +358,10 @@ class TestBuildParser:
     def test_reset_with_phase(self) -> None:
         parser = _build_parser()
         args = parser.parse_args([
-            "reset", "/tmp/ws", "--phase", "PH-003-interface-contracts",
+            "reset", "/tmp/ws", "--phase", "PH-004-interface-contracts",
         ])
         assert args.workspace_dir == "/tmp/ws"
-        assert args.phase == "PH-003-interface-contracts"
+        assert args.phase == "PH-004-interface-contracts"
 
     def test_escalation_policy_choices(self) -> None:
         parser = _build_parser()
@@ -784,26 +785,26 @@ class TestCmdReset:
         state = _make_project_state(
             workspace,
             phase_statuses={
-                "PH-006-verification-sweep": PhaseStatus.COMPLETED,
+                "PH-007-verification-sweep": PhaseStatus.COMPLETED,
             },
         )
-        state.phase_results["PH-006-verification-sweep"] = _make_phase_result(
-            "PH-006-verification-sweep",
+        state.phase_results["PH-007-verification-sweep"] = _make_phase_result(
+            "PH-007-verification-sweep",
         )
         state_dir = workspace / ".methodology-runner"
         state.save(state_dir / "state.json")
 
         parser = _build_parser()
         args = parser.parse_args([
-            "reset", str(workspace), "--phase", "PH-006-verification-sweep",
+            "reset", str(workspace), "--phase", "PH-007-verification-sweep",
         ])
         rc = cmd_reset(args)
         assert rc == EXIT_SUCCESS
 
         reloaded = ProjectState.load(state_dir / "state.json")
-        phase6 = next(ps for ps in reloaded.phases if ps.phase_id == "PH-006-verification-sweep")
-        assert phase6.status == PhaseStatus.PENDING
-        assert "PH-006-verification-sweep" not in reloaded.phase_results
+        phase7 = next(ps for ps in reloaded.phases if ps.phase_id == "PH-007-verification-sweep")
+        assert phase7.status == PhaseStatus.PENDING
+        assert "PH-007-verification-sweep" not in reloaded.phase_results
 
     def test_cascades_downstream(self, tmp_path: Path) -> None:
         workspace = tmp_path / "ws"
@@ -819,36 +820,37 @@ class TestCmdReset:
         parser = _build_parser()
         args = parser.parse_args([
             "reset", str(workspace),
-            "--phase", "PH-003-interface-contracts",
+            "--phase", "PH-004-interface-contracts",
         ])
         rc = cmd_reset(args)
         assert rc == EXIT_SUCCESS
 
         reloaded = ProjectState.load(state_dir / "state.json")
 
-        # Phases 0, 1, 2 should remain COMPLETED
+        # Phases 0, 1, 2, 3 should remain COMPLETED
         for ps in reloaded.phases:
             if ps.phase_id in (
                 "PH-000-requirements-inventory",
                 "PH-001-feature-specification",
-                "PH-002-solution-design",
+                "PH-002-architecture",
+                "PH-003-solution-design",
             ):
                 assert ps.status == PhaseStatus.COMPLETED, f"{ps.phase_id} should stay COMPLETED"
 
-        # Phases 3, 4, 5, 6 should be reset to PENDING
+        # Phases 4, 5, 6, 7 should be reset to PENDING
         for ps in reloaded.phases:
             if ps.phase_id in (
-                "PH-003-interface-contracts",
-                "PH-004-intelligent-simulations",
-                "PH-005-implementation-plan",
-                "PH-006-verification-sweep",
+                "PH-004-interface-contracts",
+                "PH-005-intelligent-simulations",
+                "PH-006-incremental-implementation",
+                "PH-007-verification-sweep",
             ):
                 assert ps.status == PhaseStatus.PENDING, f"{ps.phase_id} should be PENDING"
                 assert ps.cross_ref_retries == 0
 
         # Phase results should be removed for reset phases
-        assert "PH-003-interface-contracts" not in reloaded.phase_results
-        assert "PH-006-verification-sweep" not in reloaded.phase_results
+        assert "PH-004-interface-contracts" not in reloaded.phase_results
+        assert "PH-007-verification-sweep" not in reloaded.phase_results
         # Upstream results should remain
         assert "PH-000-requirements-inventory" in reloaded.phase_results
 
@@ -879,13 +881,13 @@ class TestCmdReset:
         parser = _build_parser()
         args = parser.parse_args([
             "reset", str(workspace),
-            "--phase", "PH-003-interface-contracts",
+            "--phase", "PH-004-interface-contracts",
         ])
         cmd_reset(args)
         captured = capsys.readouterr()
         assert "Phase Reset" in captured.out
-        assert "PH-003-interface-contracts" in captured.out
-        assert "PH-005-implementation-plan" in captured.out
+        assert "PH-004-interface-contracts" in captured.out
+        assert "PH-006-incremental-implementation" in captured.out
 
 
 # ---------------------------------------------------------------------------

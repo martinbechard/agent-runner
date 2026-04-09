@@ -677,26 +677,30 @@ class TestPhaseCrossRefChecks:
         assert "requirements-inventory.yaml" in t
 
     def test_phase_2_references_phase_1(self) -> None:
-        t = PHASE_CROSS_REF_CHECKS["PH-002-solution-design"]
+        t = PHASE_CROSS_REF_CHECKS["PH-002-architecture"]
         assert "feature-specification.yaml" in t
 
     def test_phase_3_references_phase_2(self) -> None:
-        t = PHASE_CROSS_REF_CHECKS["PH-003-interface-contracts"]
-        assert "solution-design.yaml" in t
+        t = PHASE_CROSS_REF_CHECKS["PH-003-solution-design"]
+        assert "stack-manifest.yaml" in t
 
     def test_phase_4_references_phase_3(self) -> None:
-        t = PHASE_CROSS_REF_CHECKS["PH-004-intelligent-simulations"]
+        t = PHASE_CROSS_REF_CHECKS["PH-004-interface-contracts"]
+        assert "solution-design.yaml" in t
+
+    def test_phase_5_references_phase_4(self) -> None:
+        t = PHASE_CROSS_REF_CHECKS["PH-005-intelligent-simulations"]
         assert "interface-contracts.yaml" in t
 
-    def test_phase_5_references_phases_1_through_4(self) -> None:
-        t = PHASE_CROSS_REF_CHECKS["PH-005-implementation-plan"]
+    def test_phase_6_references_phases_1_through_5(self) -> None:
+        t = PHASE_CROSS_REF_CHECKS["PH-006-incremental-implementation"]
         assert "feature-specification.yaml" in t
         assert "solution-design.yaml" in t
         assert "interface-contracts.yaml" in t
         assert "simulation-definitions.yaml" in t
 
-    def test_phase_6_references_phases_0_1_2_5(self) -> None:
-        t = PHASE_CROSS_REF_CHECKS["PH-006-verification-sweep"]
+    def test_phase_7_references_phases_0_1_3_6(self) -> None:
+        t = PHASE_CROSS_REF_CHECKS["PH-007-verification-sweep"]
         assert "requirements-inventory.yaml" in t
         assert "feature-specification.yaml" in t
         assert "solution-design.yaml" in t
@@ -778,7 +782,7 @@ class TestVerifyPhaseCrossReferences:
     def test_prompt_contains_phase_info(self, tmp_path: Path) -> None:
         workspace = tmp_path / "project"
         workspace.mkdir()
-        phase = PHASE_MAP["PH-002-solution-design"]
+        phase = PHASE_MAP["PH-003-solution-design"]
         client = FakeClaudeClient(scripted=[
             ClaudeResponse(
                 stdout=_wrap_in_fence(_passing_json()),
