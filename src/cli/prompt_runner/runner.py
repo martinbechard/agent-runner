@@ -174,17 +174,40 @@ def build_initial_generator_message(
     return _HORIZONTAL_RULE.join(sections)
 
 
-def build_initial_judge_message(pair: PromptPair, artifact: str) -> str:
+def _format_generator_files_section(files: list[Path]) -> str:
+    """Format a list of files produced by the generator for a judge message.
+
+    If files is empty (text-only task), returns a short note saying so;
+    the judge can still look around with tools but should not expect any
+    specific files.
+    """
+    if not files:
+        return (
+            "# Files produced by the generator during this iteration\n\n"
+            "(no files created or modified — this appears to be a text-only "
+            "task)"
+        )
+    listing = "\n".join(f"- {f}" for f in files)
+    return (
+        "# Files produced by the generator during this prompt (relative to cwd)\n\n"
+        f"{listing}\n\n"
+        "These are the exact files the generator added or modified since "
+        "this prompt started. Your cwd is the project root — Read any of "
+        "them directly, run Bash (python -m py_compile, mypy, pytest, etc.) "
+        "to verify them, and consult them alongside the text response."
+    )
+
+
+def build_initial_judge_message(
+    pair: PromptPair, artifact: str, generator_files: list[Path] | None = None,
+) -> str:
+    files_section = _format_generator_files_section(generator_files or [])
     return (
         f"{pair.validation_prompt}"
         f"{_HORIZONTAL_RULE}"
         f"# Artifact to evaluate (generator's text response)\n\n{artifact}"
         f"{_HORIZONTAL_RULE}"
-        f"The generator may also have created files on disk. Your current "
-        f"working directory is the project root. You can Read any file, run "
-        f"Bash commands (python -m py_compile, mypy, pytest, etc.), and Glob "
-        f"for files the generator may have produced. Use tool-based "
-        f"verification in addition to reading the text response."
+        f"{files_section}"
         f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
@@ -199,14 +222,15 @@ def build_revision_generator_message(judge_output: str) -> str:
     )
 
 
-def build_revision_judge_message(new_artifact: str) -> str:
+def build_revision_judge_message(
+    new_artifact: str, generator_files: list[Path] | None = None,
+) -> str:
+    files_section = _format_generator_files_section(generator_files or [])
     return (
         f"{ANTI_ANCHORING_CLAUSE}\n\n"
         f"# Revised artifact (generator's text response)\n\n{new_artifact}"
         f"{_HORIZONTAL_RULE}"
-        f"The generator may have created or modified files on disk. Re-check "
-        f"them via Read / Bash / Glob as needed, alongside re-reading the "
-        f"text response."
+        f"{files_section}"
         f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
@@ -421,10 +445,16 @@ def run_prompt(
             claude_client, gen_call, prompt_dir / f"iter-{iteration_number:02d}-generator.md"
         )
 
+        # Diff the workspace against the pre-prompt snapshot to find which
+        # files the generator has touched so far. Pass this list to the
+        # judge so it knows exactly which files to inspect, rather than
+        # having to discover them via Glob.
+        files_so_far = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+
         jud_msg = (
-            build_initial_judge_message(pair, gen_response.stdout)
+            build_initial_judge_message(pair, gen_response.stdout, files_so_far)
             if is_first
-            else build_revision_judge_message(gen_response.stdout)
+            else build_revision_judge_message(gen_response.stdout, files_so_far)
         )
         jud_call = _make_call(
             prompt=jud_msg,

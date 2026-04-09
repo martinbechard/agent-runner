@@ -94,6 +94,72 @@ def test_revision_generator_message_includes_organiser_instruction():
     assert "project-organiser" in msg
 
 
+def test_initial_judge_message_lists_generator_files():
+    """The judge message must include the explicit list of files the
+    generator produced, so the judge knows what to inspect without having
+    to discover files via tools."""
+    p = _pair(1, "X")
+    msg = build_initial_judge_message(
+        p, "artifact text",
+        generator_files=[Path("src/foo.py"), Path("tests/test_foo.py")],
+    )
+    assert "src/foo.py" in msg
+    assert "tests/test_foo.py" in msg
+    assert "Files produced by the generator" in msg
+
+
+def test_initial_judge_message_with_no_files_says_text_only():
+    """When the generator produced no files, the judge message explicitly
+    says so — no ambiguity about whether the judge should go looking."""
+    p = _pair(1, "X")
+    msg = build_initial_judge_message(p, "artifact text", generator_files=[])
+    assert "(no files created or modified" in msg
+    assert "text-only task" in msg
+
+
+def test_revision_judge_message_lists_generator_files():
+    msg = build_revision_judge_message(
+        "revised artifact",
+        generator_files=[Path("src/models.py")],
+    )
+    assert "src/models.py" in msg
+    assert "Files produced by the generator" in msg
+
+
+def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
+    """End-to-end: when the generator creates a file, that file's path is
+    included in the prompt the judge sees on the same iteration."""
+    workspace = _workspace(tmp_path)
+    pair = _pair(1, "Alpha")
+
+    class FileCreatingThenPassingClient:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def call(self, call):
+            self._n += 1
+            if self._n == 1:
+                # Generator: write a new file in the workspace.
+                (workspace / "created_by_gen.py").write_text("x = 1\n")
+                return _pass_response("here is the artifact")
+            # Judge: return pass, but record the prompt we received so
+            # the test can assert the file is mentioned.
+            self._judge_prompt = call.prompt
+            return _judge_pass()
+
+    client = FileCreatingThenPassingClient()
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=client, run_id="testrun",
+        workspace_dir=workspace,
+    )
+
+    # The judge prompt must list the file the generator just created.
+    assert "created_by_gen.py" in client._judge_prompt, (
+        "judge prompt did not mention the file the generator produced"
+    )
+
+
 # ─── Workspace snapshot / diff / restore ─────────────────────────────────────
 
 from prompt_runner.runner import (
