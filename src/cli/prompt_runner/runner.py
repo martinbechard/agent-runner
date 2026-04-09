@@ -98,6 +98,14 @@ class RunConfig:
     model: str | None = None
     only: int | None = None
     dry_run: bool = False
+    generator_prelude: str | None = None
+    """Optional text prepended to every generator Claude message in this
+    run.  Used by methodology-runner to inject phase-specific skill
+    loading instructions.  prompt-runner treats this as opaque text —
+    it does not parse, interpret, or modify it."""
+    judge_prelude: str | None = None
+    """Optional text prepended to every judge Claude message in this
+    run.  Symmetric to generator_prelude."""
 
 
 @dataclass(frozen=True)
@@ -147,9 +155,14 @@ def _format_file_manifest(files: list[Path]) -> str:
 
 
 def build_initial_generator_message(
-    pair: PromptPair, prior_artifacts: list[PriorArtifact]
+    pair: PromptPair,
+    prior_artifacts: list[PriorArtifact],
+    generator_prelude: str | None = None,
 ) -> str:
     sections: list[str] = []
+
+    if generator_prelude:
+        sections.append(generator_prelude)
 
     if prior_artifacts:
         prior_blocks: list[str] = []
@@ -199,10 +212,15 @@ def _format_generator_files_section(files: list[Path]) -> str:
 
 
 def build_initial_judge_message(
-    pair: PromptPair, artifact: str, generator_files: list[Path] | None = None,
+    pair: PromptPair,
+    artifact: str,
+    generator_files: list[Path] | None = None,
+    judge_prelude: str | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
+    prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     return (
+        f"{prelude_block}"
         f"{pair.validation_prompt}"
         f"{_HORIZONTAL_RULE}"
         f"# Artifact to evaluate (generator's text response)\n\n{artifact}"
@@ -213,8 +231,13 @@ def build_initial_judge_message(
     )
 
 
-def build_revision_generator_message(judge_output: str) -> str:
+def build_revision_generator_message(
+    judge_output: str,
+    generator_prelude: str | None = None,
+) -> str:
+    prelude_block = f"{generator_prelude}{_HORIZONTAL_RULE}" if generator_prelude else ""
     return (
+        f"{prelude_block}"
         f"{REVISION_GENERATOR_PREAMBLE}\n\n"
         f"# Judge feedback\n\n{judge_output}"
         f"{_HORIZONTAL_RULE}"
@@ -223,10 +246,14 @@ def build_revision_generator_message(judge_output: str) -> str:
 
 
 def build_revision_judge_message(
-    new_artifact: str, generator_files: list[Path] | None = None,
+    new_artifact: str,
+    generator_files: list[Path] | None = None,
+    judge_prelude: str | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
+    prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     return (
+        f"{prelude_block}"
         f"{ANTI_ANCHORING_CLAUSE}\n\n"
         f"# Revised artifact (generator's text response)\n\n{new_artifact}"
         f"{_HORIZONTAL_RULE}"
@@ -426,9 +453,15 @@ def run_prompt(
         is_first = iteration_number == 1
 
         gen_msg = (
-            build_initial_generator_message(pair, prior_artifacts)
+            build_initial_generator_message(
+                pair, prior_artifacts,
+                generator_prelude=config.generator_prelude,
+            )
             if is_first
-            else build_revision_generator_message(iterations[-1].judge_output)
+            else build_revision_generator_message(
+                iterations[-1].judge_output,
+                generator_prelude=config.generator_prelude,
+            )
         )
         gen_call = _make_call(
             prompt=gen_msg,
@@ -452,9 +485,15 @@ def run_prompt(
         files_so_far = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
 
         jud_msg = (
-            build_initial_judge_message(pair, gen_response.stdout, files_so_far)
+            build_initial_judge_message(
+                pair, gen_response.stdout, files_so_far,
+                judge_prelude=config.judge_prelude,
+            )
             if is_first
-            else build_revision_judge_message(gen_response.stdout, files_so_far)
+            else build_revision_judge_message(
+                gen_response.stdout, files_so_far,
+                judge_prelude=config.judge_prelude,
+            )
         )
         jud_call = _make_call(
             prompt=jud_msg,

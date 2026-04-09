@@ -817,3 +817,57 @@ def test_r_claude_failed_halt_reason_includes_stderr_tail_and_log_paths(tmp_path
     assert "Partial output saved to:" in halt
     # The retry instruction should be there.
     assert "re-run prompt-runner" in halt
+
+
+# ---------------------------------------------------------------------------
+# Prelude prepending (spec section 9)
+# ---------------------------------------------------------------------------
+
+from prompt_runner.runner import RunConfig
+
+
+def test_run_config_defaults_have_none_preludes():
+    cfg = RunConfig()
+    assert cfg.generator_prelude is None
+    assert cfg.judge_prelude is None
+
+
+def test_build_initial_generator_message_prepends_generator_prelude():
+    p = _pair(1, "X", gen="the task body")
+    msg = build_initial_generator_message(
+        p, [], generator_prelude="# GEN PRELUDE TEXT",
+    )
+    assert msg.startswith("# GEN PRELUDE TEXT")
+    assert "the task body" in msg
+    # Horizontal rule or blank line must separate prelude from task
+    assert "\n\n" in msg.split("the task body")[0]
+
+
+def test_build_initial_generator_message_no_prelude_unchanged():
+    p = _pair(1, "X", gen="the task body")
+    msg_with = build_initial_generator_message(p, [], generator_prelude=None)
+    msg_without = build_initial_generator_message(p, [])
+    assert msg_with == msg_without
+
+
+def test_build_initial_judge_message_prepends_judge_prelude():
+    p = _pair(1, "X")
+    msg = build_initial_judge_message(
+        p, "artifact", judge_prelude="# JUD PRELUDE",
+    )
+    assert msg.startswith("# JUD PRELUDE")
+
+
+def test_build_revision_generator_message_prepends_prelude():
+    msg = build_revision_generator_message(
+        "feedback", generator_prelude="# GEN REVISE PRELUDE",
+    )
+    assert msg.startswith("# GEN REVISE PRELUDE")
+    assert "feedback" in msg
+
+
+def test_build_revision_judge_message_prepends_prelude():
+    msg = build_revision_judge_message(
+        "revised artifact", judge_prelude="# JUD REVISE PRELUDE",
+    )
+    assert msg.startswith("# JUD REVISE PRELUDE")
