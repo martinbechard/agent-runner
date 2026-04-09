@@ -1,168 +1,231 @@
-# Build: AI-Driven Development Methodology Runner
+# Build: AI-Driven Development Methodology Runner (v2)
 
-This prompt-runner input file produces a complete methodology runner system.
-When executed, it generates Python code for a tool that takes a requirements
-document as input and runs it through the full 7-phase AI-driven development
-pipeline (Phase 0: Requirements Inventory through Phase 6: Verification Sweep),
-with separate agents for checklist extraction, validation, generation, and
-judgment at each phase.
+This prompt-runner input file produces a methodology runner system with
+the following architecture:
 
-The generated system reuses the Claude CLI client from prompt-runner and
-follows the methodology defined in the AI-Driven Development Methodology
-artifacts (Phase Processing Unit schema, Phase Definitions, Agent Role
-Specifications, Traceability Infrastructure, Simulation Framework, and
-Orchestration design).
+For each methodology phase (0 through 6):
+
+1. Methodology runner assembles inputs (prior artifacts, phase config)
+2. Methodology runner calls Claude to GENERATE a prompt-runner .md file
+   that incrementally builds the phase's artifacts. Claude decides the
+   decomposition — few prompts for simple phases, many for complex ones.
+   Each prompt has its own verification prompt.
+3. Methodology runner invokes prompt-runner on that .md file. All
+   incremental work happens in a shared workspace tracked by git.
+   The judge has tool access and receives a git diff.
+4. When prompt-runner completes, the workspace contains the phase output.
+5. Methodology runner runs cross-reference verification: traceability,
+   integration with prior phases, coverage. This is a separate Claude
+   call with tool access.
+
+prompt-runner handles the generate-judge-revise loop at each increment.
+The methodology runner is a thin orchestrator: phase sequencing, prompt
+file generation, prompt-runner invocation, and cross-reference checks.
 
 ## Prompt 1: Solution Design
 
-### 1.1 Generation Prompt
-
 ```
 You are designing a Python application called "methodology-runner" that
-implements an AI-driven software development methodology. The system takes
-a requirements document as input and runs it through 7 phases (Phase 0
-through Phase 6), producing a complete system design ready for
-implementation.
+orchestrates an AI-driven software development methodology across 7
+phases (Phase 0: Requirements Inventory through Phase 6: Verification
+Sweep).
 
-CONTEXT: WHAT THE METHODOLOGY IS
+ARCHITECTURE OVERVIEW
 
-The methodology has 7 phases, each following a uniform "Phase Processing Unit"
-pattern:
+The system has two layers:
 
-  Phase 0: Requirements Inventory — extract every idea from raw requirements
-  Phase 1: Feature Specification — organize into structured features
-  Phase 2: Solution Design — architecture, components, interactions
-  Phase 3: Contract-First Interface Definitions — formal schemas for boundaries
-  Phase 4: Intelligent Simulations — LLM-powered test doubles per contract
-  Phase 5: Incremental Implementation — component-by-component with integration
-  Phase 6: Verification Sweep — end-to-end acceptance tests
+Layer 1 — methodology-runner (this system):
+  Sequences phases, generates prompt-runner input files, invokes
+  prompt-runner, and performs cross-reference verification.
 
-Each phase follows the Phase Processing Unit pattern:
-  1. Checklist Extraction — a dedicated agent reads inputs and produces
-     acceptance criteria
-  2. Checklist Validation — a separate agent checks the checklist for
-     completeness, grounding, and specificity
-  3. Artifact Generation — a generator agent produces the phase artifact
-     and a traceability mapping
-  4. Judgment — a separate judge agent evaluates every checklist item
-  5. Revision Loop — if verdict is "revise", generator revises and judge
-     re-evaluates ALL items. Bounded by max_iterations.
-  6. Phase Output — approved artifact, completed checklist, traceability
+Layer 2 — prompt-runner (existing tool, used as-is):
+  Executes a .md file containing (generation, validation) prompt pairs.
+  Each prompt goes through a generate-judge-revise loop with separate
+  Claude sessions. The judge has tool access and receives git diffs of
+  workspace changes. Approved artifacts from earlier prompts are carried
+  as context to later prompts.
 
-The checklist validation is itself a sub-loop (extract -> validate -> revise
-checklist if needed), bounded by max_validation_iterations.
+HOW A SINGLE PHASE EXECUTES:
 
-CONTEXT: EXISTING CODE TO REUSE
+  1. methodology-runner assembles the phase's inputs:
+     - Prior phase artifacts (files in the workspace)
+     - Phase configuration (what to produce, quality criteria, etc.)
+     - The methodology's phase definition (extraction focus, generation
+       instructions, judge guidance, artifact schema)
 
-There is an existing "prompt-runner" tool with these reusable components:
+  2. methodology-runner calls Claude with these inputs and a meta-prompt:
+     "Produce a prompt-runner .md file that incrementally builds this
+     phase's artifacts. Decide how many prompts are needed based on
+     complexity. Each prompt must have a verification prompt."
 
-  claude_client.py — ClaudeClient protocol, RealClaudeClient (subprocess
-    wrapper for the claude CLI with streaming output), ClaudeCall and
-    ClaudeResponse dataclasses, ClaudeInvocationError, and a
-    NON_INTERACTIVE_SYSTEM_PROMPT constant.
+     Claude returns a .md file like:
 
-  verdict.py — Verdict enum (PASS, REVISE, ESCALATE), parse_verdict()
-    function that extracts VERDICT lines from judge output.
+       ## Prompt 1: Extract Requirements Checklist
+       (generation prompt)
+       (validation prompt)
 
-These can be imported directly. The runner.py and parser.py from
-prompt-runner are NOT reused — the methodology-runner has its own
-orchestration logic.
+       ## Prompt 2: Functional Requirements
+       (generation prompt)
+       (validation prompt)
 
-YOUR TASK
+       ## Prompt 3: Non-Functional Requirements and Constraints
+       (generation prompt)
+       (validation prompt)
 
-Produce a solution design document that covers:
+     The number of prompts varies by phase and project complexity.
 
-1. COMPONENT INVENTORY — list every Python module the system needs, with
-   its responsibility (one sentence each). Group into packages.
+  3. methodology-runner writes the .md file to disk and invokes
+     prompt-runner on it (as a subprocess or library call). prompt-runner
+     executes each prompt with its generate-judge-revise loop in the
+     shared workspace.
 
-2. DATA FLOW — describe how data flows from the user's requirements document
-   through all 7 phases to the final verification plan. Show what each
-   agent receives and produces at each step.
+  4. When prompt-runner completes successfully, the workspace contains
+     the phase's full output.
 
-3. AGENT CALL ARCHITECTURE — how the system invokes Claude for each agent
-   role. Key decisions:
-   - Each agent role (extractor, validator, generator, judge) gets its own
-     Claude session (separate context, no cross-contamination).
-   - The system prompt for each role is assembled from a base role template
-     plus phase-specific configuration (extraction focus, generation
-     instructions, judge guidance, etc.).
-   - The traceability validator runs between phases, not within them.
+  5. methodology-runner runs cross-reference verification:
+     - Traceability: does every element in this phase's output trace
+       back to elements in prior phases?
+     - Coverage: are all upstream elements (requirements, features, etc.)
+       accounted for?
+     - Consistency: do references to prior-phase elements actually exist?
+     - Integration: does this phase's output integrate correctly with
+       prior phases (no contradictions, no orphans, no dead ends)?
 
-4. STATE MANAGEMENT — how project state is persisted between phases.
-   The system must support resuming from the last completed phase if
-   interrupted. Define the directory structure for a project run.
+     This is a separate Claude call with tool access to inspect the
+     workspace. It produces a structured pass/fail verdict with specific
+     issues listed. If it fails, the methodology-runner can re-generate
+     the prompt-runner file with the cross-reference issues as feedback.
 
-5. TRACEABILITY — how traceability links are stored (YAML files per phase),
-   how they are validated (completeness, consistency, coverage), and how
-   agents query them.
+WHAT YOU NEED TO DESIGN:
 
-6. CONFIGURATION — what the user can configure: max iterations per phase,
-   escalation policies, model selection, which phases to run.
+1. COMPONENT INVENTORY — list every Python module with its
+   responsibility. The system should be small; prompt-runner does
+   the heavy lifting. Expected modules:
 
-7. INTERFACE CONTRACTS between components — for each module, define its
-   public functions/classes with signatures and brief docstrings. Use
-   Python type hints. Do NOT write implementations — just the interface.
+   - models.py — dataclasses for phase config, project state,
+     cross-reference results
+   - phases.py — definitions for all 7 phases (inputs, outputs,
+     extraction focus, generation instructions, judge guidance,
+     artifact schemas, example checklist items)
+   - prompt_generator.py — the module that calls Claude to produce
+     a prompt-runner .md file for a given phase. Contains the
+     meta-prompt template and assembles the phase context.
+   - cross_reference.py — runs cross-reference verification after
+     a phase completes. Calls Claude with tool access to inspect
+     the workspace.
+   - orchestrator.py — sequences phases, manages workspace and git,
+     invokes prompt_generator then prompt-runner then cross-reference
+     for each phase, handles escalation and resumption.
+   - cli.py — command-line interface
 
-Format: a markdown document with the sections above. Use 4-space indented
-code for Python signatures (no triple-backtick fences). Keep it concrete
-and implementable — another developer (or AI) should be able to implement
-each module from this design alone.
+2. DATA FLOW — trace how a requirements document flows through the
+   system from input to final verification plan. Show the workspace
+   directory structure at each stage.
+
+3. WORKSPACE AND GIT — the shared workspace where all generators
+   work. Tracked by git so the judge can see diffs. Define:
+   - Initial structure
+   - How the methodology-runner initializes git
+   - How prompt-runner's generators write into it
+   - How git commits happen (after each approved prompt? after each
+     phase?)
+   - How git diffs are provided to judges
+
+4. PROMPT-RUNNER INTEGRATION — how the methodology-runner invokes
+   prompt-runner. Options:
+   - Subprocess: `prompt-runner run phase-N.md --project-dir ...`
+   - Library: import and call run_pipeline() directly
+   Design for both but recommend one. Consider: how does the
+   methodology-runner know where prompt-runner wrote its artifacts?
+   How does it pass the workspace path?
+
+5. THE META-PROMPT — the template used to ask Claude to produce a
+   prompt-runner .md file for a phase. This is the most critical
+   piece. It must convey:
+   - What the phase needs to produce (from phase config)
+   - What inputs are available (files in workspace from prior phases)
+   - Quality criteria (extraction focus, judge guidance)
+   - The prompt-runner file format constraints (## Prompt headings,
+     two code blocks per prompt, no triple backticks inside blocks)
+   - That Claude should decide the decomposition (number of prompts)
+     based on the complexity of what needs to be produced
+   - That each generation prompt should instruct the generator to
+     write files in the workspace
+   - That each validation prompt should tell the judge what to verify,
+     including checking the git diff for expected changes
+
+6. CROSS-REFERENCE VERIFICATION — the prompt template and process
+   for the post-phase verification call. What it checks, how it
+   reports results, how failures feed back into re-generation.
+
+7. STATE AND RESUMPTION — how project state is tracked. The system
+   must support resuming from the last completed phase. Define what
+   "completed" means (prompt-runner succeeded AND cross-reference
+   passed).
+
+8. INTERFACE CONTRACTS — for each module, public functions/classes
+   with Python type-hinted signatures and docstrings. No
+   implementations.
+
+Format: a markdown document with the sections above. Use 4-space
+indented code blocks for Python signatures (not triple-backtick fences).
+Keep it concrete and implementable.
 ```
 
-### 1.2 Validation Prompt
-
 ```
-You are reviewing a solution design for a "methodology-runner" system that
-implements an AI-driven development methodology with 7 phases.
+You are reviewing a solution design for a "methodology-runner" system.
 
 Evaluate against these criteria:
 
+ARCHITECTURE CLARITY
+- Is the two-layer architecture (methodology-runner + prompt-runner)
+  clearly described?
+- Is the boundary between layers unambiguous — what does each layer own?
+- Is there any logic that prompt-runner already handles being
+  reimplemented in methodology-runner?
+
 COMPONENT COMPLETENESS
-- Is there a module for data models (dataclasses)?
-- Is there a module for agent prompt templates?
-- Is there a module for phase definitions (all 7 phases)?
-- Is there a module for traceability storage and validation?
-- Is there a module for running a single phase (the Phase Processing Unit)?
-- Is there a module for the pipeline orchestrator?
-- Is there a module for CLI / entry point?
-- Is the reuse of claude_client.py and verdict.py from prompt-runner explicit?
+- Is there a module for each responsibility: models, phase definitions,
+  prompt generation, cross-reference verification, orchestration, CLI?
+- Is the reuse of prompt-runner explicit (how it's invoked, what's
+  imported vs. called as subprocess)?
 
-DATA FLOW CORRECTNESS
-- Can you trace the path of a single requirement from raw input through
-  all 7 phases?
-- At each phase, are the inputs clearly specified (which prior artifacts)?
-- Does the checklist extraction agent receive only input sources, not
-  the generated artifact?
-- Does the judge agent receive the checklist and artifact but NOT the
-  generation instructions?
-- Are generator and judge always in separate sessions?
+DATA FLOW
+- Can you trace a requirement from raw input through all 7 phases?
+- At each phase, is it clear what files exist in the workspace?
+- Is it clear how the prompt-runner's output becomes the next phase's
+  input (it's all files in the workspace)?
 
-AGENT ROLE SEPARATION
-- Are all four roles (extractor, validator, generator, judge) identified
-  as separate Claude sessions?
-- Is the traceability validator identified as a distinct check?
-- Is there any pathway where one role could influence another's domain?
+WORKSPACE AND GIT
+- Is git initialization defined?
+- Is the commit strategy defined (when do commits happen)?
+- Is it clear how judges receive git diffs?
+- Is workspace isolation between phases addressed (can a phase corrupt
+  prior phases' output)?
 
-STATE AND RESUMABILITY
-- Is the project directory structure defined?
+META-PROMPT QUALITY
+- Is the meta-prompt template detailed enough that Claude would produce
+  a valid prompt-runner .md file?
+- Does it convey the prompt-runner format constraints?
+- Does it instruct Claude to decide decomposition based on complexity?
+- Does it tell Claude that generators should write files in workspace?
+- Does it tell Claude that validation prompts should reference git diffs?
+
+CROSS-REFERENCE VERIFICATION
+- Is it clear what gets checked (traceability, coverage, consistency)?
+- Is it clear how failures feed back (re-generate the prompt-runner
+  file with issues as context)?
+- Is this a Claude call with tool access, not just text evaluation?
+
+STATE AND RESUMPTION
 - Can the system determine which phases are complete from disk state?
-- Is checkpointing defined (what gets written when)?
+- Is "complete" defined as prompt-runner pass AND cross-reference pass?
+- Can it resume from a crashed state?
 
-INTERFACE QUALITY
-- Do the public interfaces have type hints?
-- Are return types specified?
-- Could you implement each module from the interface alone?
-- Are there any circular dependencies between modules?
-
-For each criterion: status (pass/fail/partial), evidence, and if not pass,
-what specifically needs to change.
-
-Flag any uncovered concerns.
+For each criterion: pass/fail/partial with evidence.
 ```
 
 ## Prompt 2: Data Models
-
-### 2.1 Generation Prompt
 
 ```
 Using the solution design from Prompt 1, implement the data models module.
@@ -170,393 +233,201 @@ Using the solution design from Prompt 1, implement the data models module.
 Produce a single Python file: methodology_runner/models.py
 
 This module defines all dataclasses and enums used across the system.
-It has NO dependencies on other methodology-runner modules (it may import
-from standard library and from the prompt-runner verdict module).
+No dependencies on other methodology-runner modules. May import from
+standard library only.
 
-Required types (from the solution design):
+Required types:
 
-1. Enums:
-   - EscalationPolicy: halt, flag_and_continue, human_review
-   - PhaseStatus: pending, running, passed, escalated, skipped
-   - ChecklistItemStatus: pass_, fail, partial (note: "pass" is reserved)
-   - VerificationMethod: schema_inspection, behavioral_trace, content_match,
-     coverage_query, manual_review
-   - InputRole: primary, validation_reference, upstream_traceability
+ENUMS:
+  - EscalationPolicy: halt, flag_and_continue, human_review
+  - PhaseStatus: pending, running, prompt_runner_passed,
+    cross_ref_passed, escalated, skipped
+    (Note: a phase goes through running -> prompt_runner_passed ->
+    cross_ref_passed. Both must pass for the phase to be complete.)
+  - InputRole: primary, validation_reference, upstream_traceability
 
-2. Configuration dataclasses:
-   - InputSource: ref (path), role, format, description
-   - PhaseConfig: phase_id, phase_name, abbreviation, input_source_templates
-     (list of InputSource patterns with {project_dir} placeholders),
-     extraction_focus (str), generation_instructions (str),
-     judge_guidance (str), artifact_format (str), artifact_schema_description
-     (str), max_iterations (int), max_validation_iterations (int),
-     escalation_policy, checklist_examples (good and bad)
+CONFIGURATION:
+  - InputSourceTemplate: ref_template (str with {workspace} placeholder),
+    role (InputRole), format (str), description (str)
+  - PhaseConfig: phase_id, phase_name, abbreviation,
+    input_source_templates (list[InputSourceTemplate]),
+    extraction_focus (str), generation_instructions (str),
+    judge_guidance (str), artifact_format (str),
+    artifact_schema_description (str),
+    checklist_examples_good (list[str]),
+    checklist_examples_bad (list[str]),
+    max_prompt_runner_iterations (int, default 3),
+    escalation_policy (EscalationPolicy, default halt),
+    expected_output_files (list[str] — paths relative to workspace
+    that this phase should produce)
 
-3. Runtime dataclasses:
-   - ChecklistItem: id, source_ref, criterion, verification_method
-   - Checklist: items (list of ChecklistItem), phase_id
-   - TraceabilityEntry: artifact_element_ref, checklist_item_ids (list),
-     input_source_refs (list)
-   - TraceabilityMapping: entries (list of TraceabilityEntry), phase_id
-   - ChecklistEvaluation: checklist_item_id, result (ChecklistItemStatus),
-     evidence (str), reason (str), artifact_location (str)
-   - UncoveredConcern: id, concern (str), severity (str),
-     artifact_location (str)
-   - JudgmentResult: evaluations (list), uncovered_concerns (list),
-     verdict (Verdict)
-   - IterationRecord: iteration (int), verdict (Verdict),
-     passed_count (int), failed_count (int), partial_count (int)
-   - PhaseResult: phase_id, status (PhaseStatus), artifact_path (str),
-     checklist_path (str), traceability_path (str),
-     iterations (list of IterationRecord), final_verdict (Verdict or None)
-   - ProjectState: project_dir (Path), requirements_path (Path),
-     phase_results (dict mapping phase_id to PhaseResult),
-     started_at (str), current_phase (str or None)
+RUNTIME STATE:
+  - CrossRefResult: passed (bool), issues (list[str]),
+    traceability_gaps (list[str]), orphaned_elements (list[str]),
+    coverage_summary (dict[str, float])
+  - PhaseResult: phase_id (str), status (PhaseStatus),
+    prompt_runner_exit_code (int or None),
+    cross_ref_result (CrossRefResult or None),
+    prompt_runner_file (str — path to the generated .md file),
+    iteration_count (int), wall_time_seconds (float)
+  - ProjectState: workspace_dir (Path), requirements_path (Path),
+    phase_results (dict[str, PhaseResult]),
+    started_at (str), finished_at (str or None),
+    current_phase (str or None), git_initialized (bool)
 
-4. Serialization:
-   - Each dataclass should have a to_dict() method returning a plain dict
-   - Include a module-level function for loading ProjectState from a
-     JSON file and saving it
+SERIALIZATION:
+  - Each dataclass: to_dict() -> dict and from_dict(d: dict) classmethod
+  - ProjectState: save(path: Path) and load(path: Path) classmethods
+    using JSON
 
-Keep the module focused: data definitions and serialization only, no
-business logic. Use frozen=True for configuration types, regular
-dataclasses for mutable runtime types.
-
-Produce the complete Python file with all imports, docstrings, and type
-hints.
+Produce the complete Python file with all imports, docstrings, type
+hints. Use frozen=True for configuration types. Ensure enum values
+are valid Python (e.g. "pass_" not "pass").
 ```
 
-### 2.2 Validation Prompt
-
 ```
-You are reviewing a Python data models module for a methodology-runner
-system.
+You are reviewing a Python data models module for a methodology-runner.
 
 Evaluate against these criteria:
 
 TYPE COMPLETENESS
-- Are all types listed in the prompt present (all enums, config types,
-  runtime types)?
-- Does each dataclass have all the fields specified?
-- Are type hints present on every field?
-- Is Verdict imported from the prompt-runner verdict module?
+- All enums present: EscalationPolicy, PhaseStatus, InputRole?
+- All config types: InputSourceTemplate, PhaseConfig?
+- All runtime types: CrossRefResult, PhaseResult, ProjectState?
+- Every field from the specification present with correct type hints?
+
+PHASE STATUS LIFECYCLE
+- Does PhaseStatus support the two-stage completion
+  (prompt_runner_passed -> cross_ref_passed)?
+- Can you determine from a ProjectState which phases are fully complete
+  (cross_ref_passed), which partially complete (prompt_runner_passed),
+  and which haven't started (pending)?
 
 SERIALIZATION
-- Does every dataclass have a to_dict() method?
-- Are there load/save functions for ProjectState?
-- Can all types round-trip through to_dict() and back?
+- Does every dataclass have to_dict() and from_dict()?
+- Does ProjectState have save() and load()?
+- Can all types round-trip through to_dict/from_dict without loss?
+- Are enums serialized as strings and deserialized back to enums?
 
 DESIGN QUALITY
 - Are configuration types frozen?
-- Are there no circular imports?
-- Is there no business logic (only data definitions and serialization)?
-- Are docstrings present on every class?
-- Do enum values use valid Python identifiers (not "pass")?
-
-USABILITY
-- Can PhaseConfig's input_source_templates be resolved with a project
-  directory to produce actual InputSource paths?
-- Is ProjectState sufficient to determine which phases have completed
-  and what the current state is?
-- Can you reconstruct the full project history from ProjectState?
+- No circular imports?
+- No business logic (data only)?
+- Docstrings on all classes?
 
 For each criterion: pass/fail/partial with evidence.
 ```
 
-## Prompt 3: Agent Prompt Templates
-
-### 3.1 Generation Prompt
+## Prompt 3: Phase Definitions
 
 ```
-Using the solution design and data models from prior prompts, implement the
-agent prompt templates module.
-
-Produce a single Python file: methodology_runner/agent_prompts.py
-
-This module contains string templates for each agent role's system prompt,
-plus functions that assemble a complete prompt for a specific phase by
-combining the role template with phase-specific configuration.
-
-AGENT ROLES AND THEIR TEMPLATES:
-
-1. CHECKLIST EXTRACTOR
-   Base template covers:
-   - Identity: "You are the Checklist Extractor agent..."
-   - Boundaries: reads inputs, produces checklist, does NOT generate artifacts
-   - Output format: YAML with checklist_items list (id, source_ref, criterion,
-     verification_method)
-   - Element locator grammar: / (heading), $. (dot-path), L (line range),
-     @ (named anchor)
-   - Quality standards: good criteria are concrete, observable, binary;
-     bad criteria are vague, subjective, compound
-   - Must NOT soften requirements, resolve ambiguities, or invent requirements
-   - Handling validation feedback: revise specific items based on failed_check,
-     problematic_item_ids, uncovered_input_refs
-
-   Phase-specific insertion points:
-   - {extraction_focus} — what to look for in this phase
-   - {phase_id}, {phase_name}, {abbreviation}
-   - {artifact_schema_description} — what the artifact will look like
-   - {checklist_examples} — good/bad examples for this phase
-
-2. CHECKLIST VALIDATOR
-   Base template covers:
-   - Identity: "You are the Checklist Validator agent..."
-   - Boundaries: validates checklists, does NOT extract or generate
-   - Three ordered checks:
-     a. Grounding (order 1): every item traces to an input source element
-     b. Coverage (order 2): every requirement in inputs has a checklist item
-     c. Specificity (order 3): items are precise enough for pass/fail
-   - After grounding removes items, coverage must re-run
-   - Output format: YAML with validation_result (passed: bool,
-     failed_check, problematic_item_ids, uncovered_input_refs,
-     specificity_notes)
-
-   Phase-specific insertion points:
-   - {phase_id}, {phase_name}
-   - {input_source_descriptions} — what the input sources contain
-
-3. ARTIFACT GENERATOR
-   Base template covers:
-   - Identity: "You are the Artifact Generator agent..."
-   - Boundaries: produces artifact + traceability mapping, does NOT
-     modify checklist
-   - Must address every checklist item
-   - Traceability mapping format: list of (artifact_element_ref,
-     checklist_item_ids, input_source_refs)
-   - Output structure: artifact content first, then a YAML section
-     headed "# TRACEABILITY MAPPING" with the mapping
-   - On revision: receives full prior artifact + judge feedback,
-     must fix failures without regressing passes
-
-   Phase-specific insertion points:
-   - {generation_instructions} — what to produce for this phase
-   - {artifact_format}, {artifact_schema_description}
-   - {phase_id}, {phase_name}
-
-4. JUDGE
-   Base template covers:
-   - Identity: "You are the Judge agent..."
-   - Boundaries: evaluates artifact against checklist, does NOT modify
-     artifact or checklist
-   - Must independently verify traceability claims
-   - Evaluates EVERY checklist item on EVERY iteration (catches regressions)
-   - Output format: YAML with evaluations (per item: checklist_item_id,
-     result, evidence, reason, artifact_location), uncovered_concerns
-     (id, concern, severity, artifact_location), verdict
-   - Verdict rules: all pass -> pass, any fail/partial -> revise
-   - Must provide actionable feedback on failures
-   - artifact_location: MUST be non-empty for pass/partial; for fail,
-     non-empty when defect exists, empty only when element is missing
-
-   Phase-specific insertion points:
-   - {judge_guidance} — phase-specific quality concerns
-   - {phase_id}, {phase_name}
-
-5. TRACEABILITY VALIDATOR
-   Base template covers:
-   - Identity: "You are the Traceability Validator agent..."
-   - Runs between phases, not within them
-   - Checks: completeness (every element in phase N links to phase N-1),
-     consistency (all referenced IDs exist), coverage (percentage report),
-     orphan detection, dead-end detection
-   - Output format: YAML with validation_result (passed: bool,
-     orphaned_elements, dead_ends, broken_references, coverage_summary)
-
-FUNCTIONS TO IMPLEMENT:
-
-    def build_extractor_prompt(phase: PhaseConfig, input_paths: dict[str, str]) -> str
-    def build_validator_prompt(phase: PhaseConfig, input_descriptions: list[str]) -> str
-    def build_generator_prompt(phase: PhaseConfig, checklist: str) -> str
-    def build_judge_prompt(phase: PhaseConfig) -> str
-    def build_traceability_validator_prompt(phase_ids: list[str]) -> str
-
-    def build_extractor_revision_message(validation_feedback: str) -> str
-    def build_generator_revision_message(judge_feedback: str) -> str
-    def build_judge_revision_message(revised_artifact: str) -> str
-
-Each build_*_prompt function returns the complete system+user prompt for
-that agent's first invocation. The revision message functions return the
-follow-up message for subsequent iterations.
-
-IMPORTANT: The VERDICT instruction ("End your response with VERDICT: pass,
-VERDICT: revise, or VERDICT: escalate") must be appended to judge and
-validator prompts. Use a constant for this, similar to prompt-runner's
-VERDICT_INSTRUCTION.
-
-Produce the complete Python file. Use multi-line strings for templates.
-Use str.format() or Template substitution for insertion points. Include
-all imports and docstrings.
-```
-
-### 3.2 Validation Prompt
-
-```
-You are reviewing the agent prompt templates module for a methodology-runner.
-
-Evaluate against these criteria:
-
-ROLE COVERAGE
-- Are all 5 roles implemented (extractor, validator, generator, judge,
-  traceability validator)?
-- Does each role template clearly state the agent's identity and boundaries?
-- Does each template specify the exact output format?
-- Does each template include explicit "do NOT" instructions?
-
-SEPARATION ENFORCEMENT
-- Does the extractor template forbid artifact generation?
-- Does the generator template forbid checklist modification?
-- Does the judge template forbid artifact modification?
-- Does the validator template forbid extraction or generation?
-
-PHASE PARAMETERIZATION
-- Does each build_*_prompt function accept a PhaseConfig?
-- Are all insertion points from the design populated from PhaseConfig fields?
-- Would two different phases produce meaningfully different prompts?
-
-VERDICT HANDLING
-- Is VERDICT instruction appended to judge and validator prompts?
-- Is the instruction consistent with prompt-runner's format?
-
-REVISION SUPPORT
-- Is there a revision message function for each role that revises
-  (extractor and generator)?
-- Does the judge revision message include anti-anchoring language
-  (telling the judge to re-evaluate everything, not anchor to prior)?
-- Does the generator revision message tell it to preserve passing items?
-
-OUTPUT FORMAT CLARITY
-- Could a naive LLM follow the output format instructions to produce
-  parseable YAML?
-- Are field names and structures specified precisely?
-- Are examples included in the templates?
-
-For each criterion: pass/fail/partial with evidence.
-```
-
-## Prompt 4: Phase Definitions
-
-### 4.1 Generation Prompt
-
-```
-Using the solution design, data models, and agent prompt templates from
-prior prompts, implement the phase definitions module.
+Using the solution design and data models from prior prompts, implement
+the phase definitions module.
 
 Produce a single Python file: methodology_runner/phases.py
 
-This module defines all 7 phases as PhaseConfig instances. Each phase is
-a complete configuration that, when passed to the agent prompt template
-functions, produces the correct prompts for that phase's agents.
+This module defines all 7 phases as PhaseConfig instances. Each phase
+config provides everything the prompt generator needs to produce a
+prompt-runner file, and everything the cross-reference verifier needs
+to check the output.
 
 Define these phases:
 
 PHASE 0: REQUIREMENTS INVENTORY (PH-000, abbreviation: RI)
-  Purpose: Extract every distinct idea, constraint, assumption from raw
-  requirements into a flat enumerated inventory.
-  Input: the user's requirements document(s) (primary)
-  Artifact: YAML inventory with items having: id (RI-NNN), category
+  Input: the user's requirements document (primary)
+  Output: {workspace}/phases/PH-000/inventory.yaml
+  Artifact: YAML inventory with items: id (RI-NNN), category
     (functional, non_functional, constraint, assumption),
-    verbatim_quote, source_location, tags (ambiguity, conflict, etc.)
-  Extraction focus: completeness (every idea captured), atomicity
-    (compounds split), fidelity (no interpretation, ambiguity preserved)
-  Judge guidance: watch for silent omissions, invented requirements,
-    unsplit compounds, lost nuance, wrong categories
+    verbatim_quote, source_location, tags
+  Extraction focus: completeness, atomicity, fidelity (no interpretation)
+  Judge guidance: silent omissions, invented requirements, unsplit
+    compounds, lost nuance, wrong categories
+  Good checklist example: "Every paragraph in the requirements document
+    that contains a shall/must/will statement has at least one
+    corresponding RI-* item in the inventory"
+  Bad checklist example: "Requirements are captured"
 
 PHASE 1: FEATURE SPECIFICATION (PH-001, abbreviation: FS)
-  Purpose: Organize inventory items into structured features with
-  acceptance criteria.
   Input: requirements inventory (primary), raw requirements
     (validation-reference)
-  Artifact: YAML feature list with features (FT-NNN), acceptance criteria
-    (AC-NNN-NN), out_of_scope section, cross-cutting concerns (CC-NNN)
-  Extraction focus: complete RI coverage, quality of acceptance criteria,
-    dependency identification
-  Judge guidance: vague criteria, assumption conflicts, scope creep,
-    unjustified exclusions
+  Output: {workspace}/phases/PH-001/features.yaml
+  Artifact: YAML with features (FT-NNN), acceptance criteria
+    (AC-NNN-NN), out_of_scope, cross-cutting concerns (CC-NNN)
+  Extraction focus: complete RI coverage, AC quality, dependencies
+  Judge guidance: vague criteria, assumption conflicts, scope creep
 
 PHASE 2: SOLUTION DESIGN (PH-002, abbreviation: SD)
-  Purpose: Define system architecture — components, responsibilities,
-  interactions.
   Input: feature specification (primary), requirements inventory
     (upstream-traceability)
+  Output: {workspace}/phases/PH-002/design.yaml
   Artifact: YAML with components (CMP-NNN), interactions (INT-NNN),
-    feature realization map (which components realize which features)
-  Extraction focus: every feature has a realization path, component
-    boundaries are clear, all interactions identified
-  Judge guidance: orphan components, god components, missing interactions,
-    implicit state sharing, assumption drift
+    feature realization map
+  Extraction focus: every feature has a realization path, boundaries
+    clear, all interactions identified
+  Judge guidance: orphan components, god components, missing
+    interactions, implicit state sharing
 
-PHASE 3: CONTRACT-FIRST INTERFACE DEFINITIONS (PH-003, abbreviation: CI)
-  Purpose: Formal schemas for every component boundary.
+PHASE 3: INTERFACE CONTRACTS (PH-003, abbreviation: CI)
   Input: solution design (primary), feature specification
     (validation-reference)
-  Artifact: YAML with contracts (CTR-NNN), operations (OP-NNN),
-    input/output schemas, error types, behavioral specs
-  Extraction focus: every interaction has a contract, schemas are precise,
+  Output: {workspace}/phases/PH-003/contracts.yaml
+  Artifact: YAML with contracts (CTR-NNN), operations, schemas,
+    error types, behavioral specs
+  Extraction focus: every interaction has a contract, schemas precise,
     error handling complete
-  Judge guidance: type holes, error gaps, cross-contract inconsistency,
-    missing idempotency
+  Judge guidance: type holes, error gaps, cross-contract inconsistency
 
 PHASE 4: INTELLIGENT SIMULATIONS (PH-004, abbreviation: IS)
-  Purpose: LLM-powered test doubles for each contract.
   Input: interface contracts (primary), feature specification
     (validation-reference)
-  Artifact: YAML simulation specifications with: simulation ID (SIM-NNN),
-    contract_ref, scenario bank (happy/error/edge), LLM adjuster config,
-    validation rules
+  Output: {workspace}/phases/PH-004/simulations.yaml
+  Artifact: YAML simulation specs: SIM-NNN, contract_ref, scenario
+    bank, LLM adjuster config, validation rules
   Extraction focus: every contract has a simulation, scenarios cover
-    happy/error/edge, LLM adjuster is schema-constrained
-  Judge guidance: validation gaps, scenario realism, LLM leakage,
-    error cascade blindness
+    happy/error/edge
+  Judge guidance: validation gaps, scenario realism, LLM leakage
 
-PHASE 5: INCREMENTAL IMPLEMENTATION (PH-005, abbreviation: II)
-  Purpose: Implementation plan — component ordering, unit tests,
-  integration tests.
+PHASE 5: IMPLEMENTATION PLAN (PH-005, abbreviation: II)
   Input: interface contracts (primary), simulation specs
     (validation-reference), feature specification (validation-reference),
     solution design (validation-reference)
-  Artifact: YAML implementation plan with: component build order
-    (dependency-graph-derived), per-component unit test plan
-    (UT-CMP-NNN), integration test plan (IT-CMP-NNN), simulation
-    replacement sequence
-  Extraction focus: ordering respects dependencies, tests trace to
-    acceptance criteria, simulation replacement triggers re-testing
-  Judge guidance: ordering violations, test sufficiency, completion
-    criteria gaps
+  Output: {workspace}/phases/PH-005/implementation-plan.yaml
+  Artifact: YAML with component build order, per-component unit test
+    plan, integration test plan, simulation replacement sequence
+  Extraction focus: ordering respects dependencies, tests trace to ACs,
+    simulation replacement triggers re-testing
+  Judge guidance: ordering violations, test sufficiency, completion gaps
 
 PHASE 6: VERIFICATION SWEEP (PH-006, abbreviation: VS)
-  Purpose: End-to-end acceptance test specifications.
   Input: feature specification (primary), implementation plan
-    (validation-reference), requirements inventory (upstream-traceability)
-  Artifact: YAML verification plan with: E2E tests (E2E-AREA-NNN),
-    traceability matrix (RI -> FT -> AC -> E2E), coverage summary
-  Extraction focus: every AC has an E2E test, traceability chains are
-    complete from RI to E2E
+    (validation-reference), requirements inventory
+    (upstream-traceability)
+  Output: {workspace}/phases/PH-006/verification-plan.yaml
+  Artifact: YAML with E2E tests (E2E-AREA-NNN), traceability matrix
+    (RI -> FT -> AC -> E2E), coverage summary
+  Extraction focus: every AC has an E2E test, chains complete from RI
+    to E2E
   Judge guidance: broken chains, superficial tests, missing negative
-    tests, silent coverage gaps
+    tests
 
-FOR EACH PHASE, provide:
-  - phase_id, phase_name, abbreviation
-  - input_source_templates (using {project_dir} as placeholder for the
-    project directory path)
-  - extraction_focus (multi-line string)
-  - generation_instructions (multi-line string)
-  - judge_guidance (multi-line string)
-  - artifact_format and artifact_schema_description
-  - checklist_examples with good and bad examples (at least 2 each)
-  - max_iterations (default 3), max_validation_iterations (default 3)
-  - escalation_policy (default halt)
+FOR EACH PHASE provide:
+  - All PhaseConfig fields fully populated
+  - extraction_focus, generation_instructions, judge_guidance as
+    multi-line strings with specific, actionable content
+  - At least 2 good and 2 bad checklist examples
+  - expected_output_files listing what the phase produces
+  - input_source_templates using {workspace} placeholders
 
-Also provide:
-  - PHASES: a list of all PhaseConfig instances in execution order
+Provide module-level:
+  - PHASES: list[PhaseConfig] in execution order
+  - PHASE_MAP: dict[str, PhaseConfig] keyed by phase_id
   - get_phase(phase_id: str) -> PhaseConfig
-  - get_phase_input_sources(phase: PhaseConfig, project_dir: Path)
-      -> list[InputSource] — resolves templates to actual paths
+  - resolve_input_sources(phase: PhaseConfig, workspace: Path)
+      -> list[tuple[Path, InputRole, str]]
+    (resolves templates to actual paths, returns path + role + description)
 
 Produce the complete Python file.
 ```
-
-### 4.2 Validation Prompt
 
 ```
 You are reviewing the phase definitions module for a methodology-runner.
@@ -565,514 +436,572 @@ Evaluate against these criteria:
 
 PHASE COMPLETENESS
 - Are all 7 phases defined (PH-000 through PH-006)?
-- Does each phase have ALL required PhaseConfig fields populated?
-- Are the phases in PHASES list in correct execution order?
+- Does each have ALL PhaseConfig fields populated?
+- Are phases in PHASES list in correct order?
 
 INPUT/OUTPUT CHAIN
 - Does each phase's input_source_templates reference the correct prior
-  phase's output artifact path?
+  phase's output path?
 - Is Phase 0's input the user's requirements document?
-- Does Phase 6 trace back to Phase 0 (requirements inventory as
-  upstream-traceability)?
-- Are input roles correct (primary, validation-reference,
-  upstream-traceability)?
+- Does Phase 6 trace back to Phase 0?
+- Are input roles correct?
 
 CONTENT QUALITY
-- Is extraction_focus specific enough to guide a checklist extractor?
-  (Not vague like "extract requirements" but concrete like "every FR-*
-  identifier must map to a checklist item")
-- Are generation_instructions detailed enough to produce the right
-  artifact format?
+- Is extraction_focus concrete enough to guide a checklist extractor?
+  (Not "extract requirements" but "every shall/must statement has a
+  corresponding RI-* item")
+- Are generation_instructions detailed enough for artifact format?
 - Does judge_guidance list specific things to watch for?
-- Do checklist_examples include realistic good AND bad examples?
+- Are checklist examples realistic good AND bad?
 
-ARTIFACT FORMAT CONSISTENCY
-- Does each phase's artifact_schema_description define the YAML structure
-  the generator should produce?
-- Are ID formats specified for each phase's elements?
-- Are the ID formats consistent with what traceability expects?
+OUTPUT FILES
+- Does each phase's expected_output_files list the right paths?
+- Are paths relative to workspace?
+- Would the cross-reference verifier be able to find them?
 
-TRACEABILITY
-- Can you trace a hypothetical requirement through all 7 phases using
-  the defined input_source_templates and artifact paths?
-- At each phase transition, is the prior phase's artifact available
-  as an input source?
+TEMPLATE RESOLUTION
+- Does resolve_input_sources correctly replace {workspace}?
+- Does it handle missing files gracefully (return path even if file
+  doesn't exist yet, letting the caller decide)?
 
 For each criterion: pass/fail/partial with evidence.
 ```
 
-## Prompt 5: Traceability Engine
-
-### 5.1 Generation Prompt
+## Prompt 4: Prompt Generator
 
 ```
 Using the solution design, data models, and phase definitions from prior
-prompts, implement the traceability engine module.
+prompts, implement the prompt generator module.
 
-Produce a single Python file: methodology_runner/traceability.py
+Produce a single Python file: methodology_runner/prompt_generator.py
 
-This module handles storage, validation, and querying of traceability
-links across phases. Traceability links connect elements in each phase's
-artifact back through checklist items to input source elements, forming
-chains from Phase 6 all the way back to Phase 0.
-
-STORAGE:
-
-Traceability data is stored in YAML files, one per phase, in the project
-directory under a traceability/ subdirectory:
-
-    {project_dir}/traceability/phase-{N}-links.yaml
-
-Each file contains a list of TraceabilityEntry objects (from models.py).
-
-Functions:
-    def save_phase_traceability(
-        project_dir: Path,
-        phase_id: str,
-        mapping: TraceabilityMapping
-    ) -> Path
-
-    def load_phase_traceability(
-        project_dir: Path,
-        phase_id: str
-    ) -> TraceabilityMapping | None
-
-PARSING:
-
-The generator produces traceability mappings as a YAML block within its
-output, after a "# TRACEABILITY MAPPING" header. The engine must extract
-this from the raw generator output.
-
-    def extract_traceability_from_output(
-        generator_output: str,
-        phase_id: str
-    ) -> TraceabilityMapping
-
-VALIDATION:
-
-These functions check the integrity of traceability data. They return
-structured results suitable for reporting.
-
-    @dataclass
-    class TraceabilityValidationResult:
-        passed: bool
-        orphaned_elements: list[str]    # artifact elements with no upstream link
-        dead_ends: list[str]            # upstream elements with no downstream
-        broken_references: list[str]    # IDs that don't exist
-        coverage_by_phase: dict[str, float]  # phase_id -> percentage covered
-        issues: list[str]              # human-readable issue descriptions
-
-    def validate_phase_traceability(
-        project_dir: Path,
-        phase_id: str,
-        artifact_content: str,
-        checklist: Checklist
-    ) -> TraceabilityValidationResult
-
-    def validate_cross_phase_traceability(
-        project_dir: Path,
-        completed_phases: list[str]
-    ) -> TraceabilityValidationResult
-
-QUERYING:
-
-    def trace_forward(
-        project_dir: Path,
-        element_id: str
-    ) -> dict[str, list[str]]
-    # Returns {phase_id: [element_ids]} for all downstream elements
-
-    def trace_backward(
-        project_dir: Path,
-        element_id: str
-    ) -> dict[str, list[str]]
-    # Returns {phase_id: [element_ids]} for all upstream elements
-
-    def coverage_report(
-        project_dir: Path,
-        completed_phases: list[str]
-    ) -> str
-    # Returns a human-readable coverage report
-
-IMPLEMENTATION NOTES:
-- Use PyYAML for YAML parsing/writing (import yaml)
-- Element IDs follow the convention from phase definitions:
-  RI-NNN, FT-NNN, CMP-NNN, CTR-NNN, SIM-NNN, etc.
-- For trace_forward and trace_backward, walk the per-phase link files
-  and follow the chains
-- The validate functions should catch: missing files, malformed YAML,
-  ID references that don't exist in the artifact, gaps in the chain
-
-Produce the complete Python file with all imports, docstrings, error
-handling, and type hints.
-```
-
-### 5.2 Validation Prompt
-
-```
-You are reviewing the traceability engine module for a methodology-runner.
-
-Evaluate against these criteria:
-
-FUNCTION COMPLETENESS
-- Are all functions from the specification implemented: save, load,
-  extract, validate (phase and cross-phase), trace_forward,
-  trace_backward, coverage_report?
-- Is TraceabilityValidationResult defined with all fields?
-
-STORAGE CORRECTNESS
-- Does save write YAML to the correct path?
-- Does load handle missing files gracefully (returns None, not crash)?
-- Is the YAML format consistent with TraceabilityMapping.to_dict()?
-
-PARSING ROBUSTNESS
-- Does extract_traceability_from_output handle the case where the
-  generator output has no TRACEABILITY MAPPING section?
-- Does it handle malformed YAML in the mapping section?
-- Does it correctly split the artifact content from the traceability
-  section?
-
-VALIDATION THOROUGHNESS
-- Does validate_phase_traceability check for orphaned elements?
-- Does it check for broken references (IDs that don't exist)?
-- Does validate_cross_phase_traceability check chains across phases?
-- Do validation functions return structured results, not just booleans?
-
-QUERY CORRECTNESS
-- Does trace_forward walk the chain from early phases to later phases?
-- Does trace_backward walk from later phases to earlier phases?
-- Do they handle elements that appear in multiple phases?
-- Do they handle missing traceability files for intermediate phases?
-
-ERROR HANDLING
-- Are file I/O errors handled?
-- Are YAML parse errors handled?
-- Do functions fail gracefully rather than crashing the pipeline?
-
-For each criterion: pass/fail/partial with evidence.
-```
-
-## Prompt 6: Phase Runner
-
-### 6.1 Generation Prompt
-
-```
-Using all prior approved artifacts (solution design, data models, agent
-prompts, phase definitions, traceability engine), implement the phase
-runner module.
-
-Produce a single Python file: methodology_runner/phase_runner.py
-
-This is the core engine that executes a single phase through the full
-Phase Processing Unit pattern. It is called by the pipeline orchestrator
-for each phase.
-
-THE PHASE PROCESSING UNIT EXECUTION FLOW:
-
-    1. CHECKLIST EXTRACTION
-       a. Build extractor prompt using phase config and input source paths
-       b. Call Claude in a new session with the extractor system prompt
-       c. Parse the YAML checklist from the response
-       d. Enter checklist validation sub-loop:
-          i.   Build validator prompt
-          ii.  Call Claude in a new session with the validator prompt +
-               the checklist
-          iii. Parse the validation result
-          iv.  If validation passes, proceed to step 2
-          v.   If validation fails, build revision message with feedback,
-               resume the extractor session, parse revised checklist,
-               re-validate
-          vi.  If max_validation_iterations reached, apply escalation policy
-       e. Result: a validated Checklist object
-
-    2. ARTIFACT GENERATION
-       a. Build generator prompt using phase config + validated checklist
-       b. Assemble input context: read all input source files and include
-          their content
-       c. Call Claude in a new session with the generator prompt + inputs
-       d. Parse the response to separate artifact content from traceability
-          mapping (using traceability.extract_traceability_from_output)
-       e. Enter judgment loop:
-          i.   Build judge prompt using phase config
-          ii.  Call Claude in a new session with judge prompt + checklist
-               + artifact
-          iii. Parse the judgment result (evaluations, concerns, verdict)
-          iv.  If verdict is pass, proceed to step 3
-          v.   If verdict is revise, build revision message with judge
-               feedback, resume the generator session, re-extract
-               traceability, resume the judge session with revised
-               artifact + anti-anchoring clause
-          vi.  If max_iterations reached, apply escalation policy
-       f. Result: approved artifact + traceability mapping + judgment
-
-    3. PHASE OUTPUT
-       a. Write the artifact to {project_dir}/phases/{phase_id}/artifact.yaml
-       b. Write the checklist to {project_dir}/phases/{phase_id}/checklist.yaml
-       c. Save traceability via traceability.save_phase_traceability()
-       d. Write the judgment (evaluations + concerns) to
-          {project_dir}/phases/{phase_id}/judgment.yaml
-       e. Return a PhaseResult
-
-KEY IMPLEMENTATION DETAILS:
-
-Session management:
-- Each agent role gets a unique session ID per phase per run:
-  "{role}-{phase_id}-{run_id}" hashed through uuid5
-- Extractor session is reused across validation iterations (resume)
-- Generator session is reused across judgment iterations (resume)
-- Validator gets a new session each validation iteration
-- Judge gets its session reused across judgment iterations (resume)
-
-Claude calls:
-- Import and use ClaudeClient, ClaudeCall, ClaudeResponse from
-  prompt_runner.claude_client
-- Import Verdict, parse_verdict from prompt_runner.verdict
-- Use the NON_INTERACTIVE_SYSTEM_PROMPT for all calls
-- Append role-specific system prompt content using --append-system-prompt
-
-Input assembly:
-- For each input source in the phase config, resolve the path using
-  the project directory, read the file content, and include it in the
-  prompt with a clear header showing the file path and role
-
-Error handling:
-- ClaudeInvocationError: persist partial output, return escalated result
-- YAML parse errors on agent outputs: retry once with a "your output was
-  not valid YAML, please fix" message; if still invalid, escalate
-- File not found for input sources: report which file is missing and
-  escalate
-
-Logging:
-- Write all agent inputs and outputs to
-  {project_dir}/phases/{phase_id}/logs/
+This is the core module. It calls Claude to produce a prompt-runner .md
+file for a given phase. The returned .md file contains however many
+incremental prompts Claude decides are needed, each with a verification
+prompt. When executed by prompt-runner, these prompts incrementally
+build the phase's artifacts in the shared workspace.
 
 PUBLIC INTERFACE:
 
-    def run_phase(
+    def generate_phase_prompts(
         phase: PhaseConfig,
-        project_dir: Path,
-        run_id: str,
-        client: ClaudeClient,
-        model: str | None = None
-    ) -> PhaseResult
+        workspace: Path,
+        model: str | None = None,
+    ) -> Path:
+        """Call Claude to produce a prompt-runner .md file for this phase.
 
-Produce the complete Python file. This is the most complex module —
-take care with the control flow, error handling, and session management.
+        Reads the input source files from the workspace, assembles them
+        with the phase configuration into a meta-prompt, calls Claude,
+        writes the resulting .md file to:
+            {workspace}/prompt-runner-files/{phase.phase_id}.md
+
+        Returns the path to the written .md file.
+        """
+
+IMPLEMENTATION:
+
+1. ASSEMBLE CONTEXT
+   - Resolve the phase's input source templates to actual file paths
+   - Read each input file's content
+   - Assemble into a context block with headers showing path and role:
+
+       # Input: {path} (role: {role})
+       {file content}
+
+2. BUILD THE META-PROMPT
+   The meta-prompt asks Claude to produce a prompt-runner .md file. It
+   must convey:
+
+   a. The phase's purpose (from phase_name and phase_id)
+
+   b. What the phase must produce (from generation_instructions,
+      artifact_format, artifact_schema_description, expected_output_files)
+
+   c. The input context (assembled above)
+
+   d. Quality criteria for the generation prompts:
+      - extraction_focus (for checklist-related prompts)
+      - judge_guidance (for verification prompts)
+      - checklist_examples_good and checklist_examples_bad
+
+   e. PROMPT-RUNNER FORMAT RULES — critical constraints:
+      - Each prompt section starts with ## Prompt N: Title
+      - Each section has exactly two code blocks (triple backtick fenced)
+      - First code block: generation prompt
+      - Second code block: validation prompt
+      - No triple backticks inside code blocks (use 4-space indent for
+        code examples inside prompts)
+      - Generation prompts should instruct the generator to write files
+        in the current working directory (the workspace)
+      - Validation prompts should tell the judge to:
+        * Check the git diff for expected file changes
+        * Use tool access to read and inspect created files
+        * Run any applicable mechanical checks (yaml parsing, syntax
+          validation, schema conformance)
+        * Verify the specific quality criteria for this increment
+
+   f. DECOMPOSITION GUIDANCE:
+      - Claude should decide how many prompts are needed based on
+        the complexity of the phase's output
+      - A simple phase (e.g., requirements inventory for a small
+        project) might need 2-3 prompts
+      - A complex phase (e.g., solution design for a large system)
+        might need 5-10 prompts
+      - Each prompt should produce a coherent increment — not too
+        small (trivial) or too large (likely to fail verification)
+      - The first prompt should typically handle checklist/criteria
+        extraction from the inputs
+      - Subsequent prompts should incrementally build the artifact,
+        with each verification checking the increment against the
+        relevant criteria
+      - The final prompt should consolidate and verify completeness
+
+   g. WORKSPACE CONVENTIONS:
+      - Phase output goes in {workspace}/phases/{phase_id}/
+      - Generators have full tool access (Read, Write, Bash)
+      - Files are tracked by git; judges see the diff
+
+3. CALL CLAUDE
+   - Use the claude CLI via subprocess (same pattern as prompt-runner's
+     RealClaudeClient, or import and use it directly)
+   - The meta-prompt goes as the user message
+   - Use a system prompt that says: "You are producing a prompt-runner
+     input file. Your entire response must be a valid prompt-runner
+     markdown file and nothing else. Do not include any preamble,
+     explanation, or commentary outside the file content."
+
+4. EXTRACT AND WRITE THE .MD FILE
+   - Parse Claude's response to extract the .md content
+   - Validate basic structure: at least one ## Prompt heading, each
+     has two code blocks
+   - Write to {workspace}/prompt-runner-files/{phase.phase_id}.md
+   - Return the path
+
+ERROR HANDLING:
+   - If Claude fails to produce a valid prompt-runner file (no ## Prompt
+     headings, or wrong number of code blocks), retry once with
+     feedback about what was wrong
+   - If input source files don't exist, raise a clear error listing
+     which files are missing and which phase was supposed to produce them
+   - If the meta-prompt is too large (input files are huge), summarize
+     the inputs rather than including full content
+
+Also provide:
+
+    META_PROMPT_TEMPLATE: str — the template string with placeholders
+
+    def _assemble_input_context(
+        phase: PhaseConfig, workspace: Path
+    ) -> str
+
+    def _validate_prompt_runner_file(content: str) -> list[str]
+        # Returns list of issues, empty if valid
+
+Produce the complete Python file. The meta-prompt template is the most
+important part — spend the most effort on it.
 ```
 
-### 6.2 Validation Prompt
-
 ```
-You are reviewing the phase runner module for a methodology-runner.
+You are reviewing the prompt generator module for a methodology-runner.
 
 Evaluate against these criteria:
 
-CONTROL FLOW CORRECTNESS
-- Trace the happy path: extract checklist -> validate (pass) -> generate
-  artifact -> judge (pass) -> write outputs. Does it work?
-- Trace a revision path: extract -> validate (fail) -> re-extract ->
-  validate (pass) -> generate -> judge (fail) -> revise -> judge (pass).
-  Does it work?
-- Trace an escalation path: generate -> judge (fail) -> revise -> judge
-  (fail) -> revise -> judge (fail) -> max iterations -> escalate.
-  Does it work?
+META-PROMPT QUALITY
+- Does the meta-prompt template convey ALL of: phase purpose, what to
+  produce, quality criteria, format rules, decomposition guidance,
+  workspace conventions?
+- Would Claude, given this meta-prompt and real input files, produce a
+  valid prompt-runner .md file?
+- Does it tell Claude the prompt-runner format constraints (## Prompt
+  headings, exactly two code blocks, no inner triple backticks)?
+- Does it tell Claude to instruct generators to write files?
+- Does it tell Claude to instruct judges to use tool access and git diff?
+- Does it give Claude freedom to choose the number of prompts?
 
-SESSION MANAGEMENT
-- Does each role get its own session ID?
-- Is the extractor session reused (resumed) across validation iterations?
-- Is the generator session reused across judgment iterations?
-- Are generator and judge always in separate sessions?
-- Are session IDs deterministic (same inputs produce same IDs)?
+INPUT ASSEMBLY
+- Does _assemble_input_context read real files from disk?
+- Does it handle missing files with a clear error?
+- Does it include the file path and role in the assembled context?
+- Does it handle large files (truncation or summarization)?
 
-AGENT PROMPT ASSEMBLY
-- Are the build_*_prompt functions from agent_prompts.py used correctly?
-- Is input source content read from disk and included in generator prompts?
-- Is the validated checklist included in generator and judge prompts?
-- Is the VERDICT instruction appended to judge prompts?
-- Do revision messages include anti-anchoring for the judge?
+VALIDATION
+- Does _validate_prompt_runner_file check for ## Prompt headings?
+- Does it check for exactly two code blocks per prompt?
+- Does it return specific issues (not just true/false)?
 
-OUTPUT PERSISTENCE
-- Is the artifact written to the correct path?
-- Is the checklist written?
-- Is the traceability mapping saved via the traceability engine?
-- Is the judgment written?
-- Are logs written for every agent call?
+CLAUDE INVOCATION
+- Is Claude called correctly (subprocess or library)?
+- Is the system prompt appropriate (produce file, no commentary)?
+- Is there retry logic for invalid output?
 
 ERROR HANDLING
-- Is ClaudeInvocationError caught and partial output persisted?
-- Are YAML parse errors handled with a retry?
-- Are missing input files detected before calling Claude?
-- Does the function return a meaningful PhaseResult on escalation?
-
-INTERFACE COMPLIANCE
-- Does run_phase match the signature from the solution design?
-- Does it return a PhaseResult with all fields populated?
-- Does it use ClaudeClient (not subprocess directly)?
+- Missing input files: clear error message?
+- Claude failure: handled gracefully?
+- Invalid .md output: retry with feedback?
 
 For each criterion: pass/fail/partial with evidence.
 ```
 
-## Prompt 7: Pipeline Orchestrator
-
-### 7.1 Generation Prompt
+## Prompt 5: Cross-Reference Verifier
 
 ```
-Using all prior approved artifacts, implement the pipeline orchestrator
-module.
+Using the solution design, data models, and phase definitions from prior
+prompts, implement the cross-reference verification module.
+
+Produce a single Python file: methodology_runner/cross_reference.py
+
+This module runs after prompt-runner has completed a phase's incremental
+prompts. It verifies that the phase's output integrates correctly with
+all prior phases' outputs. Unlike the per-increment judges (which check
+local quality), this module checks global consistency.
+
+PUBLIC INTERFACE:
+
+    def verify_phase_cross_references(
+        phase: PhaseConfig,
+        workspace: Path,
+        completed_phases: list[str],
+        model: str | None = None,
+    ) -> CrossRefResult:
+        """Run cross-reference verification for a completed phase.
+
+        Calls Claude with tool access to inspect the workspace. Claude
+        checks traceability, coverage, consistency, and integration
+        with prior phases.
+
+        Returns a CrossRefResult with pass/fail and specific issues.
+        """
+
+    def verify_end_to_end(
+        workspace: Path,
+        model: str | None = None,
+    ) -> CrossRefResult:
+        """Run final end-to-end verification across all phases.
+
+        Called after all 7 phases complete. Traces every requirement
+        from Phase 0 through to Phase 6 and reports any broken chains
+        or coverage gaps.
+        """
+
+WHAT CROSS-REFERENCE VERIFICATION CHECKS:
+
+1. TRACEABILITY — for each element in this phase's output, can it be
+   traced back to an element in a prior phase? Specifically:
+   - Phase 1 features -> Phase 0 inventory items
+   - Phase 2 components -> Phase 1 features
+   - Phase 3 contracts -> Phase 2 interactions
+   - Phase 4 simulations -> Phase 3 contracts
+   - Phase 5 implementation items -> Phase 3 contracts + Phase 1 ACs
+   - Phase 6 E2E tests -> Phase 1 ACs -> Phase 0 inventory items
+
+2. COVERAGE — are all upstream elements accounted for?
+   - Every RI-* item should eventually reach an E2E test (or be
+     explicitly marked out of scope)
+   - Every feature should have at least one component realizing it
+   - Every interaction should have a contract
+   - Every contract should have a simulation
+
+3. CONSISTENCY — do cross-references actually resolve?
+   - If a feature says source_inventory_refs: [RI-003], does RI-003
+     exist in the inventory?
+   - If a component says it realizes FT-007, does FT-007 exist?
+   - Are there ID format mismatches or typos?
+
+4. INTEGRATION — does this phase's output conflict with prior phases?
+   - Does the feature spec introduce assumptions that contradict the
+     requirements inventory?
+   - Does the design introduce components for features that were
+     marked out of scope?
+   - Do contracts reference interactions that don't exist in the design?
+
+IMPLEMENTATION:
+
+1. Build a prompt that tells Claude:
+   - Which phase just completed
+   - What to check (the four categories above, specialized for this phase)
+   - That it has tool access — it should Read files, parse YAML, and
+     programmatically verify cross-references (not just skim and guess)
+   - To produce a structured YAML result matching CrossRefResult
+
+2. Call Claude with tool access, cwd set to the workspace
+
+3. Parse the response into a CrossRefResult
+
+4. For verify_end_to_end: build a prompt that asks Claude to trace
+   every RI-* item through the full chain to E2E tests, reporting
+   broken chains and coverage percentage
+
+CROSS-REFERENCE PROMPT TEMPLATES:
+
+Provide per-phase templates that specify exactly what to check for
+that phase (which IDs to trace, which files to read, what constitutes
+a broken reference). These should be concrete, not generic.
+
+Also provide:
+
+    CROSS_REF_SYSTEM_PROMPT: str — system prompt for cross-ref calls
+    PHASE_CROSS_REF_CHECKS: dict[str, str] — per-phase check templates
+    END_TO_END_PROMPT_TEMPLATE: str — template for final verification
+
+    def _parse_cross_ref_result(claude_output: str) -> CrossRefResult
+
+Produce the complete Python file.
+```
+
+```
+You are reviewing the cross-reference verification module for a
+methodology-runner.
+
+Evaluate against these criteria:
+
+CHECK COMPLETENESS
+- Does it check all four categories: traceability, coverage,
+  consistency, integration?
+- Are checks phase-specific (not generic "check everything")?
+- For each phase (1-6), is it clear which upstream elements are
+  traced and which files are inspected?
+
+TOOL ACCESS USAGE
+- Does the Claude call have tool access enabled?
+- Does the prompt instruct Claude to programmatically verify
+  cross-references (parse YAML, check IDs) rather than just
+  reading and guessing?
+- Is cwd set to the workspace so Claude can access all files?
+
+END-TO-END VERIFICATION
+- Does verify_end_to_end trace RI-* items through the full chain?
+- Does it produce a coverage percentage?
+- Does it identify specific broken chains?
+
+RESULT STRUCTURE
+- Does CrossRefResult contain all fields: passed, issues,
+  traceability_gaps, orphaned_elements, coverage_summary?
+- Is the parse function robust to malformed Claude output?
+- Do issues contain specific, actionable information (not just
+  "traceability is incomplete")?
+
+PHASE-SPECIFIC TEMPLATES
+- Is there a template for each phase (1 through 6)?
+- Does each template name the specific IDs and files to check?
+- Does Phase 0 have a template (even if minimal — it has no
+  upstream to cross-reference)?
+
+FEEDBACK LOOP
+- Is the CrossRefResult structured so that the orchestrator can
+  pass its issues back to the prompt generator for re-generation?
+- Can a human reading the result understand what went wrong and
+  where?
+
+For each criterion: pass/fail/partial with evidence.
+```
+
+## Prompt 6: Pipeline Orchestrator
+
+```
+Using all prior approved artifacts, implement the pipeline orchestrator.
 
 Produce a single Python file: methodology_runner/orchestrator.py
 
-This module sequences the 7 phases, manages project state, handles
-escalation, and produces reports. It calls phase_runner.run_phase()
-for each phase.
-
-RESPONSIBILITIES:
-
-1. PROJECT INITIALIZATION
-   - Create the project directory structure:
-       {project_dir}/
-         requirements/        — copy of input requirements
-         phases/
-           PH-000-requirements-inventory/
-           PH-001-feature-specification/
-           ...
-         traceability/
-         state.json           — ProjectState
-         summary.txt          — human-readable summary
-   - Initialize ProjectState with all phases as "pending"
-   - Copy the requirements document into requirements/
-
-2. PHASE SEQUENCING
-   - Run phases in order: PH-000 through PH-006
-   - Before each phase, verify that all input sources exist (prior
-     phases' artifacts are present)
-   - After each phase, update ProjectState and write it to disk
-   - After each phase, run cross-phase traceability validation using
-     traceability.validate_cross_phase_traceability()
-
-3. ESCALATION HANDLING
-   - If a phase returns PhaseStatus.escalated:
-     - If escalation_policy is halt: stop the pipeline, write summary
-     - If escalation_policy is flag_and_continue: record the flag,
-       continue to next phase (the escalated artifact is used as-is)
-     - If escalation_policy is human_review: write state, print message,
-       exit with special return code
-   - If cross-phase traceability validation fails: log the issues but
-     do not halt (traceability gaps are warnings, not blockers)
-
-4. RESUMPTION
-   - On startup, check if state.json exists in the project directory
-   - If it does, load it and determine which phases are complete
-   - Skip completed phases (their artifacts are already on disk)
-   - Resume from the first phase with status "pending" or "running"
-   - A phase with status "running" is treated as incomplete (crashed
-     mid-phase) and is re-run from scratch
-
-5. REPORTING
-   - After each phase, update summary.txt with:
-     - Phase name, status, iteration count, duration
-   - After all phases complete (or pipeline halts), write final summary:
-     - Overall status, total duration, per-phase results
-     - Traceability coverage statistics
-     - List of uncovered concerns from all phases
-     - List of escalation events
+This module sequences the 7 phases, manages the workspace and git,
+invokes the prompt generator and prompt-runner for each phase, runs
+cross-reference verification, and handles escalation and resumption.
 
 PUBLIC INTERFACE:
 
     @dataclass
     class PipelineConfig:
         requirements_path: Path
-        project_dir: Path
+        workspace_dir: Path | None = None  # None = auto-generate
         model: str | None = None
         resume: bool = False
-        phases_to_run: list[str] | None = None  # None means all
-        # Per-phase overrides (if not set, use PhaseConfig defaults):
-        max_iterations: int | None = None
-        escalation_policy: EscalationPolicy | None = None
+        phases_to_run: list[str] | None = None  # None = all
+        max_prompt_runner_iterations: int | None = None  # override
+        escalation_policy: EscalationPolicy | None = None  # override
+        max_cross_ref_retries: int = 2  # how many times to re-generate
+                                         # if cross-ref fails
 
     @dataclass
     class PipelineResult:
-        project_dir: Path
+        workspace_dir: Path
         phase_results: list[PhaseResult]
         halted_early: bool
         halt_reason: str | None
-        traceability_report: str
-        wall_time: str
+        end_to_end_result: CrossRefResult | None
+        wall_time_seconds: float
 
-    def run_pipeline(
-        config: PipelineConfig,
-        client: ClaudeClient
-    ) -> PipelineResult
+    def run_pipeline(config: PipelineConfig) -> PipelineResult
 
-Also provide:
+EXECUTION FLOW FOR EACH PHASE:
 
-    def load_or_create_project(config: PipelineConfig) -> ProjectState
-    def write_summary(project_dir: Path, result: PipelineResult) -> None
+    1. Check if phase is already complete (resume support)
+    2. Update ProjectState: current_phase = phase_id, status = running
+    3. Call prompt_generator.generate_phase_prompts() to produce the
+       prompt-runner .md file
+    4. Invoke prompt-runner on the .md file:
+       - subprocess: prompt-runner run {md_file} --project-dir {workspace}
+       - or library: parse the file, call run_pipeline with workspace
+       - Pass the model, max-iterations, and workspace as arguments
+    5. Check prompt-runner exit code. If failed:
+       - If escalation policy is halt: stop
+       - If flag_and_continue: record, proceed
+       - If human_review: exit with code 2
+    6. Update ProjectState: status = prompt_runner_passed
+    7. Call cross_reference.verify_phase_cross_references()
+    8. If cross-ref fails:
+       - Re-generate the prompt-runner file with cross-ref issues as
+         additional context (up to max_cross_ref_retries times)
+       - Re-run prompt-runner
+       - Re-check cross-references
+       - If still failing after retries, apply escalation policy
+    9. Update ProjectState: status = cross_ref_passed
+    10. Git commit: "Phase {phase_id} completed"
+
+WORKSPACE INITIALIZATION:
+
+    def initialize_workspace(config: PipelineConfig) -> Path:
+        """Create workspace, copy requirements, init git."""
+
+    Structure:
+        {workspace}/
+            requirements/          # copy of input requirements
+            phases/
+                PH-000/            # each phase gets a subdirectory
+                PH-001/
+                ...
+            prompt-runner-files/   # generated .md files
+            prompt-runner-runs/    # prompt-runner's output directories
+            state.json             # ProjectState
+            summary.txt            # human-readable summary
+
+    Git:
+        - Initialize a git repo in the workspace
+        - Initial commit with requirements and empty structure
+        - Commit after each phase completes (step 10 above)
+        - The git log becomes an audit trail of the entire run
+
+RESUMPTION:
+
+    def resume_pipeline(config: PipelineConfig) -> PipelineResult:
+        """Load state.json, skip completed phases, continue."""
+
+    - Load ProjectState from state.json
+    - For each phase in order:
+      - If status is cross_ref_passed: skip
+      - If status is prompt_runner_passed: re-run cross-ref only
+      - If status is running or pending: run from the beginning
+    - Verify prior phase artifacts still exist before starting a phase
+
+REPORTING:
+
+    def write_summary(workspace: Path, result: PipelineResult) -> None
+
+    Summary includes:
+    - Per-phase: status, prompt count (from .md file), iteration count,
+      cross-ref result, wall time
+    - Overall: total phases completed, total wall time, end-to-end
+      traceability coverage
+    - Any escalation events or uncovered concerns
+
+PROMPT-RUNNER INVOCATION:
+
+To invoke prompt-runner, use subprocess:
+
+    import subprocess
+    result = subprocess.run(
+        ["prompt-runner", "run", str(md_file),
+         "--project-dir", str(workspace)],
+        capture_output=True, text=True
+    )
+
+If prompt-runner is not on PATH, fall back to:
+
+    result = subprocess.run(
+        [sys.executable, "-m", "prompt_runner", "run", str(md_file),
+         "--project-dir", str(workspace)],
+        capture_output=True, text=True
+    )
+
+The workspace is both prompt-runner's working directory and the
+methodology-runner's workspace. prompt-runner's generators write
+files there; methodology-runner's cross-reference checks read them.
+
+GIT OPERATIONS:
+
+Use subprocess calls to git:
+    def _git(workspace: Path, *args: str) -> str
+    def _git_init(workspace: Path) -> None
+    def _git_commit(workspace: Path, message: str) -> None
+    def _git_diff(workspace: Path) -> str
 
 Produce the complete Python file.
 ```
 
-### 7.2 Validation Prompt
-
 ```
-You are reviewing the pipeline orchestrator module for a methodology-runner.
+You are reviewing the pipeline orchestrator module for a
+methodology-runner.
 
 Evaluate against these criteria:
 
 PHASE SEQUENCING
-- Are all 7 phases run in order (PH-000 through PH-006)?
-- Is each phase's input verified before it runs?
-- Is ProjectState updated after each phase?
-- Is state written to disk after each phase (crash safety)?
+- Are all 7 phases run in order?
+- Is each phase's input verified before running?
+- Is ProjectState updated at each stage (running, prompt_runner_passed,
+  cross_ref_passed)?
+- Is state written to disk after each status change?
+
+PROMPT-RUNNER INTEGRATION
+- Is prompt-runner invoked correctly (subprocess with right args)?
+- Is the workspace passed to prompt-runner?
+- Is the exit code checked?
+- Is there a fallback if prompt-runner is not on PATH?
+
+CROSS-REFERENCE RETRY LOOP
+- If cross-ref fails, does it re-generate the prompt-runner file
+  with the issues?
+- Is the retry bounded by max_cross_ref_retries?
+- After retries exhausted, does it apply escalation policy?
+
+WORKSPACE AND GIT
+- Is workspace initialized with correct structure?
+- Is git initialized?
+- Are commits made at the right points?
+- Are prior phase artifacts preserved (a phase can't corrupt them)?
 
 RESUMPTION
-- If state.json exists with PH-000 passed and PH-001 passed, does the
-  orchestrator skip those two phases and start at PH-002?
-- If a phase has status "running" (crashed), is it re-run?
-- Does resumption verify that prior artifacts still exist on disk?
+- Does it load ProjectState correctly?
+- Does it skip cross_ref_passed phases?
+- Does it re-run cross-ref for prompt_runner_passed phases?
+- Does it re-run entirely for running/pending phases?
+- Does it verify prior artifacts exist?
 
 ESCALATION
-- Is each escalation policy (halt, flag_and_continue, human_review)
-  implemented?
-- Does halt stop the pipeline and write a summary?
-- Does flag_and_continue record the flag and proceed?
-- Does human_review exit with a special code?
-
-TRACEABILITY INTEGRATION
-- Is cross-phase traceability validation run after each phase?
-- Are traceability warnings logged but not treated as blockers?
-- Is a final traceability coverage report included in PipelineResult?
+- Are all three policies implemented (halt, flag_and_continue,
+  human_review)?
+- Do they apply both to prompt-runner failure and cross-ref failure?
 
 REPORTING
-- Is summary.txt updated after each phase (not just at the end)?
-- Does the final summary include per-phase iteration counts?
-- Does it include uncovered concerns from all phases?
-- Does it include traceability coverage statistics?
-
-STATE MANAGEMENT
-- Is ProjectState serialized to state.json correctly?
-- Does load_or_create_project handle both new and existing projects?
-- Is the requirements document copied into the project directory?
-
-INTERFACE
-- Does run_pipeline match the specified signature?
-- Does PipelineConfig allow per-phase overrides?
-- Does PipelineResult contain all specified fields?
+- Is summary updated after each phase?
+- Does final summary include all specified information?
 
 For each criterion: pass/fail/partial with evidence.
 ```
 
-## Prompt 8: CLI Entry Point
-
-### 8.1 Generation Prompt
+## Prompt 7: CLI Entry Point
 
 ```
 Using all prior approved artifacts, implement the CLI entry point.
 
-Produce a single Python file: methodology_runner/cli.py
+Produce three Python files:
+- methodology_runner/cli.py
+- methodology_runner/__init__.py
+- methodology_runner/__main__.py
 
-This is the command-line interface for the methodology runner. It uses
-argparse (not click or typer) to keep dependencies minimal.
+Separate each file with a clear header:
+    # === FILE: methodology_runner/cli.py ===
+    # === FILE: methodology_runner/__init__.py ===
+    # === FILE: methodology_runner/__main__.py ===
+
+CLI uses argparse. Minimal dependencies.
 
 COMMANDS:
 
@@ -1080,89 +1009,57 @@ COMMANDS:
 
    methodology-runner run <requirements-file> [options]
 
-   Arguments:
-     requirements-file    Path to the requirements document (markdown,
-                          text, or any format)
-
    Options:
-     --project-dir DIR    Project directory (default: auto-generated
-                          from timestamp and requirements filename in
-                          ./runs/)
-     --model MODEL        Claude model to use (default: system default)
-     --max-iterations N   Override max iterations for all phases
-                          (default: use per-phase config)
-     --resume             Resume an existing project from where it
-                          left off
-     --phases PHASES      Comma-separated phase IDs to run (e.g.,
-                          "PH-000,PH-001,PH-002"). Default: all.
-     --escalation-policy  Override escalation policy for all phases
-                          (halt|flag-and-continue|human-review)
-     --dry-run            Show what would be done without calling Claude
+     --workspace DIR         Workspace directory (default: auto from
+                             timestamp + requirements filename in ./runs/)
+     --model MODEL           Claude model to use
+     --max-iterations N      Override max prompt-runner iterations
+     --resume                Resume an existing project
+     --phases PHASES         Comma-separated phase IDs to run
+     --escalation-policy P   Override: halt|flag-and-continue|human-review
+     --max-cross-ref-retries N  Max retries for cross-ref failures
 
-2. status — Show the status of a project
+2. status — Show project status
 
-   methodology-runner status <project-dir>
+   methodology-runner status <workspace-dir>
 
-   Reads state.json and prints:
-   - Project directory, requirements file, started time
-   - Per-phase status table (phase name, status, iterations, verdict)
-   - Current phase (if pipeline is in progress or halted)
-   - Halt reason (if any)
+   Reads state.json and prints per-phase status table.
 
-3. trace — Query traceability for a project
+3. resume — Resume a halted or interrupted project
 
-   methodology-runner trace <project-dir> <element-id> [--direction forward|backward]
+   methodology-runner resume <workspace-dir> [options]
 
-   Prints the traceability chain for the given element. Default direction
-   is forward (from requirements toward tests).
-
-4. coverage — Show traceability coverage report
-
-   methodology-runner coverage <project-dir>
-
-   Prints the coverage report from traceability.coverage_report().
+   Same options as run, but workspace-dir is required and requirements
+   are already in the workspace.
 
 IMPLEMENTATION:
 
     def main(argv: list[str] | None = None) -> int:
-        # Returns exit code: 0 success, 1 error, 2 human-review-needed
+        # Returns: 0 success, 1 error, 2 human-review-needed
 
-    def cmd_run(args: argparse.Namespace) -> int:
-        # Build PipelineConfig from args
-        # Create RealClaudeClient
-        # Call orchestrator.run_pipeline()
-        # Print summary
-        # Return exit code
+    def cmd_run(args) -> int:
+        # Build PipelineConfig, call run_pipeline, print summary
 
-    def cmd_status(args: argparse.Namespace) -> int:
-        # Load ProjectState from state.json
-        # Print formatted status
+    def cmd_status(args) -> int:
+        # Load ProjectState, print formatted table
 
-    def cmd_trace(args: argparse.Namespace) -> int:
-        # Call traceability.trace_forward or trace_backward
-        # Print formatted chain
+    def cmd_resume(args) -> int:
+        # Build PipelineConfig with resume=True, call run_pipeline
 
-    def cmd_coverage(args: argparse.Namespace) -> int:
-        # Call traceability.coverage_report
-        # Print report
+Auto-generated workspace name:
+    runs/{YYYY-MM-DDTHH-MM-SS}-{slugified-requirements-name}/
 
-Also create:
+Error handling:
+    - requirements file not found: clear message
+    - workspace not found (for status/resume): clear message
+    - prompt-runner not installed: helpful message
+    - Claude CLI not found: helpful message
 
-    methodology_runner/__init__.py — empty or with version string
-    methodology_runner/__main__.py — just calls cli.main()
+__init__.py: version string only
+__main__.py: calls cli.main()
 
-Include the auto-generated project directory naming:
-  runs/{timestamp}-{slugified-requirements-filename}/
-
-The RealClaudeClient import should be from prompt_runner.claude_client.
-If the user doesn't have prompt-runner installed, print a helpful error
-message explaining how to install it or where to get claude_client.py.
-
-Produce all three files (cli.py, __init__.py, __main__.py) separated
-by clear headers in your output.
+Produce all three files.
 ```
-
-### 8.2 Validation Prompt
 
 ```
 You are reviewing the CLI entry point for a methodology-runner.
@@ -1170,39 +1067,37 @@ You are reviewing the CLI entry point for a methodology-runner.
 Evaluate against these criteria:
 
 COMMAND COMPLETENESS
-- Are all 4 commands implemented (run, status, trace, coverage)?
-- Does each command have the specified arguments and options?
-- Are defaults correct (auto-generated project dir, all phases, etc.)?
+- Are all 3 commands implemented (run, status, resume)?
+- Does each have the specified arguments and options?
+- Are defaults correct?
 
 RUN COMMAND
-- Does it build PipelineConfig correctly from argparse args?
-- Does it handle --resume by setting config.resume = True?
-- Does it handle --phases by parsing the comma-separated list?
-- Does it handle --dry-run?
-- Does it create RealClaudeClient and pass it to run_pipeline?
-- Does it print the summary after completion?
-- Does it return the correct exit code (0, 1, or 2)?
+- Does it build PipelineConfig correctly from args?
+- Does it handle all options?
+- Does it print a summary after completion?
+- Correct exit codes (0, 1, 2)?
 
 STATUS COMMAND
-- Does it load ProjectState from the project directory?
-- Does it handle the case where state.json doesn't exist?
-- Does it print a formatted table of phase statuses?
+- Does it load and display ProjectState?
+- Does it handle missing state.json?
+- Is the output formatted as a readable table?
 
-TRACE AND COVERAGE COMMANDS
-- Does trace call the right traceability function based on --direction?
-- Does coverage print the report?
-- Do they handle missing traceability files gracefully?
+RESUME COMMAND
+- Does it set resume=True in PipelineConfig?
+- Does it use the workspace's existing requirements?
+- Does it accept the same override options as run?
 
 ERROR HANDLING
-- Does it catch ClaudeBinaryNotFound and print a helpful message?
-- Does it handle missing requirements file?
-- Does it handle invalid project directory?
-- Are error messages user-friendly (not raw tracebacks)?
+- Missing requirements file?
+- Missing workspace (for status/resume)?
+- prompt-runner not on PATH?
+- Claude CLI not found?
+- User-friendly messages (no raw tracebacks)?
 
 FILE STRUCTURE
-- Is __init__.py present?
-- Is __main__.py present and does it call cli.main()?
-- Would "python -m methodology_runner run ..." work?
+- __init__.py present?
+- __main__.py calls main()?
+- "python -m methodology_runner run ..." would work?
 
 For each criterion: pass/fail/partial with evidence.
 ```
