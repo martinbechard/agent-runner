@@ -561,6 +561,22 @@ def _verify_phase_output_exists(
 
 
 # ---------------------------------------------------------------------------
+# Phase skill manifest loader
+# ---------------------------------------------------------------------------
+
+def _load_phase_skill_manifest(
+    run_dir: Path, phase_config: "PhaseConfig",
+) -> "PhaseSkillManifest | None":
+    """Load ``phase-NNN-skills.yaml`` from *run_dir* if present."""
+    from .models import PhaseSkillManifest
+    path = run_dir / _phase_skills_filename(phase_config)
+    if not path.exists():
+        return None
+    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    return PhaseSkillManifest.from_dict(raw)
+
+
+# ---------------------------------------------------------------------------
 # Cross-ref feedback reconstruction
 # ---------------------------------------------------------------------------
 
@@ -905,6 +921,7 @@ def _run_single_phase(
             phase_config=phase_config,
             workspace_dir=workspace,
             completed_phases=completed_states,
+            phase_skill_manifest=_load_phase_skill_manifest(run_dir, phase_config),
         )
         try:
             generate_prompt_file(ctx, claude_client, prompt_file, config.model)
@@ -1022,6 +1039,7 @@ def _run_single_phase(
             workspace_dir=workspace,
             completed_phases=completed_states,
             cross_ref_feedback=feedback,
+            phase_skill_manifest=_load_phase_skill_manifest(run_dir, phase_config),
         )
         try:
             generate_prompt_file(ctx, claude_client, prompt_file, config.model)

@@ -726,3 +726,66 @@ class TestMetaPromptTemplate:
 
     def test_verdict_instruction_present(self) -> None:
         assert "VERDICT: pass" in META_PROMPT_TEMPLATE
+
+
+# ---------------------------------------------------------------------------
+# Tests: skill manifest in meta-prompt
+# ---------------------------------------------------------------------------
+
+def _setup_phase_0_workspace(tmp_path: Path) -> Path:
+    """Create a workspace with the raw-requirements.md file required by PH-000."""
+    req_dir = tmp_path / "docs" / "requirements"
+    req_dir.mkdir(parents=True)
+    (req_dir / "raw-requirements.md").write_text(
+        "# Requirements\n\nThe system shall do X.\n",
+        encoding="utf-8",
+    )
+    return tmp_path
+
+
+def test_meta_prompt_includes_skill_manifest_section_when_provided(tmp_path):
+    from methodology_runner.models import (
+        PhaseSkillManifest, SkillChoice, SkillSource,
+    )
+    from methodology_runner.phases import get_phase
+    from methodology_runner.prompt_generator import (
+        PromptGenerationContext, assemble_meta_prompt,
+    )
+    workspace = _setup_phase_0_workspace(tmp_path)
+    manifest = PhaseSkillManifest(
+        phase_id="PH-000-requirements-inventory",
+        selector_run_at="2026-04-09T10:00:00+00:00",
+        selector_model="test",
+        generator_skills=[
+            SkillChoice(
+                id="requirements-extraction",
+                source=SkillSource.BASELINE,
+                rationale="Baseline",
+            ),
+        ],
+        judge_skills=[],
+        overall_rationale="Test",
+    )
+    ctx = PromptGenerationContext(
+        phase_config=get_phase("PH-000-requirements-inventory"),
+        workspace_dir=workspace,
+        phase_skill_manifest=manifest,
+    )
+    prompt = assemble_meta_prompt(ctx)
+    assert "requirements-extraction" in prompt
+    assert "generator_skills" in prompt.lower() or "generator skill" in prompt.lower()
+
+
+def test_meta_prompt_without_skill_manifest_omits_section(tmp_path):
+    from methodology_runner.phases import get_phase
+    from methodology_runner.prompt_generator import (
+        PromptGenerationContext, assemble_meta_prompt,
+    )
+    workspace = _setup_phase_0_workspace(tmp_path)
+    ctx = PromptGenerationContext(
+        phase_config=get_phase("PH-000-requirements-inventory"),
+        workspace_dir=workspace,
+    )
+    prompt = assemble_meta_prompt(ctx)
+    # Should not raise; should not contain a skill manifest header
+    assert "SKILL MANIFEST" not in prompt

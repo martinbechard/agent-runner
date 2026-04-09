@@ -32,6 +32,7 @@ from .models import (
     CrossReferenceResult,
     InputRole,
     PhaseConfig,
+    PhaseSkillManifest,
     PhaseState,
 )
 from .phases import PHASE_MAP, resolve_input_sources
@@ -91,6 +92,7 @@ class PromptGenerationContext:
     workspace_dir: Path
     completed_phases: list[PhaseState] = field(default_factory=list)
     cross_ref_feedback: CrossReferenceResult | None = None
+    phase_skill_manifest: "PhaseSkillManifest | None" = None
 
 
 # ---------------------------------------------------------------------------
@@ -370,6 +372,44 @@ def _format_prior_phases_block(completed_phases: list[PhaseState]) -> str:
     return "\n".join(lines)
 
 
+def _format_skill_manifest_block(manifest: PhaseSkillManifest) -> str:
+    """Return a short human-readable summary of the phase's skill manifest.
+
+    This is prepended to the meta-prompt so the prompt architect is
+    aware of which skills will be active for the generator and judge
+    when the prompt-runner file executes.  Note: the actual skill
+    loading happens via the prelude, not the meta-prompt — this
+    section is purely informational for the architect.
+    """
+    lines = [
+        "## PHASE SKILL MANIFEST",
+        "",
+        f"The Skill-Selector has chosen the following skills for "
+        f"{manifest.phase_id}.",
+        "Generator calls will load these via a prelude; judge calls "
+        "load their own set.",
+        "",
+        "Generator skills:",
+    ]
+    if manifest.generator_skills:
+        for sc in manifest.generator_skills:
+            lines.append(f"  - {sc.id} ({sc.source.value})")
+    else:
+        lines.append("  (none)")
+    lines.append("")
+    lines.append("Judge skills:")
+    if manifest.judge_skills:
+        for sc in manifest.judge_skills:
+            lines.append(f"  - {sc.id} ({sc.source.value})")
+    else:
+        lines.append("  (none)")
+    lines.append("")
+    lines.append(f"Rationale: {manifest.overall_rationale}")
+    lines.append("")
+    lines.append("---")
+    return "\n".join(lines)
+
+
 def _format_cross_ref_feedback(
     feedback: CrossReferenceResult | None,
 ) -> str:
@@ -466,7 +506,7 @@ def assemble_meta_prompt(context: PromptGenerationContext) -> str:
     phase = context.phase_config
     workspace = context.workspace_dir
 
-    return META_PROMPT_TEMPLATE.format(
+    meta = META_PROMPT_TEMPLATE.format(
         phase_id=phase.phase_id,
         phase_name=phase.phase_name,
         generation_instructions=phase.generation_instructions,
@@ -495,6 +535,10 @@ def assemble_meta_prompt(context: PromptGenerationContext) -> str:
             context.cross_ref_feedback,
         ),
     )
+    if context.phase_skill_manifest is not None:
+        skill_block = _format_skill_manifest_block(context.phase_skill_manifest)
+        meta = f"{skill_block}\n\n{meta}"
+    return meta
 
 
 # ---------------------------------------------------------------------------
