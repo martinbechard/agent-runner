@@ -618,7 +618,7 @@ def _build_parser() -> argparse.ArgumentParser:
     reset_cmd.add_argument(
         "--phase",
         required=True,
-        help="Phase ID to reset (e.g. PH-003-interface-contracts).",
+        help="Phase ID to reset (e.g. PH-004-interface-contracts).",
     )
     reset_cmd.set_defaults(func=cmd_reset)
 
