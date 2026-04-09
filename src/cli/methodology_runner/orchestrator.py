@@ -31,6 +31,7 @@ import shutil
 import subprocess
 import sys
 import time
+import yaml
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -65,6 +66,8 @@ from .baseline_config import (
 )
 from .models import BaselineSkillConfig, SkillCatalogEntry
 from .skill_catalog import CatalogBuildError, build_catalog
+from .prelude import PreludeBuildError, build_prelude
+from .skill_selector import SelectorError, SelectorInputs, invoke_skill_selector
 
 if TYPE_CHECKING:
     from .models import PhaseConfig
@@ -219,6 +222,127 @@ class RunSkillContext:
 
 BASELINE_SKILLS_PATH = "docs/methodology/skills-baselines.yaml"
 """Path (relative to repo root or workspace) to the baseline skill config."""
+
+
+@dataclass
+class PhaseSkillArtifacts:
+    """Paths and mode returned by ``run_selector_and_build_prelude``.
+
+    The orchestrator uses these to pass prelude file paths into the
+    prompt-runner invocation for a phase.
+    """
+
+    manifest_path: Path
+    generator_prelude_path: Path
+    judge_prelude_path: Path
+    mode: str
+
+
+def _phase_skills_filename(phase_config: "PhaseConfig") -> str:
+    """Return ``phase-NNN-skills.yaml`` for *phase_config*."""
+    return f"phase-{phase_config.phase_number:03d}-skills.yaml"
+
+
+def _prior_artifact_paths(
+    phase_config: "PhaseConfig",
+    state: ProjectState,
+    workspace: Path,
+) -> list[Path]:
+    """Return paths to every completed predecessor phase's output artifact."""
+    out: list[Path] = []
+    for ps in state.phases:
+        if ps.status not in _COMPLETED_STATUSES:
+            continue
+        cfg = PHASE_MAP.get(ps.phase_id)
+        if cfg is None:
+            continue
+        artifact = workspace / cfg.output_artifact_path
+        if artifact.exists():
+            out.append(artifact)
+    return out
+
+
+def _stack_manifest_path(workspace: Path) -> Path | None:
+    """Return path to stack-manifest.yaml if it exists, else None."""
+    p = workspace / "docs" / "architecture" / "stack-manifest.yaml"
+    return p if p.exists() else None
+
+
+def run_selector_and_build_prelude(
+    *,
+    phase_config: "PhaseConfig",
+    skill_ctx: RunSkillContext,
+    workspace: Path,
+    run_dir: Path,
+    claude_client: "ClaudeClient",
+    model: str | None,
+    state: ProjectState | None = None,
+    existing_manifest_path: Path | None = None,
+) -> PhaseSkillArtifacts:
+    """Run the Skill-Selector for one phase and write preludes.
+
+    On success, writes three files to *run_dir*:
+    - ``phase-NNN-skills.yaml`` (the selector's locked output)
+    - ``generator-prelude.txt``
+    - ``judge-prelude.txt``
+
+    If *existing_manifest_path* points at a readable manifest, the
+    selector is skipped and that manifest is used as-is.  This is how
+    cross-ref retries preserve the locked skill manifest across
+    iterations.
+    """
+    from .models import PhaseSkillManifest
+
+    run_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = run_dir / _phase_skills_filename(phase_config)
+
+    if existing_manifest_path is not None and existing_manifest_path.exists():
+        raw = existing_manifest_path.read_text(encoding="utf-8")
+        manifest = PhaseSkillManifest.from_dict(yaml.safe_load(raw))
+    else:
+        if state is None:
+            prior_paths: list[Path] = []
+        else:
+            prior_paths = _prior_artifact_paths(phase_config, state, workspace)
+        inputs = SelectorInputs(
+            phase_config=phase_config,
+            catalog=skill_ctx.catalog,
+            baseline_config=skill_ctx.baseline_config,
+            workspace_dir=workspace,
+            prior_artifact_paths=prior_paths,
+            stack_manifest_path=_stack_manifest_path(workspace),
+        )
+        try:
+            manifest = invoke_skill_selector(
+                inputs, claude_client=claude_client, model=model,
+            )
+        except SelectorError as exc:
+            raise RuntimeError(
+                f"Skill-Selector halted for {phase_config.phase_id}: {exc}"
+            ) from exc
+        manifest_path.write_text(
+            yaml.safe_dump(manifest.to_dict(), sort_keys=False),
+            encoding="utf-8",
+        )
+
+    try:
+        prelude_spec = build_prelude(manifest, skill_ctx.catalog)
+    except PreludeBuildError as exc:
+        raise RuntimeError(
+            f"Prelude build failed for {phase_config.phase_id}: {exc}"
+        ) from exc
+
+    gen_path = run_dir / "generator-prelude.txt"
+    jud_path = run_dir / "judge-prelude.txt"
+    gen_path.write_text(prelude_spec.generator_text, encoding="utf-8")
+    jud_path.write_text(prelude_spec.judge_text, encoding="utf-8")
+
+    return PhaseSkillArtifacts(
+        manifest_path=manifest_path,
+        generator_prelude_path=gen_path,
+        judge_prelude_path=jud_path,
+        mode=prelude_spec.mode,
+    )
 
 
 def build_run_skill_context(
@@ -496,6 +620,8 @@ def _invoke_prompt_runner_library(
     run_dir: Path,
     config: PipelineConfig,
     claude_client: ClaudeClient | None = None,
+    generator_prelude_path: Path | None = None,
+    judge_prelude_path: Path | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner via direct library call (preferred).
 
@@ -511,7 +637,20 @@ def _invoke_prompt_runner_library(
 
     pairs = parse_file(md_file)
     max_iters = config.max_prompt_runner_iterations or 3
-    pr_config = RunConfig(max_iterations=max_iters, model=config.model)
+
+    generator_prelude: str | None = None
+    judge_prelude: str | None = None
+    if generator_prelude_path is not None:
+        generator_prelude = generator_prelude_path.read_text(encoding="utf-8")
+    if judge_prelude_path is not None:
+        judge_prelude = judge_prelude_path.read_text(encoding="utf-8")
+
+    pr_config = RunConfig(
+        max_iterations=max_iters,
+        model=config.model,
+        generator_prelude=generator_prelude,
+        judge_prelude=judge_prelude,
+    )
 
     pr_result = pr_run_pipeline(
         pairs=pairs,
@@ -536,6 +675,8 @@ def _invoke_prompt_runner_subprocess(
     md_file: Path,
     workspace: Path,
     config: PipelineConfig,
+    generator_prelude_path: Path | None = None,
+    judge_prelude_path: Path | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner via subprocess (fallback).
 
@@ -554,6 +695,10 @@ def _invoke_prompt_runner_subprocess(
     ]
     if config.model:
         base_args.extend(["--model", config.model])
+    if generator_prelude_path is not None:
+        base_args.extend(["--generator-prelude", str(generator_prelude_path)])
+    if judge_prelude_path is not None:
+        base_args.extend(["--judge-prelude", str(judge_prelude_path)])
 
     # Try the installed entry-point first
     result = subprocess.run(
@@ -584,6 +729,8 @@ def _invoke_prompt_runner(
     run_dir: Path,
     config: PipelineConfig,
     claude_client: ClaudeClient | None = None,
+    generator_prelude_path: Path | None = None,
+    judge_prelude_path: Path | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner, trying library call first then subprocess.
 
@@ -592,9 +739,15 @@ def _invoke_prompt_runner(
     try:
         return _invoke_prompt_runner_library(
             md_file, workspace, run_dir, config, claude_client,
+            generator_prelude_path=generator_prelude_path,
+            judge_prelude_path=judge_prelude_path,
         )
     except ImportError:
-        return _invoke_prompt_runner_subprocess(md_file, workspace, config)
+        return _invoke_prompt_runner_subprocess(
+            md_file, workspace, config,
+            generator_prelude_path=generator_prelude_path,
+            judge_prelude_path=judge_prelude_path,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -706,6 +859,29 @@ def _run_single_phase(
     max_retries = config.max_cross_ref_retries
     iteration_count = 0
 
+    # Skill-Selector: run once per phase; reuse across cross-ref retries.
+    skill_artifacts: PhaseSkillArtifacts | None = None
+    if skill_ctx is not None and not cross_ref_only:
+        existing = run_dir / _phase_skills_filename(phase_config)
+        try:
+            skill_artifacts = run_selector_and_build_prelude(
+                phase_config=phase_config,
+                skill_ctx=skill_ctx,
+                workspace=workspace,
+                run_dir=run_dir,
+                claude_client=claude_client,
+                model=config.model,
+                state=state,
+                existing_manifest_path=existing if existing.exists() else None,
+            )
+        except RuntimeError as exc:
+            ps.status = PhaseStatus.FAILED
+            save_project_state(state, workspace)
+            return _make_failed_result(
+                phase_id, prompt_file, 0,
+                time.monotonic() - t0, str(exc),
+            )
+
     # ------------------------------------------------------------------
     # Steps 1-6: prompt generation + prompt-runner  (skip if cross_ref_only)
     # ------------------------------------------------------------------
@@ -738,8 +914,16 @@ def _run_single_phase(
 
         # Step 4-5: invoke prompt-runner
         pr_run_dir = run_dir / "prompt-runner-output"
+        gen_prelude_path = (
+            skill_artifacts.generator_prelude_path if skill_artifacts else None
+        )
+        jud_prelude_path = (
+            skill_artifacts.judge_prelude_path if skill_artifacts else None
+        )
         success, iteration_count, pr_error = _invoke_prompt_runner(
             prompt_file, workspace, pr_run_dir, config, claude_client,
+            generator_prelude_path=gen_prelude_path,
+            judge_prelude_path=jud_prelude_path,
         )
 
         if not success:
@@ -845,10 +1029,12 @@ def _run_single_phase(
                 pr_success=True,
             )
 
-        # Re-run prompt-runner on the revised file
+        # Re-run prompt-runner on the revised file — reuse locked prelude paths
         retry_run_dir = run_dir / f"prompt-runner-output-retry-{attempt + 1}"
         success, extra_iters, pr_error = _invoke_prompt_runner(
             prompt_file, workspace, retry_run_dir, config, claude_client,
+            generator_prelude_path=gen_prelude_path,
+            judge_prelude_path=jud_prelude_path,
         )
         iteration_count += extra_iters
 
