@@ -13,10 +13,11 @@ dev = ["pytest>=8.0"]
 
 [project.scripts]
 prompt-runner = "prompt_runner.__main__:main"
+methodology-runner = "methodology_runner.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src/cli"]
-include = ["prompt_runner*"]
+include = ["prompt_runner*", "methodology_runner*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
