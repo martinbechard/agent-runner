@@ -1,18 +1,24 @@
 """Auto-discovery of Claude Code skills from the local filesystem.
 
-Walks three locations in priority order, parses SKILL.md YAML
+Walks four locations in priority order, parses SKILL.md YAML
 frontmatter, and returns an in-memory catalog keyed by skill ID.
 
 Priority order (highest first):
 
 1. ``<workspace>/.claude/skills/**/SKILL.md``
-2. ``~/.claude/skills/**/SKILL.md``
-3. ``~/.claude/plugins/*/skills/**/SKILL.md``
+2. ``<cwd>/plugins/*/skills/**/SKILL.md``
+3. ``~/.claude/skills/**/SKILL.md``
+4. ``~/.claude/plugins/*/skills/**/SKILL.md``
 
 Higher-priority locations shadow lower ones; overrides are logged.
 If the final catalog is empty, :class:`CatalogBuildError` is raised
 so the orchestrator can halt before any phase runs (spec failure
 mode 7).
+
+The cwd-plugin slot (priority 2) lets dev work in a repo shadow any
+system-installed versions of the same skill: run methodology-runner
+from the repo root and any ``plugins/*/skills/`` found there take
+priority over user-installed plugins.
 
 The catalog is never persisted to disk.  SKILL.md files on disk are
 the single source of truth; the catalog is rebuilt on every run.
@@ -119,8 +125,9 @@ def build_catalog(
     *,
     workspace: Path,
     user_home: Path | None = None,
+    cwd: Path | None = None,
 ) -> dict[str, SkillCatalogEntry]:
-    """Build the skill catalog by walking the three discovery locations.
+    """Build the skill catalog by walking the four discovery locations.
 
     Parameters
     ----------
@@ -130,6 +137,12 @@ def build_catalog(
     user_home:
         Home directory to look under.  Defaults to ``Path.home()``.
         Exposed for testing.
+    cwd:
+        Working directory to check for a ``plugins/`` subdirectory.
+        Defaults to ``Path.cwd()``.  Skills discovered here shadow
+        user-installed plugins, so running from a repo root that
+        contains ``plugins/<pack>/skills/`` picks up dev versions
+        without symlinks or CLI flags.
 
     Returns
     -------
@@ -140,16 +153,31 @@ def build_catalog(
     Raises
     ------
     CatalogBuildError
-        If no valid skills are discovered across all three locations.
+        If no valid skills are discovered across all four locations.
     """
     if user_home is None:
         user_home = Path.home()
+    if cwd is None:
+        cwd = Path.cwd()
 
     # (location_label, root_path) in priority order: first wins.
+    # Priority: project > cwd-plugin > user > plugin (user-installed).
     sources: list[tuple[str, Path]] = [
         ("project", workspace / ".claude" / "skills"),
-        ("user", user_home / ".claude" / "skills"),
     ]
+
+    # cwd-plugin discovery: walk <cwd>/plugins/*/skills/ so running from a
+    # repo root that contains plugins/ picks up dev skills without symlinks.
+    # Placed after project-local so workspace always wins, but before user and
+    # user-installed plugins so dev versions shadow any installed versions.
+    cwd_plugins_dir = cwd / "plugins"
+    if cwd_plugins_dir.exists():
+        for plugin in sorted(cwd_plugins_dir.iterdir()):
+            if plugin.is_dir():
+                sources.append(("cwd-plugin", plugin / "skills"))
+
+    sources.append(("user", user_home / ".claude" / "skills"))
+
     # Plugins: one sub-root per plugin directory under ~/.claude/plugins
     plugins_dir = user_home / ".claude" / "plugins"
     if plugins_dir.exists():

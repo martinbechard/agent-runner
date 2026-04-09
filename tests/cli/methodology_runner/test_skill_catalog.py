@@ -127,3 +127,98 @@ def test_build_catalog_skips_invalid_entries_but_keeps_valid_ones(tmp_path: Path
     catalog = build_catalog(workspace=workspace, user_home=user_home)
     assert "good" in catalog
     assert "bad" not in catalog
+
+
+def test_build_catalog_walks_cwd_plugins_dir(tmp_path: Path):
+    """cwd-based plugin discovery: if cwd/plugins/<pack>/skills/ exists,
+    SKILL.md files under it are discovered without any symlink setup."""
+    workspace = tmp_path / "ws"
+    user_home = tmp_path / "home"
+    cwd = tmp_path / "repo"
+    # Don't put skills in workspace, user, or ~/.claude/plugins —
+    # only in cwd/plugins. Discovery should still find them.
+    _write_skill(
+        cwd / "plugins" / "methodology-runner-skills" / "skills",
+        "tdd", "Test-driven development",
+    )
+    _write_skill(
+        cwd / "plugins" / "methodology-runner-skills" / "skills",
+        "traceability-discipline", "Universal traceability",
+    )
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
+    assert "tdd" in catalog
+    assert "traceability-discipline" in catalog
+    assert catalog["tdd"].source_location == "cwd-plugin"
+
+
+def test_cwd_plugin_shadows_user_installed_plugin(tmp_path: Path):
+    """When the same skill exists in cwd/plugins/ and ~/.claude/plugins/,
+    the cwd version wins (dev override)."""
+    workspace = tmp_path / "ws"
+    user_home = tmp_path / "home"
+    cwd = tmp_path / "repo"
+    _write_skill(
+        cwd / "plugins" / "methodology-runner-skills" / "skills",
+        "tdd", "dev version",
+    )
+    _write_skill(
+        user_home / ".claude" / "plugins" / "some-pack" / "skills",
+        "tdd", "installed version",
+    )
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
+    assert catalog["tdd"].description == "dev version"
+    assert catalog["tdd"].source_location == "cwd-plugin"
+
+
+def test_project_local_still_beats_cwd_plugin(tmp_path: Path):
+    """Workspace-local skills still take priority over cwd plugins."""
+    workspace = tmp_path / "ws"
+    user_home = tmp_path / "home"
+    cwd = tmp_path / "repo"
+    _write_skill(workspace / ".claude" / "skills", "tdd", "workspace version")
+    _write_skill(
+        cwd / "plugins" / "methodology-runner-skills" / "skills",
+        "tdd", "cwd version",
+    )
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
+    assert catalog["tdd"].description == "workspace version"
+    assert catalog["tdd"].source_location == "project"
+
+
+def test_build_catalog_defaults_cwd_to_current_working_dir(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """When cwd is not passed, Path.cwd() is used."""
+    workspace = tmp_path / "ws"
+    user_home = tmp_path / "home"
+    fake_cwd = tmp_path / "repo"
+    _write_skill(
+        fake_cwd / "plugins" / "pack" / "skills", "tdd", "from cwd",
+    )
+    monkeypatch.chdir(fake_cwd)
+    catalog = build_catalog(workspace=workspace, user_home=user_home)
+    # cwd should default to Path.cwd() which is now fake_cwd
+    assert "tdd" in catalog
+    assert catalog["tdd"].description == "from cwd"
+
+
+def test_empty_cwd_plugins_dir_does_not_affect_discovery(tmp_path: Path):
+    """If cwd/plugins exists but is empty, discovery still works."""
+    workspace = tmp_path / "ws"
+    user_home = tmp_path / "home"
+    cwd = tmp_path / "repo"
+    (cwd / "plugins").mkdir(parents=True)  # empty plugins dir
+    _write_skill(user_home / ".claude" / "skills", "tdd", "user version")
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
+    assert catalog["tdd"].source_location == "user"
+
+
+def test_nonexistent_cwd_plugins_dir_is_skipped(tmp_path: Path):
+    """If cwd/plugins does not exist at all, no error — just skip it."""
+    workspace = tmp_path / "ws"
+    user_home = tmp_path / "home"
+    cwd = tmp_path / "repo"
+    cwd.mkdir()  # exists but no plugins subdir
+    _write_skill(user_home / ".claude" / "skills", "tdd", "user version")
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
+    assert catalog["tdd"].source_location == "user"

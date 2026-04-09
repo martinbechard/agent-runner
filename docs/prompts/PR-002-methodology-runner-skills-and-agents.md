@@ -33,7 +33,7 @@ section 11. The methodology phases themselves are defined in
 
 ---
 
-## Prompt 1: Plugin scaffold and symlink setup [interactive]
+## Prompt 1: Plugin scaffold [interactive]
 
 ```
 You are helping me set up the methodology-runner-skills companion plugin
@@ -42,59 +42,54 @@ skills into a consistent location.
 
 ## What to create
 
-1. A directory tree at `plugins/methodology-runner-skills/` under the
-   repo root:
+A directory tree at `plugins/methodology-runner-skills/` under the repo
+root:
 
-       plugins/methodology-runner-skills/
-         .claude-plugin/
-           plugin.json
-         README.md
-         skills/                   (empty for now; populated by later prompts)
+    plugins/methodology-runner-skills/
+      .claude-plugin/
+        plugin.json
+      README.md
+      skills/                   (empty for now; populated by later prompts)
 
-2. The `plugin.json` should declare:
-   - name: "methodology-runner-skills"
-   - version: "0.1.0"
-   - description: "Baseline skill pack for the AI-driven development
-     methodology — 18 tech-agnostic skills covering all 8 phases of
-     methodology-runner."
-   - author: Martin Bechard
-   - Any other fields the Claude Code plugin manifest schema requires
-     (look these up via the plugin-dev skill if unsure; don't invent
-     fields that aren't supported).
+The `plugin.json` should declare:
 
-3. The `README.md` should briefly describe the plugin, list the 18
-   skills with one-line roles, and point at the companion spec
-   (docs/superpowers/specs/2026-04-09-skill-driven-methodology-runner-design.md).
-   Keep it under 100 lines.
+- name: "methodology-runner-skills"
+- version: "0.1.0"
+- description: "Baseline skill pack for the AI-driven development
+  methodology — 18 tech-agnostic skills covering all 8 phases of
+  methodology-runner."
+- author: Martin Bechard
+- Any other fields the Claude Code plugin manifest schema requires
+  (look these up via the plugin-dev skill if unsure; don't invent
+  fields that aren't supported).
 
-## Symlink for runtime discovery
+The `README.md` should briefly describe the plugin, list the 18
+skills with one-line roles, and point at the companion spec
+(docs/superpowers/specs/2026-04-09-skill-driven-methodology-runner-design.md).
+Keep it under 100 lines.
 
-methodology-runner's catalog discovery walks
-`~/.claude/plugins/*/skills/**/SKILL.md` for plugin-installed skills.
-Create a symlink so the in-repo plugin directory is discoverable at
-runtime without a separate install step:
+## How runtime discovery works (no symlinks)
 
-    mkdir -p ~/.claude/plugins
-    ln -s /Users/martinbechard/dev/agent-runner/plugins/methodology-runner-skills \
-          ~/.claude/plugins/methodology-runner-skills
+methodology-runner's skill catalog discovery walks
+`<cwd>/plugins/*/skills/**/SKILL.md` as a discovery source. This
+means as long as you run `methodology-runner run ...` from the repo
+root (where `plugins/methodology-runner-skills/skills/` exists),
+skills are discovered automatically. No symlinks, no environment
+variables, no per-machine setup.
 
-Verify the symlink works:
+Verify by listing the structure:
 
-    ls ~/.claude/plugins/methodology-runner-skills/.claude-plugin/plugin.json
-
-If that lists the file, the symlink is good. If not, diagnose and fix.
+    ls plugins/methodology-runner-skills/.claude-plugin/plugin.json
+    ls plugins/methodology-runner-skills/README.md
 
 ## Commit
-
-Commit the plugin directory structure (but NOT the symlink, which is a
-local dev-environment setup, not a repo artifact):
 
     git add plugins/methodology-runner-skills/
     git commit -m "feat(skills): scaffold methodology-runner-skills plugin"
 
 ## When you're done
 
-Tell me the commit hash and the symlink target, then type /exit.
+Tell me the commit hash, then type /exit.
 ```
 
 ---
@@ -159,11 +154,9 @@ pair-program with you.
 
 When we're satisfied with the SKILL.md, verify it works end-to-end:
 
-1. Confirm the symlink from prompt 1 is still in place:
+# (run from repo root so cwd-plugin discovery finds the skills)
 
-       ls ~/.claude/plugins/methodology-runner-skills/skills/traceability-discipline/SKILL.md
-
-2. Run methodology-runner against the tiny requirements fixture, but
+1. Run methodology-runner against the tiny requirements fixture, but
    only for phase 0 (the only phase whose baseline we'll have complete
    after this skill — actually, phase 0 needs THREE skills, so this
    verification may halt at baseline-validation time. That's expected
@@ -172,11 +165,11 @@ When we're satisfied with the SKILL.md, verify it works end-to-end:
 
        mkdir -p /tmp/test-ph000-workspace
        methodology-runner run \
-         /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+         tests/fixtures/tiny-requirements.md \
          --workspace /tmp/test-ph000-workspace \
          --phases PH-000-requirements-inventory
 
-3. Expected outcome: the run halts during baseline validation with a
+2. Expected outcome: the run halts during baseline validation with a
    message naming the two still-missing baseline skills
    (`requirements-extraction` and `requirements-quality-review`). That
    halt confirms:
@@ -264,7 +257,7 @@ now authored, only `requirements-quality-review` is missing from the
 PH-000 baseline. Run:
 
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph000-workspace-2 \
       --phases PH-000-requirements-inventory
 
@@ -340,7 +333,7 @@ Body (100-250 lines) should cover:
 Now ALL three PH-000 baselines are present. Run the full phase:
 
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph000-workspace-3 \
       --phases PH-000-requirements-inventory
 
@@ -484,7 +477,7 @@ questions the critic asks, the more actionable its output.
 Once the file is written, run it against a completed PH-000 workspace:
 
     prompt-runner run \
-      /Users/martinbechard/dev/agent-runner/docs/prompts/integration-agent-PH-000-requirements-inventory.md \
+      docs/prompts/integration-agent-PH-000-requirements-inventory.md \
       --workspace /tmp/test-ph000-workspace-3
 
 (This workspace is the one created in prompt 4 where PH-000 completed
@@ -567,7 +560,7 @@ Run PH-000 + PH-001 in sequence against the tiny fixture:
 
     mkdir -p /tmp/test-ph001-workspace
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph001-workspace \
       --phases PH-000-requirements-inventory,PH-001-feature-specification
 
@@ -628,7 +621,7 @@ Run PH-000 + PH-001 fully:
 
     mkdir -p /tmp/test-ph001-workspace-2
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph001-workspace-2 \
       --phases PH-000-requirements-inventory,PH-001-feature-specification
 
@@ -678,7 +671,7 @@ Run against a completed PH-001 workspace (e.g.,
 /tmp/test-ph001-workspace-2 from prompt 7):
 
     prompt-runner run \
-      /Users/martinbechard/dev/agent-runner/docs/prompts/integration-agent-PH-001-feature-specification.md \
+      docs/prompts/integration-agent-PH-001-feature-specification.md \
       --workspace /tmp/test-ph001-workspace-2
 
 ## Commit
@@ -747,7 +740,7 @@ Run PH-000 through PH-002:
 
     mkdir -p /tmp/test-ph002-workspace
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph002-workspace \
       --phases PH-000-requirements-inventory,PH-001-feature-specification,PH-002-architecture
 
@@ -867,7 +860,7 @@ Now PH-000 through PH-002 should all run:
 
     mkdir -p /tmp/test-ph002-workspace-full
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph002-workspace-full \
       --phases PH-000-requirements-inventory,PH-001-feature-specification,PH-002-architecture
 
@@ -974,7 +967,7 @@ Run PH-000 through PH-003:
 
     mkdir -p /tmp/test-ph003-workspace
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph003-workspace \
       --phases PH-000-requirements-inventory,PH-001-feature-specification,PH-002-architecture,PH-003-solution-design
 
@@ -1101,7 +1094,7 @@ Run PH-000 through PH-004:
 
     mkdir -p /tmp/test-ph004-workspace
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-ph004-workspace \
       --phases PH-000-requirements-inventory,PH-001-feature-specification,PH-002-architecture,PH-003-solution-design,PH-004-interface-contracts
 
@@ -1485,7 +1478,7 @@ fixture:
 
     mkdir -p /tmp/test-full-pipeline
     methodology-runner run \
-      /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+      tests/fixtures/tiny-requirements.md \
       --workspace /tmp/test-full-pipeline
 
 (No --phases flag means all phases run.) Every phase must complete
@@ -1528,7 +1521,7 @@ documenting the release readiness.
 
        mkdir -p /tmp/test-release-smoke
        methodology-runner run \
-         /Users/martinbechard/dev/agent-runner/tests/fixtures/tiny-requirements.md \
+         tests/fixtures/tiny-requirements.md \
          --workspace /tmp/test-release-smoke
 
    All 8 phases must complete.
@@ -1546,7 +1539,8 @@ documenting the release readiness.
 3. Update `plugins/methodology-runner-skills/README.md` with:
    - A note that all 18 v1 skills are now present
    - The full list of 18 skills with one-line roles
-   - A quick-start showing the symlink setup
+   - A quick-start showing how to run from the repo root (cwd-based
+     discovery — no symlinks, no env vars)
    - A pointer to the spec doc
 
 4. Write a brief release-notes section at the end of
