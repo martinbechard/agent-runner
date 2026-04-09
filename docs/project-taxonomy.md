@@ -97,6 +97,12 @@
 - **Filename pattern:** `<module>.test.tsx`
 - **Mirrors:** `src/web/`
 
+### docs/methodology/
+- **Purpose:** Canonical reference specifications for the AI-driven software development methodology — the standing corpus that AI pipeline agents (generators, judges, orchestrators) consult when executing the methodology on real projects. These documents define phases, agent roles, data models, and control flow for the methodology itself, not for any specific codebase that uses it. They are produced by prompt-runner runs and evolve as the methodology evolves.
+- **Signals:** "AI-Driven Development Pipeline", "Phase Processing Unit", "agent role", "checklist extractor", "judge", "orchestrator", "simulation framework", "traceability infrastructure", "phase sequencing", YAML spec of pipeline phases or agent system prompts, audience is AI agents not human developers of a specific tool, not a design of agent-runner components.
+- **Filename pattern:** `M-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the methodology element (e.g. `phase-definitions`, `agent-role-specifications`, `orchestration`).
+- **Example:** `M-001-phase-processing-unit-schema.md`
+
 ### docs/prompts/
 - **Purpose:** Hand-authored prompt-runner input files — sequences of LLM generation prompts paired with validator prompts, consumed by the prompt-runner CLI tool to produce design docs, acceptance criteria, plans, or source code. These files drive downstream artifact generation but are not themselves design documents, requirements, acceptance criteria, or plans.
 - **Signals:** `## Prompt N:` section headings, paired fenced code blocks (generation prompt + validation prompt), "max_iterations", "sent to Claude", "judge", intended to be passed as `--input` to the prompt-runner CLI, subject line references a tool or feature being built via the runner.
@@ -112,6 +118,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-08 — docs/methodology/ added — AI-driven development methodology reference corpus (phase specs, agent role prompts, traceability model, simulation framework, orchestration) is not a design of agent-runner components, not a requirement, not a plan, and not a prompt file; a dedicated methodology corpus layer is needed.
 - 2026-04-08 — docs/prompts/ added — prompt-runner input files (hand-authored LLM prompt sequences with paired validators) are inputs to a tool, not design docs, requirements, plans, or test code; a dedicated prompt-files layer is needed.
 - 2026-04-08 — docs/plans/ added — TDD implementation plans (sequential task groups decomposing a design into test-first steps) are transient work documents that are neither design, requirements, nor acceptance criteria; a dedicated plan layer is needed.
 - 2026-04-08 — docs/testing/ added — implementation acceptance criteria (runnable checks that the finished code matches a design) have no home in docs/design/, docs/requirements/, or tests/; a dedicated verification-spec layer is needed.

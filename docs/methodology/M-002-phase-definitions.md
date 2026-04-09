@@ -1,0 +1,3517 @@
+```yaml
+# ═══════════════════════════════════════════════════════════════════════════════
+# AI-Driven Software Development Methodology — Phase Definitions
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# This document defines seven phases (PH-000 through PH-006) that compose the
+# full development pipeline. Each phase instantiates the Phase Processing Unit
+# schema. The pipeline orchestrator uses the input_sources and phase_output
+# declarations to build the execution DAG.
+#
+# Dependency graph:
+#
+#   PH-000 (Requirements Inventory)
+#     └─► PH-001 (Feature Specification)
+#           └─► PH-002 (Solution Design)
+#                 └─► PH-003 (Contract-First Interface Definitions)
+#                       └─► PH-004 (Intelligent Simulations)
+#                       │     │
+#                       ▼     ▼
+#                     PH-005 (Incremental Implementation) ◄── PH-001
+#                       └─► PH-006 (Verification Sweep) ◄── PH-000, PH-001
+#
+# ═══════════════════════════════════════════════════════════════════════════════
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 0: REQUIREMENTS INVENTORY
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Extract every distinct idea, constraint, assumption, and requirement
+# from raw input materials into a flat, enumerated inventory — the root of all
+# downstream traceability.
+#
+# This phase performs pure extraction. It does not organize, prioritize, group,
+# or interpret the requirements. It splits compound statements into atomic
+# items and assigns each a stable identifier (RI-{sequence}). The inventory is
+# intentionally flat: structure is the job of Phase 1.
+#
+# The critical discipline here is fidelity. The extractor must resist the
+# temptation to improve, infer, or fill gaps. If a raw source says something
+# ambiguous, the inventory item preserves the ambiguity and tags it. If a
+# source contains contradictions, both sides appear as separate items with a
+# flag noting the conflict.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_0_requirements_inventory:
+
+  phase_processing_unit:
+
+    phase_id: "PH-000-requirements-inventory"
+    phase_name: "Requirements Inventory"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/requirements/raw-requirements.md"
+          role: "primary"
+          format: "markdown"
+          description: >
+            All raw requirement materials — product briefs, user stories,
+            meeting notes, email threads, stakeholder interviews, regulatory
+            references, and any other source of requirements in any format.
+            Multiple files may be listed; each is a primary source. The
+            extractor treats every statement in every primary source as a
+            candidate for inventory extraction.
+          content_hash: ""
+          version: ""
+
+      external_references: []
+        # Raw requirements typically do not reference external specs.
+        # If the raw materials cite external standards or APIs, they
+        # should be listed here so the extractor can verify that
+        # references are captured as inventory items.
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify three properties
+        of the requirements inventory:
+
+        (a) COMPLETENESS — every distinct idea, constraint, assumption, and
+            requirement stated or implied in the raw sources appears as an
+            inventory item. The extractor should work through each raw source
+            section by section, paragraph by paragraph, ensuring nothing is
+            skipped. Particular attention to:
+            - Requirements buried in narrative prose (not just bulleted lists)
+            - Constraints mentioned in passing ("we must use PostgreSQL")
+            - Assumptions stated as facts ("users will have SSO")
+            - Non-functional requirements (performance, security, compliance)
+            - Negative requirements ("the system must NOT store PII locally")
+
+        (b) ATOMICITY — compound requirements have been split into separate
+            inventory items. A single sentence that says "the system must
+            support login via email and OAuth and remember the user for 30
+            days" contains at least three distinct requirements.
+
+        (c) FIDELITY — no inventory item introduces information not present
+            in the raw sources. The inventory is a mirror of what was said,
+            not what the extractor thinks should have been said. Ambiguities
+            and contradictions are preserved, not resolved.
+
+        Additional extraction targets:
+        - Verify that each inventory item has a unique RI-{sequence} ID
+        - Verify that each item cites the specific location in raw sources
+          it was extracted from (source_location field)
+        - Verify that items flagged as ambiguous or contradictory carry
+          appropriate tags
+
+      checklist_items:
+        # ---- Completeness items ----
+        - id: "CL-RI-001"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every section of every raw source document has been examined.
+            For each section, at least one inventory item exists whose
+            source_location references that section, OR the section
+            contains no requirement-bearing content (e.g., a table of
+            contents or a greeting).
+          verification_method: "coverage_query"
+
+        - id: "CL-RI-002"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every functional requirement explicitly stated in the raw
+            sources (identified by imperative language: "must", "shall",
+            "should", "will", or equivalent) appears as a separate
+            inventory item.
+          verification_method: "content_match"
+
+        - id: "CL-RI-003"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every non-functional requirement (performance targets,
+            security constraints, compliance obligations, scalability
+            expectations) stated in the raw sources appears as a
+            separate inventory item with category tag "non-functional".
+          verification_method: "content_match"
+
+        - id: "CL-RI-004"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every constraint (technology mandates, regulatory limits,
+            budget caps, timeline deadlines) stated in the raw sources
+            appears as a separate inventory item with category tag
+            "constraint".
+          verification_method: "content_match"
+
+        - id: "CL-RI-005"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every assumption stated or implied in the raw sources
+            (statements presented as facts about the environment,
+            users, or system context) appears as a separate inventory
+            item with category tag "assumption".
+          verification_method: "content_match"
+
+        # ---- Atomicity items ----
+        - id: "CL-RI-006"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            No inventory item contains a conjunction ("and", "or",
+            "as well as", semicolons joining independent clauses) that
+            connects two separately testable requirements. Each such
+            compound has been split into separate items that
+            cross-reference each other.
+          verification_method: "content_match"
+
+        # ---- Fidelity items ----
+        - id: "CL-RI-007"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every inventory item can be traced to specific text in the
+            raw sources via its source_location field. No item describes
+            a capability, constraint, or assumption that cannot be found
+            in the raw materials.
+          verification_method: "content_match"
+
+        - id: "CL-RI-008"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Inventory items that reference ambiguous or contradictory
+            raw-source text carry an "ambiguity" or "contradiction" tag
+            and preserve the original wording rather than resolving it.
+          verification_method: "content_match"
+
+        # ---- Structural items ----
+        - id: "CL-RI-009"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every inventory item has a unique identifier matching the
+            pattern RI-{three-digit-sequence} (e.g., RI-001, RI-042).
+            No two items share an ID.
+          verification_method: "schema_inspection"
+
+        - id: "CL-RI-010"
+          source_ref: "docs/requirements/raw-requirements.md"
+          criterion: >
+            Every inventory item includes a non-empty source_location
+            field that uses the element locator grammar to point to
+            the specific paragraph, bullet, or sentence in the raw
+            source from which it was extracted.
+          verification_method: "schema_inspection"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "Every FR-* identifier in the raw requirements appears as at
+      #    least one inventory item with a source_location pointing to
+      #    the paragraph containing that identifier."
+      #   "No inventory item contains the word 'and' joining two
+      #    independently verifiable requirements."
+      #
+      # BAD checklist items for this phase:
+      #   "Requirements are captured"  (too vague — captured how?)
+      #   "The inventory is complete"  (not actionable — complete by
+      #    what measure?)
+      #   "Features are well-organized"  (wrong phase — Phase 0 does
+      #    not organize into features)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to content in the raw source
+              documents. No checklist item tests for something that no
+              raw source mentions.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              Every section of every raw source document that contains
+              requirement-bearing content is the target of at least one
+              checklist item. This ensures completeness verification
+              spans the entire input corpus.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item describes a concrete, observable
+              property of the inventory (presence of an item, format
+              of an ID, existence of a tag) rather than a subjective
+              quality judgment.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "requirements-inventory-generator"
+      output_format: "yaml"
+      output_path: "docs/requirements/requirements-inventory.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            inventory_metadata:
+              source_documents: list of string (paths to raw sources)
+              extraction_date: string (ISO 8601 date)
+              total_item_count: integer
+
+            inventory_items: list of inventory item objects
+
+          Inventory item object fields:
+            id: string (RI-{three-digit-sequence}, e.g., RI-001)
+            statement: string
+              The requirement, constraint, assumption, or idea expressed
+              as a single atomic declarative sentence. Preserves the
+              meaning and specificity of the raw source without adding
+              interpretation.
+            category: string
+              One of: functional | non-functional | constraint |
+              assumption | informational
+            source_location: string
+              Element locator pointing to the specific text in the raw
+              source from which this item was extracted. Uses the locator
+              grammar (e.g., docs/requirements/raw-requirements.md#@FR-001
+              or docs/requirements/meeting-notes.md#L14-L27).
+            tags: list of string
+              Optional tags for cross-cutting concerns. Recognized tags:
+              ambiguity — the source text is unclear or open to multiple
+                interpretations; the statement preserves the original
+                wording
+              contradiction — this item conflicts with one or more other
+                items; related_items lists the conflicting IDs
+              implicit — derived from context rather than explicit
+                statement (still must be grounded in source text)
+            related_items: list of string
+              Optional list of other RI-* IDs that this item was split
+              from, contradicts, or is closely related to.
+            verbatim_quote: string
+              The exact text from the raw source that this item was
+              extracted from. Provides an audit trail for fidelity
+              verification.
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce a flat inventory of every requirement, constraint,
+        assumption, and distinct idea found in the raw source materials.
+
+        For each item:
+        1. Read the raw source text carefully.
+        2. Express the item as a single atomic declarative sentence.
+           Do not combine multiple requirements into one item.
+        3. Assign a sequential ID: RI-001, RI-002, etc.
+        4. Categorize as functional, non-functional, constraint,
+           assumption, or informational.
+        5. Record the exact source location using element locator syntax.
+        6. Include the verbatim quote from the source.
+        7. Tag ambiguities and contradictions; do not resolve them.
+        8. Link related items (splits, contradictions, dependencies).
+
+        Do NOT:
+        - Organize items into groups or hierarchies (that is Phase 1)
+        - Add requirements not found in the sources
+        - Resolve ambiguities or contradictions
+        - Prioritize or rank items
+        - Skip items that seem obvious or redundant — capture everything
+
+      traceability_mapping:
+        # In Phase 0, traceability is from inventory items back to raw
+        # source locations. Each inventory item maps directly to a
+        # specific location in the raw sources.
+        - artifact_element_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items[0]"
+          checklist_item_ids: ["CL-RI-002", "CL-RI-009", "CL-RI-010"]
+          input_source_refs:
+            - "docs/requirements/raw-requirements.md#@FR-001"
+
+    # -----------------------------------------------------------------------
+    # Traceability mapping guidance
+    # -----------------------------------------------------------------------
+    # Artifact side: $.inventory_items[n] — each inventory item object
+    # Input side: element locators into raw source documents pointing to
+    #   the specific paragraph, bullet, sentence, or identifier from
+    #   which the inventory item was extracted
+    #
+    # The mapping is one-to-one or many-to-one:
+    #   - One inventory item traces to exactly one source location
+    #     (the text it was extracted from)
+    #   - Multiple inventory items may trace to the same source location
+    #     (when a compound statement was split into atomic items)
+    # -----------------------------------------------------------------------
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "requirements-inventory-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. SILENT OMISSIONS — requirements that exist in the raw sources
+      #    but have no corresponding inventory item. The judge must read
+      #    the raw sources independently (not just check the traceability
+      #    mapping) to find these.
+      #
+      # 2. INVENTED REQUIREMENTS — inventory items whose verbatim_quote
+      #    does not actually appear in the cited source_location, or
+      #    whose statement significantly distorts the meaning of the
+      #    quoted text.
+      #
+      # 3. COMPOUND ITEMS — inventory items that smuggle multiple
+      #    independent requirements into a single statement. Look for
+      #    conjunctions, semicolons, or "including" clauses that join
+      #    separately testable assertions.
+      #
+      # 4. LOST NUANCE — cases where the inventory item loses important
+      #    qualifiers, conditions, or context from the original source
+      #    text (e.g., "users can export data" when the source said
+      #    "admin users can export data in CSV format").
+      #
+      # 5. CATEGORY MISMATCHES — items categorized incorrectly (e.g.,
+      #    a performance target categorized as "functional" instead of
+      #    "non-functional", or a technology mandate categorized as
+      #    "assumption" instead of "constraint").
+
+      evaluations:
+        - checklist_item_id: "CL-RI-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. MISSING ITEMS (coverage failure)
+      #    The judge identifies source sections with no corresponding
+      #    inventory items. Fix: re-read the cited sections line by line
+      #    and extract every distinct statement. Pay special attention to
+      #    subordinate clauses and parenthetical remarks.
+      #
+      # 2. COMPOUND ITEMS (atomicity failure)
+      #    The judge identifies items containing multiple requirements.
+      #    Fix: split the item into separate entries, each with its own
+      #    RI-* ID. Update related_items to cross-reference the split.
+      #    Keep verbatim_quote the same for all split items (they share
+      #    the same source text).
+      #
+      # 3. INVENTED CONTENT (fidelity failure)
+      #    The judge identifies items not grounded in source text.
+      #    Fix: either find the actual source location and update
+      #    source_location and verbatim_quote, or remove the item
+      #    entirely. Do not keep items that cannot be grounded.
+      #
+      # 4. MISSING TAGS (metadata failure)
+      #    The judge finds ambiguous or contradictory items without
+      #    appropriate tags. Fix: add the tags and update related_items
+      #    to link contradictory pairs.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/requirements/requirements-inventory.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/requirements/requirements-inventory-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/requirements/requirements-inventory-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 10
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 1: FEATURE SPECIFICATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Organize requirements inventory items into structured features with
+# IDs, descriptions, acceptance criteria, dependencies, and data/interface
+# assumptions — producing the specification that drives all downstream design
+# and implementation.
+#
+# This is the first phase that adds structure. It groups related inventory items
+# into coherent features, writes acceptance criteria that are concrete enough
+# to test against, and identifies dependencies between features. Every inventory
+# item must be accounted for: either mapped to a feature or explicitly marked
+# out-of-scope with a justification grounded in the inventory itself.
+#
+# The feature specification is the contract between "what was asked for" and
+# "what will be built." Downstream phases never read the raw requirements —
+# they rely on this specification as the authoritative statement of intent.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_1_feature_specification:
+
+  phase_processing_unit:
+
+    phase_id: "PH-001-feature-specification"
+    phase_name: "Feature Specification"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/requirements/requirements-inventory.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The flat requirements inventory produced by Phase 0. Contains
+            every extracted requirement, constraint, assumption, and idea
+            with unique RI-* identifiers and source traceability. This is
+            the sole source of truth for what the system must do.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/requirements/raw-requirements.md"
+          role: "validation-reference"
+          format: "markdown"
+          description: >
+            The original raw requirements. Used by the judge to verify
+            that feature descriptions faithfully represent the intent of
+            the original stakeholder statements. Not used for discovering
+            new requirements — that was Phase 0's job.
+          content_hash: ""
+          version: ""
+
+      external_references: []
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify four properties
+        of the feature specification:
+
+        (a) COVERAGE COMPLETENESS — every RI-* item in the inventory either
+            maps to at least one feature (via the feature's source_inventory_refs)
+            or appears in the out_of_scope section with a justification. No
+            inventory item is silently dropped.
+
+        (b) ACCEPTANCE CRITERIA QUALITY — each feature has acceptance criteria
+            that are:
+            - Concrete: references specific values, thresholds, or behaviors
+            - Testable: a test case can be written directly from the criterion
+            - Unambiguous: two independent readers would agree on pass/fail
+            - Complete: all aspects of the mapped inventory items are covered
+
+        (c) STRUCTURAL INTEGRITY — features have valid IDs, no circular
+            dependencies, and data/interface assumptions that are consistent
+            across features. Dependency declarations form a DAG.
+
+        (d) FAITHFUL INTERPRETATION — feature descriptions and acceptance
+            criteria faithfully represent the meaning of the inventory items
+            they map to, without adding capabilities not in the inventory or
+            losing capabilities that are.
+
+      checklist_items:
+        # ---- Coverage items ----
+        - id: "CL-FS-001"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Every RI-* identifier in the requirements inventory appears in
+            at least one feature's source_inventory_refs list or in the
+            out_of_scope section. No RI-* ID is absent from both.
+          verification_method: "coverage_query"
+
+        - id: "CL-FS-002"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Every item in the out_of_scope section includes a justification
+            field that explains why the inventory item is excluded, and the
+            justification references a concrete reason (e.g., contradicts
+            another requirement, deferred to a future release, superseded
+            by another item) rather than a generic dismissal.
+          verification_method: "content_match"
+
+        # ---- Acceptance criteria quality items ----
+        - id: "CL-FS-003"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Every feature has at least one acceptance criterion. No
+            acceptance criterion uses vague language such as "works well",
+            "is fast", "handles errors gracefully", "is user-friendly",
+            or "is secure" without a measurable qualification.
+          verification_method: "content_match"
+
+        - id: "CL-FS-004"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Each acceptance criterion specifies a verifiable condition:
+            given a specific input or precondition, the system produces
+            a specific output or postcondition. The criterion is precise
+            enough that a test case can be written from it without
+            requiring additional clarification.
+          verification_method: "content_match"
+
+        # ---- Structural integrity items ----
+        - id: "CL-FS-005"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Every feature has a unique identifier matching the pattern
+            FT-{three-digit-sequence} (e.g., FT-001). No two features
+            share an ID.
+          verification_method: "schema_inspection"
+
+        - id: "CL-FS-006"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Feature dependency declarations form a directed acyclic graph.
+            No feature directly or transitively depends on itself.
+          verification_method: "behavioral_trace"
+
+        - id: "CL-FS-007"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Every feature ID referenced in a depends_on list corresponds
+            to an actual feature in the specification. No dangling
+            dependency references.
+          verification_method: "schema_inspection"
+
+        # ---- Faithful interpretation items ----
+        - id: "CL-FS-008"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            For each feature, the acceptance criteria collectively cover
+            the full meaning of every inventory item listed in the
+            feature's source_inventory_refs. No aspect of a mapped
+            inventory item is left unaddressed by acceptance criteria.
+          verification_method: "content_match"
+
+        - id: "CL-FS-009"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            No feature introduces capabilities, constraints, or behaviors
+            that cannot be traced to at least one inventory item. The
+            feature specification adds structure but not substance.
+          verification_method: "content_match"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "Every RI-* ID appears in at least one feature's
+      #    source_inventory_refs or in the out_of_scope section."
+      #   "No acceptance criterion uses the word 'appropriate' without
+      #    specifying what 'appropriate' means in measurable terms."
+      #   "FT-003's acceptance criteria address the 200ms latency target
+      #    from RI-017."
+      #
+      # BAD checklist items for this phase:
+      #   "Features are well-organized" (subjective, not verifiable)
+      #   "Acceptance criteria are good" (no specific quality measure)
+      #   "All requirements are covered" (too vague — covered how? by
+      #    what mechanism? what constitutes coverage?)
+      #   "The architecture supports all features" (wrong phase — Phase 1
+      #    defines features, not architecture)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to inventory items or structural
+              properties of the inventory. No checklist item tests for
+              something unrelated to the requirements inventory content.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              The checklist collectively ensures that every inventory item
+              is accounted for in the feature specification. There should
+              be items that check both the feature mapping and the
+              out-of-scope accounting.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item describes an observable property that
+              can be mechanically checked against the feature specification
+              artifact. No item relies on subjective quality judgments.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "feature-specification-generator"
+      output_format: "yaml"
+      output_path: "docs/features/feature-specification.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            specification_metadata:
+              source_inventory: string (path to requirements inventory)
+              specification_date: string (ISO 8601 date)
+              total_feature_count: integer
+              total_out_of_scope_count: integer
+
+            features: list of feature objects
+            out_of_scope: list of exclusion objects
+
+          Feature object fields:
+            feature_id: string (FT-{three-digit-sequence}, e.g., FT-001)
+            name: string (short descriptive name, 3-8 words)
+            description: string (one or two paragraphs explaining what
+              the feature does, for whom, and why)
+            source_inventory_refs: list of string (RI-* IDs this feature
+              addresses — at least one required)
+            acceptance_criteria: list of acceptance criterion objects
+            depends_on: list of string (FT-* IDs of features this one
+              requires — empty list if no dependencies)
+            data_assumptions: list of string (assumptions about data
+              formats, volumes, or availability that this feature relies on)
+            interface_assumptions: list of string (assumptions about
+              system boundaries, user interactions, or external service
+              behaviors that this feature relies on)
+            priority: string (must | should | could — MoSCoW without
+              "won't", since won't items go in out_of_scope)
+
+          Acceptance criterion object fields:
+            criterion_id: string (AC-{feature-sequence}-{criterion-sequence},
+              e.g., AC-001-01)
+            description: string (a testable given/when/then or
+              condition/expected-result statement)
+            inventory_refs: list of string (RI-* IDs this criterion
+              specifically addresses)
+
+          Exclusion object fields:
+            inventory_ref: string (RI-* ID)
+            justification: string (why this item is excluded — must
+              reference a concrete reason)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce a structured feature specification from the requirements
+        inventory. For each group of related inventory items:
+
+        1. Create a feature with a descriptive name and unique FT-* ID.
+        2. Write a description explaining WHAT the feature does (not how
+           it will be implemented — that is Phase 2's job).
+        3. List all RI-* IDs this feature addresses in source_inventory_refs.
+        4. Write acceptance criteria in given/when/then or
+           condition/expected-result format. Each criterion must be
+           specific enough to derive a test case.
+        5. Identify dependencies on other features.
+        6. Document data and interface assumptions explicitly.
+        7. Assign priority using MoSCoW (must/should/could).
+
+        For inventory items that should not become features:
+        1. Add them to the out_of_scope section.
+        2. Provide a specific justification (not "out of scope" — that is
+           circular; explain WHY).
+
+        Grouping principles:
+        - Group by user-facing capability, not by implementation similarity
+        - Keep features at a level where each has 2-8 acceptance criteria
+        - If a feature would have more than 8 criteria, consider splitting
+        - Cross-cutting concerns (performance, security) may be features
+          if they have testable acceptance criteria, or may be noted as
+          constraints on other features
+
+      traceability_mapping:
+        # Artifact side: $.features[n] — each feature object
+        # Input side: $.inventory_items[n] — each inventory item
+        #
+        # The mapping is many-to-many:
+        #   - One feature maps to one or more inventory items
+        #   - One inventory item may map to one or more features
+        #   - Inventory items in out_of_scope map to no features but
+        #     carry explicit justification
+        - artifact_element_ref: "docs/features/feature-specification.yaml#$.features[0]"
+          checklist_item_ids: ["CL-FS-001", "CL-FS-003", "CL-FS-008"]
+          input_source_refs:
+            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[0]"
+            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[1]"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "feature-specification-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. ACCEPTANCE CRITERIA GAPS — features where the acceptance
+      #    criteria do not fully cover the mapped inventory items.
+      #    For each feature, the judge should read every RI-* item in
+      #    source_inventory_refs and verify that the acceptance criteria
+      #    collectively address all aspects of those items.
+      #
+      # 2. VAGUE CRITERIA — acceptance criteria that use qualitative
+      #    language without quantification. "Responds quickly" is vague;
+      #    "responds within 200ms at p95" is concrete. "Handles errors"
+      #    is vague; "returns HTTP 400 with a JSON body containing an
+      #    error code and message" is concrete.
+      #
+      # 3. ASSUMPTION CONFLICTS — data or interface assumptions in one
+      #    feature that contradict assumptions in another feature. For
+      #    example, FT-001 assumes "users authenticate via OAuth" while
+      #    FT-003 assumes "users authenticate via API key".
+      #
+      # 4. DEPENDENCY GAPS — features that clearly depend on another
+      #    feature's output or state but do not declare the dependency.
+      #    For example, a "user dashboard" feature that shows user data
+      #    but does not depend on the "user registration" feature.
+      #
+      # 5. SCOPE CREEP — features or acceptance criteria that introduce
+      #    capabilities not present in any inventory item. Cross-reference
+      #    every acceptance criterion back to its inventory_refs.
+      #
+      # 6. UNJUSTIFIED EXCLUSIONS — out-of-scope items with weak or
+      #    generic justifications ("not needed", "future work") that do
+      #    not explain the specific reason for exclusion.
+
+      evaluations:
+        - checklist_item_id: "CL-FS-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. MISSING INVENTORY COVERAGE (CL-FS-001 failure)
+      #    Some RI-* IDs appear in neither features nor out_of_scope.
+      #    Fix: search for the missing IDs in the inventory, understand
+      #    what they require, and either add them to an existing feature's
+      #    source_inventory_refs (adding corresponding acceptance criteria)
+      #    or create a new feature, or add them to out_of_scope with
+      #    justification.
+      #
+      # 2. VAGUE ACCEPTANCE CRITERIA (CL-FS-003/CL-FS-004 failure)
+      #    Criteria use subjective language. Fix: replace qualitative
+      #    terms with quantitative ones. For each vague criterion, ask
+      #    "what would a test assert?" and rewrite accordingly.
+      #    Before: "The system handles large datasets efficiently"
+      #    After:  "When the dataset contains 1M records, the query
+      #             completes within 5 seconds"
+      #
+      # 3. SCOPE CREEP (CL-FS-009 failure)
+      #    Features include capabilities not in the inventory. Fix:
+      #    remove the excess capability, or check if it was an
+      #    extraction miss in Phase 0 (in which case flag it as an
+      #    uncovered concern — do not add it to the feature spec
+      #    without an inventory item).
+      #
+      # 4. CIRCULAR DEPENDENCIES (CL-FS-006 failure)
+      #    Feature dependency graph has cycles. Fix: identify the
+      #    cycle and break it by finding the feature that can function
+      #    without the other (even in degraded mode) and removing the
+      #    dependency in that direction.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/features/feature-specification.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/features/feature-specification-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/features/feature-specification-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 9
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 2: SOLUTION DESIGN
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Define the system architecture — components, their responsibilities,
+# and the interactions between them — ensuring every feature has a clear path
+# through the architecture.
+#
+# This phase transforms the "what" of the feature specification into the "how"
+# of system structure. It does not define implementation details (code, schemas,
+# API signatures) — that is Phase 3's job. It identifies what components exist,
+# what each one is responsible for, and which components interact with each
+# other to deliver each feature.
+#
+# The key discipline is bounded responsibility: each component should have a
+# clear, non-overlapping area of concern. If two components share a
+# responsibility, the design is ambiguous and will cause contract conflicts
+# in Phase 3.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_2_solution_design:
+
+  phase_processing_unit:
+
+    phase_id: "PH-002-solution-design"
+    phase_name: "Solution Design"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/features/feature-specification.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The structured feature specification from Phase 1. Contains
+            features with acceptance criteria, dependencies, and data/
+            interface assumptions. The design must provide an architectural
+            path for every feature.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/requirements/requirements-inventory.yaml"
+          role: "upstream-traceability"
+          format: "yaml"
+          description: >
+            The requirements inventory from Phase 0. Used for traceability
+            verification — ensuring the design does not lose coverage of
+            original requirements. Not a primary input for design decisions.
+          content_hash: ""
+          version: ""
+
+      external_references:
+        - ref: ""
+          kind: "existing-codebase"
+          description: >
+            If the system is being built within or alongside an existing
+            codebase, the current architecture may constrain the design.
+            List existing code repositories or architecture documents here.
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify five properties
+        of the solution design:
+
+        (a) FEATURE COVERAGE — every feature in the specification has a
+            clear architectural path: a sequence of component interactions
+            that, when executed, delivers the feature's described behavior.
+            The design should include a feature_realization_map that shows
+            which components participate in each feature.
+
+        (b) COMPONENT BOUNDEDNESS — each component has a single, clear area
+            of responsibility. No responsibility is shared by multiple
+            components without an explicit delegation or composition
+            relationship. No component is "miscellaneous" or "utility"
+            without specific bounded responsibilities.
+
+        (c) INTERACTION COMPLETENESS — every pair of components that must
+            communicate to deliver a feature has a declared interaction.
+            No interaction is implied but undeclared. Each interaction
+            specifies direction (who initiates), communication style
+            (synchronous/asynchronous), and the data that flows.
+
+        (d) ASSUMPTION FULFILLMENT — every data assumption and interface
+            assumption declared in the feature specification is addressed
+            by the design: either fulfilled by a component's responsibility
+            or explicitly noted as an external dependency.
+
+        (e) DESIGN CONSISTENCY — component responsibilities and interaction
+            patterns do not contradict each other. If component A is
+            responsible for authentication and component B's interactions
+            include authenticating users, there is a conflict.
+
+      checklist_items:
+        # ---- Feature coverage items ----
+        - id: "CL-SD-001"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every FT-* feature in the specification appears in the
+            feature_realization_map with at least one component listed
+            as participating in its delivery. No feature is unmapped.
+          verification_method: "coverage_query"
+
+        - id: "CL-SD-002"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            For each feature in the feature_realization_map, the listed
+            component interactions form a coherent path from trigger
+            (user action or system event) to outcome (the feature's
+            described behavior). The path can be traced step-by-step
+            through the declared interactions.
+          verification_method: "behavioral_trace"
+
+        # ---- Component boundedness items ----
+        - id: "CL-SD-003"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every component has a responsibilities list with at least
+            one and at most seven responsibilities. Each responsibility
+            is a concrete verb-phrase (e.g., "validates user credentials
+            against the identity provider") not a vague category (e.g.,
+            "handles security").
+          verification_method: "content_match"
+
+        - id: "CL-SD-004"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            No responsibility appears in more than one component's
+            responsibilities list. If two components both mention the
+            same capability, the design must clarify which component
+            owns it and which delegates to the other.
+          verification_method: "content_match"
+
+        # ---- Interaction completeness items ----
+        - id: "CL-SD-005"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every pair of components that appear together in any
+            feature_realization_map entry has at least one declared
+            interaction describing how they communicate.
+          verification_method: "coverage_query"
+
+        - id: "CL-SD-006"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every declared interaction specifies: (a) the initiating
+            component, (b) the receiving component, (c) the
+            communication style (synchronous request-response,
+            asynchronous event, streaming, etc.), and (d) a summary
+            of the data exchanged.
+          verification_method: "schema_inspection"
+
+        # ---- Assumption fulfillment items ----
+        - id: "CL-SD-007"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every data_assumption listed in any feature's specification
+            is addressed by the design: either a component's
+            responsibilities include managing that data concern, or the
+            design notes it as an external dependency with a named
+            external system.
+          verification_method: "content_match"
+
+        - id: "CL-SD-008"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every interface_assumption listed in any feature's
+            specification is addressed by the design: either a
+            component boundary aligns with the assumed interface, or
+            an interaction explicitly bridges the assumption.
+          verification_method: "content_match"
+
+        # ---- Design consistency items ----
+        - id: "CL-SD-009"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            No component interaction contradicts a responsibility
+            declaration. If component A is responsible for X, no
+            interaction should show component B performing X
+            independently (without delegating to A).
+          verification_method: "behavioral_trace"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "FT-003 (Dashboard) appears in the feature_realization_map with
+      #    components UI, API-Gateway, and DataService listed, and the
+      #    declared interactions between them form a path from user request
+      #    to rendered dashboard."
+      #   "No two components list 'validates input' in their
+      #    responsibilities."
+      #
+      # BAD checklist items for this phase:
+      #   "The architecture is clean" (subjective)
+      #   "Components are well-designed" (not verifiable)
+      #   "The API contract for authentication uses JWT" (wrong phase —
+      #    Phase 2 defines component interactions, Phase 3 defines contracts)
+      #   "The code uses dependency injection" (implementation detail,
+      #    not architectural design)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to a feature, acceptance
+              criterion, or assumption in the feature specification.
+              No checklist item tests for architectural properties
+              not implied by the features.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              Every feature in the specification is the subject of at
+              least one checklist item verifying its architectural
+              coverage. Every feature's data_assumptions and
+              interface_assumptions are addressed by at least one item.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item names specific components, features,
+              or interactions rather than testing general architectural
+              qualities.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "solution-design-generator"
+      output_format: "yaml"
+      output_path: "docs/design/solution-design.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            design_metadata:
+              source_specification: string (path to feature specification)
+              design_date: string (ISO 8601 date)
+              total_component_count: integer
+              total_interaction_count: integer
+
+            components: list of component objects
+            interactions: list of interaction objects
+            feature_realization_map: list of realization objects
+            external_dependencies: list of external dependency objects
+
+          Component object fields:
+            component_id: string (CMP-{three-digit-sequence}, e.g., CMP-001)
+            name: string (short descriptive name)
+            description: string (one paragraph: what this component is and
+              why it exists as a separate unit)
+            responsibilities: list of string (concrete verb-phrases, each
+              describing one thing this component does)
+            technology_constraints: list of string (optional — mandated
+              technologies from inventory constraints)
+
+          Interaction object fields:
+            interaction_id: string (INT-{three-digit-sequence}, e.g., INT-001)
+            from_component: string (CMP-* ID of the initiator)
+            to_component: string (CMP-* ID of the receiver)
+            communication_style: string
+              synchronous-request-response | asynchronous-event |
+              asynchronous-command | streaming | shared-state
+            data_summary: string (what data flows in this interaction —
+              not the schema, just the concept: "user credentials",
+              "dashboard widget data", "audit log entry")
+            features_served: list of string (FT-* IDs that use this
+              interaction)
+
+          Realization object fields:
+            feature_id: string (FT-* ID)
+            participating_components: list of string (CMP-* IDs)
+            interaction_sequence: list of string (INT-* IDs in order
+              of execution for the primary happy path)
+            notes: string (optional — any design rationale specific
+              to how this feature is realized)
+
+          External dependency object fields:
+            dependency_id: string (EXT-{three-digit-sequence})
+            name: string (e.g., "PostgreSQL", "OAuth provider")
+            description: string (what the system expects from this
+              external entity)
+            features_dependent: list of string (FT-* IDs that require
+              this external dependency)
+            assumption_refs: list of string (the data_assumption or
+              interface_assumption entries this dependency fulfills)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce a system architecture that provides a clear path for
+        every feature in the specification. For each component:
+
+        1. Give it a unique CMP-* ID and descriptive name.
+        2. Write a description explaining WHY this is a separate
+           component (what would go wrong if it were merged with
+           another component?).
+        3. List concrete responsibilities as verb-phrases.
+        4. Ensure no responsibility overlaps with another component.
+
+        For each interaction:
+        1. Identify which component initiates and which receives.
+        2. Specify the communication style.
+        3. Summarize the data that flows (concepts, not schemas).
+        4. List which features use this interaction.
+
+        For each feature:
+        1. List the components that participate.
+        2. Show the interaction sequence for the happy path.
+
+        For external dependencies:
+        1. Identify any system or service outside the architecture
+           that features depend on.
+        2. Map each to the feature assumptions it fulfills.
+
+        Design principles:
+        - Separate concerns: each component owns one area
+        - Minimize interaction count: fewer interactions means
+          fewer contracts to define and maintain
+        - Prefer explicit data flow over shared state
+        - Components should be independently deployable/testable
+          where possible
+
+      traceability_mapping:
+        # Artifact side: components ($.components[n]),
+        #   interactions ($.interactions[n]),
+        #   realizations ($.feature_realization_map[n])
+        # Input side: features ($.features[n]) from the specification
+        #
+        # The mapping flows:
+        #   feature → realization → components + interactions
+        #   feature assumptions → external dependencies
+        - artifact_element_ref: "docs/design/solution-design.yaml#$.feature_realization_map[0]"
+          checklist_item_ids: ["CL-SD-001", "CL-SD-002"]
+          input_source_refs:
+            - "docs/features/feature-specification.yaml#$.features[0]"
+
+        - artifact_element_ref: "docs/design/solution-design.yaml#$.components[0]"
+          checklist_item_ids: ["CL-SD-003", "CL-SD-004"]
+          input_source_refs:
+            - "docs/features/feature-specification.yaml#$.features[0]"
+
+        - artifact_element_ref: "docs/design/solution-design.yaml#$.interactions[0]"
+          checklist_item_ids: ["CL-SD-005", "CL-SD-006"]
+          input_source_refs:
+            - "docs/features/feature-specification.yaml#$.features[0]"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "solution-design-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. ORPHAN COMPONENTS — components that participate in no feature
+      #    realization. Every component must serve at least one feature;
+      #    otherwise it is unjustified overhead.
+      #
+      # 2. GOD COMPONENTS — components with more than seven responsibilities
+      #    or that participate in more than 70% of features. These indicate
+      #    insufficient decomposition and will create bottlenecks in Phase 3
+      #    (too many contracts) and Phase 5 (too much to implement at once).
+      #
+      # 3. MISSING INTERACTIONS — features whose realization maps list
+      #    multiple components but the declared interactions do not connect
+      #    all of them. If CMP-001 and CMP-003 both participate in FT-002
+      #    but there is no interaction between them (direct or transitive),
+      #    the design has a gap.
+      #
+      # 4. IMPLICIT STATE SHARING — interactions where the data_summary
+      #    implies shared mutable state (e.g., "both components read and
+      #    write to the user session") without the communication_style
+      #    being explicitly "shared-state". Implicit sharing causes
+      #    contract ambiguity in Phase 3.
+      #
+      # 5. ASSUMPTION DRIFT — feature assumptions that the design addresses
+      #    differently than the feature specification intended. For example,
+      #    a feature assumes "data is stored in PostgreSQL" but the design
+      #    routes that data through a cache layer without noting the
+      #    persistence guarantee.
+      #
+      # 6. FEEDBACK LOOPS — interaction patterns where component A calls B
+      #    and B calls A (directly or through a chain). These are not
+      #    always wrong but must be intentional and justified.
+
+      evaluations:
+        - checklist_item_id: "CL-SD-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. UNMAPPED FEATURES (CL-SD-001/CL-SD-002 failure)
+      #    A feature has no realization entry or the realization has no
+      #    interaction sequence. Fix: trace the feature's acceptance
+      #    criteria and determine which components must participate. Add
+      #    the realization entry and any missing interactions.
+      #
+      # 2. OVERLAPPING RESPONSIBILITIES (CL-SD-004 failure)
+      #    Two components claim the same responsibility. Fix: decide which
+      #    component owns the responsibility and rewrite the other to
+      #    delegate. Add an interaction if the delegating component needs
+      #    to invoke the capability.
+      #
+      # 3. MISSING INTERACTIONS (CL-SD-005 failure)
+      #    Components co-participate in a feature but have no declared
+      #    interaction. Fix: determine how they communicate (does one call
+      #    the other? do they share an event bus?) and add the interaction
+      #    with appropriate communication style and data summary.
+      #
+      # 4. VAGUE RESPONSIBILITIES (CL-SD-003 failure)
+      #    Component responsibilities use broad category names instead of
+      #    specific verb-phrases. Fix: decompose "handles authentication"
+      #    into "validates user credentials against the identity provider",
+      #    "issues session tokens with configurable TTL", "revokes session
+      #    tokens on logout request".
+      #
+      # 5. UNADDRESSED ASSUMPTIONS (CL-SD-007/CL-SD-008 failure)
+      #    Feature assumptions have no corresponding component or external
+      #    dependency. Fix: either add the responsibility to an existing
+      #    component or create an external dependency entry.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/design/solution-design.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/design/solution-design-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/design/solution-design-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 9
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 3: CONTRACT-FIRST INTERFACE DEFINITIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Formally define every inter-component boundary with precise schemas
+# — function signatures, data types, error types, sequencing constraints — so
+# that components can be implemented and tested independently against their
+# contracts.
+#
+# This is where the design becomes executable. Every interaction declared in
+# Phase 2 becomes a concrete contract with input types, output types, error
+# types, preconditions, postconditions, and invariants. The contracts are
+# detailed enough that:
+#   - A simulation can validate inputs and outputs (Phase 4)
+#   - An implementation can be checked for conformance (Phase 5)
+#   - A test can be generated from the contract alone
+#
+# The key discipline is precision. "any" types, unspecified error handling,
+# and undefined edge cases are contract bugs that compound downstream.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_3_contract_first_interfaces:
+
+  phase_processing_unit:
+
+    phase_id: "PH-003-contract-first-interfaces"
+    phase_name: "Contract-First Interface Definitions"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/design/solution-design.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The solution design from Phase 2. Contains components,
+            interactions, and feature realization maps. Every declared
+            interaction becomes a contract in this phase.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/features/feature-specification.yaml"
+          role: "validation-reference"
+          format: "yaml"
+          description: >
+            The feature specification from Phase 1. Used to verify that
+            contracts carry enough information to support the acceptance
+            criteria. Not used for discovering new interactions — that
+            was Phase 2's job.
+          content_hash: ""
+          version: ""
+
+      external_references:
+        - ref: ""
+          kind: "api-specification"
+          description: >
+            External API specifications (OpenAPI, GraphQL schemas, protobuf
+            definitions) that constrain the contracts at system boundaries.
+            If the system must integrate with external services, their
+            specifications are listed here.
+
+        - ref: ""
+          kind: "coding-standard"
+          description: >
+            Type system conventions, naming standards, and error handling
+            patterns that the contracts must follow. Language-specific
+            typing rules (e.g., TypeScript strict mode, Python type hints)
+            belong here.
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify four properties
+        of the interface contracts:
+
+        (a) INTERACTION COVERAGE — every interaction declared in the
+            solution design (every INT-* entry) has a corresponding
+            contract. No design interaction is left without a formal
+            interface definition.
+
+        (b) TYPE PRECISION — every contract specifies concrete types for
+            all inputs, outputs, and errors. No "any" types, no untyped
+            fields, no "string" used where a union or enum is appropriate.
+            Error types enumerate the specific error conditions that can
+            occur, not just "Error" or "unknown".
+
+        (c) BEHAVIORAL SPECIFICATION — contracts include preconditions
+            (what must be true before the call), postconditions (what is
+            guaranteed after the call), and invariants (what is always
+            true). These go beyond type signatures to capture semantic
+            constraints the design implies but does not state.
+
+        (d) EDGE CASE COVERAGE — contracts address boundary conditions
+            implied by the data types and the features they serve: empty
+            collections, null/undefined values, maximum sizes, concurrent
+            access, timeout behavior, and partial failure scenarios.
+
+      checklist_items:
+        # ---- Interaction coverage items ----
+        - id: "CL-CI-001"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            Every INT-* interaction in the solution design has a
+            corresponding contract in the interface definitions with
+            a matching interaction_ref field. No interaction is missing
+            a contract.
+          verification_method: "coverage_query"
+
+        - id: "CL-CI-002"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            Every contract's from_component and to_component match the
+            corresponding interaction's component references. No contract
+            swaps the direction of an interaction.
+          verification_method: "content_match"
+
+        # ---- Type precision items ----
+        - id: "CL-CI-003"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            No contract contains a field typed as "any", "unknown",
+            "object", or unqualified "string" where a more specific
+            type (enum, union, literal, or structured object) is
+            derivable from the design or feature specification.
+          verification_method: "content_match"
+
+        - id: "CL-CI-004"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            Every contract defines an explicit error type that enumerates
+            every error condition: validation failures, not-found cases,
+            authorization failures, timeout conditions, and upstream
+            errors. Each error condition has a unique error code and a
+            description of when it occurs.
+          verification_method: "schema_inspection"
+
+        - id: "CL-CI-005"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            All shared data types used across multiple contracts are
+            defined once in a shared_types section and referenced by
+            name. No type definition is duplicated across contracts.
+          verification_method: "content_match"
+
+        # ---- Behavioral specification items ----
+        - id: "CL-CI-006"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            Every contract includes at least one precondition (a statement
+            of what must be true for the call to be valid) and at least
+            one postcondition (a statement of what the caller can rely on
+            after a successful response).
+          verification_method: "content_match"
+
+        - id: "CL-CI-007"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            For each feature's acceptance criteria, the contracts involved
+            in that feature's realization collectively carry enough
+            behavioral specification (preconditions, postconditions, type
+            constraints) that the acceptance criterion could be verified
+            by inspecting the contracts alone.
+          verification_method: "behavioral_trace"
+
+        # ---- Edge case coverage items ----
+        - id: "CL-CI-008"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            Every contract with a collection-type input or output
+            specifies behavior for the empty collection case. Every
+            contract with an optional field specifies behavior when
+            the field is absent.
+          verification_method: "content_match"
+
+        - id: "CL-CI-009"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            Every contract for an asynchronous interaction specifies
+            timeout behavior: what the caller should do if no response
+            arrives within the expected window, and what the receiver
+            should do if it cannot process within the expected window.
+          verification_method: "content_match"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "INT-003 (API Gateway to Auth Service) has a contract that
+      #    defines the input type with email:string and password:string
+      #    fields, and the error type enumerates INVALID_CREDENTIALS,
+      #    ACCOUNT_LOCKED, and RATE_LIMITED."
+      #   "The CreateUser contract specifies that the email field must
+      #    not be empty (precondition) and that the returned user_id
+      #    is unique across all users (postcondition)."
+      #
+      # BAD checklist items for this phase:
+      #   "Contracts are well-defined" (not specific enough)
+      #   "Error handling is adequate" (adequate by what measure?)
+      #   "The implementation handles edge cases" (wrong phase — this
+      #    phase defines contracts, not implementations)
+      #   "The API uses REST" (architectural choice, not a contract
+      #    quality criterion)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to an interaction in the
+              solution design or an acceptance criterion in the feature
+              specification. No checklist item tests for contract
+              properties not implied by the design.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              Every interaction in the solution design is the subject of
+              at least one checklist item. The checklist collectively
+              covers type precision, behavioral specification, and edge
+              cases for all interactions.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item names specific contracts, types, or
+              error conditions rather than testing general contract
+              quality.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "contract-definition-generator"
+      output_format: "yaml"
+      output_path: "docs/design/interface-contracts.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            contract_metadata:
+              source_design: string (path to solution design)
+              definition_date: string (ISO 8601 date)
+              total_contract_count: integer
+              total_shared_type_count: integer
+
+            shared_types: list of type definition objects
+            contracts: list of contract objects
+
+          Type definition object fields:
+            type_id: string (TYP-{three-digit-sequence}, e.g., TYP-001)
+            name: string (PascalCase type name, e.g., UserCredentials)
+            description: string (what this type represents)
+            definition: object
+              Structure depends on the type kind:
+              - For object types: fields (list of field objects with
+                name, type, required, description)
+              - For enum types: values (list of string values)
+              - For union types: variants (list of type references)
+              - For alias types: base_type (string reference)
+
+          Contract object fields:
+            contract_id: string (CTR-{three-digit-sequence}, e.g., CTR-001)
+            interaction_ref: string (INT-* ID from solution design)
+            from_component: string (CMP-* ID)
+            to_component: string (CMP-* ID)
+            operation_name: string (verb-noun name, e.g., authenticateUser)
+            communication_style: string (from design interaction)
+            description: string (what this operation does)
+
+            input_type: object or string
+              Either an inline type definition or a reference to a
+              shared type (TYP-* ID). All fields must have explicit
+              types. No "any".
+            output_type: object or string
+              Either an inline type definition or a reference to a
+              shared type. Includes the success response structure.
+            error_type: object
+              An enumerated union of all error conditions. Each variant
+              has: error_code (string), description (string), and
+              http_status or equivalent transport-level code if applicable.
+
+            preconditions: list of string
+              Statements that must be true before this operation is
+              called. Each precondition is a declarative sentence
+              referencing input fields or system state.
+            postconditions: list of string
+              Statements that are guaranteed true after successful
+              completion. Each postcondition is a declarative sentence
+              referencing output fields or system state changes.
+            invariants: list of string
+              Statements that are always true regardless of call outcome.
+              Example: "The total number of active sessions for a user
+              never exceeds the configured maximum."
+
+            edge_cases: list of edge case objects
+              Specific boundary conditions and their expected behavior.
+            timeout_behavior: object (optional — required for async)
+              caller_timeout_ms: integer
+              receiver_timeout_ms: integer
+              on_timeout: string (what happens: retry, fail, degrade)
+
+          Edge case object fields:
+            condition: string (the boundary condition)
+            expected_behavior: string (what the contract guarantees)
+            error_code: string (if this triggers an error, which one)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce formal interface contracts for every interaction in the
+        solution design. For each contract:
+
+        1. Map to the INT-* interaction it formalizes.
+        2. Define concrete input and output types. Use shared types for
+           structures that appear in multiple contracts.
+        3. Enumerate every error condition as a distinct variant with a
+           unique error code.
+        4. Write preconditions and postconditions as declarative sentences.
+        5. Identify edge cases from the type definitions (empty lists,
+           optional fields absent, maximum sizes) and from the features
+           (concurrent access, partial failures).
+        6. For asynchronous interactions, specify timeout behavior.
+
+        Type discipline:
+        - Never use "any" or "unknown"
+        - Use enums for finite value sets
+        - Use unions for values that can be one of several shapes
+        - Use optional markers explicitly; no implicit nullability
+        - String fields should specify format where applicable (email,
+          URL, ISO date, UUID)
+        - Numeric fields should specify range where applicable
+        - Collection fields should specify minimum/maximum cardinality
+          where the design implies bounds
+
+        Extract implicit constraints from the design:
+        - If a component "validates user credentials", the contract
+          must include validation-related error codes
+        - If a feature requires "200ms p95 response time", contracts
+          in that feature's path should note the latency budget
+        - If the design says "shared-state" communication, the contract
+          must specify locking/concurrency semantics
+
+      traceability_mapping:
+        # Artifact side: $.contracts[n] — each contract definition
+        #   and $.shared_types[n] — each shared type definition
+        # Input side: $.interactions[n] — from the solution design
+        #   and $.features[n].acceptance_criteria — from the feature spec
+        #
+        # The mapping flows:
+        #   design interaction → contract (one-to-one)
+        #   feature acceptance criteria → contracts that must support them
+        - artifact_element_ref: "docs/design/interface-contracts.yaml#$.contracts[0]"
+          checklist_item_ids: ["CL-CI-001", "CL-CI-003", "CL-CI-004", "CL-CI-006"]
+          input_source_refs:
+            - "docs/design/solution-design.yaml#$.interactions[0]"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "contract-definition-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. TYPE HOLES — places where the type system allows values that
+      #    the design intent would forbid. For example, a contract accepts
+      #    "string" for an email field but does not specify format, or
+      #    accepts "number" for a quantity that must be a positive integer.
+      #
+      # 2. ERROR GAPS — error conditions that could occur based on the
+      #    preconditions and edge cases but are not enumerated in the
+      #    error type. If a precondition says "user must be authenticated"
+      #    but the error type has no UNAUTHENTICATED variant, that is a gap.
+      #
+      # 3. POSTCONDITION WEAKNESS — postconditions that are trivially true
+      #    or that do not guarantee what downstream consumers need. For
+      #    example, "returns a user object" is weak; "returns a user object
+      #    with a non-empty user_id that is unique across all users" is
+      #    strong.
+      #
+      # 4. CROSS-CONTRACT INCONSISTENCY — shared types used differently
+      #    in different contracts (e.g., one contract treats a field as
+      #    required and another treats it as optional, both using the same
+      #    shared type).
+      #
+      # 5. IMPLICIT SEQUENCING — contracts that implicitly depend on
+      #    another contract being called first (e.g., "getUser" assumes
+      #    "createUser" was called) but do not express this as a
+      #    precondition.
+      #
+      # 6. MISSING IDEMPOTENCY GUARANTEES — operations that could be
+      #    retried (especially in async interactions) without specifying
+      #    whether retries are safe.
+
+      evaluations:
+        - checklist_item_id: "CL-CI-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. MISSING CONTRACTS (CL-CI-001 failure)
+      #    Interactions have no corresponding contract. Fix: create
+      #    contracts for every missing INT-* reference. Use the
+      #    interaction's data_summary as a starting point for the
+      #    input/output type design.
+      #
+      # 2. IMPRECISE TYPES (CL-CI-003 failure)
+      #    Fields use "any" or overly broad types. Fix: examine the
+      #    feature acceptance criteria and design responsibilities to
+      #    determine the actual domain of each field. Replace "string"
+      #    with specific formats, "any" with concrete types.
+      #
+      # 3. INCOMPLETE ERROR TYPES (CL-CI-004 failure)
+      #    Error conditions are missing. Fix: for each contract, walk
+      #    through the preconditions and ask "what if this is violated?"
+      #    Walk through the edge cases and ask "what error does this
+      #    produce?" Enumerate every distinct failure mode.
+      #
+      # 4. WEAK BEHAVIORAL SPECS (CL-CI-006 failure)
+      #    Missing or trivial pre/postconditions. Fix: for preconditions,
+      #    ask "what must the caller guarantee?" For postconditions, ask
+      #    "what can the caller rely on?" Reference specific fields
+      #    and values, not vague qualities.
+      #
+      # 5. MISSING EDGE CASES (CL-CI-008/CL-CI-009 failure)
+      #    Boundary conditions not addressed. Fix: systematically walk
+      #    each input field's type and ask "what is the boundary value?"
+      #    (empty string, zero, null, maximum length, empty list, etc.)
+      #    Add each as an edge case with expected behavior.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/design/interface-contracts.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/design/interface-contracts-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/design/interface-contracts-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 9
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 4: INTELLIGENT SIMULATIONS
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: For each component interface, produce an LLM-powered simulation
+# that validates inputs and outputs against the contract, provides realistic
+# responses from a scenario bank, and uses an LLM adjuster for inputs not
+# covered by the bank.
+#
+# Simulations are not stubs or simple mocks. They are contract-enforcing test
+# doubles that:
+#   - Validate every input against the contract's input type and preconditions
+#   - Validate every output against the contract's output type and postconditions
+#   - Provide deterministic responses for known scenarios (scenario bank)
+#   - Use an LLM to generate plausible responses for unknown inputs, constrained
+#     to the contract's output schema
+#
+# Simulations enable parallel development: any component can be implemented
+# and tested against simulations of its dependencies before those dependencies
+# exist. They also serve as living documentation of the contract's expected
+# behavior.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_4_intelligent_simulations:
+
+  phase_processing_unit:
+
+    phase_id: "PH-004-intelligent-simulations"
+    phase_name: "Intelligent Simulations"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/design/interface-contracts.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The interface contracts from Phase 3. Every contract defines the
+            input types, output types, error types, preconditions,
+            postconditions, and edge cases that the simulation must enforce.
+            Each contract gets exactly one simulation.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/design/solution-design.yaml"
+          role: "validation-reference"
+          format: "yaml"
+          description: >
+            The solution design from Phase 2. Used to understand the
+            interaction topology so simulations can model realistic
+            multi-step scenarios and state dependencies between contracts.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/features/feature-specification.yaml"
+          role: "validation-reference"
+          format: "yaml"
+          description: >
+            The feature specification from Phase 1. Used to derive
+            realistic scenario bank entries from acceptance criteria.
+            Each feature's acceptance criteria suggest happy-path and
+            error-path scenarios.
+          content_hash: ""
+          version: ""
+
+      external_references: []
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify four properties
+        of the intelligent simulations:
+
+        (a) CONTRACT COVERAGE — every contract (CTR-*) in the interface
+            definitions has a corresponding simulation. No contract is
+            left without a simulation.
+
+        (b) INPUT/OUTPUT VALIDATION — each simulation validates inputs
+            against the contract's input type and preconditions, and
+            validates outputs against the contract's output type and
+            postconditions. The validation is strict: invalid inputs
+            produce contract violation errors, not silent acceptance.
+
+        (c) SCENARIO BANK QUALITY — each simulation's scenario bank
+            covers: (a) the happy path for every feature that uses this
+            contract, (b) every error condition enumerated in the
+            contract's error type, and (c) every edge case listed in
+            the contract. Scenarios have deterministic inputs and
+            expected outputs.
+
+        (d) LLM ADJUSTER CONSTRAINTS — the LLM adjuster for unknown
+            inputs is constrained to produce outputs that conform to the
+            contract's output type schema. The adjuster receives the
+            contract definition as context and its outputs are validated
+            against the schema before being returned.
+
+      checklist_items:
+        # ---- Contract coverage items ----
+        - id: "CL-IS-001"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Every CTR-* contract in the interface definitions has a
+            corresponding simulation entry with a matching contract_ref
+            field. No contract is without a simulation.
+          verification_method: "coverage_query"
+
+        # ---- Input/output validation items ----
+        - id: "CL-IS-002"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation includes an input_validation section that
+            checks every field of the contract's input type for type
+            correctness, required-field presence, and format conformance.
+            Invalid inputs produce a CONTRACT_VIOLATION error, not a
+            silent default.
+          verification_method: "content_match"
+
+        - id: "CL-IS-003"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation includes an output_validation section that
+            verifies every generated response (from scenario bank or LLM
+            adjuster) against the contract's output type before returning
+            it. Responses that fail validation are rejected and logged.
+          verification_method: "content_match"
+
+        - id: "CL-IS-004"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation checks the contract's preconditions before
+            processing the input. If a precondition is violated, the
+            simulation returns the appropriate error from the contract's
+            error type rather than processing the request.
+          verification_method: "content_match"
+
+        # ---- Scenario bank quality items ----
+        - id: "CL-IS-005"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation's scenario bank includes at least one
+            happy-path scenario for every feature that uses this contract
+            (as determined by the interaction's features_served list in
+            the solution design).
+          verification_method: "coverage_query"
+
+        - id: "CL-IS-006"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation's scenario bank includes at least one
+            scenario for every error code in the contract's error type.
+            The scenario specifies the input that triggers the error
+            and the expected error response.
+          verification_method: "coverage_query"
+
+        - id: "CL-IS-007"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation's scenario bank includes at least one
+            scenario for every edge case listed in the contract. The
+            scenario specifies the boundary input and the expected
+            output or error.
+          verification_method: "coverage_query"
+
+        # ---- LLM adjuster constraint items ----
+        - id: "CL-IS-008"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation's LLM adjuster configuration includes the
+            full contract definition (input type, output type, error
+            type, postconditions) as context for the LLM, and specifies
+            that the LLM output must be parsed and validated against
+            the output type schema before being returned.
+          verification_method: "content_match"
+
+        - id: "CL-IS-009"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each simulation's LLM adjuster specifies a fallback behavior
+            for when the LLM produces output that fails schema validation:
+            either retry with additional constraints, or return a
+            SIMULATION_FALLBACK error. The simulation does not return
+            unvalidated LLM output.
+          verification_method: "content_match"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "CTR-003 (authenticateUser) simulation's scenario bank includes
+      #    a scenario for INVALID_CREDENTIALS error with input
+      #    {email: 'test@example.com', password: 'wrong'} and expected
+      #    output {error_code: 'INVALID_CREDENTIALS', ...}."
+      #   "The LLM adjuster for CTR-005 receives the full OutputType
+      #    definition as context and validates its response against the
+      #    schema before returning."
+      #
+      # BAD checklist items for this phase:
+      #   "Simulations are realistic" (subjective)
+      #   "Edge cases are handled" (not specific about which cases)
+      #   "The LLM produces good outputs" (not verifiable)
+      #   "The implementation passes all tests" (wrong phase — Phase 4
+      #    creates simulations, not implementations)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to a contract in the interface
+              definitions or a feature in the specification. No checklist
+              item tests for simulation properties not implied by the
+              contracts.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              Every contract in the interface definitions is the subject
+              of at least one checklist item covering validation,
+              scenarios, and LLM adjuster constraints.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item names specific contracts, error codes,
+              or edge cases rather than testing general simulation quality.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "simulation-generator"
+      output_format: "yaml"
+      output_path: "docs/simulations/simulation-definitions.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            simulation_metadata:
+              source_contracts: string (path to interface contracts)
+              generation_date: string (ISO 8601 date)
+              total_simulation_count: integer
+
+            simulations: list of simulation objects
+
+          Simulation object fields:
+            simulation_id: string (SIM-{three-digit-sequence}, e.g., SIM-001)
+            contract_ref: string (CTR-* ID from interface contracts)
+            operation_name: string (matching the contract's operation_name)
+            description: string (what this simulation models)
+
+            input_validation: object
+              validation_rules: list of validation rule objects
+                Each rule specifies:
+                  field: string (dot-path to the field in the input type)
+                  check: string (type_match | required | format | range |
+                    enum_member | custom)
+                  constraint: string (the specific constraint, e.g.,
+                    "must be valid email format", "must be >= 1")
+                  on_failure: string (the error_code returned when this
+                    validation fails)
+
+            precondition_checks: list of precondition check objects
+              Each check specifies:
+                precondition: string (from the contract)
+                check_mechanism: string (how the simulation verifies
+                  this — state inspection, input field check, etc.)
+                on_failure_error_code: string
+
+            output_validation: object
+              validation_rules: list of validation rule objects
+                Same structure as input validation but applied to
+                responses generated by the scenario bank or LLM adjuster.
+
+            scenario_bank: list of scenario objects
+              Each scenario specifies:
+                scenario_id: string (SCN-{sim-sequence}-{scenario-sequence})
+                description: string (what this scenario tests)
+                category: string (happy-path | error | edge-case)
+                feature_refs: list of string (FT-* IDs, if happy-path)
+                input: object (concrete input values)
+                expected_output: object (concrete output values or error)
+                precondition_state: object (optional — any state the
+                  simulation must be in for this scenario)
+
+            llm_adjuster: object
+              contract_context: string (reference to the full contract
+                definition provided as LLM context)
+              output_schema_constraint: string (the output type schema
+                the LLM must conform to)
+              max_retries: integer (how many times to retry if schema
+                validation fails)
+              fallback_behavior: string (error_code returned if all
+                retries fail)
+              temperature: number (LLM temperature — lower for more
+                deterministic outputs)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce an intelligent simulation for every contract in the
+        interface definitions. For each simulation:
+
+        1. Map to the CTR-* contract it simulates.
+        2. Define input validation rules that check every field of the
+           contract's input type. Each rule specifies the field, the
+           check type, and the error code on failure.
+        3. Define precondition checks that verify the contract's
+           preconditions. Specify how the simulation checks each one.
+        4. Define output validation rules that check responses against
+           the contract's output type.
+        5. Build a scenario bank:
+           - For each feature that uses this contract: at least one
+             happy-path scenario with concrete inputs and expected outputs
+           - For each error code: one scenario with input that triggers it
+           - For each edge case: one scenario with boundary input
+        6. Configure the LLM adjuster:
+           - Provide the full contract definition as context
+           - Specify the output schema constraint
+           - Set max retries and fallback behavior
+           - Use low temperature (0.1-0.3) for deterministic outputs
+
+        Scenario design principles:
+        - Use realistic but obviously test data (e.g., test@example.com)
+        - Scenarios should be independently executable (no shared state
+          between scenarios unless explicitly declared)
+        - Error scenarios should test one error at a time
+        - Edge case scenarios should test exactly the boundary value
+
+      traceability_mapping:
+        # Artifact side: $.simulations[n] — each simulation definition
+        #   and $.simulations[n].scenario_bank[m] — each scenario
+        # Input side: $.contracts[n] — from interface contracts
+        #   and $.features[n].acceptance_criteria — from feature spec
+        #
+        # The mapping is one-to-one at the simulation level:
+        #   contract → simulation
+        # And many-to-many at the scenario level:
+        #   scenario → contract error codes, edge cases, or features
+        - artifact_element_ref: "docs/simulations/simulation-definitions.yaml#$.simulations[0]"
+          checklist_item_ids: ["CL-IS-001", "CL-IS-002", "CL-IS-003"]
+          input_source_refs:
+            - "docs/design/interface-contracts.yaml#$.contracts[0]"
+
+        - artifact_element_ref: "docs/simulations/simulation-definitions.yaml#$.simulations[0].scenario_bank[0]"
+          checklist_item_ids: ["CL-IS-005"]
+          input_source_refs:
+            - "docs/features/feature-specification.yaml#$.features[0]"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "simulation-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. VALIDATION GAPS — input validation rules that miss fields
+      #    defined in the contract's input type, or output validation
+      #    rules that miss fields in the output type. Every typed field
+      #    should have a corresponding validation rule.
+      #
+      # 2. SCENARIO REALISM — scenarios whose inputs are syntactically
+      #    valid but semantically nonsensical (e.g., a user with age
+      #    -5 or a date in the year 9999). While edge cases should test
+      #    boundaries, happy-path scenarios should use realistic data.
+      #
+      # 3. SCENARIO INDEPENDENCE — scenarios that implicitly depend on
+      #    other scenarios' side effects (e.g., scenario B assumes
+      #    scenario A created a user). Each scenario should declare its
+      #    precondition_state if it depends on prior state.
+      #
+      # 4. LLM ADJUSTER LEAKAGE — configurations where the LLM adjuster
+      #    could produce outputs that technically match the schema but
+      #    violate the contract's postconditions (e.g., returning a
+      #    valid UserObject but with a user_id that duplicates an existing
+      #    scenario bank ID). The judge should check that postconditions
+      #    are included in the adjuster's contract context.
+      #
+      # 5. ERROR CASCADE BLINDNESS — simulations that validate inputs and
+      #    return errors independently but do not model the state changes
+      #    that a real implementation would produce. For example, a
+      #    "createOrder" simulation that always succeeds without tracking
+      #    that the order ID should be unique across calls.
+
+      evaluations:
+        - checklist_item_id: "CL-IS-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. MISSING SIMULATIONS (CL-IS-001 failure)
+      #    Contracts have no corresponding simulation. Fix: create
+      #    simulations for missing contracts. Start with the contract's
+      #    type definitions to build validation rules, then derive
+      #    scenarios from the contract's error codes and edge cases.
+      #
+      # 2. INCOMPLETE VALIDATION (CL-IS-002/CL-IS-003 failure)
+      #    Validation rules miss fields. Fix: walk every field in the
+      #    contract's input/output type definitions and add a validation
+      #    rule for each. Check nested objects and arrays recursively.
+      #
+      # 3. MISSING SCENARIOS (CL-IS-005/CL-IS-006/CL-IS-007 failure)
+      #    Scenario bank has gaps. Fix: use the contract's error_type
+      #    variants as a checklist — one scenario per error code. Use
+      #    the contract's edge_cases as another checklist — one scenario
+      #    per edge case. Use the features_served from the design
+      #    interaction for happy-path scenarios.
+      #
+      # 4. UNCONSTRAINED LLM ADJUSTER (CL-IS-008/CL-IS-009 failure)
+      #    LLM adjuster lacks proper constraints or fallback. Fix:
+      #    include the full contract definition (not just the type) in
+      #    the adjuster's context. Add schema validation as a post-
+      #    processing step. Define explicit retry and fallback behavior.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/simulations/simulation-definitions.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/simulations/simulation-definitions-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/simulations/simulation-definitions-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 9
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 5: INCREMENTAL IMPLEMENTATION
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Implement components one at a time, each immediately integrated
+# against simulations of its dependencies, with simulations progressively
+# replaced by real implementations as components are completed.
+#
+# This phase is unique in the pipeline because it executes iteratively: not
+# in the revision-loop sense (which handles quality), but in the component-
+# ordering sense. The implementation order follows the dependency graph
+# leaf-first: components with no dependencies on other internal components
+# are implemented first, then components that depend only on already-
+# implemented components, and so on.
+#
+# Each component's implementation cycle:
+#   1. Implement the component against its contract(s)
+#   2. Run unit tests derived from acceptance criteria
+#   3. Integrate against simulations of dependencies
+#   4. When the component passes, replace its simulation with the real
+#      implementation for all components that depend on it
+#   5. Re-run dependent components' integration tests to verify the
+#      real implementation behaves identically to the simulation
+#
+# The artifact for this phase is an implementation plan with ordering,
+# test strategies, and integration checkpoints — not the code itself. The
+# code is produced by executing the plan. The plan is what gets judged.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_5_incremental_implementation:
+
+  phase_processing_unit:
+
+    phase_id: "PH-005-incremental-implementation"
+    phase_name: "Incremental Implementation"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/design/interface-contracts.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The interface contracts from Phase 3. Each contract defines
+            the interface a component must implement. The contracts are
+            the source of truth for what each component does.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/simulations/simulation-definitions.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The simulation definitions from Phase 4. Each simulation
+            provides a test double that components integrate against
+            before real dependencies are available. The scenario banks
+            provide integration test cases.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/features/feature-specification.yaml"
+          role: "validation-reference"
+          format: "yaml"
+          description: >
+            The feature specification from Phase 1. Provides acceptance
+            criteria that drive unit test design. Each component's tests
+            must trace to the acceptance criteria of the features it
+            serves.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/design/solution-design.yaml"
+          role: "validation-reference"
+          format: "yaml"
+          description: >
+            The solution design from Phase 2. Provides the component
+            dependency graph that determines implementation order and
+            the feature realization map that determines which components
+            participate in which features.
+          content_hash: ""
+          version: ""
+
+      external_references:
+        - ref: ""
+          kind: "coding-standard"
+          description: >
+            Language-specific coding standards, project conventions,
+            and testing framework documentation that constrain how
+            the implementation is structured.
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify five properties
+        of the implementation plan:
+
+        (a) ORDERING VALIDITY — the implementation order respects the
+            dependency graph. No component is scheduled before the
+            components it depends on (or their simulations). Leaf
+            components (those with no internal dependencies) come first.
+
+        (b) CONTRACT CONFORMANCE — each component's implementation plan
+            specifies which contracts it implements and includes test
+            strategies that verify conformance to the contract's types,
+            preconditions, postconditions, and error handling.
+
+        (c) UNIT TEST TRACEABILITY — each component's test plan includes
+            unit tests that trace to specific acceptance criteria from
+            the features the component serves. Every acceptance criterion
+            reachable by the component has at least one test.
+
+        (d) SIMULATION INTEGRATION — each component's plan specifies
+            which simulations it integrates against and includes
+            integration test cases derived from the simulation's
+            scenario bank.
+
+        (e) SIMULATION REPLACEMENT — the plan specifies the handoff
+            protocol for replacing each simulation with the real
+            implementation: which dependent components must be re-tested,
+            what constitutes a successful handoff, and what to do if the
+            real implementation behaves differently from the simulation.
+
+      checklist_items:
+        # ---- Ordering validity items ----
+        - id: "CL-II-001"
+          source_ref: "docs/design/solution-design.yaml#$.components"
+          criterion: >
+            The implementation order lists every CMP-* component from
+            the solution design. No component is omitted.
+          verification_method: "coverage_query"
+
+        - id: "CL-II-002"
+          source_ref: "docs/design/solution-design.yaml#$.interactions"
+          criterion: >
+            For every component in the implementation order, all
+            components it depends on (determined by interactions where
+            it is the from_component) appear earlier in the order.
+            Leaf components (those with no outgoing interactions to
+            other internal components) appear first.
+          verification_method: "behavioral_trace"
+
+        # ---- Contract conformance items ----
+        - id: "CL-II-003"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            Each component's implementation plan lists every contract
+            (CTR-*) the component participates in, specifying whether
+            the component is the provider (to_component) or consumer
+            (from_component) of each contract.
+          verification_method: "coverage_query"
+
+        - id: "CL-II-004"
+          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          criterion: >
+            For each contract a component provides, the test strategy
+            includes tests that verify: (a) the component accepts all
+            valid input types, (b) the component returns the correct
+            output type, (c) the component handles every error condition
+            in the error type, and (d) the component satisfies all
+            postconditions.
+          verification_method: "content_match"
+
+        # ---- Unit test traceability items ----
+        - id: "CL-II-005"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            For each component, every acceptance criterion from every
+            feature the component serves (as determined by the feature
+            realization map) has at least one unit test case in the
+            component's test plan. The test case references the AC-*
+            criterion ID.
+          verification_method: "coverage_query"
+
+        # ---- Simulation integration items ----
+        - id: "CL-II-006"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
+          criterion: >
+            Each component's implementation plan identifies which
+            simulations (SIM-*) it will integrate against during
+            development, corresponding to the contracts of components
+            it depends on that are not yet implemented at that point
+            in the order.
+          verification_method: "content_match"
+
+        - id: "CL-II-007"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
+          criterion: >
+            Each component's integration test plan includes test cases
+            derived from the scenario banks of the simulations it
+            integrates against. At minimum: all happy-path scenarios
+            and all error scenarios from each dependency simulation.
+          verification_method: "coverage_query"
+
+        # ---- Simulation replacement items ----
+        - id: "CL-II-008"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
+          criterion: >
+            The implementation plan includes a simulation replacement
+            protocol for each simulation, specifying: (a) when the
+            replacement occurs (after the real component passes its
+            own tests), (b) which dependent components must be re-tested,
+            (c) what constitutes a successful replacement (all dependent
+            component tests still pass), and (d) rollback procedure if
+            the replacement fails.
+          verification_method: "content_match"
+
+        - id: "CL-II-009"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
+          criterion: >
+            The simulation replacement protocol specifies that when a
+            simulation is replaced with a real implementation, the
+            dependent components' integration tests are re-run using
+            the same scenario inputs. Any behavioral difference between
+            simulation and real implementation is flagged and must be
+            resolved before proceeding.
+          verification_method: "content_match"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "CMP-003 (AuthService) appears before CMP-001 (APIGateway) in
+      #    the implementation order because INT-002 shows APIGateway
+      #    depends on AuthService."
+      #   "CMP-005's test plan includes a test for AC-003-02 (the 200ms
+      #    latency acceptance criterion from FT-003) with a specific
+      #    assertion on response time."
+      #   "When SIM-003 is replaced by the real AuthService, CMP-001's
+      #    integration tests re-run scenarios SCN-003-01 through SCN-003-04."
+      #
+      # BAD checklist items for this phase:
+      #   "The code is well-written" (subjective, and this phase judges
+      #    the plan, not the code)
+      #   "Tests pass" (untestable at plan time — tests don't exist yet)
+      #   "The architecture is correct" (wrong phase — architecture is
+      #    Phase 2's output)
+      #   "Components are implemented" (this phase produces the plan,
+      #    not the implementation)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to a component, contract,
+              simulation, or acceptance criterion from the input
+              artifacts. No checklist item tests for properties not
+              derivable from the inputs.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              Every component in the solution design is the subject of
+              checklist items covering ordering, contract conformance,
+              test traceability, simulation integration, and simulation
+              replacement.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item names specific components, contracts,
+              simulations, or acceptance criteria rather than testing
+              general plan quality.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "implementation-plan-generator"
+      output_format: "yaml"
+      output_path: "docs/implementation/implementation-plan.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            plan_metadata:
+              source_contracts: string (path to interface contracts)
+              source_simulations: string (path to simulation definitions)
+              source_features: string (path to feature specification)
+              source_design: string (path to solution design)
+              plan_date: string (ISO 8601 date)
+              total_component_count: integer
+
+            implementation_order: list of implementation step objects
+            simulation_replacement_protocol: object
+
+          Implementation step object fields:
+            step_number: integer (1-based, determines execution order)
+            component_id: string (CMP-* ID)
+            component_name: string
+            rationale: string (why this component is at this position
+              in the order — what dependencies are satisfied)
+
+            contracts_provided: list of string (CTR-* IDs where this
+              component is the to_component — contracts it implements)
+            contracts_consumed: list of string (CTR-* IDs where this
+              component is the from_component — contracts it calls)
+
+            dependency_simulations: list of string (SIM-* IDs this
+              component integrates against during development — only
+              for dependencies not yet implemented at this step)
+            dependency_real: list of string (CMP-* IDs of dependencies
+              already implemented at this step — integrated directly)
+
+            unit_test_plan: list of unit test spec objects
+              Each spec:
+                test_id: string (UT-{component}-{sequence})
+                acceptance_criterion_ref: string (AC-* ID from features)
+                description: string (what the test verifies)
+                contract_ref: string (CTR-* ID this test relates to)
+
+            integration_test_plan: list of integration test spec objects
+              Each spec:
+                test_id: string (IT-{component}-{sequence})
+                dependency_ref: string (CMP-* or SIM-* ID being
+                  integrated against)
+                scenario_refs: list of string (SCN-* IDs from the
+                  simulation scenario bank)
+                description: string (what the integration test verifies)
+
+            contract_conformance_tests: list of conformance test objects
+              Each spec:
+                test_id: string (CF-{component}-{sequence})
+                contract_ref: string (CTR-* ID)
+                aspect: string (input-validation | output-type |
+                  error-handling | precondition | postcondition)
+                description: string
+
+            completion_criteria: list of string (conditions that must
+              be true before this step is complete and the next can begin)
+
+          Simulation replacement protocol fields:
+            replacement_sequence: list of replacement step objects
+              Each step:
+                simulation_ref: string (SIM-* ID being replaced)
+                real_component_ref: string (CMP-* ID replacing it)
+                triggered_after_step: integer (step_number of the
+                  component that provides this contract)
+                dependent_components: list of string (CMP-* IDs
+                  that must be re-tested)
+                retest_scenarios: list of string (SCN-* IDs to re-run)
+                success_condition: string (what constitutes a
+                  successful replacement)
+                rollback_procedure: string (what to do if re-tests fail)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce an implementation plan that orders components for
+        incremental development with simulation-backed integration.
+
+        Implementation ordering strategy:
+        1. Build the component dependency graph from the interactions
+           in the solution design. If CMP-A has an interaction where it
+           is from_component and CMP-B is to_component, then CMP-A
+           depends on CMP-B.
+        2. Topologically sort the graph. Components with no dependencies
+           (leaf nodes) come first.
+        3. If multiple components are at the same depth in the graph,
+           order by: (a) number of downstream dependents (more dependents
+           first — unblocks more work), (b) number of features served
+           (more features first — delivers more value early).
+
+        For each component in order:
+        1. List the contracts it provides and consumes.
+        2. Identify which dependencies are simulated (not yet implemented)
+           and which are real (already implemented in a previous step).
+        3. Design unit tests from acceptance criteria:
+           - For each feature the component serves, find the acceptance
+             criteria from the feature specification
+           - Create a unit test spec for each criterion
+        4. Design integration tests from simulation scenarios:
+           - For each dependency simulation, include its scenario bank
+             entries as integration test inputs
+        5. Design contract conformance tests:
+           - For each contract the component provides, include tests for
+             input validation, output type, error handling, and
+             pre/postconditions
+        6. Define completion criteria.
+
+        For simulation replacement:
+        1. After each component passes its tests, its simulation can be
+           replaced for downstream consumers.
+        2. List which components must be re-tested when each simulation
+           is replaced.
+        3. Define success conditions and rollback procedures.
+
+      traceability_mapping:
+        # Artifact side: $.implementation_order[n] — each step
+        #   and $.implementation_order[n].unit_test_plan[m] — each test
+        # Input side:
+        #   $.components[n] — from solution design (component identity)
+        #   $.contracts[n] — from interface contracts (what to implement)
+        #   $.simulations[n] — from simulations (what to integrate against)
+        #   $.features[n].acceptance_criteria[m] — from features (what to test)
+        - artifact_element_ref: "docs/implementation/implementation-plan.yaml#$.implementation_order[0]"
+          checklist_item_ids: ["CL-II-001", "CL-II-002", "CL-II-003"]
+          input_source_refs:
+            - "docs/design/solution-design.yaml#$.components[0]"
+            - "docs/design/interface-contracts.yaml#$.contracts[0]"
+
+        - artifact_element_ref: "docs/implementation/implementation-plan.yaml#$.implementation_order[0].unit_test_plan[0]"
+          checklist_item_ids: ["CL-II-005"]
+          input_source_refs:
+            - "docs/features/feature-specification.yaml#$.features[0].acceptance_criteria[0]"
+
+        - artifact_element_ref: "docs/implementation/implementation-plan.yaml#$.simulation_replacement_protocol.replacement_sequence[0]"
+          checklist_item_ids: ["CL-II-008", "CL-II-009"]
+          input_source_refs:
+            - "docs/simulations/simulation-definitions.yaml#$.simulations[0]"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "implementation-plan-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. ORDERING VIOLATIONS — subtle dependency violations where
+      #    component A is scheduled before component B but has an indirect
+      #    dependency on B through a chain of interactions. The judge
+      #    must trace the full transitive dependency closure, not just
+      #    direct interactions.
+      #
+      # 2. TEST SUFFICIENCY — unit test plans that cover the happy path
+      #    but miss error conditions or edge cases implied by the
+      #    acceptance criteria. For example, an acceptance criterion
+      #    says "the system returns an error for invalid input" but the
+      #    test plan only tests valid inputs.
+      #
+      # 3. SIMULATION MISMATCH RISK — cases where a simulation's
+      #    scenario bank covers behaviors that the real implementation
+      #    might not replicate exactly (especially around timing, state
+      #    management, or error responses). The judge should flag areas
+      #    where simulation-to-real divergence is likely.
+      #
+      # 4. COMPLETION CRITERIA GAPS — steps whose completion criteria
+      #    do not fully ensure the component is ready. For example,
+      #    "unit tests pass" is necessary but insufficient — integration
+      #    tests and contract conformance tests must also pass.
+      #
+      # 5. ORPHAN TESTS — test specifications that reference acceptance
+      #    criteria or scenarios that do not exist in the input artifacts.
+      #    Every test must trace to a real source.
+      #
+      # 6. REPLACEMENT CASCADING — simulation replacement sequences that
+      #    do not account for cascading effects. When SIM-A is replaced,
+      #    components that depend on CMP-A might now depend on CMP-A's
+      #    dependencies (CMP-B), which are still simulated. The judge
+      #    should verify the replacement sequence accounts for this.
+
+      evaluations:
+        - checklist_item_id: "CL-II-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. ORDERING ERRORS (CL-II-002 failure)
+      #    A component appears before its dependencies. Fix: re-derive
+      #    the dependency graph from interactions and re-sort
+      #    topologically. If there is a cycle (which should not exist
+      #    per Phase 2 validation), escalate — the solution design
+      #    has an unresolved issue.
+      #
+      # 2. MISSING CONTRACT COVERAGE (CL-II-003/CL-II-004 failure)
+      #    A component's plan omits contracts it participates in.
+      #    Fix: cross-reference the component with all contracts where
+      #    it appears as from_component or to_component and add missing
+      #    entries with conformance tests.
+      #
+      # 3. MISSING ACCEPTANCE TESTS (CL-II-005 failure)
+      #    Acceptance criteria lack corresponding unit tests. Fix: for
+      #    each feature the component serves (from the realization map),
+      #    list all AC-* criteria and create a test spec for each. Use
+      #    the criterion's given/when/then structure to define the test.
+      #
+      # 4. INCOMPLETE REPLACEMENT PROTOCOL (CL-II-008/CL-II-009 failure)
+      #    Simulation replacement steps miss dependent components or
+      #    lack rollback procedures. Fix: for each simulation, find all
+      #    components that use it (where it is a dependency_simulation)
+      #    and add them to the re-test list. Define rollback as reverting
+      #    to the simulation for that dependency.
+      #
+      # 5. INSUFFICIENT COMPLETION CRITERIA
+      #    Completion criteria are too lenient. Fix: every step's
+      #    completion criteria must include at minimum: (a) all unit
+      #    tests pass, (b) all integration tests pass, (c) all contract
+      #    conformance tests pass, (d) simulation replacement (if
+      #    applicable) succeeds.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/implementation/implementation-plan.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/implementation/implementation-plan-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/implementation/implementation-plan-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 9
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 6: VERIFICATION SWEEP
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Run end-to-end acceptance tests traced back to features and
+# ultimately to requirements inventory items, confirming full traceability
+# coverage from raw requirements through to verified system behavior.
+#
+# This phase closes the traceability loop. Every chain from requirement
+# inventory item (RI-*) through feature (FT-*) through acceptance criterion
+# (AC-*) must terminate in a passing end-to-end test. The verification sweep
+# does not re-test individual components (that was Phase 5) — it tests the
+# integrated system as a whole, exercising the full interaction paths defined
+# in the feature realization maps.
+#
+# The artifact is a verification report that maps every requirement to its
+# test result, identifies any gaps in coverage, and provides the evidence
+# needed to declare the system complete (or to identify what remains).
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_6_verification_sweep:
+
+  phase_processing_unit:
+
+    phase_id: "PH-006-verification-sweep"
+    phase_name: "Verification Sweep"
+    version: "1.0.0"
+
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
+    input_sources:
+      artifacts:
+        - ref: "docs/features/feature-specification.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The feature specification from Phase 1. Every feature's
+            acceptance criteria drive the end-to-end tests. This is the
+            primary source: the verification sweep confirms that the
+            integrated system satisfies every acceptance criterion.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/requirements/requirements-inventory.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            The requirements inventory from Phase 0. The root of all
+            traceability. The verification sweep confirms that every
+            inventory item is covered by at least one end-to-end test
+            (via features and acceptance criteria).
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/design/solution-design.yaml"
+          role: "validation-reference"
+          format: "yaml"
+          description: >
+            The solution design from Phase 2. Provides feature
+            realization maps that define the interaction paths to test.
+            End-to-end tests should exercise these paths.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/implementation/implementation-plan.yaml"
+          role: "upstream-traceability"
+          format: "yaml"
+          description: >
+            The implementation plan from Phase 5. Provides the component
+            and test inventory for cross-referencing with end-to-end
+            test coverage.
+          content_hash: ""
+          version: ""
+
+      external_references: []
+
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        The extractor must derive checklist items that verify four properties
+        of the verification sweep:
+
+        (a) ACCEPTANCE CRITERIA COVERAGE — every acceptance criterion
+            (AC-*) across all features has at least one end-to-end test.
+            The test exercises the full interaction path from user input
+            (or system trigger) to observable output.
+
+        (b) INVENTORY TRACEABILITY — every requirements inventory item
+            (RI-*) can be traced through features and acceptance criteria
+            to at least one end-to-end test. The chain is:
+            RI-* → FT-* (via source_inventory_refs) → AC-* → E2E test.
+            Items in out_of_scope are excluded from this check.
+
+        (c) TEST QUALITY — each end-to-end test specifies: (a) the
+            preconditions (system state before the test), (b) the
+            trigger (what initiates the behavior), (c) the expected
+            outcome (what the test asserts), and (d) the observation
+            method (how the outcome is verified — UI check, API response,
+            database state, log entry, etc.).
+
+        (d) GAP IDENTIFICATION — any inventory items or acceptance
+            criteria that cannot be verified by end-to-end tests (e.g.,
+            non-functional requirements that require load testing,
+            security requirements that require penetration testing) are
+            identified with the alternative verification method specified.
+
+      checklist_items:
+        # ---- Acceptance criteria coverage items ----
+        - id: "CL-VS-001"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every AC-* acceptance criterion across all features in the
+            specification is referenced by at least one end-to-end test
+            in the verification plan. No criterion is untested.
+          verification_method: "coverage_query"
+
+        - id: "CL-VS-002"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Each end-to-end test exercises the full interaction path
+            from trigger to outcome. The test specification includes the
+            components involved (from the feature realization map) and
+            confirms that no component is bypassed or stubbed.
+          verification_method: "content_match"
+
+        # ---- Inventory traceability items ----
+        - id: "CL-VS-003"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Every RI-* inventory item (excluding those in out_of_scope)
+            has a traceability chain to at least one end-to-end test:
+            RI-* → FT-* (via source_inventory_refs) → AC-* (via
+            acceptance_criteria.inventory_refs) → E2E test. The
+            verification report includes this chain for each RI-* item.
+          verification_method: "coverage_query"
+
+        - id: "CL-VS-004"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            The verification report includes a traceability matrix that
+            lists every RI-* item, the FT-* features it maps to, the
+            AC-* criteria it maps to, the E2E test(s) that verify it,
+            and the test result (pass/fail/not-applicable). Every cell
+            in the matrix is populated.
+          verification_method: "schema_inspection"
+
+        # ---- Test quality items ----
+        - id: "CL-VS-005"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every end-to-end test specifies: (a) preconditions (what
+            system state must exist before the test runs), (b) trigger
+            (the user action or system event that initiates the
+            behavior), (c) expected outcome (what the test asserts, with
+            specific values), and (d) observation method (how the outcome
+            is checked — HTTP response, database query, UI element, log
+            assertion, etc.).
+          verification_method: "content_match"
+
+        - id: "CL-VS-006"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            End-to-end tests include both positive tests (happy path —
+            the feature works as specified) and negative tests (the
+            feature correctly handles invalid inputs, unauthorized
+            access, and error conditions as specified in the acceptance
+            criteria).
+          verification_method: "content_match"
+
+        # ---- Gap identification items ----
+        - id: "CL-VS-007"
+          source_ref: "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            Any RI-* item or AC-* criterion that cannot be verified by
+            a functional end-to-end test (e.g., performance requirements,
+            security requirements, compliance requirements) is listed in
+            the alternative_verification section with the specific
+            verification method (load test, penetration test, manual
+            audit, etc.) and its current status.
+          verification_method: "content_match"
+
+        - id: "CL-VS-008"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            The verification report includes a coverage summary showing:
+            total RI-* items, total verified by E2E tests, total verified
+            by alternative methods, total unverified, and the list of
+            unverified items with explanations.
+          verification_method: "schema_inspection"
+
+      # --- Checklist item guidance ---
+      #
+      # GOOD checklist items for this phase:
+      #   "AC-003-02 (200ms p95 response time) is covered by E2E test
+      #    E2E-PERF-001 which measures response time at the API gateway
+      #    under load."
+      #   "RI-017 traces to FT-003 (via source_inventory_refs) → AC-003-01
+      #    (via acceptance_criteria) → E2E-FT003-01 (via test plan). The
+      #    chain is complete."
+      #   "RI-042 (GDPR data deletion) cannot be verified by E2E test
+      #    and appears in alternative_verification with method
+      #    'manual compliance audit' and status 'scheduled'."
+      #
+      # BAD checklist items for this phase:
+      #   "All tests pass" (test results are recorded in the report,
+      #    but the checklist verifies the plan, not the execution)
+      #   "The system works" (too vague)
+      #   "Requirements are met" (by what measure? which requirements?)
+      #   "Code coverage is above 80%" (code coverage is a Phase 5
+      #    concern; Phase 6 is about requirement coverage)
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to specific features, acceptance
+              criteria, or inventory items from the input artifacts. No
+              checklist item tests for properties not implied by the
+              inputs.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              The checklist collectively ensures that every inventory item
+              and every acceptance criterion is the subject of at least
+              one verification check. The checklist also covers test
+              quality and gap identification.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item names specific inventory items, features,
+              acceptance criteria, or test specifications rather than
+              testing general verification quality.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+
+      generator_agent: "verification-sweep-generator"
+      output_format: "yaml"
+      output_path: "docs/verification/verification-report.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            verification_metadata:
+              source_features: string (path to feature specification)
+              source_inventory: string (path to requirements inventory)
+              source_design: string (path to solution design)
+              verification_date: string (ISO 8601 date)
+              total_e2e_test_count: integer
+              total_inventory_items: integer
+              total_verified_items: integer
+              total_alternatively_verified_items: integer
+              total_unverified_items: integer
+
+            e2e_tests: list of end-to-end test objects
+            traceability_matrix: list of traceability chain objects
+            alternative_verifications: list of alternative verification objects
+            coverage_summary: object
+
+          End-to-end test object fields:
+            test_id: string (E2E-{feature-or-area}-{sequence},
+              e.g., E2E-AUTH-001)
+            description: string (what this test verifies in plain language)
+            feature_refs: list of string (FT-* IDs)
+            acceptance_criteria_refs: list of string (AC-* IDs)
+            components_exercised: list of string (CMP-* IDs from the
+              feature realization map — confirms full-path testing)
+            preconditions: list of string (system state required before
+              the test runs — e.g., "test user exists in database",
+              "authentication service is running")
+            trigger: string (the action or event that starts the test —
+              e.g., "POST /api/login with valid credentials")
+            expected_outcome: string (the specific assertion — e.g.,
+              "response status 200, body contains session_token with
+              TTL >= 3600 seconds")
+            observation_method: string (how the outcome is verified —
+              e.g., "HTTP response inspection", "database query for
+              session record", "UI element assertion")
+            test_result: string (pass | fail | not-run)
+            failure_details: string (if fail, what happened; empty
+              for pass or not-run)
+
+          Traceability chain object fields:
+            inventory_item_id: string (RI-* ID)
+            inventory_statement: string (the inventory item's statement,
+              for human readability)
+            feature_ids: list of string (FT-* IDs via source_inventory_refs)
+            acceptance_criteria_ids: list of string (AC-* IDs via
+              acceptance_criteria.inventory_refs)
+            e2e_test_ids: list of string (E2E-* IDs that verify
+              these criteria)
+            chain_status: string (complete | partial | missing)
+            notes: string (explanation if partial or missing)
+
+          Alternative verification object fields:
+            inventory_item_id: string (RI-* ID)
+            acceptance_criterion_id: string (AC-* ID, if applicable)
+            reason_not_e2e: string (why this cannot be a functional
+              end-to-end test)
+            alternative_method: string (load-test | penetration-test |
+              manual-audit | code-review | static-analysis | other)
+            method_description: string (specific plan for verification)
+            status: string (planned | in-progress | completed | deferred)
+            result: string (pass | fail | pending; empty if not completed)
+
+          Coverage summary object fields:
+            total_inventory_items: integer
+            out_of_scope_items: integer
+            in_scope_items: integer
+            e2e_verified: integer
+            alternatively_verified: integer
+            unverified: integer
+            unverified_items: list of string (RI-* IDs with explanations)
+            coverage_percentage: number (e2e_verified + alternatively_verified
+              as a percentage of in_scope_items)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce a verification report that confirms full traceability
+        from requirements through to tested system behavior.
+
+        For each feature's acceptance criteria:
+        1. Design an end-to-end test that exercises the full interaction
+           path from the feature realization map.
+        2. Specify preconditions, trigger, expected outcome, and
+           observation method.
+        3. List the components exercised — this must match the feature
+           realization map from the solution design.
+
+        For the traceability matrix:
+        1. Start from the requirements inventory.
+        2. For each RI-* item, follow the chain:
+           RI-* → FT-* (via source_inventory_refs in features)
+           FT-* → AC-* (via acceptance_criteria in features)
+           AC-* → E2E-* (via acceptance_criteria_refs in tests)
+        3. Record the chain status as complete, partial, or missing.
+
+        For alternative verifications:
+        1. Identify inventory items or acceptance criteria that cannot
+           be verified by functional end-to-end tests.
+        2. Specify the alternative method and a concrete plan.
+        3. Non-functional requirements (performance, security,
+           compliance) typically need alternative verification.
+
+        For the coverage summary:
+        1. Count items in each category.
+        2. List unverified items with explanations.
+        3. Calculate coverage percentage.
+
+        Test design principles:
+        - Each test should be independent (no implicit ordering)
+        - Tests should be deterministic (no flaky assertions)
+        - Negative tests are as important as positive tests
+        - Tests should verify observable behavior, not implementation
+        - Preconditions should be setup steps, not assumptions
+
+      traceability_mapping:
+        # Artifact side:
+        #   $.e2e_tests[n] — each end-to-end test
+        #   $.traceability_matrix[n] — each traceability chain
+        #   $.alternative_verifications[n] — each alternative verification
+        # Input side:
+        #   $.features[n].acceptance_criteria[m] — from feature spec
+        #   $.inventory_items[n] — from requirements inventory
+        #   $.feature_realization_map[n] — from solution design
+        - artifact_element_ref: "docs/verification/verification-report.yaml#$.e2e_tests[0]"
+          checklist_item_ids: ["CL-VS-001", "CL-VS-002", "CL-VS-005"]
+          input_source_refs:
+            - "docs/features/feature-specification.yaml#$.features[0].acceptance_criteria[0]"
+
+        - artifact_element_ref: "docs/verification/verification-report.yaml#$.traceability_matrix[0]"
+          checklist_item_ids: ["CL-VS-003", "CL-VS-004"]
+          input_source_refs:
+            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[0]"
+            - "docs/features/feature-specification.yaml#$.features[0]"
+
+        - artifact_element_ref: "docs/verification/verification-report.yaml#$.coverage_summary"
+          checklist_item_ids: ["CL-VS-008"]
+          input_source_refs:
+            - "docs/requirements/requirements-inventory.yaml#$.inventory_items"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
+
+      judge_agent: "verification-sweep-judge"
+
+      # --- Judge evaluation guidance ---
+      #
+      # Beyond the checklist, the judge should specifically look for:
+      #
+      # 1. BROKEN TRACEABILITY CHAINS — chains where the RI → FT → AC →
+      #    E2E links do not actually connect. For example, a traceability
+      #    matrix entry claims RI-005 → FT-002, but FT-002's
+      #    source_inventory_refs does not include RI-005. The judge
+      #    must verify each link independently.
+      #
+      # 2. SUPERFICIAL TESTS — end-to-end tests that technically
+      #    exercise the right components but assert trivial outcomes
+      #    (e.g., "response status is 200" without checking the response
+      #    body). The expected_outcome should verify the substantive
+      #    behavior described in the acceptance criterion.
+      #
+      # 3. MISSING NEGATIVE TESTS — features with error-path acceptance
+      #    criteria (e.g., "returns 403 for unauthorized users") that
+      #    have happy-path E2E tests but no error-path tests.
+      #
+      # 4. INCOMPLETE ALTERNATIVE VERIFICATIONS — non-functional
+      #    requirements that are noted as needing alternative verification
+      #    but lack a concrete plan (just "load testing" without
+      #    specifying thresholds, tools, or schedules).
+      #
+      # 5. OBSERVATION METHOD MISMATCH — tests whose observation method
+      #    does not match what the acceptance criterion actually requires.
+      #    For example, a criterion about data persistence verified only
+      #    by checking an API response (which might be cached) instead
+      #    of querying the database.
+      #
+      # 6. SILENT COVERAGE GAPS — unverified items that appear in the
+      #    coverage summary without adequate explanation. The judge
+      #    should flag any unverified item that could plausibly be
+      #    verified by an E2E or alternative method but was simply missed.
+
+      evaluations:
+        - checklist_item_id: "CL-VS-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
+
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      # --- Revision hints ---
+      #
+      # Common failure modes and how to fix them:
+      #
+      # 1. MISSING TEST COVERAGE (CL-VS-001 failure)
+      #    Acceptance criteria lack corresponding E2E tests. Fix:
+      #    systematically walk each feature's acceptance_criteria list
+      #    and create a test for each criterion. Use the criterion's
+      #    given/when/then structure to define preconditions, trigger,
+      #    and expected outcome.
+      #
+      # 2. BROKEN TRACEABILITY (CL-VS-003 failure)
+      #    Inventory items cannot be traced to tests. Fix: start from
+      #    the missing RI-* items and trace forward through the feature
+      #    specification. If the chain breaks at RI → FT, the feature
+      #    spec may have a gap (escalate to Phase 1). If it breaks at
+      #    AC → E2E, add the missing test.
+      #
+      # 3. WEAK TEST SPECIFICATIONS (CL-VS-005 failure)
+      #    Tests lack preconditions, triggers, or specific assertions.
+      #    Fix: for each weak test, re-read the acceptance criterion
+      #    and extract the specific values, conditions, and expected
+      #    behaviors. Replace vague assertions ("works correctly") with
+      #    specific ones ("returns JSON with field X equal to Y").
+      #
+      # 4. MISSING ALTERNATIVE VERIFICATIONS (CL-VS-007 failure)
+      #    Non-functional requirements have no verification plan. Fix:
+      #    identify the appropriate verification method for each
+      #    requirement type (load testing for performance, penetration
+      #    testing for security, etc.) and create a specific plan with
+      #    thresholds and tools.
+      #
+      # 5. INCOMPLETE COVERAGE SUMMARY (CL-VS-008 failure)
+      #    Summary statistics do not match the detail. Fix: recount
+      #    from the traceability matrix and reconcile. Ensure every
+      #    RI-* item appears in exactly one category: e2e-verified,
+      #    alternatively-verified, unverified, or out-of-scope.
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+
+      artifact:
+        path: "docs/verification/verification-report.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "docs/verification/verification-sweep-checklist.yaml"
+
+      traceability_mapping:
+        path: "docs/verification/verification-sweep-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 8
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PIPELINE SUMMARY
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Phase    Input                           Artifact                          Key Traceability
+# ──────   ─────────────────────────────   ───────────────────────────────   ────────────────────────────────
+# PH-000   Raw requirements                Requirements inventory (YAML)    RI-* ← raw source locations
+# PH-001   Requirements inventory           Feature specification (YAML)    FT-* ← RI-*, AC-* ← RI-*
+# PH-002   Feature specification            Solution design (YAML)          CMP-* ← FT-*, INT-* ← FT-*
+# PH-003   Solution design                  Interface contracts (YAML)      CTR-* ← INT-*, TYP-* shared
+# PH-004   Interface contracts              Simulation definitions (YAML)   SIM-* ← CTR-*, SCN-* ← AC-*
+# PH-005   Contracts + simulations + feats  Implementation plan (YAML)      UT-* ← AC-*, IT-* ← SCN-*
+# PH-006   Features + inventory + system    Verification report (YAML)      E2E-* ← AC-* ← FT-* ← RI-*
+#
+# The full traceability chain:
+#   Raw requirements
+#     → RI-* (inventory items)
+#       → FT-* (features) + AC-* (acceptance criteria)
+#         → CMP-* (components) + INT-* (interactions)
+#           → CTR-* (contracts) + TYP-* (shared types)
+#             → SIM-* (simulations) + SCN-* (scenarios)
+#               → UT-*/IT-*/CF-* (unit/integration/conformance tests)
+#                 → E2E-* (end-to-end tests)
+#
+# At any point in the chain, "why does X exist?" can be answered by following
+# the traceability links backward to the original raw requirement text.
+# ═══════════════════════════════════════════════════════════════════════════════
+```
