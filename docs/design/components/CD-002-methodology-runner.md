@@ -890,3 +890,160 @@ The state file is written atomically (write to a temp file, then rename) after e
         Returns 0 on success, 1 on escalation/halt, 2 on usage error.
         """
         ...
+
+---
+
+## 11. Skill-driven per-phase selection
+
+This section documents how methodology-runner specializes each phase's
+knowledge for the technology stack being developed, without coupling
+the methodology text itself to any specific language or framework.
+
+### 11.1 Skill catalog discovery
+
+At the start of every `run_pipeline` invocation (before any phase
+executes), the orchestrator calls `skill_catalog.build_catalog()` to
+walk three locations in priority order:
+
+1. `<workspace>/.claude/skills/**/SKILL.md` — project-local skills
+2. `~/.claude/skills/**/SKILL.md` — user-global skills
+3. `~/.claude/plugins/*/skills/**/SKILL.md` — plugin-installed skills
+
+Each SKILL.md is parsed for YAML frontmatter (`name` and
+`description`) and registered in an in-memory catalog keyed by skill
+ID.  Higher-priority locations shadow lower ones; overrides are
+logged.
+
+If the resulting catalog is empty, the orchestrator halts with an
+actionable error before any phase runs (failure mode 7).
+
+### 11.2 Baseline skills configuration
+
+The file `docs/methodology/skills-baselines.yaml` declares the
+non-negotiable skills per phase.  It is read at run start by
+`baseline_config.load_baseline_config()` and validated against the
+catalog by `baseline_config.validate_against_catalog()`.  Any baseline
+skill ID that is not in the catalog is a critical halt (failure mode
+9).
+
+This file is intentionally data, not code: adding or removing a
+baseline skill is a one-line edit and takes effect on the next run.
+
+### 11.3 Skill-Selector agent (per-phase)
+
+Before each phase's meta-prompt runs, the orchestrator invokes the
+Skill-Selector via `skill_selector.invoke_skill_selector()`.  The
+selector is a single Claude call with four inputs:
+
+- The phase definition (from `PhaseConfig`)
+- The baseline skills for this phase (from `skills-baselines.yaml`)
+- The compact catalog (ID + description only, not full SKILL.md bodies)
+- Prior phase artifacts (small ones in full; large ones summarized
+  and cached by `artifact_summarizer.ArtifactSummaryProvider`)
+- The stack manifest, if it exists (from PH-002 Architecture)
+
+The selector emits a YAML document which is parsed, validated
+(failure modes 1-6), and persisted to the phase's run directory as
+`phase-NNN-skills.yaml`.  The file is committed to the workspace git
+repo along with the phase's output artifact.
+
+**Locking:** the manifest is locked across cross-reference retries
+within a single run.  A retry regenerates the prompt-runner .md file
+but reuses the locked skill manifest and prelude.  On `resume`, the
+user can pass `--rerun-selector` to force a new selector invocation
+for the halted phase.
+
+### 11.4 Prelude construction (dual mode)
+
+`prelude.build_prelude()` converts a `PhaseSkillManifest` into two
+text blocks (generator and judge) using one of two designs:
+
+- **`skill-tool` mode** (primary): the prelude instructs the agent to
+  invoke the Claude Code Skill tool by name for each selected skill.
+  The agent loads SKILL.md content just-in-time.  Depends on the
+  Skill tool being available inside nested `claude --print`
+  subprocess calls.
+- **`inline` mode** (fallback): the prelude embeds the full SKILL.md
+  body (minus frontmatter) of every selected skill, delimited by
+  section markers.  Larger preludes but zero dependency on the Skill
+  tool.
+
+The default mode is set by `constants.SKILL_LOADING_MODE`.  Phase 0
+validation (see `phase_0_validation.py`) determines which mode works
+in the deployment environment and records its verdict in
+`runs/phase-0-validation/validation-report.md`.
+
+Both prelude texts are written to the phase's run directory as
+`generator-prelude.txt` and `judge-prelude.txt` and passed to
+prompt-runner via two new CLI flags.
+
+### 11.5 Prompt-runner prelude flags
+
+`prompt-runner run` accepts two new optional flags:
+
+- `--generator-prelude PATH` — file whose contents are prepended to
+  every generator Claude message in the run
+- `--judge-prelude PATH` — symmetric for judge messages
+
+Prelude content is read once at startup and cached for the duration.
+prompt-runner does not parse, interpret, or modify the content; it
+treats it as opaque text so the tool remains skill-agnostic and
+usable outside methodology-runner.
+
+The orchestrator passes prelude file paths into `_invoke_prompt_runner`,
+which threads them into the library call via `RunConfig.generator_prelude`
+and `RunConfig.judge_prelude`, or into the subprocess call via the CLI
+flags.
+
+### 11.6 Per-phase execution flow
+
+```
+┌──────────────────────────────────────────────────────────────────┐
+│ _run_single_phase (per-phase)                                    │
+├──────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. Mark phase RUNNING                                           │
+│  2. Invoke Skill-Selector                                        │
+│       - skip if phase-NNN-skills.yaml exists and not             │
+│         --rerun-selector                                         │
+│       - validate catalog membership + baseline coverage          │
+│       - any failure = critical halt                              │
+│  3. Build generator-prelude.txt and judge-prelude.txt            │
+│  4. Generate phase-NNN-prompts.md via existing meta-prompt       │
+│                                                                  │
+│  ┌─ cross-reference retry loop (max N=2) ──────────────────┐     │
+│  │                                                         │     │
+│  │  5. Invoke prompt-runner with prelude file paths        │     │
+│  │  6. Cross-reference verification                        │     │
+│  │     - pass  → exit loop, go to step 7                   │     │
+│  │     - fail  → if retries remaining:                     │     │
+│  │                 re-generate prompt file with cross-ref  │     │
+│  │                 feedback; skill manifest stays LOCKED   │     │
+│  │                 back to step 5                          │     │
+│  │               if retries exhausted:                     │     │
+│  │                 critical halt (failure mode 11)         │     │
+│  │                                                         │     │
+│  └─────────────────────────────────────────────────────────┘     │
+│                                                                  │
+│  7. Commit all phase artifacts including phase-NNN-skills.yaml,  │
+│     generator-prelude.txt, judge-prelude.txt                     │
+│  8. Mark phase COMPLETED                                         │
+│                                                                  │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+### 11.7 Phase 0 validation (release gate)
+
+Before first use of `skill-tool` mode, Phase 0 validation must be
+run: `python -m methodology_runner.phase_0_validation`.
+
+The script creates a temporary test skill under `~/.claude/skills/`,
+invokes `claude --print` with an instruction to load it via the
+Skill tool, and inspects the response for a distinctive sentinel
+string.  If found, `skill-tool` mode is verified and the report is
+committed as a release gate.  If not, the fallback `inline` mode is
+used.
+
+Failure mode 14: methodology-runner refuses to start in `skill-tool`
+mode unless `runs/phase-0-validation/validation-report.md` exists and
+records a successful outcome.
