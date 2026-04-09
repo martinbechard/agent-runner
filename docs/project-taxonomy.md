@@ -109,6 +109,18 @@
 - **Filename pattern:** `PR-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the tool or feature the prompts will produce.
 - **Example:** `PR-001-methodology-runner.md`
 
+### docs/superpowers/plans/
+- **Purpose:** TDD-style implementation plans produced by the `superpowers:writing-plans` skill. Each plan is derived from a companion spec in `docs/superpowers/specs/` and decomposes a proposed enhancement into ordered, bite-sized, test-first tasks with exact file paths, code blocks, and commands. These are not design documents, not requirements, not acceptance-criteria files, and not generic `docs/plans/` entries — they live alongside their source spec in the superpowers layer.
+- **Signals:** output of `superpowers:writing-plans` skill, "derived from spec at docs/superpowers/specs/", TDD cadence (failing test → minimal implementation → commit), "task group", "write failing test", "run pytest", references a dated spec file, dated filename with a topic slug, ordered implementation tasks.
+- **Filename pattern:** `YYYY-MM-DD-<topic-slug>.md` where YYYY-MM-DD is the session date and topic-slug is a kebab-case description of the feature being implemented.
+- **Example:** `2026-04-07-project-organiser-agent.md`
+
+### docs/superpowers/specs/
+- **Purpose:** Design specifications produced by brainstorming or ideation sessions (e.g. the `superpowers:brainstorming` skill). These are pre-implementation specs that describe a proposed enhancement, mechanism, or distribution model and are intended for human review before an implementation plan is derived from them. They are not design docs in the `docs/design/` sense (they have not yet been approved into the component design canon), not requirements, not plans, and not prompt files.
+- **Signals:** output of a `superpowers:brainstorming` skill run, "design spec", "brainstorming session", describes a proposed feature or enhancement that cuts across multiple existing components, "reviewed by the human before implementation", "input to a subsequent writing-plans step", dated filename with a topic slug, not yet assigned a CD-NNN or HLD-NNN number.
+- **Filename pattern:** `YYYY-MM-DD-<topic-slug>-design.md` where YYYY-MM-DD is the session date and topic-slug is a kebab-case description of the subject.
+- **Example:** `2026-04-07-project-organiser-agent-design.md`
+
 ### (project root)
 - **Purpose:** Tooling configuration files that must live at the repository root by ecosystem convention.
 - **Signals:** `package.json`, `tsconfig.json`, `pyproject.toml`, `.gitignore`, `README.md`, `CLAUDE.md`, `.editorconfig`, `.prettierrc`, lockfiles.
@@ -118,6 +130,8 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-09 — docs/superpowers/plans/ added — TDD implementation plans produced by the superpowers:writing-plans skill are derived from superpowers/specs/ companions and belong in the same superpowers layer, distinct from docs/plans/ which holds generic component plans.
+- 2026-04-09 — docs/superpowers/specs/ added — pre-implementation design specs produced by brainstorming skill runs are not yet approved into the component design canon and need a dedicated staging layer distinct from docs/design/, docs/requirements/, docs/plans/, and docs/prompts/.
 - 2026-04-08 — docs/methodology/ added — AI-driven development methodology reference corpus (phase specs, agent role prompts, traceability model, simulation framework, orchestration) is not a design of agent-runner components, not a requirement, not a plan, and not a prompt file; a dedicated methodology corpus layer is needed.
 - 2026-04-08 — docs/prompts/ added — prompt-runner input files (hand-authored LLM prompt sequences with paired validators) are inputs to a tool, not design docs, requirements, plans, or test code; a dedicated prompt-files layer is needed.
 - 2026-04-08 — docs/plans/ added — TDD implementation plans (sequential task groups decomposing a design into test-first steps) are transient work documents that are neither design, requirements, nor acceptance criteria; a dedicated plan layer is needed.
