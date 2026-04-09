@@ -179,7 +179,7 @@ def build_catalog(
 
     if not catalog:
         raise CatalogBuildError(
-            "no claude code skills discovered.\n\n"
+            "no Claude Code skills discovered.\n\n"
             "Searched:\n"
             + "\n".join(f"  - {lbl}: {root}" for lbl, root in sources)
             + "\n\nInstall the baseline skill pack with:\n"
