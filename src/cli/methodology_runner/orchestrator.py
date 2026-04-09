@@ -128,6 +128,11 @@ class PipelineConfig:
     max_prompt_runner_iterations: int | None = None
     escalation_policy: EscalationPolicy | None = None
     max_cross_ref_retries: int = MAX_CROSS_REF_RETRIES
+    rerun_selector: bool = False
+    """On resume, force the Skill-Selector to re-run even if a
+    phase-NNN-skills.yaml already exists in the run directory.  By
+    default the existing manifest is reused to preserve determinism
+    within a single enhancement run."""
 
 
 @dataclass
@@ -860,9 +865,11 @@ def _run_single_phase(
     iteration_count = 0
 
     # Skill-Selector: run once per phase; reuse across cross-ref retries.
+    # On resume with --rerun-selector, overwrite an existing manifest.
     skill_artifacts: PhaseSkillArtifacts | None = None
     if skill_ctx is not None and not cross_ref_only:
         existing = run_dir / _phase_skills_filename(phase_config)
+        reuse_existing = existing.exists() and not config.rerun_selector
         try:
             skill_artifacts = run_selector_and_build_prelude(
                 phase_config=phase_config,
@@ -872,7 +879,7 @@ def _run_single_phase(
                 claude_client=claude_client,
                 model=config.model,
                 state=state,
-                existing_manifest_path=existing if existing.exists() else None,
+                existing_manifest_path=existing if reuse_existing else None,
             )
         except RuntimeError as exc:
             ps.status = PhaseStatus.FAILED

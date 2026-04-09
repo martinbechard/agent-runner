@@ -379,6 +379,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         max_prompt_runner_iterations=args.max_iterations,
         escalation_policy=escalation_policy,
         max_cross_ref_retries=args.max_cross_ref_retries,
+        rerun_selector=args.rerun_selector,
     )
 
     _print_banner("Methodology Runner -- Resuming pipeline")
@@ -603,6 +604,16 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="Max retries for cross-reference verification failures (default: 2).",
+    )
+    resume_cmd.add_argument(
+        "--rerun-selector",
+        action="store_true",
+        help=(
+            "On resume, force the Skill-Selector to re-run for the "
+            "halted phase even if a phase-NNN-skills.yaml already "
+            "exists.  Default: reuse the existing manifest to preserve "
+            "deterministic semantics within a run."
+        ),
     )
     resume_cmd.set_defaults(func=cmd_resume)
 
