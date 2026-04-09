@@ -1010,3 +1010,155 @@ def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
         workspace_dir=workspace,
     )
     assert any(p.name == "newly-authored-skill.md" for p in result.created_files)
+
+
+# ---------------------------------------------------------------------------
+# --resume flag
+# ---------------------------------------------------------------------------
+
+def test_resume_skips_completed_prompts(tmp_path: Path):
+    """If a previous run left final-verdict.txt = pass for prompts 1 and 2,
+    resuming skips them and runs only prompt 3."""
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+    from prompt_runner.runner import run_pipeline, PromptResult
+    from prompt_runner.parser import PromptPair
+
+    run_dir = tmp_path / "run"
+    workspace = _workspace(tmp_path)
+
+    # Set up the resume state: prompts 1 and 2 have pass verdicts on disk
+    for i in (1, 2):
+        slug = f"prompt-0{i}-prompt-{i}"
+        pd = run_dir / slug
+        pd.mkdir(parents=True)
+        (pd / "final-verdict.txt").write_text("pass\n", encoding="utf-8")
+        (pd / "final-artifact.md").write_text(f"artifact {i}", encoding="utf-8")
+        (pd / "files-created.txt").write_text("", encoding="utf-8")
+
+    # We also need a manifest.json since _finalise will read it
+    import json as _json
+    (run_dir / "manifest.json").write_text(
+        _json.dumps({
+            "source_file": str(tmp_path / "src.md"),
+            "run_id": run_dir.name,
+            "config": {"max_iterations": 3, "model": None, "only": None, "dry_run": False},
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    # Three pairs in the input
+    pairs = [
+        PromptPair(index=i, title=f"Prompt {i}",
+                   generation_prompt=f"gen {i}", validation_prompt=f"val {i}",
+                   heading_line=1, generation_line=2, validation_line=5)
+        for i in (1, 2, 3)
+    ]
+
+    # Scripted responses for prompt 3 only: generator, judge
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="artifact 3", stderr="", returncode=0),
+        ClaudeResponse(stdout="Looks good.\n\nVERDICT: pass", stderr="", returncode=0),
+    ])
+
+    result = run_pipeline(
+        pairs=pairs, run_dir=run_dir,
+        config=RunConfig(max_iterations=3),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        workspace_dir=workspace,
+        resume=True,
+    )
+
+    assert not result.halted_early
+    # Only prompt 3 consumed claude calls
+    assert len(client.received) == 2  # gen + judge for prompt 3
+    # All three results present (prompts 1, 2 synthesized, 3 real)
+    assert len(result.prompt_results) == 3
+    assert result.prompt_results[0].iterations == []  # skipped
+    assert result.prompt_results[1].iterations == []  # skipped
+    assert len(result.prompt_results[2].iterations) == 1  # real
+
+
+def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
+    """If prompt 1 has pass but prompt 2 has no verdict file, prompt 2
+    executes normally even though prompt 3 (later) also has a stale pass."""
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+    from prompt_runner.runner import run_pipeline
+    from prompt_runner.parser import PromptPair
+
+    run_dir = tmp_path / "run"
+    workspace = _workspace(tmp_path)
+
+    # Prompt 1: completed
+    pd1 = run_dir / "prompt-01-prompt-1"
+    pd1.mkdir(parents=True)
+    (pd1 / "final-verdict.txt").write_text("pass\n", encoding="utf-8")
+    (pd1 / "final-artifact.md").write_text("1", encoding="utf-8")
+    (pd1 / "files-created.txt").write_text("", encoding="utf-8")
+    # Prompt 2: no state at all (incomplete — absence of final-verdict.txt is the trigger)
+    # Prompt 3: has a stale pass from an earlier run we don't care about
+    pd3 = run_dir / "prompt-03-prompt-3"
+    pd3.mkdir(parents=True)
+    (pd3 / "final-verdict.txt").write_text("pass\n", encoding="utf-8")
+    (pd3 / "final-artifact.md").write_text("old 3", encoding="utf-8")
+    (pd3 / "files-created.txt").write_text("", encoding="utf-8")
+
+    # Need manifest.json for _finalise
+    import json as _json
+    (run_dir / "manifest.json").write_text(
+        _json.dumps({
+            "source_file": str(tmp_path / "src.md"),
+            "run_id": run_dir.name,
+            "config": {"max_iterations": 3, "model": None, "only": None, "dry_run": False},
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    pairs = [
+        PromptPair(index=i, title=f"Prompt {i}",
+                   generation_prompt=f"gen {i}", validation_prompt=f"val {i}",
+                   heading_line=1, generation_line=2, validation_line=5)
+        for i in (1, 2, 3)
+    ]
+    # Prompts 2 and 3 both run for real: 4 claude calls (gen+judge each)
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="new artifact 2", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+        ClaudeResponse(stdout="new artifact 3", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+    ])
+    result = run_pipeline(
+        pairs=pairs, run_dir=run_dir,
+        config=RunConfig(max_iterations=3),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        workspace_dir=workspace,
+        resume=True,
+    )
+    assert len(client.received) == 4
+    assert result.prompt_results[0].iterations == []       # skipped
+    assert len(result.prompt_results[1].iterations) == 1   # re-run
+    assert len(result.prompt_results[2].iterations) == 1   # re-run (stale pass ignored)
+
+
+def test_resume_errors_on_missing_run_dir(tmp_path: Path, capsys):
+    from prompt_runner.__main__ import main
+
+    src = tmp_path / "src.md"
+    src.write_text(
+        "## Prompt 1: X\n\n```\ngen\n```\n\n```\nval\n```\n",
+        encoding="utf-8",
+    )
+    rc = main([
+        "run", str(src),
+        "--resume", str(tmp_path / "nonexistent-run"),
+        "--dry-run",
+    ])
+    assert rc != 0
+    captured = capsys.readouterr()
+    assert "resume" in captured.err.lower()
+    assert "nonexistent-run" in captured.err

@@ -665,6 +665,26 @@ def _call_or_persist_partial(
     return response
 
 
+def _load_prior_artifact_from_disk(
+    pair: PromptPair, run_dir: Path,
+) -> PriorArtifact:
+    """Reconstruct a PriorArtifact for a completed prompt from its on-disk
+    final-artifact and files-created files. Used by --resume to rebuild the
+    prior-artifact context for prompts that were already completed in a
+    previous run."""
+    prompt_dir = run_dir / _prompt_dir_name(pair)
+    text_body = (prompt_dir / "final-artifact.md").read_text(encoding="utf-8")
+    files_txt = (prompt_dir / "files-created.txt").read_text(encoding="utf-8")
+    files = [
+        Path(line) for line in files_txt.splitlines() if line.strip()
+    ]
+    return PriorArtifact(
+        title=pair.title,
+        text_body=text_body,
+        files=files,
+    )
+
+
 def run_pipeline(
     pairs: list[PromptPair],
     run_dir: Path,
@@ -672,6 +692,7 @@ def run_pipeline(
     claude_client: ClaudeClient,
     source_file: Path,
     workspace_dir: Path | None = None,
+    resume: bool = False,
 ) -> PipelineResult:
     run_id = run_dir.name
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -680,15 +701,51 @@ def run_pipeline(
     else:
         workspace_dir = Path(workspace_dir).resolve()
     started_at = datetime.now(timezone.utc)
-    _write_manifest(run_dir, source_file, config, run_id,
-                    started_at=_format_iso(started_at))
+    if not resume:
+        _write_manifest(run_dir, source_file, config, run_id,
+                        started_at=_format_iso(started_at))
 
     prior_artifacts: list[PriorArtifact] = []
     prompt_results: list[PromptResult] = []
 
+    # When resuming, track whether we have hit the first incomplete prompt.
+    # All prompts before it that have a 'pass' verdict are skipped; once we
+    # encounter an incomplete prompt we switch to normal forward execution.
+    still_skipping = resume
+
     for pair in pairs:
         if config.only is not None and pair.index != config.only:
             continue
+
+        if still_skipping:
+            prompt_dir = run_dir / _prompt_dir_name(pair)
+            verdict_path = prompt_dir / "final-verdict.txt"
+            if verdict_path.exists() and verdict_path.read_text(encoding="utf-8").splitlines()[0] == "pass":
+                # This prompt already completed with pass — skip it.
+                prior_artifact = _load_prior_artifact_from_disk(pair, run_dir)
+                text_body = (prompt_dir / "final-artifact.md").read_text(encoding="utf-8")
+                files_txt = (prompt_dir / "files-created.txt").read_text(encoding="utf-8")
+                created_files = [
+                    Path(line) for line in files_txt.splitlines() if line.strip()
+                ]
+                synthetic_result = PromptResult(
+                    pair=pair,
+                    iterations=[],
+                    final_verdict=Verdict.PASS,
+                    final_artifact=text_body,
+                    created_files=created_files,
+                )
+                prompt_results.append(synthetic_result)
+                prior_artifacts.append(prior_artifact)
+                print(
+                    f"[resume] skipping prompt {pair.index} '{pair.title}' — already pass",
+                    flush=True,
+                )
+                continue
+            else:
+                # First incomplete prompt — stop skipping from here on.
+                still_skipping = False
+
         try:
             result = run_prompt(
                 pair, prior_artifacts, run_dir, config, claude_client,

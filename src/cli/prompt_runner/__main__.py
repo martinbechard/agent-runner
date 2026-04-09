@@ -112,7 +112,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _print_error_banner("R-NO-CLAUDE", str(err))
         return 3
 
-    run_dir = Path(args.output_dir) if args.output_dir else _default_run_dir(source)
+    if args.resume:
+        resume_path = Path(args.resume)
+        if not resume_path.exists() or not resume_path.is_dir():
+            _print_error_banner(
+                "R-RESUME-NOT-FOUND",
+                f"--resume path does not exist or is not a directory: {resume_path}",
+            )
+            return 2
+        run_dir = resume_path
+        do_resume = True
+    else:
+        run_dir = Path(args.output_dir) if args.output_dir else _default_run_dir(source)
+        do_resume = False
 
     result = run_pipeline(
         pairs=pairs,
@@ -120,6 +132,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         config=config,
         claude_client=client,
         source_file=source,
+        resume=do_resume,
     )
 
     if result.halted_early:
@@ -210,6 +223,17 @@ def _build_parser() -> argparse.ArgumentParser:
             "Path to a text file whose contents are prepended to every "
             "judge Claude message in this run.  Symmetric to "
             "--generator-prelude."
+        ),
+    )
+    run_cmd.add_argument(
+        "--resume",
+        default=None,
+        help=(
+            "Resume an existing run by pointing at its run directory. Prompts "
+            "that have already completed with 'pass' (per their final-verdict.txt) "
+            "are skipped; execution continues from the first incomplete prompt. "
+            "When --resume is set, --output-dir is ignored (the resumed run dir "
+            "is used as the output dir)."
         ),
     )
     run_cmd.set_defaults(func=_cmd_run)
