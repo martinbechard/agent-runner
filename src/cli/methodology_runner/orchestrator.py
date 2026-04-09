@@ -58,6 +58,13 @@ from .cross_reference import (
     verify_end_to_end,
     verify_phase_cross_references,
 )
+from .baseline_config import (
+    BaselineConfigError,
+    load_baseline_config,
+    validate_against_catalog,
+)
+from .models import BaselineSkillConfig, SkillCatalogEntry
+from .skill_catalog import CatalogBuildError, build_catalog
 
 if TYPE_CHECKING:
     from .models import PhaseConfig
@@ -191,6 +198,56 @@ def _git_discard_file(workspace: Path, rel_path: str) -> None:
     except RuntimeError:
         if abs_path.exists():
             abs_path.unlink()
+
+
+# ---------------------------------------------------------------------------
+# Run-scoped skill context (CD-002 Section 11 — skill-driven selection)
+# ---------------------------------------------------------------------------
+
+@dataclass
+class RunSkillContext:
+    """Catalog and baseline config loaded once per run.
+
+    Built by ``build_run_skill_context`` before any phase executes.
+    Used by the orchestrator to invoke the Skill-Selector and build
+    prelude files for each phase.
+    """
+
+    catalog: dict[str, SkillCatalogEntry]
+    baseline_config: BaselineSkillConfig
+
+
+BASELINE_SKILLS_PATH = "docs/methodology/skills-baselines.yaml"
+"""Path (relative to repo root or workspace) to the baseline skill config."""
+
+
+def build_run_skill_context(
+    *,
+    workspace: Path,
+    baseline_path: Path | None = None,
+    user_home: Path | None = None,
+) -> RunSkillContext:
+    """Load the skill catalog and baseline config for a run.
+
+    Runs once at the start of every invocation of ``run_pipeline``
+    (before any phase executes).  Raises on any failure so the
+    orchestrator halts immediately — per spec failure modes 7 and 9.
+    """
+    catalog = build_catalog(workspace=workspace, user_home=user_home)
+
+    if baseline_path is None:
+        # Prefer a workspace-local copy if one exists, otherwise fall back
+        # to the repo-level copy next to the CLI install.
+        ws_copy = workspace / BASELINE_SKILLS_PATH
+        if ws_copy.exists():
+            baseline_path = ws_copy
+        else:
+            # Repo-root path: same working directory as the CLI invocation.
+            baseline_path = Path(BASELINE_SKILLS_PATH)
+
+    baseline_config = load_baseline_config(baseline_path)
+    validate_against_catalog(baseline_config, catalog)
+    return RunSkillContext(catalog=catalog, baseline_config=baseline_config)
 
 
 # ---------------------------------------------------------------------------
@@ -625,6 +682,7 @@ def _run_single_phase(
     config: PipelineConfig,
     claude_client: ClaudeClient | None = None,
     cross_ref_only: bool = False,
+    skill_ctx: RunSkillContext | None = None,
 ) -> PhaseResult:
     """Execute one methodology phase end-to-end.
 
@@ -980,6 +1038,19 @@ def run_pipeline(
     # ---- workspace and state ----
     workspace = initialize_workspace(config)
 
+    # ---- skill catalog + baseline config (run-scoped) ----
+    try:
+        skill_ctx = build_run_skill_context(workspace=workspace)
+    except (CatalogBuildError, BaselineConfigError) as exc:
+        return PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=True,
+            halt_reason=f"skill context build failed: {exc}",
+            end_to_end_result=None,
+            wall_time_seconds=time.monotonic() - t0,
+        )
+
     state: ProjectState | None = None
     if config.resume:
         state = load_project_state(workspace)
@@ -1036,6 +1107,7 @@ def run_pipeline(
             phase, state, workspace, config,
             claude_client=claude_client,
             cross_ref_only=cross_ref_only,
+            skill_ctx=skill_ctx,
         )
         phase_results.append(result)
 
