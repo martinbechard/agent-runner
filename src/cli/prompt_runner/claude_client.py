@@ -21,6 +21,13 @@ class ClaudeCall:
     stdout_log_path: Path
     stderr_log_path: Path
     stream_header: str
+    workspace_dir: Path
+    """Directory the nested claude subprocess runs in. Set to the project root
+    (not the log directory), so the generator can write files directly into
+    the project tree and the judge can Read them without path juggling.
+    All generator and judge calls within a single pipeline run share the same
+    workspace_dir — it is the runner's 'shared workspace' for cross-prompt
+    file continuity."""
 
 
 @dataclass(frozen=True)
@@ -199,12 +206,11 @@ class RealClaudeClient:
         call.stdout_log_path.write_text("", encoding="utf-8")
         call.stderr_log_path.write_text("", encoding="utf-8")
 
-        # Run the child in the log directory rather than inheriting the
-        # parent's cwd. With --tools "" the nested claude has no file access,
-        # but setting cwd to a neutral location is a belt-and-braces measure
-        # that also means any default "working directory: X" context the
-        # nested claude sees points at its own run-specific logs, not the
-        # surrounding repo.
+        # Run the child in the shared workspace directory (the project root),
+        # not in the log directory. This is what lets the generator write
+        # files directly into the project tree (src/cli/foo.py becomes a
+        # real file at <workspace>/src/cli/foo.py, not an orphan in the
+        # logs folder) and lets the judge inspect them with Read/Bash.
         proc = subprocess.Popen(
             argv,
             stdin=subprocess.DEVNULL,
@@ -214,7 +220,7 @@ class RealClaudeClient:
             bufsize=1,
             encoding="utf-8",
             env=_build_child_env(),
-            cwd=str(call.stdout_log_path.parent),
+            cwd=str(call.workspace_dir),
         )
         assert proc.stdout is not None and proc.stderr is not None
 

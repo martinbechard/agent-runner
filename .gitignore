@@ -10,3 +10,6 @@ build/
 
 # Pytest
 .pytest_cache/
+
+# Prompt-runner outputs
+runs/

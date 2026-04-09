@@ -6,8 +6,9 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,6 +39,15 @@ REVISION_GENERATOR_PREAMBLE = (
     "below. Produce a revised artifact that addresses every fail or partial "
     "item. Do not drop content that already passed. Your response must be the "
     "complete revised artifact, with no commentary before or after it."
+)
+PROJECT_ORGANISER_INSTRUCTION = (
+    "If this task involves producing files on disk: before writing any new "
+    "file, invoke the `project-organiser` sub-agent via the Agent tool "
+    "(subagent_type=project-organiser) with the file's content or a "
+    "description of its content. Use the `path` it returns as the exact "
+    "file path for your Write tool call. Do not guess paths from the "
+    "project layout. If this task is purely text output (no files), ignore "
+    "this instruction."
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
 
@@ -104,6 +114,11 @@ class PromptResult:
     iterations: list[IterationResult]
     final_verdict: Verdict
     final_artifact: str
+    created_files: list[Path] = field(default_factory=list)
+    """Relative paths of files added or modified by this prompt's generator,
+    relative to the workspace directory. Empty for text-only prompts. Passed
+    to subsequent prompts' generator messages as part of the file manifest so
+    they know what the prior prompt produced on disk."""
 
 
 @dataclass(frozen=True)
@@ -113,39 +128,85 @@ class PipelineResult:
     halt_reason: str | None
 
 
+@dataclass(frozen=True)
+class PriorArtifact:
+    """One prior-prompt result, injected as context into subsequent prompts."""
+
+    title: str
+    text_body: str
+    files: list[Path]
+    """Relative paths (relative to workspace_dir) of files created by the
+    prior prompt. The current prompt's generator can Read them directly
+    since it shares the same workspace."""
+
+
+def _format_file_manifest(files: list[Path]) -> str:
+    if not files:
+        return "(no files created)"
+    return "\n".join(f"- {f}" for f in files)
+
+
 def build_initial_generator_message(
-    pair: PromptPair, prior_artifacts: list[tuple[str, str]]
+    pair: PromptPair, prior_artifacts: list[PriorArtifact]
 ) -> str:
-    if not prior_artifacts:
-        return pair.generation_prompt
-    prior_blocks = "\n\n".join(
-        f"## {title}\n\n{body}" for title, body in prior_artifacts
-    )
-    return (
-        f"# Prior approved artifacts\n\n{prior_blocks}"
-        f"{_HORIZONTAL_RULE}"
-        f"# Your task\n\n{pair.generation_prompt}"
-    )
+    sections: list[str] = []
+
+    if prior_artifacts:
+        prior_blocks: list[str] = []
+        for p in prior_artifacts:
+            prior_blocks.append(
+                f"## {p.title}\n\n"
+                f"### Text response\n\n{p.text_body}\n\n"
+                f"### Files created (relative to current working directory)\n\n"
+                f"{_format_file_manifest(p.files)}"
+            )
+        sections.append("# Prior approved artifacts\n\n" + "\n\n".join(prior_blocks))
+        sections.append(
+            "The files listed above exist on disk in the current working "
+            "directory (your cwd is the project root). You can Read them "
+            "with the Read tool if you need to import from them, reference "
+            "their contents, or extend them."
+        )
+
+    sections.append(f"# Your task\n\n{pair.generation_prompt}")
+    sections.append(PROJECT_ORGANISER_INSTRUCTION)
+
+    return _HORIZONTAL_RULE.join(sections)
 
 
 def build_initial_judge_message(pair: PromptPair, artifact: str) -> str:
     return (
         f"{pair.validation_prompt}"
         f"{_HORIZONTAL_RULE}"
-        f"# Artifact to evaluate\n\n{artifact}"
+        f"# Artifact to evaluate (generator's text response)\n\n{artifact}"
+        f"{_HORIZONTAL_RULE}"
+        f"The generator may also have created files on disk. Your current "
+        f"working directory is the project root. You can Read any file, run "
+        f"Bash commands (python -m py_compile, mypy, pytest, etc.), and Glob "
+        f"for files the generator may have produced. Use tool-based "
+        f"verification in addition to reading the text response."
         f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
 
 
 def build_revision_generator_message(judge_output: str) -> str:
-    return f"{REVISION_GENERATOR_PREAMBLE}\n\n# Judge feedback\n\n{judge_output}"
+    return (
+        f"{REVISION_GENERATOR_PREAMBLE}\n\n"
+        f"# Judge feedback\n\n{judge_output}"
+        f"{_HORIZONTAL_RULE}"
+        f"{PROJECT_ORGANISER_INSTRUCTION}"
+    )
 
 
 def build_revision_judge_message(new_artifact: str) -> str:
     return (
         f"{ANTI_ANCHORING_CLAUSE}\n\n"
-        f"# Revised artifact\n\n{new_artifact}"
+        f"# Revised artifact (generator's text response)\n\n{new_artifact}"
+        f"{_HORIZONTAL_RULE}"
+        f"The generator may have created or modified files on disk. Re-check "
+        f"them via Read / Bash / Glob as needed, alongside re-reading the "
+        f"text response."
         f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
@@ -169,6 +230,119 @@ def _write(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+# Directory names that are always skipped when snapshotting or diffing the
+# workspace. These are either the tool's own outputs (runs), dependency caches
+# (.venv, node_modules), Python bytecode caches (__pycache__, .pytest_cache),
+# version-control state (.git), or build artifacts.
+_SNAPSHOT_SKIP_DIR_NAMES: frozenset[str] = frozenset({
+    ".git",
+    "runs",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    "dist",
+    "build",
+})
+
+
+def _is_snapshot_excluded(rel_path: Path) -> bool:
+    """Return True if this relative path should be excluded from snapshot/diff."""
+    for part in rel_path.parts:
+        if part in _SNAPSHOT_SKIP_DIR_NAMES:
+            return True
+        if part.endswith(".egg-info"):
+            return True
+        if part == ".DS_Store":
+            return True
+    return False
+
+
+def _iter_workspace_files(workspace_dir: Path):
+    """Yield (relative_path, mtime_ns) for every non-excluded file in the workspace."""
+    for src in workspace_dir.rglob("*"):
+        if src.is_symlink() or not src.is_file():
+            continue
+        rel = src.relative_to(workspace_dir)
+        if _is_snapshot_excluded(rel):
+            continue
+        try:
+            yield rel, src.stat().st_mtime_ns
+        except FileNotFoundError:
+            # File vanished between glob and stat — skip.
+            continue
+
+
+def _snapshot_workspace(workspace_dir: Path, dest_dir: Path) -> None:
+    """Copy every non-excluded file from workspace_dir into dest_dir.
+
+    Used before each prompt so an escalated prompt can be rolled back by
+    restoring from the snapshot. The dest_dir must not already exist (or if
+    it does, it will be overlaid — caller is responsible for cleanup).
+    """
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    for rel, _ in _iter_workspace_files(workspace_dir):
+        src = workspace_dir / rel
+        dest = dest_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
+def _diff_workspace_since_snapshot(
+    workspace_dir: Path, snapshot_dir: Path
+) -> list[Path]:
+    """Return the list of relative paths that exist in workspace but differ
+    from (or are missing from) the snapshot. These are the files the prompt
+    created or modified."""
+    snapshot_mtimes: dict[Path, int] = {}
+    if snapshot_dir.exists():
+        for rel, mtime in _iter_workspace_files(snapshot_dir):
+            snapshot_mtimes[rel] = mtime
+    changed: list[Path] = []
+    for rel, mtime in _iter_workspace_files(workspace_dir):
+        prev = snapshot_mtimes.get(rel)
+        if prev is None or prev != mtime:
+            changed.append(rel)
+    return sorted(changed)
+
+
+def _restore_workspace_from_snapshot(
+    workspace_dir: Path, snapshot_dir: Path
+) -> None:
+    """Restore workspace_dir to match snapshot_dir exactly (within exclusions).
+
+    1. Remove any file in workspace that is not in the snapshot (files the
+       failed prompt added).
+    2. Copy every file from snapshot back into workspace (overwrites files
+       the failed prompt modified; recreates files the failed prompt may have
+       deleted).
+    """
+    if not snapshot_dir.exists():
+        return
+
+    snapshot_rels: set[Path] = set()
+    for rel, _ in _iter_workspace_files(snapshot_dir):
+        snapshot_rels.add(rel)
+
+    # Pass 1: remove files present in workspace but absent from snapshot.
+    for rel, _ in list(_iter_workspace_files(workspace_dir)):
+        if rel not in snapshot_rels:
+            try:
+                (workspace_dir / rel).unlink()
+            except FileNotFoundError:
+                pass
+
+    # Pass 2: copy everything from snapshot back.
+    for rel in snapshot_rels:
+        src = snapshot_dir / rel
+        dest = workspace_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
 def _make_call(
     *,
     prompt: str,
@@ -179,6 +353,7 @@ def _make_call(
     iteration: int,
     role: str,
     pair: PromptPair,
+    workspace_dir: Path,
 ) -> ClaudeCall:
     return ClaudeCall(
         prompt=prompt,
@@ -190,16 +365,18 @@ def _make_call(
         stream_header=(
             f"── prompt {pair.index} '{pair.title}' / iter {iteration} / {role} ──"
         ),
+        workspace_dir=workspace_dir,
     )
 
 
 def run_prompt(
     pair: PromptPair,
-    prior_artifacts: list[tuple[str, str]],
+    prior_artifacts: list[PriorArtifact],
     run_dir: Path,
     config: RunConfig,
     claude_client: ClaudeClient,
     run_id: str,
+    workspace_dir: Path,
 ) -> PromptResult:
     if config.max_iterations < 1:
         raise ValueError(
@@ -210,8 +387,14 @@ def run_prompt(
     prompt_slug = _prompt_dir_name(pair)
     prompt_dir = run_dir / prompt_slug
     logs_dir = run_dir / "logs" / prompt_slug
+    snapshot_dir = run_dir / "snapshots" / f"{prompt_slug}-pre"
     prompt_dir.mkdir(parents=True, exist_ok=True)
     logs_dir.mkdir(parents=True, exist_ok=True)
+
+    # Snapshot the workspace before the prompt runs so we can roll back to
+    # this state if the prompt escalates. Also lets us diff at the end to
+    # find out which files the prompt's generator created.
+    _snapshot_workspace(workspace_dir, snapshot_dir)
 
     iterations: list[IterationResult] = []
 
@@ -232,6 +415,7 @@ def run_prompt(
             iteration=iteration_number,
             role="generator",
             pair=pair,
+            workspace_dir=workspace_dir,
         )
         gen_response = _call_or_persist_partial(
             claude_client, gen_call, prompt_dir / f"iter-{iteration_number:02d}-generator.md"
@@ -251,6 +435,7 @@ def run_prompt(
             iteration=iteration_number,
             role="judge",
             pair=pair,
+            workspace_dir=workspace_dir,
         )
         jud_response = _call_or_persist_partial(
             claude_client, jud_call, prompt_dir / f"iter-{iteration_number:02d}-judge.md"
@@ -273,14 +458,30 @@ def run_prompt(
     if final_verdict == Verdict.REVISE:
         final_verdict = Verdict.ESCALATE
 
+    if final_verdict == Verdict.PASS:
+        # Compute the list of files this prompt created so they can be
+        # injected into subsequent prompts' prior-artifact context, and
+        # preserve the workspace state (do not restore).
+        created_files = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+    else:
+        # Escalation — roll back the workspace so a half-done prompt does
+        # not pollute later prompts or leave garbage in the tree.
+        _restore_workspace_from_snapshot(workspace_dir, snapshot_dir)
+        created_files = []
+
     _write(prompt_dir / "final-artifact.md", final.generator_output)
     _write(prompt_dir / "final-verdict.txt", final_verdict.value + "\n")
+    _write(
+        prompt_dir / "files-created.txt",
+        "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
+    )
 
     return PromptResult(
         pair=pair,
         iterations=iterations,
         final_verdict=final_verdict,
         final_artifact=final.generator_output,
+        created_files=created_files,
     )
 
 
@@ -304,14 +505,19 @@ def run_pipeline(
     config: RunConfig,
     claude_client: ClaudeClient,
     source_file: Path,
+    workspace_dir: Path | None = None,
 ) -> PipelineResult:
     run_id = run_dir.name
     run_dir.mkdir(parents=True, exist_ok=True)
+    if workspace_dir is None:
+        workspace_dir = Path.cwd().resolve()
+    else:
+        workspace_dir = Path(workspace_dir).resolve()
     started_at = datetime.now(timezone.utc)
     _write_manifest(run_dir, source_file, config, run_id,
                     started_at=_format_iso(started_at))
 
-    prior_artifacts: list[tuple[str, str]] = []
+    prior_artifacts: list[PriorArtifact] = []
     prompt_results: list[PromptResult] = []
 
     for pair in pairs:
@@ -319,7 +525,8 @@ def run_pipeline(
             continue
         try:
             result = run_prompt(
-                pair, prior_artifacts, run_dir, config, claude_client, run_id
+                pair, prior_artifacts, run_dir, config, claude_client,
+                run_id, workspace_dir,
             )
         except VerdictParseError as err:
             halt_reason = (
@@ -339,7 +546,13 @@ def run_pipeline(
 
         prompt_results.append(result)
         if result.final_verdict == Verdict.PASS:
-            prior_artifacts.append((pair.title, result.final_artifact))
+            prior_artifacts.append(
+                PriorArtifact(
+                    title=pair.title,
+                    text_body=result.final_artifact,
+                    files=list(result.created_files),
+                )
+            )
         else:
             halt_reason = f"prompt {pair.index} escalated"
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,

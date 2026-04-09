@@ -7,11 +7,26 @@ from prompt_runner.runner import (
     VERDICT_INSTRUCTION,
     ANTI_ANCHORING_CLAUSE,
     REVISION_GENERATOR_PREAMBLE,
+    PROJECT_ORGANISER_INSTRUCTION,
+    PriorArtifact,
     build_initial_generator_message,
     build_initial_judge_message,
     build_revision_generator_message,
     build_revision_judge_message,
 )
+
+
+def _workspace(tmp_path: Path) -> Path:
+    """Create (or return) a clean workspace directory sibling to the run directory.
+
+    Tests pass this as workspace_dir to run_prompt/run_pipeline so the
+    snapshot/restore helpers have a real directory to operate on (without
+    catching the per-test run_dir itself in their sweeps). Idempotent — calling
+    twice in the same test returns the same directory.
+    """
+    w = tmp_path / "workspace"
+    w.mkdir(exist_ok=True)
+    return w
 
 
 def _pair(index: int, title: str, gen: str = "GEN", val: str = "VAL") -> PromptPair:
@@ -26,22 +41,217 @@ def _pair(index: int, title: str, gen: str = "GEN", val: str = "VAL") -> PromptP
     )
 
 
-def test_initial_generator_message_with_no_priors_is_verbatim():
+def test_initial_generator_message_with_no_priors_contains_task_and_organiser_rule():
+    """With no priors, the message contains the task body and the
+    project-organiser instruction; there is no 'prior artifacts' section."""
     p = _pair(1, "First", gen="the body")
-    assert build_initial_generator_message(p, []) == "the body"
+    msg = build_initial_generator_message(p, [])
+    assert "the body" in msg
+    assert "project-organiser" in msg
+    assert "# Prior approved artifacts" not in msg
 
 
-def test_initial_generator_message_injects_priors():
+def test_initial_generator_message_injects_priors_with_file_manifests():
     p = _pair(2, "Second", gen="the task body")
     msg = build_initial_generator_message(
         p,
-        [("First", "ARTIFACT-ONE"), ("A", "ARTIFACT-A")],
+        [
+            PriorArtifact(title="First", text_body="ARTIFACT-ONE",
+                          files=[Path("src/foo.py"), Path("tests/test_foo.py")]),
+            PriorArtifact(title="A", text_body="ARTIFACT-A", files=[]),
+        ],
     )
     assert "ARTIFACT-ONE" in msg
     assert "ARTIFACT-A" in msg
     assert "# Prior approved artifacts" in msg
     assert "# Your task" in msg
     assert "the task body" in msg
+    # Files created by the prior prompts are listed so the current generator
+    # knows they exist on disk.
+    assert "src/foo.py" in msg
+    assert "tests/test_foo.py" in msg
+    # The second prior had no files → should say so.
+    assert "(no files created)" in msg
+    # The project-organiser instruction is appended.
+    assert "project-organiser" in msg
+
+
+def test_initial_generator_message_instructs_about_reading_prior_files():
+    """When prior artifacts include files, the message tells the current
+    generator it can Read them from the shared workspace."""
+    p = _pair(2, "Second")
+    msg = build_initial_generator_message(
+        p,
+        [PriorArtifact(title="X", text_body="body", files=[Path("m.py")])],
+    )
+    assert "Read" in msg
+    assert "current working directory" in msg
+
+
+def test_revision_generator_message_includes_organiser_instruction():
+    msg = build_revision_generator_message("feedback text")
+    assert "feedback text" in msg
+    assert "project-organiser" in msg
+
+
+# ─── Workspace snapshot / diff / restore ─────────────────────────────────────
+
+from prompt_runner.runner import (
+    _snapshot_workspace,
+    _diff_workspace_since_snapshot,
+    _restore_workspace_from_snapshot,
+    _is_snapshot_excluded,
+)
+
+
+def test_is_snapshot_excluded_catches_common_junk():
+    assert _is_snapshot_excluded(Path(".git/HEAD"))
+    assert _is_snapshot_excluded(Path("runs/foo"))
+    assert _is_snapshot_excluded(Path("node_modules/a/b.js"))
+    assert _is_snapshot_excluded(Path("src/__pycache__/x.pyc"))
+    assert _is_snapshot_excluded(Path("src/my_pkg.egg-info/PKG-INFO"))
+    assert _is_snapshot_excluded(Path(".DS_Store"))
+    assert not _is_snapshot_excluded(Path("src/cli/foo.py"))
+    assert not _is_snapshot_excluded(Path("docs/design/CD-001-x.md"))
+
+
+def test_snapshot_and_diff_detects_new_file(tmp_path: Path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "existing.py").write_text("print('before')\n")
+
+    snapshot = tmp_path / "snap"
+    _snapshot_workspace(workspace, snapshot)
+
+    # Simulate generator adding a new file.
+    (workspace / "new.py").write_text("print('added')\n")
+
+    changed = _diff_workspace_since_snapshot(workspace, snapshot)
+    assert Path("new.py") in changed
+    assert Path("existing.py") not in changed  # unchanged
+
+
+def test_snapshot_and_diff_detects_modified_file(tmp_path: Path):
+    import time as _time
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "models.py").write_text("print('v1')\n")
+
+    snapshot = tmp_path / "snap"
+    _snapshot_workspace(workspace, snapshot)
+
+    # Wait a bit, then modify. mtime changes.
+    _time.sleep(0.01)
+    (workspace / "models.py").write_text("print('v2')\n")
+
+    changed = _diff_workspace_since_snapshot(workspace, snapshot)
+    assert Path("models.py") in changed
+
+
+def test_restore_workspace_removes_new_files_and_restores_modified(tmp_path: Path):
+    import time as _time
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "keep.py").write_text("keep content\n")
+    (workspace / "modified.py").write_text("original\n")
+
+    snapshot = tmp_path / "snap"
+    _snapshot_workspace(workspace, snapshot)
+
+    _time.sleep(0.01)
+    # Add new file and modify existing file.
+    (workspace / "added.py").write_text("new garbage\n")
+    (workspace / "modified.py").write_text("CHANGED\n")
+
+    _restore_workspace_from_snapshot(workspace, snapshot)
+
+    # added.py is gone.
+    assert not (workspace / "added.py").exists()
+    # modified.py is back to original content.
+    assert (workspace / "modified.py").read_text() == "original\n"
+    # keep.py is untouched.
+    assert (workspace / "keep.py").read_text() == "keep content\n"
+
+
+def test_snapshot_excludes_runs_dir(tmp_path: Path):
+    """The snapshot must not recursively capture its own output directory."""
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "keep.py").write_text("x\n")
+    (workspace / "runs").mkdir()
+    (workspace / "runs" / "prev-run.log").write_text("old log\n")
+
+    snapshot = tmp_path / "snap"
+    _snapshot_workspace(workspace, snapshot)
+
+    assert (snapshot / "keep.py").exists()
+    assert not (snapshot / "runs").exists()
+
+
+def test_escalation_restores_workspace(tmp_path: Path):
+    """When a prompt escalates, files the generator created are removed."""
+    workspace = _workspace(tmp_path)
+    # Put a pre-existing file in the workspace.
+    (workspace / "existing.py").write_text("stable\n")
+
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_escalate()])
+
+    # Simulate the generator creating a file by writing it ourselves
+    # BEFORE the run, then having an escalation — the file should be
+    # cleaned up. We do this by wrapping the fake client so that between
+    # the generator call and the judge call, a file appears in the workspace.
+    class FileCreatingClient:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def call(self, call):
+            self._n += 1
+            if self._n == 1:
+                # Generator: pretend it wrote a new file.
+                (workspace / "garbage.py").write_text("temporary\n")
+                return _pass_response("artifact")
+            else:
+                return _judge_escalate()
+
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=FileCreatingClient(),
+        run_id="testrun", workspace_dir=workspace,
+    )
+
+    # The garbage file must be gone.
+    assert not (workspace / "garbage.py").exists(), "escalation did not clean up"
+    # The pre-existing file is still there.
+    assert (workspace / "existing.py").read_text() == "stable\n"
+
+
+def test_pass_preserves_files_and_records_them(tmp_path: Path):
+    """When a prompt passes, the files the generator created are preserved
+    and listed in PromptResult.created_files."""
+    workspace = _workspace(tmp_path)
+    pair = _pair(1, "Alpha")
+
+    class FileCreatingClient:
+        def __init__(self) -> None:
+            self._n = 0
+
+        def call(self, call):
+            self._n += 1
+            if self._n == 1:
+                (workspace / "created.py").write_text("# new file\n")
+                return _pass_response("artifact")
+            return _judge_pass()
+
+    result = run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(), claude_client=FileCreatingClient(),
+        run_id="testrun", workspace_dir=workspace,
+    )
+
+    assert result.final_verdict == Verdict.PASS
+    assert (workspace / "created.py").exists()
+    assert Path("created.py") in result.created_files
 
 
 def test_initial_judge_message_includes_verdict_instruction():
@@ -111,6 +321,7 @@ def test_single_prompt_passes_first_try(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         run_id="testrun",
+        workspace_dir=_workspace(tmp_path),
     )
     assert result.final_verdict == Verdict.PASS
     assert len(result.iterations) == 1
@@ -131,6 +342,7 @@ def test_single_prompt_passes_on_second_iteration(tmp_path: Path):
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="testrun",
+        workspace_dir=_workspace(tmp_path),
     )
     assert result.final_verdict == Verdict.PASS
     assert len(result.iterations) == 2
@@ -155,7 +367,7 @@ def test_escalation_on_max_iterations(tmp_path: Path):
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(max_iterations=3), claude_client=client,
-        run_id="testrun",
+        run_id="testrun", workspace_dir=_workspace(tmp_path),
     )
     assert result.final_verdict == Verdict.ESCALATE
     assert len(result.iterations) == 3
@@ -168,6 +380,7 @@ def test_direct_escalation(tmp_path: Path):
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="testrun",
+        workspace_dir=_workspace(tmp_path),
     )
     assert result.final_verdict == Verdict.ESCALATE
     assert len(result.iterations) == 1
@@ -207,6 +420,7 @@ def test_escalation_halts_pipeline(tmp_path: Path):
     result = run_pipeline(
         pairs=[p1, p2, p3], run_dir=tmp_path / "run", config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
     )
     assert result.halted_early
     assert len(result.prompt_results) == 2
@@ -243,6 +457,7 @@ def test_session_ids_are_valid_uuids_and_distinct(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="myrun",
+        workspace_dir=_workspace(tmp_path),
     )
     gen_call, jud_call = client.received
     # Must be valid UUIDs.
@@ -264,6 +479,7 @@ def test_session_ids_are_deterministic(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="myrun",
+        workspace_dir=_workspace(tmp_path),
     )
     # Iteration 1 generator and iteration 2 generator share the same session.
     assert client.received[0].session_id == client.received[2].session_id
@@ -280,6 +496,7 @@ def test_resume_flag_set_on_iterations_after_first(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="myrun",
+        workspace_dir=_workspace(tmp_path),
     )
     # Iter 1: both calls new_session=True. Iter 2: both calls new_session=False.
     assert [c.new_session for c in client.received] == [True, True, False, False]
@@ -292,6 +509,7 @@ def test_log_paths_passed_to_every_call(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=run_dir,
         config=RunConfig(), claude_client=client, run_id="myrun",
+        workspace_dir=_workspace(tmp_path),
     )
     for call in client.received:
         assert call.stdout_log_path.parent.parent == run_dir / "logs"
@@ -312,6 +530,7 @@ def test_logs_dir_created_before_first_call(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=AssertingClient(), run_id="myrun",
+        workspace_dir=_workspace(tmp_path),
     )
     assert all(captured), "logs directory was not created before a claude call"
 
@@ -326,6 +545,7 @@ def test_halt_on_claude_failure_writes_partial_md(tmp_path: Path):
         prompt="", session_id="x", new_session=True, model=None,
         stdout_log_path=Path("/tmp/x"), stderr_log_path=Path("/tmp/x"),
         stream_header="── test ──",
+        workspace_dir=Path("/tmp"),
     )
     err = ClaudeInvocationError(dummy_call, judge_partial)
     client = FakeClaudeClient(scripted=[gen_ok, err])
@@ -333,6 +553,7 @@ def test_halt_on_claude_failure_writes_partial_md(tmp_path: Path):
         run_prompt(
             pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
             config=RunConfig(), claude_client=client, run_id="myrun",
+            workspace_dir=_workspace(tmp_path),
         )
     judge_md = tmp_path / "run" / "prompt-01-alpha" / "iter-01-judge.md"
     assert judge_md.exists()
@@ -346,6 +567,7 @@ def test_unparseable_verdict_halts_pipeline(tmp_path: Path):
     result = run_pipeline(
         pairs=[pair], run_dir=tmp_path / "run", config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
     )
     assert result.halted_early
     assert result.halt_reason is not None
@@ -380,6 +602,7 @@ def test_summary_txt_is_written_on_halt(tmp_path: Path):
     run_pipeline(
         pairs=[pair], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
     )
     summary_path = run_dir / "summary.txt"
     assert summary_path.exists()
@@ -403,6 +626,7 @@ def test_skipped_prompts_appear_in_summary(tmp_path: Path):
     run_pipeline(
         pairs=[p1, p2, p3], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
     )
     summary_text = (run_dir / "summary.txt").read_text()
     # p1 ran and passed
@@ -424,6 +648,7 @@ def test_max_iterations_zero_raises(tmp_path: Path):
             pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
             config=RunConfig(max_iterations=0),
             claude_client=client, run_id="testrun",
+            workspace_dir=_workspace(tmp_path),
         )
 
 
@@ -455,6 +680,7 @@ def test_summary_includes_wall_time(tmp_path: Path):
     run_pipeline(
         pairs=[pair], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
     )
     summary = (run_dir / "summary.txt").read_text()
     assert "Wall time:" in summary
@@ -472,6 +698,7 @@ def test_manifest_includes_wall_time(tmp_path: Path):
     run_pipeline(
         pairs=[pair], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
     )
     manifest = _json.loads((run_dir / "manifest.json").read_text())
     assert "wall_time" in manifest
