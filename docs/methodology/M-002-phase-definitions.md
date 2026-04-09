@@ -3,7 +3,7 @@
 # AI-Driven Software Development Methodology — Phase Definitions
 # ═══════════════════════════════════════════════════════════════════════════════
 #
-# This document defines seven phases (PH-000 through PH-006) that compose the
+# This document defines eight phases (PH-000 through PH-007) that compose the
 # full development pipeline. Each phase instantiates the Phase Processing Unit
 # schema. The pipeline orchestrator uses the input_sources and phase_output
 # declarations to build the execution DAG.
@@ -12,13 +12,14 @@
 #
 #   PH-000 (Requirements Inventory)
 #     └─► PH-001 (Feature Specification)
-#           └─► PH-002 (Solution Design)
-#                 └─► PH-003 (Contract-First Interface Definitions)
-#                       └─► PH-004 (Intelligent Simulations)
-#                       │     │
-#                       ▼     ▼
-#                     PH-005 (Incremental Implementation) ◄── PH-001
-#                       └─► PH-006 (Verification Sweep) ◄── PH-000, PH-001
+#           └─► PH-002 (Architecture)
+#                 └─► PH-003 (Solution Design)
+#                       └─► PH-004 (Contract-First Interface Definitions)
+#                             └─► PH-005 (Intelligent Simulations)
+#                             │     │
+#                             ▼     ▼
+#                           PH-006 (Incremental Implementation) ◄── PH-001
+#                             └─► PH-007 (Verification Sweep) ◄── PH-000, PH-001
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
@@ -918,8 +919,126 @@ phase_1_feature_specification:
         escalation_status: "none"
 
 
+
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 2: SOLUTION DESIGN
+# PHASE 2: ARCHITECTURE
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# Purpose: Decompose the enhancement into technology components, declaring for
+# each its role, technology stack, candidate frameworks, and the expertise
+# required to build it (as free-text descriptions, not concrete skill IDs).
+#
+# This phase does not design the components in detail (that is Solution
+# Design's job in PH-003).  It produces the bridge artifact that turns a
+# feature specification into a technology-aware plan without coupling itself
+# to any specific skill catalog.
+#
+# The critical discipline here is decoupling: expected_expertise uses
+# human-readable free-text descriptions.  A downstream Skill-Selector agent
+# maps each description to concrete Claude Code skills at run time.  The
+# architect does not need to know which skills are installed.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+phase_2_architecture:
+
+  phase_processing_unit:
+
+    phase_id: "PH-002-architecture"
+    phase_name: "Architecture"
+    version: "1.0.0"
+
+    input_sources:
+      artifacts:
+        - ref: "{workspace}/docs/features/feature-specification.yaml"
+          role: "primary"
+          format: "yaml"
+          description: >
+            Feature specification produced by Phase 1.  Every feature must
+            be served by at least one component declared in the stack
+            manifest.
+          content_hash: ""
+          version: ""
+
+        - ref: "{workspace}/docs/requirements/requirements-inventory.yaml"
+          role: "upstream_traceability"
+          format: "yaml"
+          description: >
+            Requirements inventory for upstream traceability of the
+            technology decomposition.
+          content_hash: ""
+          version: ""
+
+      external_references: []
+
+    phase_output:
+      primary_artifact:
+        path: "{workspace}/docs/architecture/stack-manifest.yaml"
+        format: "yaml"
+        description: >
+          The stack manifest declares the components, their technology
+          stacks, frameworks, and expected expertise, plus the integration
+          points between them.
+
+      schema: |
+        components:
+          - id: CMP-NNN-<slug>
+            name: ...
+            role: ...
+            technology: python | typescript | go | rust | ...
+            runtime: ...
+            frameworks: [...]
+            persistence: ...
+            expected_expertise:
+              - "Free-text description of required knowledge"
+              - ...
+            features_served: [FT-NNN, ...]
+
+        integration_points:
+          - id: IP-NNN
+            between: [CMP-NNN-a, CMP-NNN-b]
+            protocol: ...
+            contract_source: ...
+
+        rationale: |
+          Prose explanation of the decomposition choices.
+
+    checklist_extraction:
+
+      extractor_agent: "checklist-extractor"
+
+      extraction_focus: |
+        Every feature must be served by at least one component.  Every
+        component must declare a non-empty expected_expertise list of
+        free-text descriptions.  Every integration point must reference
+        two components in the manifest.  The decomposition must be
+        traceable to the features and requirements that motivated it.
+
+    generation:
+      generator_agent: "artifact-generator"
+
+    judging:
+      judge_agent: "artifact-judge"
+
+      judge_guidance: |
+        1. Feature coverage gaps: every FT-* must appear in at least one
+           component's features_served list.
+        2. Expertise articulation: every component must have a non-empty
+           expected_expertise list of free-text descriptions.  Flag any
+           component whose expertise list looks like concrete skill IDs
+           (e.g., 'python-backend-impl') rather than descriptions
+           (e.g., 'Python backend development').
+        3. Orphan integration points: every integration_point must
+           reference two components present in the components list.
+        4. Technology coherence: flag components whose frameworks list
+           includes items from incompatible ecosystems.
+        5. Missing rationale: the rationale field must explain the
+           decomposition, not merely restate the component names.
+
+    escalation_policy: "halt"
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# PHASE 3: SOLUTION DESIGN
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Purpose: Define the system architecture — components, their responsibilities,
@@ -938,11 +1057,11 @@ phase_1_feature_specification:
 # in Phase 3.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-phase_2_solution_design:
+phase_3_solution_design:
 
   phase_processing_unit:
 
-    phase_id: "PH-002-solution-design"
+    phase_id: "PH-003-solution-design"
     phase_name: "Solution Design"
     version: "1.0.0"
 
@@ -1412,7 +1531,7 @@ phase_2_solution_design:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 3: CONTRACT-FIRST INTERFACE DEFINITIONS
+# PHASE 4: CONTRACT-FIRST INTERFACE DEFINITIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Purpose: Formally define every inter-component boundary with precise schemas
@@ -1432,11 +1551,11 @@ phase_2_solution_design:
 # and undefined edge cases are contract bugs that compound downstream.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-phase_3_contract_first_interfaces:
+phase_4_contract_first_interfaces:
 
   phase_processing_unit:
 
-    phase_id: "PH-003-contract-first-interfaces"
+    phase_id: "PH-004-contract-first-interfaces"
     phase_name: "Contract-First Interface Definitions"
     version: "1.0.0"
 
@@ -1911,7 +2030,7 @@ phase_3_contract_first_interfaces:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 4: INTELLIGENT SIMULATIONS
+# PHASE 5: INTELLIGENT SIMULATIONS
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Purpose: For each component interface, produce an LLM-powered simulation
@@ -1933,11 +2052,11 @@ phase_3_contract_first_interfaces:
 # behavior.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-phase_4_intelligent_simulations:
+phase_5_intelligent_simulations:
 
   phase_processing_unit:
 
-    phase_id: "PH-004-intelligent-simulations"
+    phase_id: "PH-005-intelligent-simulations"
     phase_name: "Intelligent Simulations"
     version: "1.0.0"
 
@@ -2394,7 +2513,7 @@ phase_4_intelligent_simulations:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 5: INCREMENTAL IMPLEMENTATION
+# PHASE 6: INCREMENTAL IMPLEMENTATION
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Purpose: Implement components one at a time, each immediately integrated
@@ -2422,11 +2541,11 @@ phase_4_intelligent_simulations:
 # code is produced by executing the plan. The plan is what gets judged.
 # ═══════════════════════════════════════════════════════════════════════════════
 
-phase_5_incremental_implementation:
+phase_6_incremental_implementation:
 
   phase_processing_unit:
 
-    phase_id: "PH-005-incremental-implementation"
+    phase_id: "PH-006-incremental-implementation"
     phase_name: "Incremental Implementation"
     version: "1.0.0"
 
@@ -2954,7 +3073,7 @@ phase_5_incremental_implementation:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# PHASE 6: VERIFICATION SWEEP
+# PHASE 7: VERIFICATION SWEEP
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Purpose: Run end-to-end acceptance tests traced back to features and
@@ -2973,11 +3092,11 @@ phase_5_incremental_implementation:
 # needed to declare the system complete (or to identify what remains).
 # ═══════════════════════════════════════════════════════════════════════════════
 
-phase_6_verification_sweep:
+phase_7_verification_sweep:
 
   phase_processing_unit:
 
-    phase_id: "PH-006-verification-sweep"
+    phase_id: "PH-007-verification-sweep"
     phase_name: "Verification Sweep"
     version: "1.0.0"
 
@@ -3495,11 +3614,12 @@ phase_6_verification_sweep:
 # ──────   ─────────────────────────────   ───────────────────────────────   ────────────────────────────────
 # PH-000   Raw requirements                Requirements inventory (YAML)    RI-* ← raw source locations
 # PH-001   Requirements inventory           Feature specification (YAML)    FT-* ← RI-*, AC-* ← RI-*
-# PH-002   Feature specification            Solution design (YAML)          CMP-* ← FT-*, INT-* ← FT-*
-# PH-003   Solution design                  Interface contracts (YAML)      CTR-* ← INT-*, TYP-* shared
-# PH-004   Interface contracts              Simulation definitions (YAML)   SIM-* ← CTR-*, SCN-* ← AC-*
-# PH-005   Contracts + simulations + feats  Implementation plan (YAML)      UT-* ← AC-*, IT-* ← SCN-*
-# PH-006   Features + inventory + system    Verification report (YAML)      E2E-* ← AC-* ← FT-* ← RI-*
+# PH-002   Feature specification            Stack manifest (YAML)           CMP-* ← FT-*, expertise free-text
+# PH-003   Stack manifest                   Solution design (YAML)          INT-* ← CMP-*, design detail
+# PH-004   Solution design                  Interface contracts (YAML)      CTR-* ← INT-*, TYP-* shared
+# PH-005   Interface contracts              Simulation definitions (YAML)   SIM-* ← CTR-*, SCN-* ← AC-*
+# PH-006   Contracts + simulations + feats  Implementation plan (YAML)      UT-* ← AC-*, IT-* ← SCN-*
+# PH-007   Features + inventory + system    Verification report (YAML)      E2E-* ← AC-* ← FT-* ← RI-*
 #
 # The full traceability chain:
 #   Raw requirements
