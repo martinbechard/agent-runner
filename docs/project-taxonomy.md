@@ -79,6 +79,12 @@
 - **Filename pattern:** `AC-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature.
 - **Example:** `AC-001-prompt-runner.md`
 
+### tests/fixtures/
+- **Purpose:** Static input files used by interactive or automated methodology-runner sessions during skill authoring and verification. These are not unit-test source files and do not mirror any `src/` module; they are realistic-but-minimal data files consumed as `--input` or equivalent arguments to CLI tools under development.
+- **Signals:** "test fixture", "used by methodology-runner run", "skill-authoring session", "tiny requirements", "sample input", not a `def test_` file, not a `describe(` block, referenced from a `docs/prompts/PR-NNN-*.md` file as the concrete input to a runner session.
+- **Filename pattern:** `<topic-slug>.<ext>` in kebab-case, where ext matches the fixture format (e.g. `tiny-requirements.md`, `sample-config.yaml`).
+- **Tests location:** n/a — these files are themselves fixtures, not code under test.
+
 ### tests/cli/
 - **Purpose:** Python unit tests mirroring `src/cli/`.
 - **Signals:** `def test_`, `pytest`, fixtures importing from `src/cli/`.
@@ -130,6 +136,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-09 — tests/fixtures/ added — static input fixtures for methodology-runner skill-authoring sessions are not unit-test source files and do not mirror any src/ module; they need a dedicated fixtures layer inside tests/.
 - 2026-04-09 — docs/superpowers/plans/ added — TDD implementation plans produced by the superpowers:writing-plans skill are derived from superpowers/specs/ companions and belong in the same superpowers layer, distinct from docs/plans/ which holds generic component plans.
 - 2026-04-09 — docs/superpowers/specs/ added — pre-implementation design specs produced by brainstorming skill runs are not yet approved into the component design canon and need a dedicated staging layer distinct from docs/design/, docs/requirements/, docs/plans/, and docs/prompts/.
 - 2026-04-08 — docs/methodology/ added — AI-driven development methodology reference corpus (phase specs, agent role prompts, traceability model, simulation framework, orchestration) is not a design of agent-runner components, not a requirement, not a plan, and not a prompt file; a dedicated methodology corpus layer is needed.
