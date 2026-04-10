@@ -35,6 +35,25 @@ class PromptPair:
     interactive: bool = False
 
 
+@dataclass(frozen=True)
+class VariantPrompt:
+    """One variant within a [VARIANTS] fork point."""
+
+    variant_name: str       # "A", "B", etc.
+    variant_title: str      # "Long task list", "Two-pass checklist"
+    pairs: list[PromptPair] # the prompt pair(s) for this variant
+
+
+@dataclass(frozen=True)
+class ForkPoint:
+    """A prompt heading marked [VARIANTS] that forks execution."""
+
+    index: int              # prompt number where the fork occurs
+    title: str              # e.g., "Audit coverage"
+    heading_line: int
+    variants: list[VariantPrompt]
+
+
 class ParseError(Exception):
     """Raised when the input file does not match the structural contract."""
 
@@ -60,6 +79,10 @@ _HEADING_RE = re.compile(
     r"(.*?)\s*$"            # title (captured)
 )
 _INTERACTIVE_RE = re.compile(r"\s*\[interactive\]\s*$", re.IGNORECASE)
+_VARIANTS_RE = re.compile(r"\s*\[variants\]\s*$", re.IGNORECASE)
+_VARIANT_HEADING_RE = re.compile(
+    r"^###\s+Variant\s+(\S+?)\s*:\s*(.+?)\s*$"
+)
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_+\-]*\s*$")
 _UNTITLED = "(untitled)"
 _BOUNDARY_HEADING = "heading"
@@ -92,8 +115,8 @@ class _Accumulator:
         )
 
 
-def parse_file(path: Path) -> list[PromptPair]:
-    """Parse a markdown file into a list of PromptPair objects.
+def parse_file(path: Path) -> list[PromptPair | ForkPoint]:
+    """Parse a markdown file into a list of PromptPair and ForkPoint objects.
 
     Raises ParseError (carrying an error_id from ERROR_IDS) if the file does
     not match the structural contract defined in CD-001 §3.
@@ -102,35 +125,178 @@ def parse_file(path: Path) -> list[PromptPair]:
     return parse_text(text)
 
 
-def parse_text(text: str) -> list[PromptPair]:
+def parse_text(text: str) -> list[PromptPair | ForkPoint]:
     lines = text.splitlines()
-    pairs: list[PromptPair] = []
+    items: list[PromptPair | ForkPoint] = []
     state = _State.SEEK_HEADING
     current: _Accumulator | None = None
+    # When processing a [VARIANTS] heading, these hold the in-progress data.
+    variants_title: str = ""
+    variants_heading_line: int = 0
+    variants_index: int = 0
+    collected_variants: list[VariantPrompt] = []
+    # Current variant being built (name, title, accumulated pairs).
+    current_variant_name: str = ""
+    current_variant_title: str = ""
+    current_variant_pairs: list[PromptPair] = []
+    in_variants_section: bool = False
+
+    def _flush_current_variant() -> None:
+        """Finalize the in-progress variant and append to collected_variants."""
+        if current_variant_name:
+            collected_variants.append(VariantPrompt(
+                variant_name=current_variant_name,
+                variant_title=current_variant_title,
+                pairs=list(current_variant_pairs),
+            ))
+
+    def _flush_variants_fork(next_boundary_line: int, boundary_kind: str) -> None:
+        """Close out the current [VARIANTS] section and emit a ForkPoint."""
+        nonlocal in_variants_section
+        _flush_current_variant()
+        if not collected_variants:
+            raise ParseError(
+                "E-NO-BLOCKS",
+                f'Prompt {variants_index} "{variants_title}" (line {variants_heading_line}): '
+                f"[VARIANTS] heading has no ### Variant subsections. "
+                f"Add at least one \"### Variant X: <title>\" subsection with a code block.",
+            )
+        items.append(ForkPoint(
+            index=variants_index,
+            title=variants_title,
+            heading_line=variants_heading_line,
+            variants=list(collected_variants),
+        ))
+        in_variants_section = False
 
     for line_index, line in enumerate(lines):
         line_number = line_index + 1
 
+        # Check for a top-level ## Prompt heading.
         heading_match = _HEADING_RE.match(line)
         if heading_match is not None:
-            if current is not None:
+            if in_variants_section:
+                # Close out the variants fork before starting the next prompt.
+                _flush_variants_fork(line_number, _BOUNDARY_HEADING)
+            elif current is not None:
                 _raise_for_incomplete_state(state, current, line_number, _BOUNDARY_HEADING)
-                pairs.append(current.to_pair())
+                items.append(current.to_pair())
+                current = None
+
             raw_title = heading_match.group(1).strip()
+
+            # Detect [interactive] and [VARIANTS] markers (mutually exclusive).
             interactive_match = _INTERACTIVE_RE.search(raw_title)
+            variants_match = _VARIANTS_RE.search(raw_title)
+
+            if interactive_match is not None and variants_match is not None:
+                raise ParseError(
+                    "E-NO-BLOCKS",
+                    f'Prompt heading at line {line_number}: '
+                    f"[interactive] and [VARIANTS] cannot appear on the same heading.",
+                )
+
+            if variants_match is not None:
+                # Strip the [VARIANTS] marker from the title.
+                title_without_variants = raw_title[:variants_match.start()].rstrip()
+                # Check for [interactive] in the remainder (it won't be caught by
+                # the earlier check when [interactive] precedes [VARIANTS]).
+                interactive_m2 = _INTERACTIVE_RE.search(title_without_variants)
+                if interactive_m2 is not None:
+                    raise ParseError(
+                        "E-NO-BLOCKS",
+                        f'Prompt heading at line {line_number}: '
+                        f"[interactive] and [VARIANTS] cannot appear on the same heading.",
+                    )
+
+                # Set up state for collecting variants.
+                nonlocal_index = len(items) + 1
+                variants_title = title_without_variants or _UNTITLED
+                variants_heading_line = line_number
+                variants_index = nonlocal_index
+                collected_variants.clear()
+                current_variant_name = ""
+                current_variant_title = ""
+                current_variant_pairs.clear()
+                in_variants_section = True
+                state = _State.SEEK_HEADING  # repurpose: we'll handle sub-headings below
+                continue
+
             if interactive_match is not None:
                 title = raw_title[:interactive_match.start()].rstrip()
                 interactive = True
             else:
                 title = raw_title
                 interactive = False
+
             current = _Accumulator(
-                index=len(pairs) + 1,
+                index=len(items) + 1,
                 title=title,
                 heading_line=line_number,
                 interactive=interactive,
             )
             state = _State.SEEK_FIRST_FENCE
+            continue
+
+        # Inside a [VARIANTS] section, look for ### Variant sub-headings.
+        if in_variants_section:
+            variant_heading_match = _VARIANT_HEADING_RE.match(line)
+            if variant_heading_match is not None:
+                # Finalize the previous variant (if any).
+                _flush_current_variant()
+                current_variant_name = variant_heading_match.group(1)
+                current_variant_title = variant_heading_match.group(2)
+                current_variant_pairs.clear()
+                # Reset accumulator for collecting pairs within this variant.
+                current = _Accumulator(
+                    index=0,  # variants don't carry individual indices
+                    title=current_variant_title,
+                    heading_line=line_number,
+                )
+                state = _State.SEEK_FIRST_FENCE
+                continue
+
+            # If we haven't entered any variant sub-heading yet, skip non-fence lines.
+            if not current_variant_name:
+                continue
+
+            # Otherwise, we are accumulating code blocks within the current variant.
+            assert current is not None
+            fence_match = _FENCE_RE.match(line)
+
+            if state is _State.SEEK_FIRST_FENCE:
+                if fence_match is not None:
+                    current.generation_line = line_number
+                    state = _State.IN_FIRST_FENCE
+                continue
+
+            if state is _State.IN_FIRST_FENCE:
+                if fence_match is not None:
+                    state = _State.SEEK_SECOND_FENCE
+                else:
+                    current.generation_lines.append(line)
+                continue
+
+            if state is _State.SEEK_SECOND_FENCE:
+                if fence_match is not None:
+                    current.validation_line = line_number
+                    state = _State.IN_SECOND_FENCE
+                continue
+
+            if state is _State.IN_SECOND_FENCE:
+                if fence_match is not None:
+                    # Completed a pair; save it and prepare for a possible next pair.
+                    current_variant_pairs.append(current.to_pair())
+                    current = _Accumulator(
+                        index=0,
+                        title=current_variant_title,
+                        heading_line=line_number,
+                    )
+                    state = _State.SEEK_FIRST_FENCE
+                else:
+                    current.validation_lines.append(line)
+                continue
+
             continue
 
         if state is _State.SEEK_HEADING:
@@ -174,9 +340,18 @@ def parse_text(text: str) -> list[PromptPair]:
             continue
 
     # End of file handling.
-    if current is not None:
+    if in_variants_section:
+        # Flush any in-progress variant pair accumulator as a validator-less pair.
+        if current is not None and current_variant_name:
+            if state is _State.SEEK_SECOND_FENCE:
+                # validator-less single-fence: finalize the pair
+                current_variant_pairs.append(current.to_pair())
+            elif state is _State.SEEK_FIRST_FENCE:
+                pass  # no pairs accumulated in this variant yet (already handled by flush)
+        _flush_variants_fork(len(lines), _BOUNDARY_EOF)
+    elif current is not None:
         if state is _State.SEEK_HEADING:
-            pairs.append(current.to_pair())
+            items.append(current.to_pair())
         else:
             _raise_for_incomplete_state(
                 state, current, next_boundary_line=len(lines),
@@ -185,9 +360,9 @@ def parse_text(text: str) -> list[PromptPair]:
             # If we reach here, state was SEEK_EXTRA_CHECK (valid terminal) or
             # SEEK_SECOND_FENCE (validator-less single-fence prompt). In both
             # cases validation_line is already correct (set or 0 by default).
-            pairs.append(current.to_pair())
+            items.append(current.to_pair())
 
-    return pairs
+    return items
 
 
 def _raise_for_incomplete_state(
