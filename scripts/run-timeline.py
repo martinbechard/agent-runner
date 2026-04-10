@@ -1132,7 +1132,14 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
             '<th>Cost</th><th>Tools</th></tr>'
         )
         tool_popup_counter = 0
-        for turn in detail.turns:
+        # Pre-compute total estimated tokens for cost proration
+        all_est = [
+            (t.thinking_chars + t.text_chars + t.tool_write_chars) // 4
+            for t in detail.turns
+        ]
+        total_est_for_cost = sum(all_est) or 1
+
+        for turn_idx, turn in enumerate(detail.turns):
             tool_parts = []
             for tc in turn.tool_calls:
                 file_path = _tool_file_path(tc)
@@ -1210,7 +1217,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                 f'<td>{est_tok:,}</td>'
                 f'<td>{dur_str}</td>'
                 f'<td>{tok_s_str}</td>'
-                f'<td></td>'
+                f'<td>${detail.cost_usd * est_tok / total_est_for_cost:.2f}</td>'
                 f'<td class="tool-detail">{tools_str}</td>'
                 f'</tr>'
             )
