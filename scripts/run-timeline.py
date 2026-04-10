@@ -1360,11 +1360,14 @@ def _steps_duration_seconds(steps: list[Step]) -> float:
 
 
 def _steps_verdict(steps: list[Step]) -> str:
-    """Return the last non-empty stop_reason from judge steps."""
+    """Return the judge's VERDICT (pass/revise/escalate) from the last judge step's output."""
+    import re
     for step in reversed(steps):
-        if step.detail and "judge" in step.name.lower() and step.detail.stop_reason:
-            return step.detail.stop_reason
-    return ""
+        if step.detail and "judge" in step.name.lower() and step.detail.output_text:
+            m = re.search(r'VERDICT:\s*(pass|revise|escalate)', step.detail.output_text, re.IGNORECASE)
+            if m:
+                return m.group(1).lower()
+    return "—"
 
 
 def _fmt_duration(seconds: float) -> str:
