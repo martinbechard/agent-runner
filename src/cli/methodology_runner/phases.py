@@ -136,9 +136,17 @@ _PHASE_0 = PhaseConfig(
         "items:\n"
         "  - id: \"RI-NNN\"           # zero-padded three-digit sequential ID\n"
         "    category: \"functional\"  # functional | non_functional | constraint | assumption\n"
-        "    verbatim_quote: \"...\"   # exact text from source document\n"
+        "    verbatim_quote: \"...\"   # exact text from source document (no paraphrasing)\n"
         "    source_location: \"...\"  # section heading or paragraph identifier\n"
-        "    tags: [\"tag1\", \"tag2\"]  # domain keywords for cross-referencing"
+        "    tags: [\"tag1\", \"tag2\"]  # domain keywords for cross-referencing\n"
+        "    rationale:               # WHY this was extracted as a separate item\n"
+        "      rule: \"...\"           # the extraction rule applied\n"
+        "      because: \"...\"        # the reasoning chain\n"
+        "    open_assumptions:        # specifics beyond the quote (if any)\n"
+        "      - id: \"ASM-NNN\"\n"
+        "        detail: \"...\"       # the assumed value or constraint\n"
+        "        needs: \"...\"        # who/what must confirm this\n"
+        "        status: \"open\"      # open | confirmed | invalidated"
     ),
     checklist_examples_good=[
         (

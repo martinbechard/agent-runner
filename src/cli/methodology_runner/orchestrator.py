@@ -355,6 +355,7 @@ def build_run_skill_context(
     workspace: Path,
     baseline_path: Path | None = None,
     user_home: Path | None = None,
+    cwd: Path | None = None,
 ) -> RunSkillContext:
     """Load the skill catalog and baseline config for a run.
 
@@ -362,7 +363,7 @@ def build_run_skill_context(
     (before any phase executes).  Raises on any failure so the
     orchestrator halts immediately — per spec failure modes 7 and 9.
     """
-    catalog = build_catalog(workspace=workspace, user_home=user_home)
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
 
     if baseline_path is None:
         # Prefer a workspace-local copy if one exists, otherwise fall back

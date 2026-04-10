@@ -78,6 +78,7 @@ def test_build_run_skill_context_empty_catalog_raises(tmp_path: Path):
             workspace=workspace,
             baseline_path=baseline,
             user_home=user_home,
+            cwd=tmp_path,
         )
 
 

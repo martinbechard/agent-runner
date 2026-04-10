@@ -124,14 +124,13 @@ requirements_inventory:
 
   items:
     - id: RI-001
-      text: "Patrons can search the book catalog by specified fields"
       category: functional
-      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref> in PH-000
       verbatim_quote: "Patrons should be able to search for books"    # <source-quote> in PH-000
+      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref> in PH-000
       tags: [patron, search, catalog]
       rationale:
-        rule: "Decomposed 'search for books' into a concrete capability"
-        because: "'Search' must specify searchable fields to be testable"
+        rule: "Extracted search capability as a distinct requirement"
+        because: "Search is a self-contained user action"
       open_assumptions:
         - id: ASM-001
           detail: "Searchable fields are title, author, and ISBN"
@@ -139,14 +138,13 @@ requirements_inventory:
           status: open
 
     - id: RI-002
-      text: "Patrons can check out books"
       category: functional
-      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref>
       verbatim_quote: "check them out"                                 # <source-quote>
+      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref>
       tags: [patron, checkout, circulation]
       rationale:
-        rule: "Extracted checkout as distinct capability"
-        because: "Checkout is a state change (available -> borrowed)"
+        rule: "Extracted checkout as distinct capability from compound sentence"
+        because: "'search for books, check them out, and return them' contains three independent actions"
       open_assumptions:
         - id: ASM-002
           detail: "Simultaneous checkout limit per patron is needed"
@@ -154,24 +152,22 @@ requirements_inventory:
           status: open
 
     - id: RI-003
-      text: "Patrons can return books and system updates availability"
       category: functional
-      source_location: "stakeholder-interview-2026-04-01.md:line-3"   # <source-ref>
       verbatim_quote: "return them"                                    # <source-quote>
+      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref>
       tags: [patron, return, circulation]
       rationale:
-        rule: "Paired return with inventory update"
-        because: "Return without availability update creates ghost inventory"
+        rule: "Extracted return as distinct capability from compound sentence"
+        because: "Return implies a state change (borrowed -> available)"
 
     - id: RI-004
-      text: "Librarians can manage the book catalog"
       category: functional
-      source_location: "stakeholder-interview-2026-04-01.md:line-3"   # <source-ref>
       verbatim_quote: "Librarians need to manage the catalog"          # <source-quote>
+      source_location: "stakeholder-interview-2026-04-01.md:line-3"   # <source-ref>
       tags: [librarian, catalog, management]
       rationale:
-        rule: "Decomposed 'manage the catalog' into explicit operations"
-        because: "'Manage' is ambiguous without specifying operations"
+        rule: "Extracted catalog management as a distinct requirement"
+        because: "'Manage' is a compound verb — specifics go in open_assumptions"
       open_assumptions:
         - id: ASM-003
           detail: "Operations are add, edit, and remove"
@@ -179,14 +175,13 @@ requirements_inventory:
           status: open
 
     - id: RI-005
-      text: "System provides librarians with overdue book information"
       category: functional
-      source_location: "stakeholder-interview-2026-04-01.md:line-4"   # <source-ref>
       verbatim_quote: "track overdue books"                            # <source-quote>
+      source_location: "stakeholder-interview-2026-04-01.md:line-3"   # <source-ref>
       tags: [librarian, overdue, reporting]
       rationale:
-        rule: "Converted 'track overdue' into a concrete capability"
-        because: "'Track' must specify the output format"
+        rule: "Extracted overdue tracking from compound sentence"
+        because: "'Track' implies output — specifics go in open_assumptions"
       open_assumptions:
         - id: ASM-004
           detail: "Output is a daily report"
@@ -194,14 +189,13 @@ requirements_inventory:
           status: open
 
     - id: RI-006
-      text: "All patron-facing interfaces are usable on mobile devices"
       category: non_functional
-      source_location: "stakeholder-interview-2026-04-01.md:line-4"   # <source-ref>
       verbatim_quote: "The system should work on mobile devices"       # <source-quote>
+      source_location: "stakeholder-interview-2026-04-01.md:line-4"   # <source-ref>
       tags: [mobile, accessibility, non-functional]
       rationale:
-        rule: "Converted 'work on mobile' into a testable constraint"
-        because: "'Mobile' must be defined to be verifiable"
+        rule: "Extracted mobile constraint as a non-functional requirement"
+        because: "'Should' signals a non-functional preference, not a functional 'shall'"
       open_assumptions:
         - id: ASM-005
           detail: "Minimum supported viewport width is 320px"
@@ -230,43 +224,48 @@ requirements_inventory:
 
 ### What makes this correct
 
+- There is NO `text` field — in PH-000, `verbatim_quote` IS the item's
+  content. The extraction phase does not restate or interpret; it quotes.
 - Every element populates the `<source-quote>` field (here: `verbatim_quote`)
   with the exact source text that justifies it
 - The `<source-ref>` field (here: `source_location`) points to the exact
   position in the raw document
-- The element text stays close to what the quote supports — no assumed
-  specifics baked into the text
 - Every detail beyond the quote is a structured `open_assumption` with
-  `id`, `detail`, `needs`, and `status`
+  `id`, `detail`, `needs`, and `status` — NOT baked into a restated text
+- Compound sentences are split into separate RI items (RI-001, RI-002,
+  RI-003 from one sentence), each with its own verbatim_quote fragment
 - An assumption verifier can process the ASM-* entries and feed
   confirmations or corrections back to the generator
 
 ### COUNTER-EXAMPLES
 
 ```yaml
-# WRONG: assumed detail baked into text without open_assumption
+# WRONG: invented a text field that restates/interprets the quote
 - id: RI-002
-  text: "Patrons can check out up to 5 books simultaneously"
+  text: "Patrons can check out up to 5 books simultaneously"  # NO text field in PH-000!
   verbatim_quote: "check them out"
-  # "up to 5" is not in the quote. Must be an open_assumption, not text.
+  # PH-000 is fidelity-first. verbatim_quote IS the content. "up to 5" goes
+  # in open_assumptions, and the text field should not exist at all.
 
 # WRONG: phantom requirement — no quote exists
 - id: RI-007
-  text: "System must support multi-language interfaces"
   verbatim_quote: ???
   # Cannot quote source text. Fails Quote Test. Delete.
 
-# WRONG: verbatim_quote doesn't support the claim
+# WRONG: verbatim_quote doesn't support the category/tags
 - id: RI-008
-  text: "System must meet WCAG 2.1 AA accessibility standards"
+  category: non_functional
   verbatim_quote: "The system should work on mobile devices"
-  # Quote says "mobile", not "accessible". False grounding.
+  tags: [accessibility, WCAG]
+  # Quote says "mobile", not "accessible". Tags claim WCAG compliance
+  # but the source never mentioned accessibility. False grounding.
 
-# WRONG: no open_assumptions despite adding specifics
+# WRONG: specifics assumed without open_assumptions
 - id: RI-005
-  text: "System generates daily overdue book report for librarians"
   verbatim_quote: "track overdue books"
-  # "daily" and "report" are not in quote — must be open_assumptions
+  open_assumptions: []  # EMPTY — but "daily" and "report" were baked
+                         # into how you'll interpret this downstream.
+  # If you believe tracking means a daily report, that's ASM-004.
 ```
 
 ---

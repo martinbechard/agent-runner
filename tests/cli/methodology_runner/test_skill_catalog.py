@@ -86,7 +86,7 @@ def test_build_catalog_walks_three_locations(tmp_path: Path):
         "plugin-skill",
         "Plugin",
     )
-    catalog = build_catalog(workspace=workspace, user_home=user_home)
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=tmp_path)
     ids = {e.id for e in catalog.values()}
     assert ids == {"proj-skill", "user-skill", "plugin-skill"}
 
@@ -101,7 +101,7 @@ def test_build_catalog_priority_project_beats_user_beats_plugin(tmp_path: Path):
         "same",
         "from plugin",
     )
-    catalog = build_catalog(workspace=workspace, user_home=user_home)
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=tmp_path)
     assert catalog["same"].description == "from project"
     assert catalog["same"].source_location == "project"
 
@@ -112,7 +112,7 @@ def test_build_catalog_empty_raises_catalog_build_error(tmp_path: Path):
     workspace.mkdir()
     user_home.mkdir()
     with pytest.raises(CatalogBuildError) as exc_info:
-        build_catalog(workspace=workspace, user_home=user_home)
+        build_catalog(workspace=workspace, user_home=user_home, cwd=tmp_path)
     assert "no claude code skills discovered" in str(exc_info.value).lower()
 
 
@@ -124,7 +124,7 @@ def test_build_catalog_skips_invalid_entries_but_keeps_valid_ones(tmp_path: Path
     bad = user_home / ".claude" / "skills" / "bad" / "SKILL.md"
     bad.parent.mkdir(parents=True)
     bad.write_text("# no frontmatter", encoding="utf-8")
-    catalog = build_catalog(workspace=workspace, user_home=user_home)
+    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=tmp_path)
     assert "good" in catalog
     assert "bad" not in catalog
 
