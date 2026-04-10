@@ -376,7 +376,55 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
         if step.duration_seconds > 0:
             timeline.steps.append(step)
 
+    # Backfill missing prompts from the phase's prompt-file.md
+    prompt_file = phase_dir / "prompt-file.md"
+    if prompt_file.exists():
+        _backfill_prompts_from_file(timeline, prompt_file)
+
     return timeline if timeline.steps else None
+
+
+def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> None:
+    """For generator/judge steps missing prompt_text, extract it from the
+    phase's prompt-runner .md file by matching the prompt slug in the step name."""
+    import re
+    try:
+        content = prompt_file.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    # Parse prompt sections: ## Prompt N: <title> followed by code blocks
+    sections: dict[str, str] = {}
+    current_slug = ""
+    current_lines: list[str] = []
+    for line in content.splitlines():
+        m = re.match(r"^## Prompt\s+\d+", line)
+        if m:
+            if current_slug and current_lines:
+                sections[current_slug] = "\n".join(current_lines)
+            # Build a slug from the heading to match step names
+            slug = re.sub(r"[^a-z0-9]+", "-", line.lower()).strip("-")
+            # Remove the "prompt-NN-" prefix to get the descriptive part
+            slug = re.sub(r"^-*prompt-\d+-", "", slug)
+            current_slug = slug
+            current_lines = [line]
+        elif current_slug:
+            current_lines.append(line)
+    if current_slug and current_lines:
+        sections[current_slug] = "\n".join(current_lines)
+
+    for step in timeline.steps:
+        if step.detail and not step.detail.prompt_text:
+            # Try to match step name slug to a section
+            step_slug = re.sub(r"\s*/\s*iter.*$", "", step.name)
+            step_slug = re.sub(r"[^a-z0-9]+", "-", step_slug.lower()).strip("-")
+            for section_slug, section_text in sections.items():
+                if section_slug and section_slug in step_slug:
+                    step.detail.prompt_text = section_text
+                    break
+                if step_slug and step_slug in section_slug:
+                    step.detail.prompt_text = section_text
+                    break
 
 
 def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
