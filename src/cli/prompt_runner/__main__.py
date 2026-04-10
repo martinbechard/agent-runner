@@ -68,6 +68,22 @@ def _default_run_dir(source: Path) -> Path:
     return Path("runs") / f"{ts}-{source.stem}"
 
 
+def _find_latest_run_dir(source: Path) -> Path | None:
+    """Find the most recent run directory matching *source*'s stem.
+
+    Run directories are named ``<timestamp>-<stem>`` under ``runs/``.
+    Timestamps sort lexicographically, so the last match is the most
+    recent.  Returns None if no match is found.
+    """
+    runs_dir = Path("runs")
+    if not runs_dir.exists():
+        return None
+    candidates = sorted(runs_dir.glob(f"*-{source.stem}"))
+    if not candidates:
+        return None
+    return candidates[-1]
+
+
 def _cmd_run(args: argparse.Namespace) -> int:
     source = Path(args.file)
     try:
@@ -113,8 +129,18 @@ def _cmd_run(args: argparse.Namespace) -> int:
         _print_error_banner("R-NO-CLAUDE", str(err))
         return 3
 
-    if args.resume:
-        resume_path = Path(args.resume)
+    if args.resume is not None:
+        if args.resume == "auto":
+            resume_path = _find_latest_run_dir(source)
+            if resume_path is None:
+                _print_error_banner(
+                    "R-RESUME-NOT-FOUND",
+                    f"No existing run directory found for {source.name} "
+                    f"under runs/. Run without --resume first.",
+                )
+                return 2
+        else:
+            resume_path = Path(args.resume)
         if not resume_path.exists() or not resume_path.is_dir():
             _print_error_banner(
                 "R-RESUME-NOT-FOUND",
@@ -237,13 +263,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run_cmd.add_argument(
         "--resume",
+        nargs="?",
+        const="auto",
         default=None,
         help=(
-            "Resume an existing run by pointing at its run directory. Prompts "
-            "that have already completed with 'pass' (per their final-verdict.txt) "
-            "are skipped; execution continues from the first incomplete prompt. "
-            "When --resume is set, --output-dir is ignored (the resumed run dir "
-            "is used as the output dir)."
+            "Resume an existing run. Without a path, auto-finds the most "
+            "recent run directory matching the input file under runs/. "
+            "With a path, uses that directory. Prompts that already "
+            "completed with 'pass' are skipped; execution continues from "
+            "the first incomplete prompt."
         ),
     )
     run_cmd.set_defaults(func=_cmd_run)
