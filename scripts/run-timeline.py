@@ -468,7 +468,7 @@ def _render_detail(detail: CallDetail) -> str:
         parts.append('<table class="turns">')
         parts.append(
             '<tr><th>Turn</th><th>Think</th><th>Text</th>'
-            '<th>Output</th><th>Time</th><th>tok/s</th>'
+            '<th>Output</th>'
             '<th>Tools</th></tr>'
         )
         # Estimate per-turn time proportionally by estimated output tokens
@@ -485,18 +485,12 @@ def _render_detail(detail: CallDetail) -> str:
                 for tc in turn.tool_calls
             ) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
-            # Estimate this turn's share of API time
-            turn_frac = est_tok / total_est
-            turn_time_s = (detail.duration_api_ms / 1000) * turn_frac
-            tok_per_s = est_tok / turn_time_s if turn_time_s > 0 else 0
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
                 f'<td{thinking_cls}>{turn.thinking_chars:,}</td>'
                 f'<td>{turn.text_chars:,}</td>'
                 f'<td>{est_tok:,}</td>'
-                f'<td>{turn_time_s:.0f}s</td>'
-                f'<td>{tok_per_s:.0f}</td>'
                 f'<td class="tool-detail">{tools_str}</td>'
                 f'</tr>'
             )
@@ -505,13 +499,11 @@ def _render_detail(detail: CallDetail) -> str:
         tot_text = sum(t.text_chars for t in detail.turns)
         parts.append(
             f'<tr style="border-top:1px solid #ccc;font-weight:bold">'
-            f'<td></td>'
+            f'<td>Total</td>'
             f'<td>{tot_think:,}</td>'
             f'<td>{tot_text:,}</td>'
             f'<td>{total_est:,}</td>'
-            f'<td>{api_s:.0f}s</td>'
-            f'<td>{overall_tok_s:.0f}</td>'
-            f'<td></td>'
+            f'<td>API: {api_s:.0f}s | {overall_tok_s:.0f} tok/s</td>'
             f'</tr>'
         )
         parts.append('</table>')
