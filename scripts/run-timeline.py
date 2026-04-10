@@ -110,6 +110,7 @@ class Step:
     ended: datetime
     size_bytes: int = 0
     detail: CallDetail | None = None
+    log_path: Path | None = None  # path to the .stdout.log JSONL file
 
     @property
     def duration_seconds(self) -> float:
@@ -314,6 +315,7 @@ def _file_step(name: str, start_file: Path, end_file: Path,
         ended=_mtime(end_file),
         size_bytes=end_file.stat().st_size,
         detail=detail,
+        log_path=log_file,
     )
 
 
@@ -1005,12 +1007,15 @@ def _render_steps_rows(
         # Step name with popup links if we have prompt/output
         has_prompt = step.detail and step.detail.prompt_text
         has_output = step.detail and step.detail.output_text
+        has_log = step.log_path and step.log_path.exists() and step.log_path.stat().st_size > 0
         name_html = step.name
         links = []
         if has_prompt:
             links.append(f'<a href="#" onclick="showPopup(\'{step_id}-prompt\');return false">prompt</a>')
         if has_output:
             links.append(f'<a href="#" onclick="showPopup(\'{step_id}-output\');return false">output</a>')
+        if has_log:
+            links.append(f'<a href="#" onclick="showPopup(\'{step_id}-log\');return false">log</a>')
         if links:
             name_html += f' <span class="popup-links">[{" | ".join(links)}]</span>'
 
@@ -1049,6 +1054,17 @@ def _render_steps_rows(
                 f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
                 f'</div>'
                 f'{_popup_content(step_id + "-output-content", step.detail.output_text)}'
+                f'</div>'
+            )
+        if has_log:
+            log_content = step.log_path.read_text(encoding="utf-8", errors="replace")
+            popups.append(
+                f'<div id="{step_id}-log" class="popup">'
+                f'<div class="popup-header">'
+                f'<strong>{step.name} — Log</strong>'
+                f'<a href="#" onclick="hidePopup(\'{step_id}-log\');return false">close</a>'
+                f'</div>'
+                f'{_popup_content(step_id + "-log-content", log_content)}'
                 f'</div>'
             )
     return step_counter
