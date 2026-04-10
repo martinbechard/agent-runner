@@ -1357,7 +1357,7 @@ def _steps_cost(steps: list[Step]) -> float:
 
 
 def _steps_turns(steps: list[Step]) -> int:
-    return sum(s.detail.num_turns for s in steps if s.detail)
+    return sum(len(s.detail.turns) for s in steps if s.detail)
 
 
 def _steps_output_tokens(steps: list[Step]) -> int:
