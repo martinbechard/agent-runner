@@ -88,11 +88,17 @@ transitively from PH-000's requirements). For that to work:
 ### Recognizable technology implications
 - Requirements that imply specific technology choices (storage layer,
   UI framework, integration protocol, language runtime) must be
-  recognizable as such from the inventory content.
-- Check: which RI-* items imply technology decisions? Are those
-  implications explicit in the item's tags, rationale, or
-  verbatim_quote? Or would the architect have to infer them from
-  general knowledge?
+  recognizable as such from the inventory content alone.
+- Check: for each technology-constraining item, is the constraint
+  stated in the verbatim_quote, tags, or rationale? If you can only
+  identify the technology implication by applying general domain
+  knowledge (e.g., "recursive directory walk implies os.walk"), that
+  means the inventory is NOT carrying the signal — PH-002 would have
+  to infer it, which is a finding.
+- The test: could a PH-002 agent with NO knowledge of the
+  implementation language or platform still identify the technology
+  constraint from the inventory entry? If yes, the signal is
+  inventory-carried. If no, it is inference-dependent.
 
 ### Complete and unambiguous non-functional requirements
 - NFRs that constrain architecture decisions (performance targets,
@@ -128,14 +134,17 @@ Perform these three steps in order:
    - Any items you could not place in any group
 
 2. **Simulate PH-002 (Architecture).** Read the inventory looking for
-   technology implications and architectural constraints. Note:
-   - Which items imply technology decisions and what those decisions are
+   technology constraints and architectural decisions. Note:
+   - Which items carry explicit technology constraints in their
+     verbatim_quote, tags, or rationale (e.g., "Python 3.11",
+     "standard library only")
+   - Which items SHOULD carry technology signals but do not — where
+     you had to apply general implementation knowledge to identify
+     the architectural implication. These gaps are findings.
    - Which NFRs are concrete enough to act on vs. which require
      clarification
    - Whether open_assumptions cover the gaps or whether new assumptions
      are needed
-   - Any architectural decisions you would have to make WITHOUT
-     supporting evidence in the inventory
 
 3. **Produce a structured YAML critique.** Synthesize your findings
    from steps 1 and 2 into the output format below.
@@ -168,8 +177,13 @@ outside the YAML). Use this exact structure:
     ungrouped_items: ["RI-NNN", ...]
     architecture_signals:
       - item: "RI-NNN"
-        implies: "<technology decision or constraint>"
-        explicit: true | false
+        constraint: "<technology decision stated in the inventory>"
+        source_field: "verbatim_quote | tags | rationale"
+      - ...
+    architecture_gaps:
+      - item: "RI-NNN"
+        inferred_constraint: "<what you had to infer using domain knowledge>"
+        missing_from: "<what the inventory should say but doesn't>"
       - ...
     overall_usability: high | medium | low
     summary: |
