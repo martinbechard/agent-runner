@@ -82,6 +82,8 @@ class CallDetail:
     stop_reason: str = ""
     error: str = ""
     model: str = ""
+    prompt_text: str = ""   # initial user message content
+    output_text: str = ""   # concatenated assistant text blocks
 
 
 @dataclass
@@ -211,7 +213,9 @@ def parse_log(path: Path) -> CallDetail:
                 if bt == "thinking":
                     current_turn.thinking_chars += len(block.get("thinking", ""))
                 elif bt == "text":
-                    current_turn.text_chars += len(block.get("text", ""))
+                    txt = block.get("text", "")
+                    current_turn.text_chars += len(txt)
+                    detail.output_text += txt
                 elif bt == "tool_use":
                     name = block.get("name", "?")
                     inp = json.dumps(block.get("input", {}))
@@ -231,6 +235,12 @@ def parse_log(path: Path) -> CallDetail:
             if ts:
                 last_user_ts = ts
             msg = obj.get("message", {})
+            # Capture the initial prompt (first user text content)
+            if not detail.prompt_text:
+                for block in msg.get("content", []):
+                    if block.get("type") == "text":
+                        detail.prompt_text = block.get("text", "")
+                        break
             for block in msg.get("content", []):
                 if block.get("type") == "tool_result":
                     tool_id = block.get("tool_use_id", "")
@@ -545,8 +555,20 @@ def _render_detail(detail: CallDetail) -> str:
     return "\n".join(parts)
 
 
+def _escape_html(text: str) -> str:
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _truncate(text: str, limit: int = 50000) -> str:
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"\n\n... (truncated at {limit:,} chars, full: {len(text):,})"
+
+
 def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
     rows = []
+    popups = []
+    step_counter = 0
     grand_total = sum(t.total_seconds for t in timelines) or 1
     grand_cost = sum(t.total_cost for t in timelines)
 
@@ -558,14 +580,29 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
             f'</td></tr>'
         )
         for step in tl.steps:
+            step_counter += 1
+            step_id = f"step-{step_counter}"
             pct = (step.duration_seconds / grand_total * 100)
             color = _bar_color(step.name)
             size_kb = step.size_bytes / 1024
             cost_str = f"${step.detail.cost_usd:.2f}" if step.detail else ""
             detail_html = _render_detail(step.detail) if step.detail else ""
+
+            # Step name with popup links if we have prompt/output
+            has_prompt = step.detail and step.detail.prompt_text
+            has_output = step.detail and step.detail.output_text
+            name_html = step.name
+            links = []
+            if has_prompt:
+                links.append(f'<a href="#" onclick="showPopup(\'{step_id}-prompt\');return false">prompt</a>')
+            if has_output:
+                links.append(f'<a href="#" onclick="showPopup(\'{step_id}-output\');return false">output</a>')
+            if links:
+                name_html += f' <span class="popup-links">[{" | ".join(links)}]</span>'
+
             rows.append(
                 f'<tr class="step-row">'
-                f'<td class="step-name">{step.name}</td>'
+                f'<td class="step-name">{name_html}</td>'
                 f'<td class="step-time">{step.duration_str}</td>'
                 f'<td class="step-cost">{cost_str}</td>'
                 f'<td class="step-size">{size_kb:.0f}KB</td>'
@@ -577,6 +614,28 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
             if detail_html:
                 rows.append(
                     f'<tr class="detail-row"><td colspan="5">{detail_html}</td></tr>'
+                )
+
+            # Build popup divs
+            if has_prompt:
+                popups.append(
+                    f'<div id="{step_id}-prompt" class="popup">'
+                    f'<div class="popup-header">'
+                    f'<strong>{step.name} — Prompt</strong>'
+                    f'<a href="#" onclick="hidePopup(\'{step_id}-prompt\');return false">close</a>'
+                    f'</div>'
+                    f'<pre>{_escape_html(_truncate(step.detail.prompt_text))}</pre>'
+                    f'</div>'
+                )
+            if has_output:
+                popups.append(
+                    f'<div id="{step_id}-output" class="popup">'
+                    f'<div class="popup-header">'
+                    f'<strong>{step.name} — Output</strong>'
+                    f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
+                    f'</div>'
+                    f'<pre>{_escape_html(_truncate(step.detail.output_text))}</pre>'
+                    f'</div>'
                 )
 
     grand_m, grand_s = divmod(int(grand_total), 60)
@@ -617,7 +676,40 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
   table.turns td {{ padding: 2px 8px; }}
   .big-think {{ color: #e74c3c; font-weight: bold; }}
   .tool-detail {{ color: #888; font-size: 0.9em; }}
+
+  .popup-links {{ font-size: 0.8em; }}
+  .popup-links a {{ color: #4a90d9; text-decoration: none; }}
+  .popup-links a:hover {{ text-decoration: underline; }}
+
+  .popup {{
+    display: none; position: fixed; top: 5%; left: 10%; width: 80%; max-height: 85%;
+    background: #fff; border: 1px solid #ccc; border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.25); z-index: 1000; overflow: auto;
+  }}
+  .popup-header {{
+    display: flex; justify-content: space-between; align-items: center;
+    padding: 10px 16px; border-bottom: 1px solid #eee; background: #f8f8f8;
+    border-radius: 8px 8px 0 0; position: sticky; top: 0;
+  }}
+  .popup-header a {{ color: #e74c3c; text-decoration: none; font-size: 0.9em; }}
+  .popup pre {{
+    padding: 12px 16px; margin: 0; font-size: 0.8em; white-space: pre-wrap;
+    word-wrap: break-word; line-height: 1.4;
+  }}
 </style>
+<script>
+function showPopup(id) {{
+  document.getElementById(id).style.display = 'block';
+}}
+function hidePopup(id) {{
+  document.getElementById(id).style.display = 'none';
+}}
+document.addEventListener('keydown', function(e) {{
+  if (e.key === 'Escape') {{
+    document.querySelectorAll('.popup').forEach(function(p) {{ p.style.display = 'none'; }});
+  }}
+}});
+</script>
 </head>
 <body>
 <h1>Methodology Runner Timeline</h1>
@@ -638,6 +730,7 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
 <table>
 {''.join(rows)}
 </table>
+{''.join(popups)}
 </body>
 </html>"""
 
