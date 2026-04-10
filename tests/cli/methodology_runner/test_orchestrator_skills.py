@@ -215,3 +215,39 @@ def test_orchestrator_runs_selector_once_per_phase_and_writes_manifest(tmp_path:
     assert result.generator_prelude_path.exists()
     assert result.judge_prelude_path.exists()
     assert len(client.received) == 1  # selector called once
+
+
+# ---------------------------------------------------------------------------
+# Workspace lock (prevent concurrent instances)
+# ---------------------------------------------------------------------------
+
+from methodology_runner.orchestrator import (
+    _WorkspaceLock,
+    WorkspaceLockError,
+)
+
+
+def test_workspace_lock_prevents_concurrent_instances(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    (workspace / ".methodology-runner").mkdir(parents=True)
+    lock1 = _WorkspaceLock(workspace)
+    lock1.acquire()
+    try:
+        lock2 = _WorkspaceLock(workspace)
+        with pytest.raises(WorkspaceLockError) as exc_info:
+            lock2.acquire()
+        assert "already running" in str(exc_info.value).lower()
+    finally:
+        lock1.release()
+
+
+def test_workspace_lock_releases_cleanly(tmp_path: Path):
+    workspace = tmp_path / "ws"
+    (workspace / ".methodology-runner").mkdir(parents=True)
+    lock1 = _WorkspaceLock(workspace)
+    lock1.acquire()
+    lock1.release()
+    # Second lock should succeed after release
+    lock2 = _WorkspaceLock(workspace)
+    lock2.acquire()
+    lock2.release()

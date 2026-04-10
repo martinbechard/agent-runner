@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import re
+import fcntl
 import shutil
 import subprocess
 import sys
@@ -98,6 +99,54 @@ REQUIREMENTS_DEST = "docs/requirements"
 
 RAW_REQUIREMENTS_FILENAME = "raw-requirements.md"
 """Filename for the copied requirements document."""
+
+LOCK_FILENAME = "run.lock"
+"""Workspace lock file — prevents concurrent methodology-runner instances
+on the same workspace. Uses fcntl.flock so the OS auto-releases on crash."""
+
+
+class WorkspaceLockError(RuntimeError):
+    """Raised when another methodology-runner instance holds the workspace lock."""
+
+
+class _WorkspaceLock:
+    """Exclusive file lock on a workspace directory.
+
+    Uses ``fcntl.flock`` with ``LOCK_NB`` (non-blocking). If another
+    process holds the lock, raises :class:`WorkspaceLockError`
+    immediately. The OS releases the lock automatically if the holding
+    process dies — no stale-lock cleanup needed.
+    """
+
+    def __init__(self, workspace: Path) -> None:
+        self._lock_path = workspace / METHODOLOGY_DIR / LOCK_FILENAME
+        self._fd: int | None = None
+
+    def acquire(self) -> None:
+        self._lock_path.parent.mkdir(parents=True, exist_ok=True)
+        self._fd = open(self._lock_path, "w")
+        try:
+            fcntl.flock(self._fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except (BlockingIOError, OSError):
+            self._fd.close()
+            self._fd = None
+            raise WorkspaceLockError(
+                f"Another methodology-runner instance is already running "
+                f"on this workspace.\n"
+                f"Lock file: {self._lock_path}\n\n"
+                f"Wait for it to finish, or kill the stale process."
+            )
+        import os
+        self._fd.write(str(os.getpid()))
+        self._fd.flush()
+
+    def release(self) -> None:
+        if self._fd is not None:
+            fcntl.flock(self._fd, fcntl.LOCK_UN)
+            self._fd.close()
+            self._fd = None
+            self._lock_path.unlink(missing_ok=True)
+
 
 _ISSUE_RE = re.compile(r"^\[(\w+)/(\w+)\] (.+)$")
 """Parses formatted issue strings from CrossRefResult.issues."""
@@ -1250,6 +1299,20 @@ def run_pipeline(
     # ---- workspace and state ----
     workspace = initialize_workspace(config)
 
+    # ---- workspace lock (prevent concurrent instances) ----
+    lock = _WorkspaceLock(workspace)
+    try:
+        lock.acquire()
+    except WorkspaceLockError as exc:
+        return PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=True,
+            halt_reason=str(exc),
+            end_to_end_result=None,
+            wall_time_seconds=time.monotonic() - t0,
+        )
+
     # ---- skill catalog + baseline config (run-scoped) ----
     try:
         skill_ctx = build_run_skill_context(workspace=workspace)
@@ -1387,4 +1450,5 @@ def run_pipeline(
 
     # Final summary with end-to-end results and halt status
     write_summary(workspace, pipeline_result)
+    lock.release()
     return pipeline_result

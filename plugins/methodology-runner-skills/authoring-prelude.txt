@@ -31,5 +31,12 @@ Do NOT write one draft and present it as final. Instead:
    if the top two variants have complementary strengths.
 5. I pick or we iterate. Deploy when solid.
 
+## In-session verification
+
+When running methodology-runner to verify a skill, NEVER run a second
+instance on the same workspace before the first finishes. The workspace
+is locked — a second attempt will fail with "already running". Wait for
+completion or use a fresh workspace path.
+
 ---
 
