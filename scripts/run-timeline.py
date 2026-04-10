@@ -617,63 +617,108 @@ def _bar_color(name: str) -> str:
 _POPUP_COUNTER = [0]
 
 
+def _format_block(text: str) -> str:
+    """Auto-detect content type and return formatted HTML."""
+    import re
+    stripped = text.strip()
+    if not stripped:
+        return _escape_html(text)
+
+    # JSON
+    if stripped.startswith("{") or stripped.startswith("["):
+        try:
+            import json as _j2
+            parsed = _j2.loads(stripped)
+            pretty = _j2.dumps(parsed, indent=2, ensure_ascii=False)
+            return _escape_html(pretty[:50000])
+        except (ValueError, TypeError):
+            pass
+
+    # YAML — detect by common patterns
+    lines = stripped.splitlines()
+    yaml_signals = sum(1 for l in lines[:20] if (
+        re.match(r'^\s*[\w_-]+\s*:', l) or
+        l.strip().startswith("- ") or
+        l.strip() == "---"
+    ))
+    if yaml_signals >= 3 or (yaml_signals >= 1 and len(lines) <= 5):
+        out = []
+        for line in _escape_html(text).splitlines():
+            if re.match(r'^(\s*)(\S.*?):', line):
+                m = re.match(r'^(\s*)(\S.*?)(:.*)', line)
+                if m:
+                    out.append(f'{m.group(1)}<span style="color:#2980b9;font-weight:bold">{m.group(2)}</span>{m.group(3)}')
+                    continue
+            if line.strip().startswith("- "):
+                out.append(f'<span style="color:#27ae60">{line}</span>')
+                continue
+            out.append(line)
+        return chr(10).join(out)
+
+    # Markdown — detect by headers, bold, lists
+    md_signals = sum(1 for l in lines[:30] if (
+        l.startswith("#") or
+        l.startswith("- ") or
+        l.startswith("* ") or
+        "**" in l
+    ))
+    if md_signals >= 2:
+        md = _escape_html(text)
+        md = re.sub(r'^(#{1,4}) (.+)$',
+                    r'<span style="color:#8e44ad;font-weight:bold">\1 \2</span>',
+                    md, flags=re.MULTILINE)
+        md = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', md)
+        md = re.sub(r'`([^`\n]+)`', r'<code>\1</code>', md)
+        md = re.sub(r'^(\s*[-*] )(.+)$',
+                    r'<span style="color:#27ae60">\1</span>\2',
+                    md, flags=re.MULTILINE)
+        return md
+
+    # Plain text
+    return _escape_html(text)
+
+
 def _popup_content(popup_id: str, text: str) -> str:
     """Render a popup content area with formatted/raw toggle.
 
-    Detects JSON, YAML, and Markdown and renders formatted view.
-    Raw view shows escaped plain text in a <pre> block.
+    Splits on '--- Section ---' markers and formats each section
+    independently. Auto-detects JSON, YAML, and Markdown.
     """
+    import re
     _POPUP_COUNTER[0] += 1
     uid = f"pcontent-{_POPUP_COUNTER[0]}"
     truncated = _truncate(text)
     raw_html = f'<pre class="popup-raw">{_escape_html(truncated)}</pre>'
 
-    # Detect format and build formatted view
-    stripped = text.strip()
-    formatted_html = ""
-    if stripped.startswith("{") or stripped.startswith("["):
-        # JSON — try to pretty-print
-        try:
-            import json as _j2
-            parsed = _j2.loads(stripped)
-            pretty = _j2.dumps(parsed, indent=2, ensure_ascii=False)
-            formatted_html = f'<pre class="popup-formatted">{_escape_html(pretty[:50000])}</pre>'
-        except (ValueError, TypeError):
-            pass
-    if not formatted_html and (
-        stripped.startswith("---\n")
-        or stripped.startswith("- ")
-        or ": " in stripped.split("\n")[0]
-    ):
-        # YAML — syntax highlight keys
-        lines = []
-        for line in _escape_html(truncated).splitlines():
-            # Color YAML keys (word followed by colon at start or after indent)
-            if ": " in line or line.rstrip().endswith(":"):
-                idx = line.index(":")
-                lines.append(f'<span style="color:#2980b9">{line[:idx]}</span>{line[idx:]}')
-            elif line.strip().startswith("- "):
-                lines.append(f'<span style="color:#27ae60">{line}</span>')
-            else:
-                lines.append(line)
-        formatted_html = f'<pre class="popup-formatted">{chr(10).join(lines)}</pre>'
-    if not formatted_html and (
-        stripped.startswith("#") or "\n## " in stripped or "\n- " in stripped
-    ):
-        # Markdown — basic rendering
-        import re
-        md = _escape_html(truncated)
-        # Headers
-        md = re.sub(r'^(#{1,3}) (.+)$', r'<strong>\1 \2</strong>', md, flags=re.MULTILINE)
-        # Bold
-        md = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', md)
-        # Code
-        md = re.sub(r'`([^`]+)`', r'<code>\1</code>', md)
-        formatted_html = f'<pre class="popup-formatted">{md}</pre>'
+    # Split on section markers (--- Label ---) and format each part
+    section_re = re.compile(r'^(---\s*.+?\s*---)$', re.MULTILINE)
+    parts = section_re.split(truncated)
 
-    if not formatted_html:
-        # No formatting detected — just show raw
+    formatted_parts = []
+    has_formatting = False
+    for part in parts:
+        if section_re.match(part.strip()):
+            # Section header — render as a styled divider
+            formatted_parts.append(
+                f'<span style="color:#666;font-weight:bold">{_escape_html(part)}</span>'
+            )
+        else:
+            formatted = _format_block(part)
+            if formatted != _escape_html(part):
+                has_formatting = True
+            formatted_parts.append(formatted)
+
+    if not has_formatting:
+        # Nothing was formatted differently from raw — try the whole text
+        whole_formatted = _format_block(truncated)
+        if whole_formatted != _escape_html(truncated):
+            has_formatting = True
+            formatted_parts = [whole_formatted]
+
+    if not has_formatting:
         return raw_html
+
+    formatted_html = f'<pre class="popup-formatted">{chr(10).join(formatted_parts) if len(formatted_parts) > 1 else formatted_parts[0]}</pre>'
 
     return (
         f'<div id="{uid}" class="popup-dual">'
