@@ -1,6 +1,11 @@
 # Skill Authoring — Lessons Learned
 
-Read this before drafting. Each lesson is a before/after pair.
+You are contributing to two things at once: the skill you're authoring,
+AND the methodology for authoring skills. If you discover something that
+worked or failed, update this file and authoring-prelude.txt before you
+exit so the next session benefits.
+
+Read each lesson below before drafting. Each is a before/after pair.
 
 ---
 
