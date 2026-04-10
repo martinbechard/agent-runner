@@ -808,7 +808,9 @@ def _run_fork_point(
         variant_slug = f"variant-{_slugify(variant.variant_name)}"
         variant_dir = fork_dir / variant_slug
         variant_workspace = variant_dir / "workspace"
-        variant_run_dir = variant_dir / "run"
+        # Use a unique run-dir name per variant so _session_id() generates
+        # distinct UUIDs (it hashes the run_dir.name as the run_id).
+        variant_run_dir = variant_dir / f"run-{variant_slug}"
 
         variant_dir.mkdir(parents=True, exist_ok=True)
         variant_run_dir.mkdir(parents=True, exist_ok=True)
