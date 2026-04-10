@@ -1171,6 +1171,7 @@ def _render_steps_rows(
     step_counter: int,
     rows: list[str],
     popups: list[str],
+    row_class: str = "",
 ) -> int:
     """Render step rows into rows/popups lists, returns updated step_counter."""
     for step in steps:
@@ -1197,8 +1198,9 @@ def _render_steps_rows(
         if links:
             name_html += f' <span class="popup-links">[{" | ".join(links)}]</span>'
 
+        tr_cls = f"step-row {row_class}".strip()
         rows.append(
-            f'<tr class="step-row">'
+            f'<tr class="{tr_cls}">'
             f'<td class="step-name">{name_html}</td>'
             f'<td class="step-time">{step.duration_str}</td>'
             f'<td class="step-cost">{cost_str}</td>'
@@ -1209,8 +1211,9 @@ def _render_steps_rows(
             f'</tr>'
         )
         if detail_html:
+            det_cls = f"detail-row {row_class}".strip()
             rows.append(
-                f'<tr class="detail-row"><td colspan="5">{detail_html}</td></tr>'
+                f'<tr class="{det_cls}"><td colspan="5">{detail_html}</td></tr>'
             )
 
         # Build popup divs
@@ -1395,13 +1398,18 @@ def _render_fork_section(
         dur_str = _fmt_duration(_steps_duration_seconds(vsteps))
         cost = _steps_cost(vsteps)
 
+        variant_css = "".join(c if c.isalnum() else "-" for c in vname.lower()).strip("-")
+        variant_cls = f"in-variant variant-{variant_css}"
         rows.append(
-            f'<tr class="variant-header"><td colspan="5">'
+            f'<tr class="variant-header {variant_cls}"><td colspan="5">'
             f'Variant {label} — {dur_str} — ${cost:.2f}'
             f'</td></tr>'
         )
 
-        step_counter = _render_steps_rows(vsteps, grand_total, step_counter, rows, popups)
+        step_counter = _render_steps_rows(
+            vsteps, grand_total, step_counter, rows, popups,
+            row_class=variant_cls,
+        )
 
     return step_counter
 
@@ -1446,17 +1454,8 @@ def render_html(
                 tl.steps, grand_total, step_counter, rows, popups
             )
     else:
-        # Prompt-runner mode: shared steps then fork sections
+        # Prompt-runner mode: steps and fork sections interleaved
         if shared_steps:
-            shared_dur = _fmt_duration(sum(s.duration_seconds for s in shared_steps))
-            shared_cost = _steps_cost(shared_steps)
-            rows.append(
-                f'<tr class="phase-header"><td colspan="5">'
-                f'<strong>Shared Pre-Fork Steps</strong>'
-                f' — {shared_dur}'
-                f' — ${shared_cost:.2f}'
-                f'</td></tr>'
-            )
             step_counter = _render_steps_rows(
                 shared_steps, grand_total, step_counter, rows, popups
             )
@@ -1534,6 +1533,11 @@ def render_html(
     background: #f0f4f8; padding: 6px 12px 6px 24px; font-size: 0.95em;
     border-top: 1px solid #b0c8e0; color: #444;
   }}
+  tr.in-variant td:first-child {{
+    border-left: 4px solid #b0c8e0; padding-left: 20px;
+  }}
+  tr.variant-variant-a td:first-child {{ border-left-color: #4a90d9; }}
+  tr.variant-variant-b td:first-child {{ border-left-color: #e67e22; }}
   tr.variant-io td {{ padding: 0 12px 8px 24px; }}
   .variant-io-wrap {{ display: flex; gap: 12px; flex-wrap: wrap; }}
   .variant-block {{
