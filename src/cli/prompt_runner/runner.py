@@ -106,6 +106,9 @@ class RunConfig:
     judge_prelude: str | None = None
     """Optional text prepended to every judge Claude message in this
     run.  Symmetric to generator_prelude."""
+    dangerously_skip_permissions: bool = False
+    """When True, pass --dangerously-skip-permissions to claude in
+    interactive mode so the user is not prompted for every tool call."""
 
 
 @dataclass(frozen=True)
@@ -456,6 +459,8 @@ def _run_interactive_prompt(
     # Spawn claude interactively. stdin/stdout/stderr inherit from this
     # process so the user sees a real TTY session. Wait for exit.
     argv = ["claude"]
+    if config.dangerously_skip_permissions:
+        argv.append("--dangerously-skip-permissions")
     if config.model:
         argv.extend(["--model", config.model])
     argv.append(mission)

@@ -104,6 +104,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         dry_run=args.dry_run,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
+        dangerously_skip_permissions=args.dangerously_skip_permissions,
     )
 
     try:
@@ -223,6 +224,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "Path to a text file whose contents are prepended to every "
             "judge Claude message in this run.  Symmetric to "
             "--generator-prelude."
+        ),
+    )
+    run_cmd.add_argument(
+        "--dangerously-skip-permissions",
+        action="store_true",
+        help=(
+            "Pass --dangerously-skip-permissions to claude in interactive "
+            "mode so the user is not prompted for every tool call. Only "
+            "affects [interactive] prompts; ignored for non-interactive."
         ),
     )
     run_cmd.add_argument(

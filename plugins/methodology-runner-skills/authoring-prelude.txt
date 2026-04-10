@@ -16,5 +16,25 @@ Key patterns established in prior sessions (details in AUTHORING-CONTEXT.md):
   adversarial "be thorough" pressure, and downstream consumption test.
 - Reference traceability-discipline/SKILL.md as the exemplar for format.
 
+## Authoring methodology
+
+Do NOT write one draft and present it as final. Instead:
+
+1. Propose 3-5 structural variants (different ways to organize the
+   skill content — e.g., rules-first vs. examples-first vs. pure
+   transforms vs. hybrid). Describe each variant in 2-3 sentences.
+2. Draft the most promising 2-3 variants as complete SKILL.md files.
+3. Test each variant with child Claude (claude -p): give it a realistic
+   input and the skill content, check the output quality.
+4. Present a comparison report to me: which variant performed best on
+   rule recall, output quality, phantom suppression, assumption
+   separation, and downstream usability. Include your recommendation.
+5. I will pick a variant or ask for iterations. We iterate until the
+   skill is solid.
+
+This is how the traceability-discipline skill was authored (7 variants,
+tested with adversarial pressure, variant G won). Apply the same
+discipline to every skill.
+
 ---
 
