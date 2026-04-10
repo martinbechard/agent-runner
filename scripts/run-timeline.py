@@ -1088,8 +1088,8 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         f'{model_abbr}'
         f' | API: {api_s:.0f}s'
         f' | overhead: {overhead_s:.1f}s'
-        f' | turns: {len(detail.turns)} visible ({detail.num_turns} API)'
-        f' | out: {detail.output_tokens:,} tok'
+        f' | turns: {len(detail.turns)}'
+        f' | output: {detail.output_tokens:,} tok'
         f' | {overall_tok_s:.0f} tok/s'
         f' | cost: ${detail.cost_usd:.2f}'
     )
@@ -1129,7 +1129,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         parts.append(
             '<tr><th>Turn</th><th>Think</th><th>Text</th>'
             '<th>Output</th><th>Time</th><th>tok/s</th>'
-            '<th>Tools</th></tr>'
+            '<th>Cost</th><th>Tools</th></tr>'
         )
         tool_popup_counter = 0
         for turn in detail.turns:
@@ -1210,6 +1210,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                 f'<td>{est_tok:,}</td>'
                 f'<td>{dur_str}</td>'
                 f'<td>{tok_s_str}</td>'
+                f'<td></td>'
                 f'<td class="tool-detail">{tools_str}</td>'
                 f'</tr>'
             )
@@ -1228,6 +1229,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
             f'<td>{tot_est:,}</td>'
             f'<td>{api_s:.0f}s</td>'
             f'<td>{overall_tok_s:.0f}</td>'
+            f'<td>${detail.cost_usd:.2f}</td>'
             f'<td></td>'
             f'</tr>'
         )
