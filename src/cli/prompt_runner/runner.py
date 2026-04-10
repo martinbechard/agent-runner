@@ -856,14 +856,66 @@ def _run_fork_point(
     comparison_lines: list[str] = [
         f"Fork {fork.index}: {fork.title}",
         f"Slug: {fork_slug}",
+        f"Variants: {len(variant_results)}",
         "",
-        "Variants:",
     ]
+
+    # Side-by-side table header.
+    col_name = 12
+    col_code = 9
+    col_status = 11
+    col_summary = 48
+    header = (
+        f"{'Variant':<{col_name}} {'Exit Code':>{col_code}} {'Status':<{col_status}} Summary"
+    )
+    separator = "-" * (col_name + col_code + col_status + col_summary + 3)
+    comparison_lines.append(header)
+    comparison_lines.append(separator)
+
     for vr in variant_results:
-        status = "success" if vr.exit_code == 0 else f"failed (exit {vr.exit_code})"
-        comparison_lines.append(f"  {vr.variant_name}: {vr.variant_title} — {status}")
-        comparison_lines.append(f"    run: {vr.run_dir}")
-        comparison_lines.append(f"    workspace: {vr.workspace_dir}")
+        status = "completed" if vr.exit_code == 0 else "failed"
+        # First 3 non-empty lines of summary.txt as a one-liner excerpt.
+        summary_lines = [ln for ln in vr.summary.splitlines() if ln.strip()][:3]
+        excerpt = " | ".join(summary_lines)
+        if len(excerpt) > col_summary:
+            excerpt = excerpt[: col_summary - 3] + "..."
+        name_col = f"{vr.variant_name} ({vr.variant_title})"
+        if len(name_col) > col_name:
+            name_col = name_col[: col_name - 1] + "…"
+        comparison_lines.append(
+            f"{name_col:<{col_name}} {vr.exit_code:>{col_code}} {status:<{col_status}} {excerpt}"
+        )
+
+    comparison_lines.append("")
+    comparison_lines.append("Per-variant details:")
+
+    for vr in variant_results:
+        status = "completed" if vr.exit_code == 0 else "failed"
+        comparison_lines.append(f"")
+        comparison_lines.append(f"  Variant {vr.variant_name}: {vr.variant_title}")
+        comparison_lines.append(f"    exit code : {vr.exit_code} ({status})")
+        comparison_lines.append(f"    run dir   : {vr.run_dir}")
+        comparison_lines.append(f"    workspace : {vr.workspace_dir}")
+
+        # Summary excerpt (first 3 lines).
+        summary_lines = [ln for ln in vr.summary.splitlines() if ln.strip()][:3]
+        if summary_lines:
+            comparison_lines.append("    summary   :")
+            for ln in summary_lines:
+                comparison_lines.append(f"      {ln}")
+
+        # Files created in the variant workspace.
+        if vr.workspace_dir.exists():
+            ws_files = sorted(
+                str(p.relative_to(vr.workspace_dir))
+                for p in vr.workspace_dir.rglob("*")
+                if p.is_file()
+            )
+            if ws_files:
+                comparison_lines.append(f"    workspace files ({len(ws_files)}):")
+                for f in ws_files:
+                    comparison_lines.append(f"      {f}")
+
     comparison_lines.append("")
 
     _write(fork_dir / "comparison.txt", "\n".join(comparison_lines) + "\n")

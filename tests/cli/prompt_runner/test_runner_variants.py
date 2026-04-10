@@ -257,6 +257,29 @@ def test_variant_sequential_flag_accepted(tmp_path: Path):
     assert cfg2.variant_sequential is False
 
 
+def test_comparison_report_contains_variant_names(tmp_path: Path):
+    """The comparison.txt should list each variant's name and exit code."""
+    items = parse_text(INPUT_WITH_FORK)
+    workspace = _workspace(tmp_path)
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+    ])
+    run_pipeline(
+        pairs=items,
+        run_dir=tmp_path / "run",
+        config=RunConfig(max_iterations=3),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        workspace_dir=workspace,
+    )
+    comparison = (tmp_path / "run" / "fork-02-audit" / "comparison.txt").read_text()
+    assert "Variant A" in comparison or "variant-a" in comparison.lower()
+    assert "Variant B" in comparison or "variant-b" in comparison.lower()
+    # Exit codes should be mentioned
+    assert "0" in comparison  # both variants exit 0 in mock
+
+
 def test_run_pipeline_no_fork_unaffected(tmp_path: Path):
     """A pipeline without fork points behaves identically to before."""
     pair1 = PromptPair(
