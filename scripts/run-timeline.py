@@ -27,8 +27,8 @@ from pathlib import Path
 @dataclass
 class ToolCall:
     name: str
-    input_size: int  # chars
-    description: str = ""
+    input_size: int  # chars — LLM output (tool_use input JSON)
+    result_size: int = 0  # chars — tool response (tool_result content)
 
 
 @dataclass
@@ -40,6 +40,16 @@ class Turn:
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
+
+    @property
+    def tool_write_chars(self) -> int:
+        """Total chars the LLM sent TO tools (tool_use input)."""
+        return sum(tc.input_size for tc in self.tool_calls)
+
+    @property
+    def tool_read_chars(self) -> int:
+        """Total chars received FROM tools (tool_result content)."""
+        return sum(tc.result_size for tc in self.tool_calls)
 
 
 @dataclass
@@ -119,6 +129,8 @@ def parse_log(path: Path) -> CallDetail:
     current_turn: Turn | None = None
     prev_usage_sig: tuple[int, int, int] | None = None
     last_was_assistant = False
+    # Map tool_use_id -> ToolCall so we can attach result sizes
+    pending_tools: dict[str, ToolCall] = {}
 
     for raw in path.read_text(encoding="utf-8").splitlines():
         raw = raw.strip()
@@ -183,12 +195,26 @@ def parse_log(path: Path) -> CallDetail:
                 elif bt == "tool_use":
                     name = block.get("name", "?")
                     inp = json.dumps(block.get("input", {}))
-                    current_turn.tool_calls.append(ToolCall(
-                        name=name,
-                        input_size=len(inp),
-                    ))
+                    tc = ToolCall(name=name, input_size=len(inp))
+                    current_turn.tool_calls.append(tc)
+                    tool_id = block.get("id", "")
+                    if tool_id:
+                        pending_tools[tool_id] = tc
                     if name == "Agent":
                         detail.subagent_count += 1
+
+        # User message — look for tool_result blocks
+        elif etype == "user":
+            msg = obj.get("message", {})
+            for block in msg.get("content", []):
+                if block.get("type") == "tool_result":
+                    tool_id = block.get("tool_use_id", "")
+                    content = block.get("content", "")
+                    result_len = len(str(content))
+                    tc = pending_tools.get(tool_id)
+                    if tc is not None:
+                        tc.result_size = result_len
+            last_was_assistant = False
 
         else:
             last_was_assistant = False
@@ -424,34 +450,48 @@ def _render_detail(detail: CallDetail) -> str:
     if detail.turns:
         parts.append('<table class="turns">')
         parts.append(
-            '<tr><th>Turn</th><th>Thinking</th><th>Text</th>'
-            '<th>Out tok</th><th>Time</th><th>tok/s</th>'
+            '<tr><th>Turn</th><th>Think</th><th>Text</th>'
+            '<th>~tok</th>'
+            '<th>Tool→ (write)</th><th>→Tool (read)</th>'
             '<th>Tools</th></tr>'
         )
-        # Estimate per-turn time by dividing total API time proportionally
-        # by output tokens (rough but better than nothing)
-        total_out = sum(t.output_tokens for t in detail.turns) or 1
         for turn in detail.turns:
+            # Tool details: name(write→/→read)
             tools_str = ", ".join(
-                f'{tc.name}({tc.input_size // 4}tok)'
+                f'{tc.name}({tc.input_size:,}→/→{tc.result_size:,})'
                 for tc in turn.tool_calls
             ) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
-            # Estimate this turn's share of API time
-            turn_frac = turn.output_tokens / total_out if total_out else 0
-            turn_time_s = (detail.duration_api_ms / 1000) * turn_frac
-            tok_per_s = turn.output_tokens / turn_time_s if turn_time_s > 0 else 0
+            # Estimate tokens from chars (~4 chars/token)
+            est_tok = (turn.thinking_chars + turn.text_chars + turn.tool_write_chars) // 4
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
                 f'<td{thinking_cls}>{turn.thinking_chars:,}</td>'
                 f'<td>{turn.text_chars:,}</td>'
-                f'<td>{turn.output_tokens:,}</td>'
-                f'<td>{turn_time_s:.0f}s</td>'
-                f'<td>{tok_per_s:.0f}</td>'
+                f'<td>{est_tok:,}</td>'
+                f'<td>{turn.tool_write_chars:,}</td>'
+                f'<td>{turn.tool_read_chars:,}</td>'
                 f'<td class="tool-detail">{tools_str}</td>'
                 f'</tr>'
             )
+        # Totals row
+        tot_think = sum(t.thinking_chars for t in detail.turns)
+        tot_text = sum(t.text_chars for t in detail.turns)
+        tot_est = sum((t.thinking_chars + t.text_chars + t.tool_write_chars) // 4 for t in detail.turns)
+        tot_tw = sum(t.tool_write_chars for t in detail.turns)
+        tot_tr = sum(t.tool_read_chars for t in detail.turns)
+        parts.append(
+            f'<tr style="border-top:1px solid #ccc;font-weight:bold">'
+            f'<td></td>'
+            f'<td>{tot_think:,}</td>'
+            f'<td>{tot_text:,}</td>'
+            f'<td>{tot_est:,}</td>'
+            f'<td>{tot_tw:,}</td>'
+            f'<td>{tot_tr:,}</td>'
+            f'<td></td>'
+            f'</tr>'
+        )
         parts.append('</table>')
 
     parts.append('</div>')
