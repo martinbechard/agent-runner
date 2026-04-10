@@ -1411,92 +1411,28 @@ def _render_fork_section(
         f'</td></tr>'
     )
 
-    # --- Comparison summary table ---
+    # --- Per-variant detail sections ---
     variant_names = sorted(fork.variants.keys())
 
-    # Gather per-variant metrics
-    variant_metrics: list[dict] = []
-    for vname in variant_names:
-        vsteps = fork.variants[vname]
-        dur = _steps_duration_seconds(vsteps)
-        cost = _steps_cost(vsteps)
-        turns = _steps_turns(vsteps)
-        out_tok = _steps_output_tokens(vsteps)
-        verdict = _steps_verdict(vsteps)
-        label = vname.replace("variant-", "").upper()
-        variant_metrics.append({
-            "name": vname,
-            "label": label,
-            "dur": dur,
-            "cost": cost,
-            "turns": turns,
-            "out_tok": out_tok,
-            "verdict": verdict,
-        })
-
-    # Build comparison table HTML
-    rows.append('<tr class="fork-comparison"><td colspan="5"><div class="fork-table-wrap">')
-    rows.append('<table class="fork-compare">')
-    rows.append(
-        '<tr>'
-        '<th>Variant</th>'
-        '<th>Time</th>'
-        '<th>Cost</th>'
-        '<th>Turns</th>'
-        '<th>Output tok</th>'
-        '<th>Verdict</th>'
-        '</tr>'
-    )
-
-    for m in variant_metrics:
-        verdict_cls = ' class="verdict-pass"' if m["verdict"] == "pass" else (
-            ' class="verdict-fail"' if m["verdict"] in ("fail", "error") else ""
-        )
-        rows.append(
-            f'<tr>'
-            f'<td><strong>{m["label"]}</strong></td>'
-            f'<td>{_fmt_duration(m["dur"])}</td>'
-            f'<td>${m["cost"]:.2f}</td>'
-            f'<td>{m["turns"]}</td>'
-            f'<td>{m["out_tok"]:,}</td>'
-            f'<td{verdict_cls}>{m["verdict"] or "—"}</td>'
-            f'</tr>'
-        )
-
-    # Delta row (second vs first)
-    if len(variant_metrics) >= 2:
-        a = variant_metrics[0]
-        b = variant_metrics[1]
-        b_label = b["label"]
-        rows.append(
-            f'<tr class="delta-row">'
-            f'<td>Δ ({b_label} vs {a["label"]})</td>'
-            f'<td style="color:{_delta_color(a["dur"], b["dur"])}">'
-            f'{_pct_delta(a["dur"], b["dur"])}</td>'
-            f'<td style="color:{_delta_color(a["cost"], b["cost"])}">'
-            f'{_pct_delta(a["cost"], b["cost"])}</td>'
-            f'<td style="color:{_delta_color(float(a["turns"]), float(b["turns"]))}">'
-            f'{_pct_delta(float(a["turns"]), float(b["turns"]))}</td>'
-            f'<td style="color:{_delta_color(float(a["out_tok"]), float(b["out_tok"]))}">'
-            f'{_pct_delta(float(a["out_tok"]), float(b["out_tok"]))}</td>'
-            f'<td></td>'
-            f'</tr>'
-        )
-
-    rows.append('</table></div></td></tr>')
-
-    # --- Per-variant detail sections ---
     for vname in variant_names:
         vsteps = fork.variants[vname]
         label = vname.replace("variant-", "").upper()
         dur_str = _fmt_duration(_steps_duration_seconds(vsteps))
         cost = _steps_cost(vsteps)
+        turns = _steps_turns(vsteps)
+        out_tok = _steps_output_tokens(vsteps)
+        verdict = _steps_verdict(vsteps)
+        verdict_cls = "verdict-pass" if verdict == "pass" else (
+            "verdict-fail" if verdict in ("fail", "revise", "escalate") else ""
+        )
 
         variant_css = "".join(c if c.isalnum() else "-" for c in vname.lower()).strip("-")
         variant_cls = f"in-variant variant-{variant_css}"
         rows.append(
             f'<tr class="variant-header {variant_cls}"><td colspan="5">'
             f'Variant {label} — {dur_str} — ${cost:.2f}'
+            f' — {turns} turns — {out_tok:,} tok'
+            f' — <span class="{verdict_cls}">{verdict}</span>'
             f'</td></tr>'
         )
 
