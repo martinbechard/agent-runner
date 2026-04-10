@@ -1652,6 +1652,19 @@ def render_html(
   .pretty-label {{
     font-size: 0.75em; color: #666; cursor: pointer; user-select: none;
   }}
+  .jv-fold {{ display: inline; }}
+  .jv-fold summary {{ display: inline; cursor: pointer; list-style: none; }}
+  .jv-fold summary::-webkit-details-marker {{ display: none; }}
+  .jv-fold[open] > summary .jv-dim {{ display: none; }}
+  .jv-fold:not([open]) > summary::after {{ content: ' … }}'; color: #999; }}
+  .jv-key {{ color: #2980b9; }}
+  .jv-str {{ color: #27ae60; }}
+  .jv-num {{ color: #e67e22; }}
+  .jv-bool {{ color: #8e44ad; }}
+  .jv-null {{ color: #999; font-style: italic; }}
+  .jv-brace {{ color: #555; font-weight: bold; }}
+  .jv-dim {{ color: #999; font-size: 0.9em; }}
+  hr.jv-sep {{ border: none; border-top: 1px solid #eee; margin: 4px 0; }}
   .toggle-btn {{
     padding: 2px 10px; font-size: 0.75em; cursor: pointer;
     background: #e0e0e0; border: 1px solid #ccc; border-radius: 3px;
@@ -1704,40 +1717,66 @@ function toggleView(uid) {{
     btn.textContent = 'raw';
   }}
 }}
+function jsonToTree(val, key, depth) {{
+  var indent = '  '.repeat(depth);
+  if (val === null) return '<span class="jv-null">null</span>';
+  if (typeof val === 'boolean') return '<span class="jv-bool">' + val + '</span>';
+  if (typeof val === 'number') return '<span class="jv-num">' + val + '</span>';
+  if (typeof val === 'string') {{
+    var escaped = val.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    if (escaped.length > 120) {{
+      return '<span class="jv-str">"' + escaped.substring(0, 120) + '…"</span> <span class="jv-dim">(' + val.length + ')</span>';
+    }}
+    return '<span class="jv-str">"' + escaped + '"</span>';
+  }}
+  if (Array.isArray(val)) {{
+    if (val.length === 0) return '<span class="jv-brace">[]</span>';
+    var items = val.map(function(v, i) {{
+      return indent + '  ' + jsonToTree(v, i, depth + 1);
+    }});
+    var preview = val.length + ' items';
+    return '<details class="jv-fold"><summary><span class="jv-brace">[</span> <span class="jv-dim">' + preview + '</span></summary>' +
+      items.join(',\\n') + '\\n' + indent + '<span class="jv-brace">]</span></details>';
+  }}
+  if (typeof val === 'object') {{
+    var keys = Object.keys(val);
+    if (keys.length === 0) return '<span class="jv-brace">{{}}</span>';
+    var entries = keys.map(function(k) {{
+      return indent + '  <span class="jv-key">"' + k + '"</span>: ' + jsonToTree(val[k], k, depth + 1);
+    }});
+    var preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? ', …' : '');
+    var open = depth < 2 ? ' open' : '';
+    return '<details class="jv-fold"' + open + '><summary><span class="jv-brace">{{</span> <span class="jv-dim">' + preview + '</span></summary>' +
+      entries.join(',\\n') + '\\n' + indent + '<span class="jv-brace">}}</span></details>';
+  }}
+  return String(val);
+}}
 function togglePrettyJson(uid) {{
   var el = document.getElementById(uid);
-  var raw = el.querySelector('.view-raw pre') || el.querySelector('.popup-raw');
-  if (!raw) return;
-  if (raw.dataset.original === undefined) {{
-    raw.dataset.original = raw.textContent;
+  var rawPre = el.querySelector('.view-raw pre') || el.querySelector('.popup-raw');
+  if (!rawPre) return;
+  if (rawPre.dataset.original === undefined) {{
+    rawPre.dataset.original = rawPre.innerHTML;
   }}
   var cb = el.querySelector('.pretty-json-cb');
   if (cb && cb.checked) {{
-    var text = raw.dataset.original;
+    var text = rawPre.dataset.originalText || rawPre.textContent;
+    if (!rawPre.dataset.originalText) rawPre.dataset.originalText = text;
     var lines = text.split('\\n');
     var result = [];
     for (var i = 0; i < lines.length; i++) {{
       var line = lines[i].trim();
-      if (!line) {{ result.push(''); continue; }}
+      if (!line) continue;
       try {{
         var obj = JSON.parse(line);
-        result.push(JSON.stringify(obj, null, 2));
+        result.push(jsonToTree(obj, '', 0));
       }} catch(e) {{
-        try {{
-          if (line.charAt(0) === '{{' || line.charAt(0) === '[') {{
-            var obj2 = JSON.parse(line);
-            result.push(JSON.stringify(obj2, null, 2));
-          }} else {{
-            result.push(line);
-          }}
-        }} catch(e2) {{
-          result.push(line);
-        }}
+        result.push(line.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'));
       }}
     }}
-    raw.textContent = result.join('\\n');
+    rawPre.innerHTML = result.join('\\n<hr class="jv-sep">\\n');
   }} else {{
-    raw.textContent = raw.dataset.original;
+    rawPre.innerHTML = rawPre.dataset.original;
   }}
 }}
 document.addEventListener('keydown', function(e) {{
