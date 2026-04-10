@@ -29,10 +29,10 @@ class ClaudeCall:
     workspace_dir — it is the runner's 'shared workspace' for cross-prompt
     file continuity."""
     fork_session: bool = False
-    """When True, pass --resume <session_id> --fork-session to claude,
-    creating a new session that inherits the conversation context of the
-    original session. Used by the variant fork mechanism to give each
-    variant the same prior context."""
+    """When True, fork from fork_from_session_id into session_id.
+    Passes --resume <source> --fork-session --session-id <new>."""
+    fork_from_session_id: str = ""
+    """The source session to fork from. Only used when fork_session=True."""
 
 
 @dataclass(frozen=True)
@@ -313,9 +313,14 @@ class RealClaudeClient:
         if call.model is not None:
             argv += ["--model", call.model]
         if call.fork_session:
-            # Fork: resume from an existing session but create a new one
-            # that inherits the conversation context.
-            argv += ["--resume", call.session_id, "--fork-session"]
+            # Fork: resume from the source session, fork it, and assign
+            # a new session ID so the fork is independently addressable.
+            # Requires the triple: --resume <source> --fork-session --session-id <new>
+            argv += [
+                "--resume", call.fork_from_session_id,
+                "--fork-session",
+                "--session-id", call.session_id,
+            ]
         elif call.new_session:
             argv += ["--session-id", call.session_id]
         else:

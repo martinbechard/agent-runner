@@ -444,6 +444,7 @@ def _make_call(
     pair: PromptPair,
     workspace_dir: Path,
     fork_session: bool = False,
+    fork_from_session_id: str = "",
 ) -> ClaudeCall:
     return ClaudeCall(
         prompt=prompt,
@@ -453,6 +454,7 @@ def _make_call(
         stdout_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stdout.log",
         stderr_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stderr.log",
         fork_session=fork_session,
+        fork_from_session_id=fork_from_session_id,
         stream_header=(
             f"── prompt {pair.index} '{pair.title}' / iter {iteration} / {role} ──"
         ),
@@ -606,6 +608,7 @@ def run_prompt(
             pair=pair,
             workspace_dir=workspace_dir,
             fork_session=use_fork,
+            fork_from_session_id=config.fork_from_session if use_fork else "",
         )
         gen_response = _call_or_persist_partial(
             claude_client, gen_call, prompt_dir / f"iter-{iteration_number:02d}-generator.md"
