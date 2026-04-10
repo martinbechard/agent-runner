@@ -459,8 +459,9 @@ def _run_interactive_prompt(
     # Spawn claude interactively. stdin/stdout/stderr inherit from this
     # process so the user sees a real TTY session. Wait for exit.
     argv = ["claude"]
-    if config.dangerously_skip_permissions:
-        argv.append("--dangerously-skip-permissions")
+    # Interactive mode always skips permissions — the human is present
+    # and driving the session, so tool-use prompts are just friction.
+    argv.append("--dangerously-skip-permissions")
     if config.model:
         argv.extend(["--model", config.model])
     argv.append(mission)
