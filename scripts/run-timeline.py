@@ -463,6 +463,20 @@ def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> N
                     break
 
 
+def _split_prompt_fences(text: str) -> tuple[str, str]:
+    """Split a prompt section into (generation_prompt, validation_prompt).
+
+    The section text from a synthetic-prompt.md has a heading, then two
+    code-fenced blocks. Extract the content inside each fence.
+    Returns (gen, val) where val may be empty if there's only one fence.
+    """
+    import re
+    fences = re.findall(r'```[^\n]*\n(.*?)```', text, re.DOTALL)
+    gen = fences[0].strip() if len(fences) >= 1 else text
+    val = fences[1].strip() if len(fences) >= 2 else ""
+    return gen, val
+
+
 def _backfill_prompts_from_synthetic(steps: list[Step], synth_path: Path) -> None:
     """Backfill missing prompt_text from a synthetic-prompt.md file.
 
@@ -1180,11 +1194,14 @@ def _render_fork_section(
 
         # Extract prompt and output from the first generator step
         gen_prompt = ""
+        val_prompt = ""
         gen_output = ""
         for s in vsteps:
             if s.detail:
                 if not gen_prompt and s.detail.prompt_text:
-                    gen_prompt = s.detail.prompt_text
+                    gen_prompt, val_prompt = _split_prompt_fences(
+                        s.detail.prompt_text
+                    )
                 if not gen_output and s.detail.output_text:
                     gen_output = s.detail.output_text
 
@@ -1204,8 +1221,16 @@ def _render_fork_section(
                 prompt_id = f"{variant_id}-vprompt"
                 rows.append(
                     f'<details class="variant-block">'
-                    f'<summary>Prompt ({len(gen_prompt):,} chars)</summary>'
+                    f'<summary>Generation Prompt ({len(gen_prompt):,} chars)</summary>'
                     f'{_popup_content(prompt_id, gen_prompt)}'
+                    f'</details>'
+                )
+            if val_prompt:
+                val_id = f"{variant_id}-vval"
+                rows.append(
+                    f'<details class="variant-block">'
+                    f'<summary>Validation Prompt ({len(val_prompt):,} chars)</summary>'
+                    f'{_popup_content(val_id, val_prompt)}'
                     f'</details>'
                 )
             if gen_output:
