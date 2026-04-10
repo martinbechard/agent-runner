@@ -118,6 +118,7 @@ def parse_log(path: Path) -> CallDetail:
     turn_num = 0
     current_turn: Turn | None = None
     prev_usage_sig: tuple[int, int, int] | None = None
+    last_was_assistant = False
 
     for raw in path.read_text(encoding="utf-8").splitlines():
         raw = raw.strip()
@@ -144,6 +145,7 @@ def parse_log(path: Path) -> CallDetail:
             detail.output_tokens = usage.get("output_tokens", 0)
             if obj.get("is_error"):
                 detail.error = str(obj.get("error", "unknown error"))
+            last_was_assistant = False
 
         # Assistant message — one content block per line
         elif etype == "assistant":
@@ -155,8 +157,12 @@ def parse_log(path: Path) -> CallDetail:
                 usage.get("cache_read_input_tokens", 0),
             )
 
-            # New API response = new turn
-            if usage_sig != prev_usage_sig:
+            # New turn if: usage changed OR there was a non-assistant
+            # line in between (consecutive check)
+            is_new_turn = (
+                usage_sig != prev_usage_sig or not last_was_assistant
+            )
+            if is_new_turn:
                 if current_turn is not None:
                     detail.turns.append(current_turn)
                 turn_num += 1
@@ -165,6 +171,7 @@ def parse_log(path: Path) -> CallDetail:
                 current_turn.input_tokens = usage.get("input_tokens", 0)
                 current_turn.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
                 prev_usage_sig = usage_sig
+            last_was_assistant = True
 
             # Accumulate content blocks into the current turn
             for block in msg.get("content", []):
@@ -182,6 +189,9 @@ def parse_log(path: Path) -> CallDetail:
                     ))
                     if name == "Agent":
                         detail.subagent_count += 1
+
+        else:
+            last_was_assistant = False
 
     # Flush last turn
     if current_turn is not None:
