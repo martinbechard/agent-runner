@@ -597,9 +597,17 @@ def run_prompt(
         # uses --resume <prior-session> --fork-session to inherit context.
         # Subsequent iterations resume from the forked session normally.
         use_fork = is_first and config.fork_from_session is not None
+        # For forks: gen_session is the NEW session ID for this fork;
+        # fork_from_session is the SOURCE to inherit context from.
+        # Use a random UUID for forks to avoid collisions with prior runs.
+        if use_fork:
+            import uuid as _uuid
+            fork_new_session = str(_uuid.uuid4())
+        else:
+            fork_new_session = gen_session
         gen_call = _make_call(
             prompt=gen_msg,
-            session_id=config.fork_from_session if use_fork else gen_session,
+            session_id=fork_new_session,
             new_session=is_first and not use_fork,
             model=config.model,
             logs_dir=logs_dir,
