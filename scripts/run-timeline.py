@@ -820,7 +820,22 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                         popup_lines.append(f"Path: {file_path}\n")
                     if tc.name in ("Read", "Write", "Edit", "Bash", "Grep", "Glob"):
                         if tc.input_json:
-                            popup_lines.append(f"--- Input ({tc.input_size:,} chars) ---\n{tc.input_json[:20000]}\n")
+                            # For Write/Edit: extract and unescape the content
+                            # field so it renders as formatted YAML/JSON/etc
+                            # instead of a JSON blob with \n escapes.
+                            display_input = tc.input_json[:20000]
+                            if tc.name in ("Write", "Edit") and tc.input_json:
+                                try:
+                                    import json as _jtool
+                                    inp_obj = _jtool.loads(tc.input_json)
+                                    file_content = inp_obj.get("content", "")
+                                    if file_content:
+                                        other_fields = {k: v for k, v in inp_obj.items() if k != "content"}
+                                        header = _jtool.dumps(other_fields, indent=2)
+                                        display_input = f"{header}\n\n--- File content ---\n{file_content[:20000]}"
+                                except (ValueError, TypeError):
+                                    pass
+                            popup_lines.append(f"--- Input ({tc.input_size:,} chars) ---\n{display_input}\n")
                         if tc.result_content:
                             popup_lines.append(f"--- Result ({tc.result_size:,} chars) ---\n{tc.result_content[:20000]}\n")
                     else:
