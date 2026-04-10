@@ -463,6 +463,48 @@ def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> N
                     break
 
 
+def _backfill_prompts_from_synthetic(steps: list[Step], synth_path: Path) -> None:
+    """Backfill missing prompt_text from a synthetic-prompt.md file.
+
+    The synthetic file contains the variant's prompts + tail prompts.
+    Parse sections and match by slug like _backfill_prompts_from_file.
+    """
+    import re
+    try:
+        content = synth_path.read_text(encoding="utf-8")
+    except OSError:
+        return
+
+    sections: dict[str, str] = {}
+    current_slug = ""
+    current_lines: list[str] = []
+    for line in content.splitlines():
+        m = re.match(r"^## Prompt\s+\d+", line)
+        if m:
+            if current_slug and current_lines:
+                sections[current_slug] = "\n".join(current_lines)
+            slug = re.sub(r"[^a-z0-9]+", "-", line.lower()).strip("-")
+            slug = re.sub(r"^-*prompt-\d+-", "", slug)
+            current_slug = slug
+            current_lines = [line]
+        elif current_slug:
+            current_lines.append(line)
+    if current_slug and current_lines:
+        sections[current_slug] = "\n".join(current_lines)
+
+    for step in steps:
+        if step.detail and not step.detail.prompt_text:
+            step_slug = re.sub(r"\s*/\s*iter.*$", "", step.name)
+            step_slug = re.sub(r"[^a-z0-9]+", "-", step_slug.lower()).strip("-")
+            for section_slug, section_text in sections.items():
+                if section_slug and section_slug in step_slug:
+                    step.detail.prompt_text = section_text
+                    break
+                if step_slug and step_slug in section_slug:
+                    step.detail.prompt_text = section_text
+                    break
+
+
 def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
     runs_dir = workspace / ".methodology-runner" / "runs"
     if not runs_dir.exists():
@@ -567,6 +609,16 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
                     continue
                 variant_logs = run_subdir / "logs"
                 variant_steps.extend(_parse_prompt_log_dir(variant_logs))
+
+            # Backfill prompts from synthetic-prompt.md if steps lack prompt_text
+            for run_subdir in sorted(variant_dir.iterdir()):
+                if not run_subdir.is_dir() or not run_subdir.name.startswith("run-"):
+                    continue
+                # Try synthetic-prompt.md in the variant dir (sibling of run-*)
+                synth = variant_dir / "synthetic-prompt.md"
+                if synth.exists():
+                    _backfill_prompts_from_synthetic(variant_steps, synth)
+                break
 
             if variant_steps:
                 variants[variant_name] = variant_steps
@@ -1126,11 +1178,46 @@ def _render_fork_section(
         dur_str = _fmt_duration(_steps_duration_seconds(vsteps))
         cost = _steps_cost(vsteps)
 
+        # Extract prompt and output from the first generator step
+        gen_prompt = ""
+        gen_output = ""
+        for s in vsteps:
+            if s.detail:
+                if not gen_prompt and s.detail.prompt_text:
+                    gen_prompt = s.detail.prompt_text
+                if not gen_output and s.detail.output_text:
+                    gen_output = s.detail.output_text
+
+        step_counter += 1
+        variant_id = f"variant-{step_counter}"
+
         rows.append(
             f'<tr class="variant-header"><td colspan="5">'
             f'Variant {label} — {dur_str} — ${cost:.2f}'
             f'</td></tr>'
         )
+
+        # Show prompt and output inline at the top of each variant
+        if gen_prompt or gen_output:
+            rows.append('<tr class="variant-io"><td colspan="5"><div class="variant-io-wrap">')
+            if gen_prompt:
+                prompt_id = f"{variant_id}-vprompt"
+                rows.append(
+                    f'<details class="variant-block">'
+                    f'<summary>Prompt ({len(gen_prompt):,} chars)</summary>'
+                    f'{_popup_content(prompt_id, gen_prompt)}'
+                    f'</details>'
+                )
+            if gen_output:
+                output_id = f"{variant_id}-voutput"
+                rows.append(
+                    f'<details class="variant-block" open>'
+                    f'<summary>Output ({len(gen_output):,} chars)</summary>'
+                    f'{_popup_content(output_id, gen_output)}'
+                    f'</details>'
+                )
+            rows.append('</div></td></tr>')
+
         step_counter = _render_steps_rows(vsteps, grand_total, step_counter, rows, popups)
 
     return step_counter
@@ -1264,6 +1351,18 @@ def render_html(
     background: #f0f4f8; padding: 6px 12px 6px 24px; font-size: 0.95em;
     border-top: 1px solid #b0c8e0; color: #444;
   }}
+  tr.variant-io td {{ padding: 0 12px 8px 24px; }}
+  .variant-io-wrap {{ display: flex; gap: 12px; flex-wrap: wrap; }}
+  .variant-block {{
+    flex: 1; min-width: 300px; max-height: 400px; overflow: auto;
+    border: 1px solid #ddd; border-radius: 6px; background: #fafafa;
+  }}
+  .variant-block summary {{
+    padding: 6px 12px; cursor: pointer; font-size: 0.85em;
+    font-weight: bold; color: #555; background: #f0f0f0;
+    border-bottom: 1px solid #ddd;
+  }}
+  .variant-block pre {{ max-height: 350px; overflow: auto; margin: 0; }}
 
   .popup {{
     display: none; position: fixed; top: 5%; left: 10%; width: 80%; max-height: 85%;
