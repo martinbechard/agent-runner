@@ -1837,19 +1837,6 @@ document.addEventListener('keydown', function(e) {{
 <body>
 <h1>{run_title}</h1>
 <h2>{workspace} — total {grand_m}m{grand_s:02d}s — ${grand_cost:.2f}</h2>
-<div class="legend">
-  <div class="legend-item"><div class="legend-swatch" style="background:#27ae60"></div> Selector/Prelude</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#8e44ad"></div> Prompt Generator</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#4a90d9"></div> Generator (claude)</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#e67e22"></div> Judge (claude)</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#c0392b"></div> Cross-ref</div>
-</div>
-<div class="legend">
-  Token bar: <div class="legend-item"><div class="legend-swatch" style="background:#3498db"></div> cache-read</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#2ecc71"></div> cache-create</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#95a5a6"></div> fresh-input</div>
-  <div class="legend-item"><div class="legend-swatch" style="background:#e74c3c"></div> output</div>
-</div>
 <table>
 {''.join(rows)}
 </table>
