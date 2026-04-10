@@ -2,39 +2,34 @@ Before starting, read `plugins/methodology-runner-skills/AUTHORING-CONTEXT.md`
 for lessons learned from earlier skill-authoring sessions. Apply those
 lessons as you work on this prompt.
 
-Key patterns established in prior sessions (details in AUTHORING-CONTEXT.md):
+Key patterns (details in AUTHORING-CONTEXT.md):
 
-- Skills must use input->output YAML transformation examples, not just
-  prose rules. AI agents learn patterns from before/after pairs.
-- Every element needs source_quote (exact upstream text), not just
-  source_refs. This is the primary anti-hallucination mechanism.
-- Added specifics beyond the source_quote go in structured
-  open_assumptions (id, detail, needs, status: open), not in element text.
-- Assumptions propagate downstream as inherited_assumptions on elements
-  that trace to an assumption-bearing upstream element.
-- Test every skill variant with child Claude (claude -p): normal prompt,
-  adversarial "be thorough" pressure, and downstream consumption test.
-- Reference traceability-discipline/SKILL.md as the exemplar for format.
+- Transforms teach output patterns; explicit procedural rules teach
+  process constraints. Both are needed — neither alone is sufficient.
+- Hybrid structures (procedure + transforms) outperform pure variants
+  on consistency across pressure levels. Try hybrids, not just pure forms.
+- Rules that resist agent defaults need triple reinforcement:
+  ALWAYS emphasis + worked example + counter-example. One layer is ignored.
+- Anti-invention: the Quote Test and Invention Traps table are robust
+  regardless of position. Their presence is what matters.
+- Avoid flowcharts/decision-trees as primary structure — they create
+  blind spots for inputs that don't pattern-match decision nodes.
+- Test with novel sources different from the skill's own examples.
+  Same-source testing hides generalization failures.
+- Reference traceability-discipline/SKILL.md as the format exemplar.
 
 ## Authoring methodology
 
 Do NOT write one draft and present it as final. Instead:
 
-1. Propose 3-5 structural variants (different ways to organize the
-   skill content — e.g., rules-first vs. examples-first vs. pure
-   transforms vs. hybrid). Describe each variant in 2-3 sentences.
-2. Draft the most promising 2-3 variants as complete SKILL.md files.
-3. Test each variant with child Claude (claude -p): give it a realistic
-   input and the skill content, check the output quality.
-4. Present a comparison report to me: which variant performed best on
-   rule recall, output quality, phantom suppression, assumption
-   separation, and downstream usability. Include your recommendation.
-5. I will pick a variant or ask for iterations. We iterate until the
-   skill is solid.
-
-This is how the traceability-discipline skill was authored (7 variants,
-tested with adversarial pressure, variant G won). Apply the same
-discipline to every skill.
+1. Propose 3-5 structural variants (different organizations — e.g.,
+   procedure-first, transforms-first, anti-pattern-first, hybrid).
+2. Draft the most promising 2-3 as complete SKILL.md files.
+3. Test each with child Claude (claude -p) using a NOVEL source
+   (not the skill's own examples): normal + adversarial pressure.
+4. Present a comparison report with recommendation. Include a hybrid
+   if the top two variants have complementary strengths.
+5. I pick or we iterate. Deploy when solid.
 
 ---
 
