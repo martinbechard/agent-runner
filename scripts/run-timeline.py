@@ -1114,14 +1114,6 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                 f'title="{label}: {count:,}"></div>'
             )
     parts.append('</div>')
-    parts.append(
-        f'<div class="token-legend">'
-        f'cache-read: {detail.cache_read_tokens:,} '
-        f'| cache-create: {detail.cache_creation_tokens:,} '
-        f'| fresh-input: {detail.input_tokens:,} '
-        f'| output: {detail.output_tokens:,}'
-        f'</div>'
-    )
 
     # Per-turn table
     if detail.turns:
