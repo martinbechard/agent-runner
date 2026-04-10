@@ -108,9 +108,16 @@ class PhaseTimeline:
 # ---------------------------------------------------------------------------
 
 def parse_log(path: Path) -> CallDetail:
-    """Parse a claude JSONL stdout log into a CallDetail."""
+    """Parse a claude JSONL stdout log into a CallDetail.
+
+    Content blocks from the same API response share identical usage
+    values. We group them into one Turn by detecting when the usage
+    signature (input_tokens, output_tokens, cache_read) changes.
+    """
     detail = CallDetail()
-    current_turn = 0
+    turn_num = 0
+    current_turn: Turn | None = None
+    prev_usage_sig: tuple[int, int, int] | None = None
 
     for raw in path.read_text(encoding="utf-8").splitlines():
         raw = raw.strip()
@@ -122,7 +129,6 @@ def parse_log(path: Path) -> CallDetail:
             continue
 
         etype = obj.get("type", "")
-        subtype = obj.get("subtype", "")
 
         # Result event — final summary
         if etype == "result":
@@ -139,32 +145,47 @@ def parse_log(path: Path) -> CallDetail:
             if obj.get("is_error"):
                 detail.error = str(obj.get("error", "unknown error"))
 
-        # Assistant message — content blocks
+        # Assistant message — one content block per line
         elif etype == "assistant":
-            current_turn += 1
-            turn = Turn(turn_number=current_turn)
             msg = obj.get("message", {})
+            usage = msg.get("usage", {})
+            usage_sig = (
+                usage.get("input_tokens", 0),
+                usage.get("output_tokens", 0),
+                usage.get("cache_read_input_tokens", 0),
+            )
+
+            # New API response = new turn
+            if usage_sig != prev_usage_sig:
+                if current_turn is not None:
+                    detail.turns.append(current_turn)
+                turn_num += 1
+                current_turn = Turn(turn_number=turn_num)
+                current_turn.output_tokens = usage.get("output_tokens", 0)
+                current_turn.input_tokens = usage.get("input_tokens", 0)
+                current_turn.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+                prev_usage_sig = usage_sig
+
+            # Accumulate content blocks into the current turn
             for block in msg.get("content", []):
                 bt = block.get("type", "")
                 if bt == "thinking":
-                    turn.thinking_chars += len(block.get("thinking", ""))
+                    current_turn.thinking_chars += len(block.get("thinking", ""))
                 elif bt == "text":
-                    turn.text_chars += len(block.get("text", ""))
+                    current_turn.text_chars += len(block.get("text", ""))
                 elif bt == "tool_use":
                     name = block.get("name", "?")
                     inp = json.dumps(block.get("input", {}))
-                    turn.tool_calls.append(ToolCall(
+                    current_turn.tool_calls.append(ToolCall(
                         name=name,
                         input_size=len(inp),
                     ))
                     if name == "Agent":
                         detail.subagent_count += 1
 
-            usage = msg.get("usage", {})
-            turn.input_tokens = usage.get("input_tokens", 0)
-            turn.output_tokens = usage.get("output_tokens", 0)
-            turn.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
-            detail.turns.append(turn)
+    # Flush last turn
+    if current_turn is not None:
+        detail.turns.append(current_turn)
 
     return detail
 
