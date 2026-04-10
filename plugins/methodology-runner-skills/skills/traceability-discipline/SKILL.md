@@ -11,19 +11,24 @@ your output is indistinguishable from hallucination.
 
 ## Rules
 
-- **RULE:** Every element you create MUST have `source_refs` (upstream element
-  IDs) AND `source_quote` (the exact text from the upstream artifact that
-  justifies this element).
+These rules use placeholder names `<source-ref>` and `<source-quote>`. The
+actual field names depend on your phase's output schema — each phase defines
+its own names for these concepts. See the transform examples below for how
+they map in specific phases.
+
+- **RULE:** Every element you create MUST have a `<source-ref>` (pointer to
+  the upstream element or location) AND a `<source-quote>` (the exact text
+  from the upstream artifact that justifies this element).
   - **BECAUSE:** A reference alone can be fabricated. A direct quote forces
     grounding in actual source text.
     - **BECAUSE:** If you cannot produce the quote, the element is not justified
       — it is an inference or invention.
 
 - **RULE:** Every upstream element MUST appear in at least one downstream
-  element's `source_refs`, or be listed in `out_of_scope` with a reason.
+  element's `<source-ref>`, or be listed in `out_of_scope` with a reason.
   - **BECAUSE:** A missing upstream element is a silently dropped requirement.
 
-- **RULE:** Every ID in `source_refs` MUST resolve to a real element in the
+- **RULE:** Every ID in `<source-ref>` MUST resolve to a real element in the
   upstream artifact. Read the actual artifact to verify. Never invent IDs.
   - **BECAUSE:** Hallucinated IDs create false traceability.
 
@@ -31,7 +36,7 @@ your output is indistinguishable from hallucination.
   explaining WHY it exists and WHY it links to its specific sources.
   - **BECAUSE:** A link without rationale is a pointer without meaning.
 
-- **RULE:** When your element adds specificity beyond what the `source_quote`
+- **RULE:** When your element adds specificity beyond what the `<source-quote>`
   directly states, each added detail MUST be recorded as a structured
   `open_assumption` on the element. Open assumptions propagate: any downstream
   element that traces to this element inherits its unresolved assumptions.
@@ -49,7 +54,7 @@ When you create an element, ask yourself:
 
 > "Can I quote the exact words from the source that justify this element?"
 
-- **YES, direct quote** -> the element is confirmed. Include `source_quote`.
+- **YES, direct quote** -> the element is confirmed. Populate the `<source-quote>` field.
 - **YES, but I'm adding specificity beyond the quote** -> the element is
   confirmed but each added detail is an `open_assumption` on the element.
 - **NO, I cannot quote any source text** -> the element is a phantom. Delete it.
@@ -84,9 +89,10 @@ generator receives the correction and re-emits the element.
 ## Critical Prohibitions
 
 - **NEVER** add elements that the source text does not justify. If you cannot
-  produce a `source_quote` that supports the element, delete it.
+  populate the `<source-quote>` field with text that supports the element,
+  delete it.
 
-- **NEVER** list all upstream IDs in a single element's source_refs without
+- **NEVER** list all upstream IDs in a single element's `<source-ref>` without
   individual quotes per mapping.
 
 - **NEVER** copy upstream text verbatim without decomposition.
@@ -96,7 +102,11 @@ generator receives the correction and re-emits the element.
 
 ---
 
-## TRANSFORM 1: Vague Input -> Structured Requirements
+## TRANSFORM 1: Vague Input -> Structured Requirements (PH-000)
+
+In PH-000, the upstream source is raw markdown (not a prior phase's YAML).
+The phase schema uses `verbatim_quote` as the `<source-quote>` field and
+`source_location` as the `<source-ref>` field.
 
 ### INPUT
 
@@ -115,8 +125,10 @@ requirements_inventory:
   items:
     - id: RI-001
       text: "Patrons can search the book catalog by specified fields"
-      source_refs: ["stakeholder-interview-2026-04-01.md:line-2"]
-      source_quote: "Patrons should be able to search for books"
+      category: functional
+      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref> in PH-000
+      verbatim_quote: "Patrons should be able to search for books"    # <source-quote> in PH-000
+      tags: [patron, search, catalog]
       rationale:
         rule: "Decomposed 'search for books' into a concrete capability"
         because: "'Search' must specify searchable fields to be testable"
@@ -128,8 +140,10 @@ requirements_inventory:
 
     - id: RI-002
       text: "Patrons can check out books"
-      source_refs: ["stakeholder-interview-2026-04-01.md:line-2"]
-      source_quote: "check them out"
+      category: functional
+      source_location: "stakeholder-interview-2026-04-01.md:line-2"   # <source-ref>
+      verbatim_quote: "check them out"                                 # <source-quote>
+      tags: [patron, checkout, circulation]
       rationale:
         rule: "Extracted checkout as distinct capability"
         because: "Checkout is a state change (available -> borrowed)"
@@ -141,16 +155,20 @@ requirements_inventory:
 
     - id: RI-003
       text: "Patrons can return books and system updates availability"
-      source_refs: ["stakeholder-interview-2026-04-01.md:line-3"]
-      source_quote: "return them"
+      category: functional
+      source_location: "stakeholder-interview-2026-04-01.md:line-3"   # <source-ref>
+      verbatim_quote: "return them"                                    # <source-quote>
+      tags: [patron, return, circulation]
       rationale:
         rule: "Paired return with inventory update"
         because: "Return without availability update creates ghost inventory"
 
     - id: RI-004
       text: "Librarians can manage the book catalog"
-      source_refs: ["stakeholder-interview-2026-04-01.md:line-3"]
-      source_quote: "Librarians need to manage the catalog"
+      category: functional
+      source_location: "stakeholder-interview-2026-04-01.md:line-3"   # <source-ref>
+      verbatim_quote: "Librarians need to manage the catalog"          # <source-quote>
+      tags: [librarian, catalog, management]
       rationale:
         rule: "Decomposed 'manage the catalog' into explicit operations"
         because: "'Manage' is ambiguous without specifying operations"
@@ -162,8 +180,10 @@ requirements_inventory:
 
     - id: RI-005
       text: "System provides librarians with overdue book information"
-      source_refs: ["stakeholder-interview-2026-04-01.md:line-4"]
-      source_quote: "track overdue books"
+      category: functional
+      source_location: "stakeholder-interview-2026-04-01.md:line-4"   # <source-ref>
+      verbatim_quote: "track overdue books"                            # <source-quote>
+      tags: [librarian, overdue, reporting]
       rationale:
         rule: "Converted 'track overdue' into a concrete capability"
         because: "'Track' must specify the output format"
@@ -175,8 +195,10 @@ requirements_inventory:
 
     - id: RI-006
       text: "All patron-facing interfaces are usable on mobile devices"
-      source_refs: ["stakeholder-interview-2026-04-01.md:line-4"]
-      source_quote: "The system should work on mobile devices"
+      category: non_functional
+      source_location: "stakeholder-interview-2026-04-01.md:line-4"   # <source-ref>
+      verbatim_quote: "The system should work on mobile devices"       # <source-quote>
+      tags: [mobile, accessibility, non-functional]
       rationale:
         rule: "Converted 'work on mobile' into a testable constraint"
         because: "'Mobile' must be defined to be verifiable"
@@ -208,7 +230,10 @@ requirements_inventory:
 
 ### What makes this correct
 
-- Every element quotes the exact source text that justifies it
+- Every element populates the `<source-quote>` field (here: `verbatim_quote`)
+  with the exact source text that justifies it
+- The `<source-ref>` field (here: `source_location`) points to the exact
+  position in the raw document
 - The element text stays close to what the quote supports — no assumed
   specifics baked into the text
 - Every detail beyond the quote is a structured `open_assumption` with
@@ -222,31 +247,35 @@ requirements_inventory:
 # WRONG: assumed detail baked into text without open_assumption
 - id: RI-002
   text: "Patrons can check out up to 5 books simultaneously"
-  source_quote: "check them out"
+  verbatim_quote: "check them out"
   # "up to 5" is not in the quote. Must be an open_assumption, not text.
 
 # WRONG: phantom requirement — no quote exists
 - id: RI-007
   text: "System must support multi-language interfaces"
-  source_quote: ???
+  verbatim_quote: ???
   # Cannot quote source text. Fails Quote Test. Delete.
 
-# WRONG: source_quote doesn't support the claim
+# WRONG: verbatim_quote doesn't support the claim
 - id: RI-008
   text: "System must meet WCAG 2.1 AA accessibility standards"
-  source_quote: "The system should work on mobile devices"
+  verbatim_quote: "The system should work on mobile devices"
   # Quote says "mobile", not "accessible". False grounding.
 
 # WRONG: no open_assumptions despite adding specifics
 - id: RI-005
   text: "System generates daily overdue book report for librarians"
-  source_quote: "track overdue books"
+  verbatim_quote: "track overdue books"
   # "daily" and "report" are not in quote — must be open_assumptions
 ```
 
 ---
 
-## TRANSFORM 2: Structured Requirements -> Features
+## TRANSFORM 2: Structured Requirements -> Features (PH-001+)
+
+In PH-001 and later phases, the upstream source is a prior phase's YAML
+artifact. The cross-phase convention uses `source_refs` as the `<source-ref>`
+field and `source_quote` as the `<source-quote>` field.
 
 ### INPUT (Phase 0 artifact)
 
@@ -274,16 +303,16 @@ items:
 features:
   - feature_id: F-001
     name: "Catalog Search"
-    source_refs: [RI-001]
-    source_quote: "Patrons can search the book catalog by specified fields"
+    source_refs: [RI-001]                                              # <source-ref> in PH-001+
+    source_quote: "Patrons can search the book catalog by specified fields"  # <source-quote> in PH-001+
     rationale:
       rule: "Direct 1:1 mapping — search is self-contained"
       because: "RI-001 describes a single user action with clear boundaries"
     acceptance_criteria:
       - criterion_id: AC-001
         text: "Search by a supported field returns matching books"
-        source_refs: [RI-001]
-        source_quote: "search the book catalog by specified fields"
+        source_refs: [RI-001]                                          # <source-ref>
+        source_quote: "search the book catalog by specified fields"    # <source-quote>
       - criterion_id: AC-002
         text: "Search with no matches returns an empty result"
         source_refs: [RI-001]
@@ -296,8 +325,8 @@ features:
 
   - feature_id: F-002
     name: "Book Circulation"
-    source_refs: [RI-002, RI-003]
-    source_quote:
+    source_refs: [RI-002, RI-003]                                      # <source-ref>
+    source_quote:                                                       # <source-quote> (multi-ref)
       - ref: RI-002
         quote: "Patrons can check out books"
       - ref: RI-003
@@ -338,7 +367,10 @@ features:
 
 ### What makes this correct
 
-- Each feature quotes the upstream RI-* text it derives from
+- Each feature populates `<source-quote>` (here: `source_quote`) with the
+  upstream RI-* text it derives from
+- The `<source-ref>` field (here: `source_refs`) points to specific upstream
+  element IDs, not raw document locations
 - Open assumptions from upstream elements are carried as
   `inherited_assumptions` — they are not silently absorbed or dropped
 - The downstream assumption verifier sees both new and inherited ASM-* items
@@ -368,8 +400,9 @@ features:
 
 Before emitting your artifact:
 
-1. Every element has `source_refs` AND `source_quote` with actual text
-2. Every `source_quote` genuinely supports the element it justifies
+1. Every element has `<source-ref>` AND `<source-quote>` populated (use your
+   phase's actual field names)
+2. Every `<source-quote>` genuinely supports the element it justifies
 3. Details beyond the quote are `open_assumptions` with id, detail, needs, status
 4. Upstream `open_assumptions` appear as `inherited_assumptions` on downstream elements
 5. No assumed specifics baked into element text as if confirmed
@@ -381,15 +414,15 @@ Before emitting your artifact:
 
 When reviewing a generator's output:
 
-1. **Quote verification**: does each `source_quote` appear in the upstream
+1. **Quote verification**: does each `<source-quote>` appear in the upstream
    artifact and support the element's claim?
 2. **Assumption separation**: are details beyond the quote in `open_assumptions`,
    not in the element text?
 3. **Assumption propagation**: do upstream `open_assumptions` appear as
    `inherited_assumptions` on downstream elements?
 4. **Completeness**: every upstream element in coverage_check or out_of_scope
-5. **Accuracy**: every source_refs ID exists in the upstream artifact
+5. **Accuracy**: every `<source-ref>` ID exists in the upstream artifact
 6. **No indiscriminate linking**: flag elements citing >60% of upstream elements
    without individual quotes
-7. **No phantom requirements**: flag elements whose source_quote does not
+7. **No phantom requirements**: flag elements whose `<source-quote>` does not
    support their text — FAIL, not a suggestion
