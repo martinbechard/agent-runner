@@ -906,7 +906,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                         pending_log_tools[tool_id] = (name, fname)
                     items.append(
                         f'<div class="log-tool">'
-                        f'<span class="log-type">TOOL→</span> '
+                        f'<span class="log-type">→TOOL</span> '
                         f'<strong>{_escape_html(name)}</strong>'
                         f'{"(" + _escape_html(fname) + ")" if fname else ""} '
                         f'<span class="log-dim">{inp_size:,}ch</span>'
