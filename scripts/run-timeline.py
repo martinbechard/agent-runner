@@ -877,7 +877,11 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
             tool_parts = []
             for tc in turn.tool_calls:
                 file_path = _tool_file_path(tc)
-                label = f'{tc.name}({tc.input_size:,}→/→{tc.result_size:,})'
+                filename = file_path.split("/")[-1] if file_path else ""
+                if filename and tc.name in ("Read", "Write", "Edit"):
+                    label = f'{tc.name}({filename} {tc.input_size:,}→/→{tc.result_size:,})'
+                else:
+                    label = f'{tc.name}({tc.input_size:,}→/→{tc.result_size:,})'
                 # Add popup link if there's meaningful content
                 has_content = (tc.input_json and tc.input_size > 10) or tc.result_content
                 if has_content and step_id and popups is not None:
