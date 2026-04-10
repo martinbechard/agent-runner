@@ -49,11 +49,23 @@ class ToolCall:
 
 
 @dataclass
+class ToolResult:
+    """A tool result that arrived between turns."""
+    tool_name: str
+    tool_fname: str
+    result_size: int
+    timestamp: str = ""
+
+
+@dataclass
 class Turn:
     turn_number: int
     thinking_chars: int = 0
     text_chars: int = 0
     tool_calls: list[ToolCall] = field(default_factory=list)
+    tool_results_before: list[ToolResult] = field(default_factory=list)
+    """Tool results received BEFORE this turn (the user events that
+    preceded this assistant response)."""
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -174,6 +186,10 @@ def parse_log(path: Path) -> CallDetail:
     last_was_assistant = False
     # Map tool_use_id -> ToolCall so we can attach result sizes
     pending_tools: dict[str, ToolCall] = {}
+    # Map tool_use_id -> (name, fname) for matching results to calls
+    tool_id_to_name: dict[str, tuple[str, str]] = {}
+    # Buffer tool results to attach to the next turn
+    pending_results: list[ToolResult] = []
     # Track the last user-event timestamp for turn timing
     last_user_ts: str = ""
 
@@ -226,6 +242,8 @@ def parse_log(path: Path) -> CallDetail:
                     detail.turns.append(current_turn)
                 turn_num += 1
                 current_turn = Turn(turn_number=turn_num)
+                current_turn.tool_results_before = list(pending_results)
+                pending_results.clear()
                 current_turn.output_tokens = usage.get("output_tokens", 0)
                 current_turn.input_tokens = usage.get("input_tokens", 0)
                 current_turn.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
@@ -255,6 +273,9 @@ def parse_log(path: Path) -> CallDetail:
                     current_turn.tool_calls.append(tc)
                     if tool_id:
                         pending_tools[tool_id] = tc
+                        fpath = block.get("input", {}).get("file_path", "") or block.get("input", {}).get("path", "") or ""
+                        fname = fpath.split("/")[-1] if fpath else ""
+                        tool_id_to_name[tool_id] = (name, fname)
                     if name == "Agent":
                         detail.subagent_count += 1
 
@@ -282,6 +303,14 @@ def parse_log(path: Path) -> CallDetail:
                     if tc is not None:
                         tc.result_size = result_len
                         tc.result_content = content_str
+                    # Buffer for attaching to the next turn
+                    tname, tfname = tool_id_to_name.get(tool_id, ("?", ""))
+                    pending_results.append(ToolResult(
+                        tool_name=tname,
+                        tool_fname=tfname,
+                        result_size=result_len,
+                        timestamp=ts,
+                    ))
             last_was_assistant = False
 
         else:
@@ -1065,6 +1094,19 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         )
         tool_popup_counter = 0
         for turn in detail.turns:
+            # Show tool results received before this turn
+            if turn.tool_results_before:
+                results_str = ", ".join(
+                    f'←{tr.tool_name}({tr.tool_fname}) {tr.result_size:,}ch'
+                    if tr.tool_fname else
+                    f'←{tr.tool_name} {tr.result_size:,}ch'
+                    for tr in turn.tool_results_before
+                )
+                parts.append(
+                    f'<tr class="tool-return-row">'
+                    f'<td></td><td colspan="6" class="tool-returns">{results_str}</td>'
+                    f'</tr>'
+                )
             tool_parts = []
             for tc in turn.tool_calls:
                 file_path = _tool_file_path(tc)
@@ -1513,6 +1555,8 @@ def render_html(
   table.turns th {{ text-align: left; padding: 2px 8px; border-bottom: 1px solid #ddd; color: #666; font-weight: normal; }}
   table.turns td {{ padding: 2px 8px; }}
   .big-think {{ color: #e74c3c; font-weight: bold; }}
+  .tool-return-row td {{ padding: 1px 8px; }}
+  .tool-returns {{ color: #c0392b; font-size: 0.82em; font-style: italic; }}
   .tool-detail {{ color: #888; font-size: 0.9em; }}
 
   .popup-links {{ font-size: 0.8em; }}
