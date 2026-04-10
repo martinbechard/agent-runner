@@ -111,6 +111,11 @@ class RunConfig:
     dangerously_skip_permissions: bool = False
     """When True, pass --dangerously-skip-permissions to claude in
     interactive mode so the user is not prompted for every tool call."""
+    fork_from_session: str | None = None
+    """When set, the first generator call in this run uses
+    --resume <session-id> --fork-session to inherit conversation
+    context from a prior session. Used by variant forks so each
+    variant starts with the same context as the pre-fork prompts."""
     variant_sequential: bool = False
     """When True, run fork-point variants one at a time instead of in
     parallel. Parallel (default) is faster; sequential uses less quota."""
@@ -135,6 +140,9 @@ class PromptResult:
     relative to the workspace directory. Empty for text-only prompts. Passed
     to subsequent prompts' generator messages as part of the file manifest so
     they know what the prior prompt produced on disk."""
+    last_session_id: str = ""
+    """Session ID from the last generator claude call. Used by the fork
+    mechanism to inherit conversation context via --fork-session."""
 
 
 @dataclass(frozen=True)
@@ -435,6 +443,7 @@ def _make_call(
     role: str,
     pair: PromptPair,
     workspace_dir: Path,
+    fork_session: bool = False,
 ) -> ClaudeCall:
     return ClaudeCall(
         prompt=prompt,
@@ -443,6 +452,7 @@ def _make_call(
         model=model,
         stdout_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stdout.log",
         stderr_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stderr.log",
+        fork_session=fork_session,
         stream_header=(
             f"── prompt {pair.index} '{pair.title}' / iter {iteration} / {role} ──"
         ),
@@ -565,6 +575,7 @@ def run_prompt(
     _snapshot_workspace(workspace_dir, snapshot_dir)
 
     iterations: list[IterationResult] = []
+    gen_response: ClaudeResponse | None = None
 
     for iteration_number in range(1, config.max_iterations + 1):
         is_first = iteration_number == 1
@@ -580,16 +591,21 @@ def run_prompt(
                 generator_prelude=config.generator_prelude,
             )
         )
+        # When forking from a prior session, the FIRST generator call
+        # uses --resume <prior-session> --fork-session to inherit context.
+        # Subsequent iterations resume from the forked session normally.
+        use_fork = is_first and config.fork_from_session is not None
         gen_call = _make_call(
             prompt=gen_msg,
-            session_id=gen_session,
-            new_session=is_first,
+            session_id=config.fork_from_session if use_fork else gen_session,
+            new_session=is_first and not use_fork,
             model=config.model,
             logs_dir=logs_dir,
             iteration=iteration_number,
             role="generator",
             pair=pair,
             workspace_dir=workspace_dir,
+            fork_session=use_fork,
         )
         gen_response = _call_or_persist_partial(
             claude_client, gen_call, prompt_dir / f"iter-{iteration_number:02d}-generator.md"
@@ -675,12 +691,18 @@ def run_prompt(
         "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
     )
 
+    # Capture the session ID from the last generator response for fork support.
+    last_sid = ""
+    if gen_response is not None:
+        last_sid = getattr(gen_response, "session_id", "")
+
     return PromptResult(
         pair=pair,
         iterations=iterations,
         final_verdict=final_verdict,
         final_artifact=final.generator_output,
         created_files=created_files,
+        last_session_id=last_sid,
     )
 
 
@@ -763,6 +785,7 @@ def _run_fork_point(
     workspace_dir: Path,
     config: RunConfig,
     source_file: Path,
+    fork_from_session: str = "",
 ) -> ForkResult:
     """Execute all variants of a fork point and return their aggregated results.
 
@@ -819,6 +842,8 @@ def _run_fork_point(
             prelude_path = variant_dir / "judge-prelude.txt"
             prelude_path.write_text(config.judge_prelude, encoding="utf-8")
             cmd.extend(["--judge-prelude", str(prelude_path)])
+        if fork_from_session:
+            cmd.extend(["--fork-from-session", fork_from_session])
 
         print(
             f"[fork {fork.index}] spawning variant '{variant.variant_name}' "
@@ -950,6 +975,7 @@ def run_pipeline(
     prior_artifacts: list[PriorArtifact] = []
     prompt_results: list[PromptResult] = []
     fork_results: list[ForkResult] = []
+    last_session_id: str = ""  # for fork context inheritance
 
     # When resuming, track whether we have hit the first incomplete prompt.
     # All prompts before it that have a 'pass' verdict are skipped; once we
@@ -974,6 +1000,7 @@ def run_pipeline(
                 workspace_dir=workspace_dir,
                 config=config,
                 source_file=source_file,
+                fork_from_session=last_session_id,
             )
             fork_results.append(fork_result)
             # Parent does not continue past the fork point.
@@ -1042,6 +1069,8 @@ def run_pipeline(
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
 
         prompt_results.append(result)
+        if result.last_session_id:
+            last_session_id = result.last_session_id
         if result.final_verdict == Verdict.PASS:
             prior_artifacts.append(
                 PriorArtifact(

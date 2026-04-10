@@ -28,6 +28,11 @@ class ClaudeCall:
     All generator and judge calls within a single pipeline run share the same
     workspace_dir — it is the runner's 'shared workspace' for cross-prompt
     file continuity."""
+    fork_session: bool = False
+    """When True, pass --resume <session_id> --fork-session to claude,
+    creating a new session that inherits the conversation context of the
+    original session. Used by the variant fork mechanism to give each
+    variant the same prior context."""
 
 
 @dataclass(frozen=True)
@@ -35,6 +40,10 @@ class ClaudeResponse:
     stdout: str
     stderr: str
     returncode: int
+    session_id: str = ""
+    """Session ID from the claude JSONL output. Populated by RealClaudeClient
+    when --output-format stream-json --verbose is used. Empty for
+    FakeClaudeClient and DryRunClaudeClient."""
 
 
 class ClaudeBinaryNotFound(Exception):
@@ -243,12 +252,23 @@ class RealClaudeClient:
         # and meta items are shown on the terminal but not stored as the
         # response, because they are not part of the artifact under review.
         text_buffer: list[str] = []
+        captured_session_id: list[str] = []
 
         with open(call.stdout_log_path, "a", encoding="utf-8") as log:
             for line in proc.stdout:
                 # Raw NDJSON line goes to the log unchanged.
                 log.write(line)
                 log.flush()
+                # Capture session_id from the first event that has one.
+                if not captured_session_id:
+                    try:
+                        import json as _json
+                        ev = _json.loads(line)
+                        sid = ev.get("session_id", "")
+                        if sid:
+                            captured_session_id.append(sid)
+                    except (ValueError, TypeError):
+                        pass
                 # Parse the line into 0+ kind-tagged display items.
                 items = _parse_stream_event(line)
                 for kind, content in items:
@@ -264,6 +284,7 @@ class RealClaudeClient:
             stdout=reconstructed,
             stderr="".join(stderr_buffer),
             returncode=returncode,
+            session_id=captured_session_id[0] if captured_session_id else "",
         )
         if returncode != 0:
             raise ClaudeInvocationError(call, response)
@@ -291,7 +312,11 @@ class RealClaudeClient:
         ]
         if call.model is not None:
             argv += ["--model", call.model]
-        if call.new_session:
+        if call.fork_session:
+            # Fork: resume from an existing session but create a new one
+            # that inherits the conversation context.
+            argv += ["--resume", call.session_id, "--fork-session"]
+        elif call.new_session:
             argv += ["--session-id", call.session_id]
         else:
             argv += ["--resume", call.session_id]

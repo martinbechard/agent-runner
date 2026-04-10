@@ -122,6 +122,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         judge_prelude=judge_prelude,
         dangerously_skip_permissions=args.dangerously_skip_permissions,
         variant_sequential=args.variant_sequential,
+        fork_from_session=getattr(args, "fork_from_session", None),
     )
 
     try:
@@ -295,6 +296,15 @@ def _build_parser() -> argparse.ArgumentParser:
             "Run fork-point variants one at a time instead of in parallel. "
             "Parallel (default) is faster; sequential uses less API quota "
             "simultaneously."
+        ),
+    )
+    run_cmd.add_argument(
+        "--fork-from-session",
+        default=None,
+        help=(
+            "Fork from an existing Claude session. The first generator call "
+            "uses --resume <session-id> --fork-session to inherit conversation "
+            "context. Used internally by the variant fork mechanism."
         ),
     )
     run_cmd.set_defaults(func=_cmd_run)
