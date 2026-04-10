@@ -1132,11 +1132,16 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
             '<th>Cost</th><th>Tools</th></tr>'
         )
         tool_popup_counter = 0
-        # Pre-compute total estimated tokens for cost proration
-        all_est = [
+        # Pre-compute estimated tokens per turn, then scale so they
+        # sum to the real output_tokens from the result event.
+        raw_est = [
             (t.thinking_chars + t.text_chars + t.tool_write_chars) // 4
             for t in detail.turns
         ]
+        raw_total = sum(raw_est) or 1
+        real_total = detail.output_tokens or raw_total
+        scale = real_total / raw_total
+        all_est = [round(e * scale) for e in raw_est]
         total_est_for_cost = sum(all_est) or 1
 
         for turn_idx, turn in enumerate(detail.turns):
@@ -1198,7 +1203,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                     tool_parts.append(label)
             tools_str = ", ".join(tool_parts) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
-            est_tok = (turn.thinking_chars + turn.text_chars + turn.tool_write_chars) // 4
+            est_tok = all_est[turn_idx]
             dur = turn.duration_seconds
             if dur < 1 and dur > 0:
                 # Sub-second turn: clamp tok/s to output estimate
@@ -1224,10 +1229,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         # Totals row
         tot_think = sum(t.thinking_chars for t in detail.turns)
         tot_text = sum(t.text_chars for t in detail.turns)
-        tot_est = sum(
-            (t.thinking_chars + t.text_chars + t.tool_write_chars) // 4
-            for t in detail.turns
-        )
+        tot_est = sum(all_est)
         parts.append(
             f'<tr style="border-top:1px solid #ccc;font-weight:bold">'
             f'<td>Total</td>'
