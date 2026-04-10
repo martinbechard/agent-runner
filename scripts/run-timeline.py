@@ -803,6 +803,184 @@ def _popup_content(popup_id: str, text: str) -> str:
     )
 
 
+def _render_log_structured(log_path: Path, popup_id: str) -> str:
+    """Render a JSONL log file as structured HTML with per-record formatting."""
+    import json as _jlog
+
+    uid = f"pcontent-{popup_id}"
+    items: list[str] = []
+
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return '<pre>(cannot read log)</pre>'
+
+    raw_text = log_path.read_text(encoding="utf-8", errors="replace")
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = _jlog.loads(line)
+        except (ValueError, TypeError):
+            items.append(f'<div class="log-unknown">{_escape_html(line[:500])}</div>')
+            continue
+
+        t = obj.get("type", "?")
+        st = obj.get("subtype", "")
+        key = f"{t}/{st}" if st else t
+
+        if t == "system" and st == "init":
+            model = obj.get("model", "?")
+            sid = obj.get("session_id", "?")[:12]
+            cwd = obj.get("cwd", "?")
+            tools = obj.get("tools", [])
+            items.append(
+                f'<div class="log-system">'
+                f'<span class="log-type">INIT</span> '
+                f'model=<strong>{_escape_html(model)}</strong> '
+                f'session={sid}… '
+                f'cwd={_escape_html(str(cwd)[-40:])} '
+                f'tools={len(tools)}'
+                f'</div>'
+            )
+
+        elif t == "system" and "hook" in st:
+            hook = obj.get("hook_name", "?")
+            event = obj.get("hook_event", "?")
+            if st == "hook_started":
+                items.append(
+                    f'<div class="log-system">'
+                    f'<span class="log-type">HOOK▶</span> {_escape_html(hook)}'
+                    f'</div>'
+                )
+            else:
+                output = obj.get("output", "")
+                preview = _escape_html(output[:200]).replace("\n", " ")
+                items.append(
+                    f'<div class="log-system">'
+                    f'<span class="log-type">HOOK✓</span> {_escape_html(hook)} '
+                    f'<span class="log-dim">({len(output):,}ch)</span>'
+                    f'</div>'
+                )
+
+        elif t == "assistant":
+            msg = obj.get("message", {})
+            model = msg.get("model", "")
+            usage = msg.get("usage", {})
+            out_tok = usage.get("output_tokens", "?")
+            cache = usage.get("cache_read_input_tokens", 0)
+            for block in msg.get("content", []):
+                bt = block.get("type", "?")
+                if bt == "thinking":
+                    text = block.get("thinking", "")
+                    preview = _escape_html(text[:150]).replace("\n", " ")
+                    items.append(
+                        f'<div class="log-thinking">'
+                        f'<span class="log-type">THINK</span> '
+                        f'<span class="log-dim">{len(text):,}ch</span> '
+                        f'{preview}…'
+                        f'</div>'
+                    )
+                elif bt == "text":
+                    text = block.get("text", "")
+                    preview = _escape_html(text[:200]).replace("\n", " ")
+                    items.append(
+                        f'<div class="log-text">'
+                        f'<span class="log-type">TEXT</span> '
+                        f'<span class="log-dim">{len(text):,}ch</span> '
+                        f'{preview}{"…" if len(text) > 200 else ""}'
+                        f'</div>'
+                    )
+                elif bt == "tool_use":
+                    name = block.get("name", "?")
+                    inp = block.get("input", {})
+                    fpath = inp.get("file_path", "") or inp.get("path", "") or inp.get("pattern", "") or inp.get("command", "")[:60]
+                    fname = fpath.split("/")[-1] if fpath else ""
+                    inp_size = len(_jlog.dumps(inp))
+                    items.append(
+                        f'<div class="log-tool">'
+                        f'<span class="log-type">TOOL→</span> '
+                        f'<strong>{_escape_html(name)}</strong>'
+                        f'{"(" + _escape_html(fname) + ")" if fname else ""} '
+                        f'<span class="log-dim">{inp_size:,}ch</span>'
+                        f'</div>'
+                    )
+
+        elif t == "user":
+            ts = obj.get("timestamp", "")
+            msg = obj.get("message", {})
+            for block in msg.get("content", []):
+                bt = block.get("type", "?")
+                if bt == "tool_result":
+                    content = str(block.get("content", ""))
+                    preview = _escape_html(content[:150]).replace("\n", " ")
+                    items.append(
+                        f'<div class="log-result">'
+                        f'<span class="log-type">→TOOL</span> '
+                        f'<span class="log-dim">{len(content):,}ch</span> '
+                        f'{preview}{"…" if len(content) > 150 else ""}'
+                        f'{"  <span class=log-ts>" + ts[-12:] + "</span>" if ts else ""}'
+                        f'</div>'
+                    )
+                elif bt == "text":
+                    text = block.get("text", "")
+                    items.append(
+                        f'<div class="log-text">'
+                        f'<span class="log-type">USER</span> '
+                        f'<span class="log-dim">{len(text):,}ch</span>'
+                        f'</div>'
+                    )
+
+        elif t == "rate_limit_event":
+            items.append(
+                f'<div class="log-system">'
+                f'<span class="log-type">RATE</span> rate limit event'
+                f'</div>'
+            )
+
+        elif "result" in t:
+            dur = obj.get("duration_ms", 0) / 1000
+            cost = obj.get("total_cost_usd", 0)
+            turns = obj.get("num_turns", 0)
+            stop = obj.get("stop_reason", "?")
+            u = obj.get("usage", {})
+            out_tok = u.get("output_tokens", 0)
+            cache_read = u.get("cache_read_input_tokens", 0)
+            cache_create = u.get("cache_creation_input_tokens", 0)
+            is_err = obj.get("is_error", False)
+            cls = "log-error" if is_err else "log-result-final"
+            errors = obj.get("errors", [])
+            items.append(
+                f'<div class="{cls}">'
+                f'<span class="log-type">{"ERROR" if is_err else "DONE"}</span> '
+                f'{dur:.0f}s | ${cost:.2f} | {turns} turns | '
+                f'out={out_tok:,} | cache-read={cache_read:,} | '
+                f'cache-create={cache_create:,} | stop={stop}'
+                f'{"<br>Errors: " + _escape_html("; ".join(errors)) if errors else ""}'
+                f'</div>'
+            )
+        else:
+            items.append(
+                f'<div class="log-unknown">'
+                f'<span class="log-type">{_escape_html(key)}</span> '
+                f'<span class="log-dim">{len(line):,}B</span>'
+                f'</div>'
+            )
+
+    formatted = "\n".join(items)
+    raw_html = f'<pre class="popup-raw">{_escape_html(raw_text[:POPUP_TRUNCATE_CHARS])}</pre>'
+
+    return (
+        f'<div id="{uid}" class="popup-dual">'
+        f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
+        f'<div class="view-formatted"><div class="log-structured">{formatted}</div></div>'
+        f'<div class="view-raw" style="display:none">{raw_html}</div>'
+        f'</div>'
+    )
+
+
 def _tool_file_path(tc: ToolCall) -> str:
     """Extract a file path from a Read/Write/Glob tool call's input JSON."""
     try:
@@ -1057,14 +1235,13 @@ def _render_steps_rows(
                 f'</div>'
             )
         if has_log:
-            log_content = step.log_path.read_text(encoding="utf-8", errors="replace")
             popups.append(
                 f'<div id="{step_id}-log" class="popup">'
                 f'<div class="popup-header">'
                 f'<strong>{step.name} — Log</strong>'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-log\');return false">close</a>'
                 f'</div>'
-                f'{_popup_content(step_id + "-log-content", log_content)}'
+                f'{_render_log_structured(step.log_path, step_id + "-log")}'
                 f'</div>'
             )
     return step_counter
@@ -1393,6 +1570,25 @@ def render_html(
   }}
   .toggle-btn:hover {{ background: #d0d0d0; }}
   .popup-formatted code {{ background: #eee; padding: 1px 4px; border-radius: 2px; }}
+
+  .log-structured {{ padding: 8px 12px; font-size: 0.82em; font-family: monospace; line-height: 1.6; }}
+  .log-structured div {{ padding: 2px 0; border-bottom: 1px solid #f0f0f0; }}
+  .log-type {{
+    display: inline-block; width: 50px; font-weight: bold; font-size: 0.85em;
+    text-align: center; border-radius: 3px; padding: 0 4px; margin-right: 6px;
+  }}
+  .log-system .log-type {{ background: #e8f5e9; color: #2e7d32; }}
+  .log-thinking .log-type {{ background: #fff3e0; color: #e65100; }}
+  .log-text .log-type {{ background: #e3f2fd; color: #1565c0; }}
+  .log-tool .log-type {{ background: #f3e5f5; color: #7b1fa2; }}
+  .log-result .log-type {{ background: #fce4ec; color: #c62828; }}
+  .log-result-final .log-type {{ background: #e8f5e9; color: #2e7d32; font-size: 1em; }}
+  .log-result-final {{ font-weight: bold; padding: 4px 0; border-top: 2px solid #ccc; }}
+  .log-error .log-type {{ background: #ffcdd2; color: #b71c1c; }}
+  .log-error {{ color: #b71c1c; font-weight: bold; }}
+  .log-unknown .log-type {{ background: #eee; color: #666; }}
+  .log-dim {{ color: #999; font-size: 0.9em; }}
+  .log-ts {{ color: #888; font-size: 0.85em; }}
 </style>
 <script>
 function showPopup(id) {{
