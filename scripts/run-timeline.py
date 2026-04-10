@@ -689,15 +689,8 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
 # ---------------------------------------------------------------------------
 
 def _model_abbrev(model: str) -> str:
-    """Shorten model name to a letter: o=opus, s=sonnet, h=haiku."""
-    m = model.lower()
-    if "opus" in m:
-        return "o"
-    if "sonnet" in m:
-        return "s"
-    if "haiku" in m:
-        return "h"
-    return model[:10] if model else "?"
+    """Return the model name as-is, or ? if empty."""
+    return model if model else "?"
 
 
 def _bar_color(name: str) -> str:
@@ -788,8 +781,7 @@ def _popup_content(popup_id: str, text: str) -> str:
     independently. Auto-detects JSON, YAML, and Markdown.
     """
     import re
-    _POPUP_COUNTER[0] += 1
-    uid = f"pcontent-{_POPUP_COUNTER[0]}"
+    uid = f"pc-{popup_id}"
     truncated = _truncate(text)
     raw_html = f'<pre class="popup-raw">{_escape_html(truncated)}</pre>'
 
@@ -825,14 +817,21 @@ def _popup_content(popup_id: str, text: str) -> str:
 
     return (
         f'<div id="{uid}" class="popup-dual">'
-        f'<span class="popup-controls">'
-        f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
-        f'<label class="pretty-label"><input type="checkbox" class="pretty-json-cb" '
-        f'onchange="togglePrettyJson(\'{uid}\')"> pretty JSON</label>'
-        f'</span>'
         f'<div class="view-formatted">{formatted_html}</div>'
         f'<div class="view-raw" style="display:none">{raw_html}</div>'
         f'</div>'
+    )
+
+
+def _popup_toolbar(uid: str) -> str:
+    """Toolbar HTML for a popup — placed in the popup-header."""
+    return (
+        f'<span class="popup-controls">'
+        f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
+        f'<label class="pretty-label" style="display:none">'
+        f'<input type="checkbox" class="pretty-json-cb" '
+        f'onchange="togglePrettyJson(\'{uid}\')"> pretty JSON</label>'
+        f'</span>'
     )
 
 
@@ -840,7 +839,7 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
     """Render a JSONL log file as structured HTML with per-record formatting."""
     import json as _jlog
 
-    uid = f"pcontent-{popup_id}"
+    uid = f"pc-{popup_id}"
     items: list[str] = []
 
     # Show Turn 1 + initial prompt (passed via --print, not in the JSONL)
@@ -1055,11 +1054,6 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
 
     return (
         f'<div id="{uid}" class="popup-dual">'
-        f'<span class="popup-controls">'
-        f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
-        f'<label class="pretty-label"><input type="checkbox" class="pretty-json-cb" '
-        f'onchange="togglePrettyJson(\'{uid}\')"> pretty JSON</label>'
-        f'</span>'
         f'<div class="view-formatted"><div class="log-structured">{formatted}</div></div>'
         f'<div class="view-raw" style="display:none">{raw_html}</div>'
         f'</div>'
@@ -1181,10 +1175,12 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                             popup_lines.append(f"--- Result ({tc.result_size:,}) ---\n{tc.result_content[:POPUP_TRUNCATE_CHARS]}\n")
                     else:
                         popup_lines.append(f"Input: {tc.input_size:,} chars | Result: {tc.result_size:,}")
+                    dual_uid = f"pc-{popup_id}"
                     popups.append(
                         f'<div id="{popup_id}" class="popup">'
                         f'<div class="popup-header">'
                         f'<strong>{tc.name}: {_escape_html(short_path)}</strong>'
+                        f'{_popup_toolbar(dual_uid)}'
                         f'<a href="#" onclick="hidePopup(\'{popup_id}\');return false">close</a>'
                         f'</div>'
                         f'<div class="popup-body">'
@@ -1304,10 +1300,12 @@ def _render_steps_rows(
 
         # Build popup divs
         if has_prompt:
+            p_uid = f'pc-{step_id}-prompt-content'
             popups.append(
                 f'<div id="{step_id}-prompt" class="popup">'
                 f'<div class="popup-header">'
                 f'<strong>{step.name} — Prompt</strong>'
+                f'{_popup_toolbar(p_uid)}'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-prompt\');return false">close</a>'
                 f'</div>'
                 f'<div class="popup-body">'
@@ -1315,10 +1313,12 @@ def _render_steps_rows(
                 f'</div></div>'
             )
         if has_output:
+            o_uid = f'pc-{step_id}-output-content'
             popups.append(
                 f'<div id="{step_id}-output" class="popup">'
                 f'<div class="popup-header">'
                 f'<strong>{step.name} — Output</strong>'
+                f'{_popup_toolbar(o_uid)}'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
                 f'</div>'
                 f'<div class="popup-body">'
@@ -1326,10 +1326,12 @@ def _render_steps_rows(
                 f'</div></div>'
             )
         if has_log:
+            l_uid = f'pc-{step_id}-log'
             popups.append(
                 f'<div id="{step_id}-log" class="popup">'
                 f'<div class="popup-header">'
                 f'<strong>{step.name} — Log</strong>'
+                f'{_popup_toolbar(l_uid)}'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-log\');return false">close</a>'
                 f'</div>'
                 f'<div class="popup-body">'
@@ -1661,8 +1663,7 @@ def render_html(
   }}
   .popup-dual {{ position: relative; }}
   .popup-controls {{
-    position: absolute; top: 4px; right: 8px; z-index: 1;
-    display: flex; gap: 8px; align-items: center;
+    display: flex; gap: 8px; align-items: center; margin: 0 12px;
   }}
   .pretty-label {{
     font-size: 0.75em; color: #666; cursor: pointer; user-select: none;
@@ -1720,17 +1721,23 @@ function hidePopup(id) {{
 }}
 function toggleView(uid) {{
   var el = document.getElementById(uid);
+  if (!el) return;
   var fmt = el.querySelector('.view-formatted');
   var raw = el.querySelector('.view-raw');
-  var btn = el.querySelector('.toggle-btn');
+  // Button is in the header, find it via the popup ancestor
+  var popup = el.closest('.popup') || el.closest('.popup-body') || el.parentElement;
+  var btn = popup.querySelector('.toggle-btn[onclick*="' + uid + '"]') || popup.querySelector('.toggle-btn');
+  var prettyLabel = popup.querySelector('.pretty-label');
   if (raw.style.display === 'none') {{
     raw.style.display = 'block';
     fmt.style.display = 'none';
-    btn.textContent = 'formatted';
+    if (btn) btn.textContent = 'formatted';
+    if (prettyLabel) prettyLabel.style.display = 'inline';
   }} else {{
     raw.style.display = 'none';
     fmt.style.display = 'block';
-    btn.textContent = 'raw';
+    if (btn) btn.textContent = 'raw';
+    if (prettyLabel) prettyLabel.style.display = 'none';
   }}
 }}
 function jsonToTree(val, key, depth) {{
@@ -1769,13 +1776,27 @@ function jsonToTree(val, key, depth) {{
 }}
 function togglePrettyJson(uid) {{
   var el = document.getElementById(uid);
+  if (!el) {{
+    // Toolbar is in header — find the popup-dual via the popup ancestor
+    var popup = document.querySelector('.popup-dual');
+    // Try all popup-duals
+    document.querySelectorAll('.popup-dual').forEach(function(d) {{
+      if (d.id === uid) el = d;
+    }});
+    if (!el) return;
+  }}
   var rawPre = el.querySelector('.view-raw pre') || el.querySelector('.popup-raw');
   if (!rawPre) return;
   if (rawPre.dataset.original === undefined) {{
     rawPre.dataset.original = rawPre.innerHTML;
   }}
-  var cb = el.querySelector('.pretty-json-cb');
-  if (cb && cb.checked) {{
+  // Find checkbox — might be in the header (parent popup)
+  var popup = el.closest('.popup');
+  var cb = popup ? popup.querySelector('.pretty-json-cb') : el.querySelector('.pretty-json-cb');
+  var checked = cb && cb.checked;
+  // Save preference
+  try {{ localStorage.setItem('prettyJson', checked ? '1' : '0'); }} catch(e) {{}}
+  if (checked) {{
     var text = rawPre.dataset.originalText || rawPre.textContent;
     if (!rawPre.dataset.originalText) rawPre.dataset.originalText = text;
     var lines = text.split('\\n');
@@ -1795,6 +1816,17 @@ function togglePrettyJson(uid) {{
     rawPre.innerHTML = rawPre.dataset.original;
   }}
 }}
+// Restore pretty-JSON preference on load
+document.addEventListener('DOMContentLoaded', function() {{
+  try {{
+    var pref = localStorage.getItem('prettyJson');
+    if (pref === '1') {{
+      document.querySelectorAll('.pretty-json-cb').forEach(function(cb) {{
+        cb.checked = true;
+      }});
+    }}
+  }} catch(e) {{}}
+}});
 document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{
     document.querySelectorAll('.popup').forEach(function(p) {{ p.style.display = 'none'; }});
