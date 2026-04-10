@@ -825,7 +825,11 @@ def _popup_content(popup_id: str, text: str) -> str:
 
     return (
         f'<div id="{uid}" class="popup-dual">'
+        f'<span class="popup-controls">'
         f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
+        f'<label class="pretty-label"><input type="checkbox" class="pretty-json-cb" '
+        f'onchange="togglePrettyJson(\'{uid}\')"> pretty JSON</label>'
+        f'</span>'
         f'<div class="view-formatted">{formatted_html}</div>'
         f'<div class="view-raw" style="display:none">{raw_html}</div>'
         f'</div>'
@@ -1036,7 +1040,11 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
 
     return (
         f'<div id="{uid}" class="popup-dual">'
+        f'<span class="popup-controls">'
         f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
+        f'<label class="pretty-label"><input type="checkbox" class="pretty-json-cb" '
+        f'onchange="togglePrettyJson(\'{uid}\')"> pretty JSON</label>'
+        f'</span>'
         f'<div class="view-formatted"><div class="log-structured">{formatted}</div></div>'
         f'<div class="view-raw" style="display:none">{raw_html}</div>'
         f'</div>'
@@ -1637,8 +1645,14 @@ def render_html(
     word-wrap: break-word; line-height: 1.4;
   }}
   .popup-dual {{ position: relative; }}
-  .toggle-btn {{
+  .popup-controls {{
     position: absolute; top: 4px; right: 8px; z-index: 1;
+    display: flex; gap: 8px; align-items: center;
+  }}
+  .pretty-label {{
+    font-size: 0.75em; color: #666; cursor: pointer; user-select: none;
+  }}
+  .toggle-btn {{
     padding: 2px 10px; font-size: 0.75em; cursor: pointer;
     background: #e0e0e0; border: 1px solid #ccc; border-radius: 3px;
   }}
@@ -1688,6 +1702,42 @@ function toggleView(uid) {{
     raw.style.display = 'none';
     fmt.style.display = 'block';
     btn.textContent = 'raw';
+  }}
+}}
+function togglePrettyJson(uid) {{
+  var el = document.getElementById(uid);
+  var raw = el.querySelector('.view-raw pre') || el.querySelector('.popup-raw');
+  if (!raw) return;
+  if (raw.dataset.original === undefined) {{
+    raw.dataset.original = raw.textContent;
+  }}
+  var cb = el.querySelector('.pretty-json-cb');
+  if (cb && cb.checked) {{
+    var text = raw.dataset.original;
+    var lines = text.split('\\n');
+    var result = [];
+    for (var i = 0; i < lines.length; i++) {{
+      var line = lines[i].trim();
+      if (!line) {{ result.push(''); continue; }}
+      try {{
+        var obj = JSON.parse(line);
+        result.push(JSON.stringify(obj, null, 2));
+      }} catch(e) {{
+        try {{
+          if (line.charAt(0) === '{{' || line.charAt(0) === '[') {{
+            var obj2 = JSON.parse(line);
+            result.push(JSON.stringify(obj2, null, 2));
+          }} else {{
+            result.push(line);
+          }}
+        }} catch(e2) {{
+          result.push(line);
+        }}
+      }}
+    }}
+    raw.textContent = result.join('\\n');
+  }} else {{
+    raw.textContent = raw.dataset.original;
   }}
 }}
 document.addEventListener('keydown', function(e) {{
