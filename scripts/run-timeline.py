@@ -1164,8 +1164,9 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                         f'<strong>{tc.name}: {_escape_html(short_path)}</strong>'
                         f'<a href="#" onclick="hidePopup(\'{popup_id}\');return false">close</a>'
                         f'</div>'
+                        f'<div class="popup-body">'
                         f'{_popup_content(popup_id, chr(10).join(popup_lines))}'
-                        f'</div>'
+                        f'</div></div>'
                     )
                 else:
                     tool_parts.append(label)
@@ -1286,8 +1287,9 @@ def _render_steps_rows(
                 f'<strong>{step.name} — Prompt</strong>'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-prompt\');return false">close</a>'
                 f'</div>'
+                f'<div class="popup-body">'
                 f'{_popup_content(step_id + "-prompt-content", step.detail.prompt_text)}'
-                f'</div>'
+                f'</div></div>'
             )
         if has_output:
             popups.append(
@@ -1296,8 +1298,9 @@ def _render_steps_rows(
                 f'<strong>{step.name} — Output</strong>'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
                 f'</div>'
+                f'<div class="popup-body">'
                 f'{_popup_content(step_id + "-output-content", step.detail.output_text)}'
-                f'</div>'
+                f'</div></div>'
             )
         if has_log:
             popups.append(
@@ -1306,8 +1309,9 @@ def _render_steps_rows(
                 f'<strong>{step.name} — Log</strong>'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-log\');return false">close</a>'
                 f'</div>'
+                f'<div class="popup-body">'
                 f'{_render_log_structured(step.log_path, step_id + "-log")}'
-                f'</div>'
+                f'</div></div>'
             )
     return step_counter
 
@@ -1616,14 +1620,18 @@ def render_html(
   .popup {{
     display: none; position: fixed; top: 5%; left: 10%; width: 80%; max-height: 85%;
     background: #fff; border: 1px solid #ccc; border-radius: 8px;
-    box-shadow: 0 8px 32px rgba(0,0,0,0.25); z-index: 1000; overflow: auto;
+    box-shadow: 0 8px 32px rgba(0,0,0,0.25); z-index: 1000;
+    overflow: hidden; display: none; flex-direction: column;
   }}
   .popup-header {{
     display: flex; justify-content: space-between; align-items: center;
     padding: 10px 16px; border-bottom: 1px solid #eee; background: #f8f8f8;
-    border-radius: 8px 8px 0 0; position: sticky; top: 0;
+    border-radius: 8px 8px 0 0; flex-shrink: 0;
   }}
   .popup-header a {{ color: #e74c3c; text-decoration: none; font-size: 0.9em; }}
+  .popup-body {{
+    overflow: auto; flex: 1; min-height: 0;
+  }}
   .popup pre {{
     padding: 12px 16px; margin: 0; font-size: 0.8em; white-space: pre-wrap;
     word-wrap: break-word; line-height: 1.4;
@@ -1662,7 +1670,7 @@ def render_html(
 </style>
 <script>
 function showPopup(id) {{
-  document.getElementById(id).style.display = 'block';
+  document.getElementById(id).style.display = 'flex';
 }}
 function hidePopup(id) {{
   document.getElementById(id).style.display = 'none';
