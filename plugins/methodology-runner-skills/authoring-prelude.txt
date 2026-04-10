@@ -9,14 +9,24 @@ It has before/after examples for each lesson. Key patterns:
 - Test with novel sources, not the skill's own examples
 - Phase skills defer traceability to traceability-discipline
 - Reference traceability-discipline/SKILL.md as format exemplar
+- Go as long as quality requires. There is NO line-count limit.
 
-## Authoring methodology
+## MANDATORY: Authoring methodology — do NOT skip this
 
-1. Propose 3-5 structural variants
-2. Draft best 2-3 as complete SKILL.md files
-3. Test each with claude -p using a NOVEL source: normal + adversarial
-4. Compare, recommend, include a hybrid if top two complement each other
+You MUST follow this process. Do NOT jump straight to writing a draft.
+Do NOT skip variant testing. Do NOT present a single draft as final.
+Every previous skill that skipped this process produced inferior results.
+
+1. Propose 3-5 structural variants. Describe each in 2-3 sentences.
+2. Draft the most promising 2-3 as complete SKILL.md files.
+3. Test each with claude -p using a NOVEL source (not the skill's own
+   examples): both normal and adversarial ("be thorough") pressure.
+4. Present a comparison report with recommendation. Include a hybrid
+   if the top two variants have complementary strengths.
 5. I pick or we iterate. Deploy when solid.
+
+If you find yourself writing a skill without having proposed variants
+first, STOP. Go back to step 1.
 
 ## In-session verification
 

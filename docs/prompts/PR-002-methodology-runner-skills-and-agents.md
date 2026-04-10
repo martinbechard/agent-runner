@@ -66,7 +66,7 @@ The `plugin.json` should declare:
 The `README.md` should briefly describe the plugin, list the 18
 skills with one-line roles, and point at the companion spec
 (docs/superpowers/specs/2026-04-09-skill-driven-methodology-runner-design.md).
-Keep it under 100 lines.
+Keep it concise.
 
 ## How runtime discovery works (no symlinks)
 
@@ -122,7 +122,7 @@ The file must start with valid YAML frontmatter:
     description: Enforce universal traceability — every element traces to a prior-phase source; no orphans, no dangling references
     ---
 
-Followed by a substantive body (aim for 150-300 lines) that covers:
+Followed by a substantive body that covers:
 
 1. What traceability means in this methodology, with forward and
    backward link semantics.
@@ -222,7 +222,7 @@ Frontmatter:
     description: Extract requirements from source documents fidelity-first — no inference, no paraphrasing, no improvement
     ---
 
-Body should cover (100-250 lines):
+Body should cover:
 
 1. The fidelity principle: the extractor reproduces source text
    verbatim in verbatim_quote fields. It does not rewrite, summarize,
@@ -305,7 +305,7 @@ Frontmatter:
     description: Evaluate a requirements inventory for completeness, atomicity, fidelity, and correct categorisation
     ---
 
-Body (100-250 lines) should cover:
+Body should cover:
 
 1. The five failure modes to detect (match the judge_guidance in
    phases.py for PH-000):
@@ -532,7 +532,7 @@ Frontmatter:
     description: Group requirements into features with testable acceptance criteria and explicit dependencies
     ---
 
-Body (100-250 lines) covers:
+Body covers:
 
 1. Grouping discipline — how to decide which RI-* items belong to the
    same feature (shared domain entity, shared user flow, transactional
@@ -606,7 +606,7 @@ Frontmatter:
     description: Evaluate feature specifications for testability, RI coverage, dependency completeness, and scope discipline
     ---
 
-Body (100-250 lines) mirrors the five failure modes from the PH-001
+Body mirrors the five failure modes from the PH-001
 judge_guidance in phases.py, adds concrete detection methods for each,
 and describes what good judge feedback looks like.
 
@@ -844,7 +844,7 @@ Frontmatter:
     description: Evaluate stack manifests for coverage, expertise articulation, integration completeness, and technology coherence
     ---
 
-Body (100-250 lines) covers the five failure modes from
+Body covers the five failure modes from
 `phases.py::_PHASE_2_ARCHITECTURE.judge_guidance` with detection
 techniques for each. Emphasize the expertise-as-free-text check: flag
 any component whose `expected_expertise` list looks like concrete skill
@@ -950,7 +950,7 @@ Frontmatter:
     description: Tech-agnostic solution-design discipline — separation of concerns, interface design, dependency boundaries, error handling
     ---
 
-Body (150-300 lines) covers the core discipline without assuming a
+Body covers the core discipline without assuming a
 specific technology. The skill is explicit that STACK-SPECIFIC design
 patterns come from other skills added by the Skill-Selector mapping
 stack-manifest expected_expertise — this one is the floor, not the
@@ -1073,7 +1073,7 @@ Frontmatter:
     description: Define typed interface contracts with precise schemas, exhaustive error modes, and behavioral specs before any implementation
     ---
 
-Body (150-300 lines) covers:
+Body covers:
 
 1. Schema precision — no `object` / `any` / `unknown` types; every
    field named and typed.
@@ -1297,7 +1297,7 @@ Frontmatter:
     description: Test-driven development discipline — red/green/refactor, failing test first, minimal implementation to pass, refactoring under a green bar
     ---
 
-Body (150-300 lines) covers:
+Body covers:
 
 1. The red-green-refactor cycle with concrete examples.
 2. What counts as a "failing test" (must fail for the RIGHT reason —
@@ -1356,7 +1356,7 @@ Frontmatter:
     description: Universal code review principles — readability, testability, no dead code, no speculative abstractions, appropriate error handling
     ---
 
-Body (150-300 lines) covers the universal review criteria without
+Body covers the universal review criteria without
 assuming a specific language. Per-language review skills come from the
 expected_expertise mapping for specific components, not from this one.
 
@@ -1420,7 +1420,7 @@ Frontmatter:
     description: End-to-end verification discipline — chain completeness from RI to E2E, concrete assertions, negative coverage at component boundaries
     ---
 
-Body (100-250 lines) covers: traceability chain verification, E2E
+Body covers: traceability chain verification, E2E
 test specificity (no generic "page loads" assertions), negative test
 coverage for any feature that accepts input, and coverage summary
 accuracy.
