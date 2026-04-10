@@ -193,6 +193,49 @@ STRONG — explicit rule + counter-example:
 
 ---
 
+## Adversarial pressure tables resist technology leakage
+
+```
+WEAK — single rule:
+  "Responsibilities must be technology-agnostic."
+  Result: under adversarial pressure ("be detailed", "include Go types"),
+  4 of 4 variants leaked technology (Go structs, PostgreSQL schemas,
+  React component trees) into responsibilities and data summaries.
+
+STRONG — rule + Abstraction Test + CORRECT/WRONG + pressure table + red flags:
+  Adds a pressure-response table mapping each adversarial prompt to
+  the correct domain-level response, plus a red flags checklist.
+  Result: hybrid resisted ALL adversarial pressure. The agent
+  explicitly recognized each pressure vector as a mapped anti-pattern
+  and refused to comply.
+
+Key: the pressure table must show the EXACT leaked form the agent
+produced under adversarial testing, paired with the correct form.
+Abstract rules ("be technology-agnostic") fail; concrete before/after
+pairs from actual test failures succeed.
+```
+
+---
+
+## Component Integrity Rule prevents premature decomposition
+
+```
+WEAK — no mention:
+  Baseline (no skill) AND variant B under adversarial pressure BOTH
+  split a single PH-002 component (CMP-001-api) into three sub-components
+  (handler, service, repository). This violates PH-002's authority
+  over component boundaries.
+
+STRONG — explicit Component Integrity Rule + CORRECT/WRONG:
+  "The stack manifest defines component boundaries. You NEVER invent,
+  split, merge, or rename components."
+  Plus a WRONG example showing the exact 3-way split that occurred.
+  Result: hybrid preserved component boundaries under adversarial
+  pressure even when asked to "be thorough."
+```
+
+---
+
 ## Orchestrator note
 
 The baseline validator checks ALL phases' skills globally, not just
