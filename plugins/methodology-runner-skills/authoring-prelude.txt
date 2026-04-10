@@ -34,8 +34,9 @@ Every previous skill that skipped this process produced inferior results.
    reinforcement (rule + example + counter-example) for any fix —
    don't propose single-layer alternatives when the methodology
    already proved triple is needed. Test the hybrids the same way.
-6. Present final recommendation (hybrid vs. best pure). I pick or
-   we iterate. Deploy when solid.
+6. Present final recommendation (hybrid vs. best pure). If results
+   are unambiguous, deploy. If trade-offs require human judgment,
+   present options and wait.
 7. Before exiting: rm -rf /tmp/skill-variants-<skill-name>/ and any
    test workspaces you created under /tmp/. Leave no temp files.
 
