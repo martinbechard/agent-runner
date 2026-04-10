@@ -829,10 +829,16 @@ def _run_fork_point(
         temp_md_path = variant_dir / "synthetic-prompt.md"
         temp_md_path.write_text(synthetic_md, encoding="utf-8")
 
+        # When forking sessions, use the ORIGINAL workspace as project-dir
+        # so claude finds the session (sessions are stored per-project-path).
+        # Variants share the original workspace — must run sequentially.
+        effective_project_dir = (
+            workspace_dir if fork_from_session else variant_workspace
+        )
         cmd: list[str] = [
             sys.executable, "-m", "prompt_runner",
             "run", str(temp_md_path),
-            "--project-dir", str(variant_workspace),
+            "--project-dir", str(effective_project_dir),
             "--output-dir", str(variant_run_dir),
         ]
         if config.model:
