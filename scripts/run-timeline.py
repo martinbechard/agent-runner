@@ -833,7 +833,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
 
         if t == "system" and st == "init":
             model = obj.get("model", "?")
-            sid = obj.get("session_id", "?")[:12]
+            sid = obj.get("session_id", "?")
             cwd = obj.get("cwd", "?")
             tools = obj.get("tools", [])
             items.append(
