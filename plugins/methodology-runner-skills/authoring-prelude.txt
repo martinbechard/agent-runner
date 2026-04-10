@@ -24,11 +24,16 @@ Every previous skill that skipped this process produced inferior results.
    Use a skill-specific temp dir: /tmp/skill-variants-<skill-name>/
 3. Test ALL variants with claude -p using a NOVEL source (not the
    skill's own examples): both normal and adversarial pressure.
-4. Present a comparison report with recommendation. Always try a
-   hybrid of the top two — hybrids have outperformed pure variants
-   in every skill authored so far.
-5. I pick or we iterate. Deploy when solid.
-6. Before exiting: rm -rf /tmp/skill-variants-<skill-name>/ and any
+4. Present a comparison report. For each variant, list its strengths
+   AND its specific weaknesses revealed by testing.
+5. Build 1-2 hybrids that combine the winner's structure with fixes
+   for its weak areas drawn from other variants. Use triple
+   reinforcement (rule + example + counter-example) for any fix —
+   don't propose single-layer alternatives when the methodology
+   already proved triple is needed. Test the hybrids the same way.
+6. Present final recommendation (hybrid vs. best pure). I pick or
+   we iterate. Deploy when solid.
+7. Before exiting: rm -rf /tmp/skill-variants-<skill-name>/ and any
    test workspaces you created under /tmp/. Leave no temp files.
 
 If you find yourself writing a skill without having proposed variants
