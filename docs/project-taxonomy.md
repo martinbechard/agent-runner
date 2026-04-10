@@ -127,6 +127,30 @@
 - **Filename pattern:** `YYYY-MM-DD-<topic-slug>-design.md` where YYYY-MM-DD is the session date and topic-slug is a kebab-case description of the subject.
 - **Example:** `2026-04-07-project-organiser-agent-design.md`
 
+### plugins/<plugin-name>/.claude-plugin/
+- **Purpose:** Claude Code plugin manifest directory. Contains the `plugin.json` file that declares the plugin's identity (name, version, description, author) and any other Claude Code plugin metadata files required by the plugin convention. This is the machine-readable registration layer of a plugin package.
+- **Signals:** `plugin.json`, `name` / `version` / `description` / `author` fields, `.claude-plugin` directory name, "plugin manifest", "Claude Code plugin", "skill pack manifest", fixed filename required by the Claude Code plugin runtime.
+- **Filename pattern:** `plugin.json` (fixed name); any additional Claude Code plugin metadata files use the exact names the runtime expects.
+- **Tests location:** n/a — manifest files are configuration, not runnable source code.
+
+### plugins/<plugin-name>/skills/<skill-name>/
+- **Purpose:** Individual skill definitions inside a Claude Code plugin package. Each skill is a named subdirectory containing a `SKILL.md` file that specifies the skill's purpose, universal rules, inputs, outputs, and any phase-specific guidance consumed by the methodology-runner when executing that skill. The filename is fixed by the methodology-runner plugin convention.
+- **Signals:** "skill definition", "universal rules", "traceability rules", "phase must follow", "every artifact element traces", "methodology phase", SKILL.md, "methodology-runner skill", "skill pack entry", fixed path derived from the plugin name and the skill's identity, audience is AI pipeline agents.
+- **Filename pattern:** `SKILL.md` (fixed name required by the methodology-runner plugin convention).
+- **Tests location:** n/a — skill definition files are declarative specifications, not runnable source code.
+
+### plugins/<plugin-name>/docs/
+- **Purpose:** Supplementary reference documents scoped to a single plugin — authoring guides, lessons-learned files, pattern catalogues, and any other human- or AI-readable guidance that belongs to the plugin but is not a skill definition, a plugin manifest, or the plugin README. Consumed by subsequent skill-authoring sessions or by AI pipeline agents writing new skills for that plugin.
+- **Signals:** "lessons learned", "authoring guide", "patterns that work well for AI", "skill authoring patterns", "adversarial testing results", "do not repeat these experiments", "best practices for skill writing", scoped to one plugin, not a SKILL.md, not a README, not a plugin.json, not a docs/methodology/ spec.
+- **Filename pattern:** `kebab-case.md` — descriptive slug matching the document's subject (e.g. `skill-authoring-lessons-learned.md`, `ai-consumption-patterns.md`).
+- **Tests location:** n/a — these are reference documents, not runnable source code.
+
+### plugins/<plugin-name>/
+- **Purpose:** Self-contained Claude Code sub-agent plugin packages. Each subdirectory is a single named plugin that bundles a README, a companion spec or prompt file, and any supporting assets the plugin needs. The README is the human-facing entry point; the spec or prompt file is the machine-facing definition consumed by the methodology-runner or prompt-runner.
+- **Signals:** "Claude Code plugin", "skill pack", "methodology-runner-skills", "sub-agent plugin", `plugins/` directory, companion spec reference, list of skills with one-line roles, "point at a companion spec", fixed plugin directory name determined by the plugin's identity.
+- **Filename pattern:** `README.md` for the human-readable description; companion spec follows the `docs/prompts/` or `docs/methodology/` naming convention for the spec file itself.
+- **Tests location:** n/a — plugin directories are documentation and configuration, not runnable source code.
+
 ### (project root)
 - **Purpose:** Tooling configuration files that must live at the repository root by ecosystem convention.
 - **Signals:** `package.json`, `tsconfig.json`, `pyproject.toml`, `.gitignore`, `README.md`, `CLAUDE.md`, `.editorconfig`, `.prettierrc`, lockfiles.
@@ -136,6 +160,10 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-09 — plugins/<plugin-name>/docs/ added — plugin-level supplementary reference documents (authoring guides, lessons-learned, pattern catalogues) are not SKILL.md files, not plugin manifests, and not plugin READMEs; they need a dedicated docs/ layer scoped to the plugin.
+- 2026-04-09 — plugins/<plugin-name>/skills/<skill-name>/ added — individual skill definition files (SKILL.md) inside a plugin's skills/ subdirectory are a distinct layer from the plugin root README and the plugin manifest; they need their own taxonomy entry covering the fixed SKILL.md filename convention.
+- 2026-04-09 — plugins/<plugin-name>/.claude-plugin/ added — Claude Code plugin manifest directory (plugin.json with name/version/description/author) is a distinct machine-readable registration layer inside a plugin package and needs its own taxonomy entry separate from the human-readable plugin root.
+- 2026-04-09 — plugins/<plugin-name>/ added — Claude Code plugin packages (README + companion spec) have no home in docs/, src/, or tests/; a dedicated top-level plugins layer is needed.
 - 2026-04-09 — tests/fixtures/ added — static input fixtures for methodology-runner skill-authoring sessions are not unit-test source files and do not mirror any src/ module; they need a dedicated fixtures layer inside tests/.
 - 2026-04-09 — docs/superpowers/plans/ added — TDD implementation plans produced by the superpowers:writing-plans skill are derived from superpowers/specs/ companions and belong in the same superpowers layer, distinct from docs/plans/ which holds generic component plans.
 - 2026-04-09 — docs/superpowers/specs/ added — pre-implementation design specs produced by brainstorming skill runs are not yet approved into the component design canon and need a dedicated staging layer distinct from docs/design/, docs/requirements/, docs/plans/, and docs/prompts/.
