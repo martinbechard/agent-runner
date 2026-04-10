@@ -840,7 +840,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                 f'<div class="log-system">'
                 f'<span class="log-type">INIT</span> '
                 f'model=<strong>{_escape_html(model)}</strong> '
-                f'session={sid}… '
+                f'session={sid} '
                 f'cwd={_escape_html(str(cwd)[-40:])} '
                 f'tools={len(tools)}'
                 f'</div>'
