@@ -895,7 +895,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                 items.append(
                     f'<div class="log-system">'
                     f'<span class="log-type">HOOK✓</span> {_escape_html(hook)} '
-                    f'<span class="log-dim">({len(output):,}ch)</span>'
+                    f'<span class="log-dim">({len(output):,})</span>'
                     f'</div>'
                 )
 
@@ -929,7 +929,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                     items.append(
                         f'<div class="log-thinking">'
                         f'<span class="log-type">THINK</span> '
-                        f'<span class="log-dim">{len(text):,}ch</span> '
+                        f'<span class="log-dim">{len(text):,}</span> '
                         f'{preview}…'
                         f'</div>'
                     )
@@ -939,7 +939,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                     items.append(
                         f'<div class="log-text">'
                         f'<span class="log-type">TEXT</span> '
-                        f'<span class="log-dim">{len(text):,}ch</span> '
+                        f'<span class="log-dim">{len(text):,}</span> '
                         f'{preview}{"…" if len(text) > 200 else ""}'
                         f'</div>'
                     )
@@ -958,7 +958,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                         f'<span class="log-type">→TOOL</span> '
                         f'<strong>{_escape_html(name)}</strong>'
                         f'{"(" + _escape_html(fname) + ")" if fname else ""} '
-                        f'<span class="log-dim">{inp_size:,}ch</span>'
+                        f'<span class="log-dim">{inp_size:,}</span>'
                         f'</div>'
                     )
 
@@ -980,7 +980,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                         f'<div class="log-result">'
                         f'<span class="log-type">←TOOL</span> '
                         f'{tool_label} '
-                        f'<span class="log-dim">{len(content):,}ch</span> '
+                        f'<span class="log-dim">{len(content):,}</span> '
                         f'{preview}{"…" if len(content) > 150 else ""}'
                         f'{"  <span class=log-ts>" + ts[-12:] + "</span>" if ts else ""}'
                         f'</div>'
@@ -990,7 +990,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                     items.append(
                         f'<div class="log-text">'
                         f'<span class="log-type">USER</span> '
-                        f'<span class="log-dim">{len(text):,}ch</span>'
+                        f'<span class="log-dim">{len(text):,}</span>'
                         f'</div>'
                     )
 
@@ -1153,11 +1153,11 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                                         display_input = f"{header}\n\n--- File content ---\n{file_content[:POPUP_TRUNCATE_CHARS]}"
                                 except (ValueError, TypeError):
                                     pass
-                            popup_lines.append(f"--- Input ({tc.input_size:,} chars) ---\n{display_input}\n")
+                            popup_lines.append(f"--- Input ({tc.input_size:,}) ---\n{display_input}\n")
                         if tc.result_content:
-                            popup_lines.append(f"--- Result ({tc.result_size:,} chars) ---\n{tc.result_content[:POPUP_TRUNCATE_CHARS]}\n")
+                            popup_lines.append(f"--- Result ({tc.result_size:,}) ---\n{tc.result_content[:POPUP_TRUNCATE_CHARS]}\n")
                     else:
-                        popup_lines.append(f"Input: {tc.input_size:,} chars | Result: {tc.result_size:,} chars")
+                        popup_lines.append(f"Input: {tc.input_size:,} chars | Result: {tc.result_size:,}")
                     popups.append(
                         f'<div id="{popup_id}" class="popup">'
                         f'<div class="popup-header">'
