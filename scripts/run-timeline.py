@@ -809,6 +809,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
 
     uid = f"pcontent-{popup_id}"
     items: list[str] = []
+    pending_log_tools: dict[str, tuple[str, str]] = {}  # tool_use_id -> (name, fname)
 
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -895,10 +896,14 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                     )
                 elif bt == "tool_use":
                     name = block.get("name", "?")
+                    tool_id = block.get("id", "")
                     inp = block.get("input", {})
                     fpath = inp.get("file_path", "") or inp.get("path", "") or inp.get("pattern", "") or inp.get("command", "")[:60]
                     fname = fpath.split("/")[-1] if fpath else ""
                     inp_size = len(_jlog.dumps(inp))
+                    # Track for matching tool_result later
+                    if tool_id:
+                        pending_log_tools[tool_id] = (name, fname)
                     items.append(
                         f'<div class="log-tool">'
                         f'<span class="log-type">TOOL→</span> '
@@ -915,10 +920,16 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                 bt = block.get("type", "?")
                 if bt == "tool_result":
                     content = str(block.get("content", ""))
+                    tool_use_id = block.get("tool_use_id", "")
+                    tool_name, tool_fname = pending_log_tools.get(tool_use_id, ("?", ""))
+                    tool_label = f'<strong>{_escape_html(tool_name)}</strong>'
+                    if tool_fname:
+                        tool_label += f'({_escape_html(tool_fname)})'
                     preview = _escape_html(content[:150]).replace("\n", " ")
                     items.append(
                         f'<div class="log-result">'
-                        f'<span class="log-type">→TOOL</span> '
+                        f'<span class="log-type">←TOOL</span> '
+                        f'{tool_label} '
                         f'<span class="log-dim">{len(content):,}ch</span> '
                         f'{preview}{"…" if len(content) > 150 else ""}'
                         f'{"  <span class=log-ts>" + ts[-12:] + "</span>" if ts else ""}'
