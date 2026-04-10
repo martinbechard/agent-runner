@@ -454,12 +454,15 @@ def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> N
             # Try to match step name slug to a section
             step_slug = re.sub(r"\s*/\s*iter.*$", "", step.name)
             step_slug = re.sub(r"[^a-z0-9]+", "-", step_slug.lower()).strip("-")
+            is_judge = "judge" in step.name.lower()
             for section_slug, section_text in sections.items():
-                if section_slug and section_slug in step_slug:
-                    step.detail.prompt_text = section_text
-                    break
-                if step_slug and step_slug in section_slug:
-                    step.detail.prompt_text = section_text
+                matched = (
+                    (section_slug and section_slug in step_slug) or
+                    (step_slug and step_slug in section_slug)
+                )
+                if matched:
+                    gen, val = _split_prompt_fences(section_text)
+                    step.detail.prompt_text = val if is_judge else gen
                     break
 
 
@@ -510,12 +513,15 @@ def _backfill_prompts_from_synthetic(steps: list[Step], synth_path: Path) -> Non
         if step.detail and not step.detail.prompt_text:
             step_slug = re.sub(r"\s*/\s*iter.*$", "", step.name)
             step_slug = re.sub(r"[^a-z0-9]+", "-", step_slug.lower()).strip("-")
+            is_judge = "judge" in step.name.lower()
             for section_slug, section_text in sections.items():
-                if section_slug and section_slug in step_slug:
-                    step.detail.prompt_text = section_text
-                    break
-                if step_slug and step_slug in section_slug:
-                    step.detail.prompt_text = section_text
+                matched = (
+                    (section_slug and section_slug in step_slug) or
+                    (step_slug and step_slug in section_slug)
+                )
+                if matched:
+                    gen, val = _split_prompt_fences(section_text)
+                    step.detail.prompt_text = val if is_judge else gen
                     break
 
 
