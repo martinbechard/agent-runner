@@ -7,6 +7,8 @@ from __future__ import annotations
 import json
 import re
 import shutil
+import subprocess
+import sys
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
@@ -18,7 +20,7 @@ from prompt_runner.claude_client import (
     ClaudeInvocationError,
     ClaudeResponse,
 )
-from prompt_runner.parser import PromptPair
+from prompt_runner.parser import ForkPoint, PromptPair, VariantPrompt
 from prompt_runner.verdict import Verdict, VerdictParseError, parse_verdict
 
 
@@ -109,6 +111,9 @@ class RunConfig:
     dangerously_skip_permissions: bool = False
     """When True, pass --dangerously-skip-permissions to claude in
     interactive mode so the user is not prompted for every tool call."""
+    variant_sequential: bool = False
+    """When True, run fork-point variants one at a time instead of in
+    parallel. Parallel (default) is faster; sequential uses less quota."""
 
 
 @dataclass(frozen=True)
@@ -133,10 +138,32 @@ class PromptResult:
 
 
 @dataclass(frozen=True)
+class VariantResult:
+    """Outcome of one variant subprocess within a fork point."""
+
+    variant_name: str
+    variant_title: str
+    exit_code: int
+    run_dir: Path
+    workspace_dir: Path
+    summary: str  # content of summary.txt, or empty if not found
+
+
+@dataclass(frozen=True)
+class ForkResult:
+    """Aggregated results for all variants at one fork point."""
+
+    fork_index: int
+    fork_title: str
+    variant_results: list[VariantResult]
+
+
+@dataclass(frozen=True)
 class PipelineResult:
     prompt_results: list[PromptResult]
     halted_early: bool
     halt_reason: str | None
+    fork_results: list[ForkResult] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -691,8 +718,165 @@ def _load_prior_artifact_from_disk(
     )
 
 
+def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
+    """Convert a list of PromptPair objects back to prompt-runner markdown format.
+
+    Each pair becomes a '## Prompt N: <title>' section with two fenced code
+    blocks.  Validator-less pairs (empty validation_prompt) get only one block.
+    """
+    sections: list[str] = []
+    for pair in pairs:
+        lines: list[str] = [f"## Prompt {pair.index}: {pair.title}", ""]
+        lines.append("```")
+        lines.append(pair.generation_prompt)
+        lines.append("```")
+        if pair.validation_prompt:
+            lines.append("")
+            lines.append("```")
+            lines.append(pair.validation_prompt)
+            lines.append("```")
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections) + "\n"
+
+
+def _copy_workspace_for_variant(src_workspace: Path, dest_workspace: Path) -> None:
+    """Copy a workspace directory to a new location, excluding build/cache dirs.
+
+    dest_workspace must not already exist.
+    """
+    def _ignore(dir_path: str, names: list[str]) -> list[str]:
+        skipped: list[str] = []
+        for name in names:
+            rel = Path(dir_path) / name
+            if name in _SNAPSHOT_SKIP_DIR_NAMES or name.endswith(".egg-info") or name == ".DS_Store":
+                skipped.append(name)
+        return skipped
+
+    shutil.copytree(src_workspace, dest_workspace, ignore=_ignore, symlinks=False)
+
+
+def _run_fork_point(
+    fork: ForkPoint,
+    fork_index_in_run: int,
+    items_after: list[PromptPair | ForkPoint],
+    run_dir: Path,
+    workspace_dir: Path,
+    config: RunConfig,
+    source_file: Path,
+) -> ForkResult:
+    """Execute all variants of a fork point and return their aggregated results.
+
+    For each variant:
+    1. Copy the current workspace into a per-variant directory.
+    2. Build a synthetic prompt file (variant pairs + items_after).
+    3. Spawn a prompt-runner subprocess.
+    4. Collect results.
+    """
+    fork_slug = f"fork-{fork.index:02d}-{_slugify(fork.title)}"
+    fork_dir = run_dir / fork_slug
+    fork_dir.mkdir(parents=True, exist_ok=True)
+
+    procs: list[tuple[VariantPrompt, Path, Path, subprocess.Popen[bytes]]] = []
+
+    for variant in fork.variants:
+        variant_slug = f"variant-{_slugify(variant.variant_name)}"
+        variant_dir = fork_dir / variant_slug
+        variant_workspace = variant_dir / "workspace"
+        variant_run_dir = variant_dir / "run"
+
+        variant_dir.mkdir(parents=True, exist_ok=True)
+        variant_run_dir.mkdir(parents=True, exist_ok=True)
+
+        # Copy the workspace into the variant directory.
+        _copy_workspace_for_variant(workspace_dir, variant_workspace)
+
+        # Build a synthetic prompt list: variant pairs + all subsequent items.
+        # Only PromptPair items from items_after are serialised (ForkPoints
+        # in the tail are not yet supported for recursive nesting; they will
+        # be ignored in serialisation for now).
+        tail_pairs: list[PromptPair] = [
+            item for item in items_after if isinstance(item, PromptPair)
+        ]
+        synthetic_pairs = list(variant.pairs) + tail_pairs
+        synthetic_md = _serialize_pairs_to_md(synthetic_pairs)
+
+        temp_md_path = variant_dir / "synthetic-prompt.md"
+        temp_md_path.write_text(synthetic_md, encoding="utf-8")
+
+        cmd: list[str] = [
+            sys.executable, "-m", "prompt_runner",
+            "run", str(temp_md_path),
+            "--project-dir", str(variant_workspace),
+            "--output-dir", str(variant_run_dir),
+        ]
+        if config.model:
+            cmd.extend(["--model", config.model])
+        if config.generator_prelude:
+            prelude_path = variant_dir / "generator-prelude.txt"
+            prelude_path.write_text(config.generator_prelude, encoding="utf-8")
+            cmd.extend(["--generator-prelude", str(prelude_path)])
+        if config.judge_prelude:
+            prelude_path = variant_dir / "judge-prelude.txt"
+            prelude_path.write_text(config.judge_prelude, encoding="utf-8")
+            cmd.extend(["--judge-prelude", str(prelude_path)])
+
+        print(
+            f"[fork {fork.index}] spawning variant '{variant.variant_name}' "
+            f"({variant.variant_title}) → {variant_run_dir}",
+            flush=True,
+        )
+
+        proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        procs.append((variant, variant_run_dir, variant_workspace, proc))
+
+        if config.variant_sequential:
+            proc.wait()
+
+    # Wait for all subprocesses.
+    variant_results: list[VariantResult] = []
+    for variant, variant_run_dir, variant_workspace, proc in procs:
+        proc.wait()
+        exit_code = proc.returncode
+        summary_path = variant_run_dir / "summary.txt"
+        summary = (
+            summary_path.read_text(encoding="utf-8")
+            if summary_path.exists()
+            else ""
+        )
+        variant_results.append(VariantResult(
+            variant_name=variant.variant_name,
+            variant_title=variant.variant_title,
+            exit_code=exit_code,
+            run_dir=variant_run_dir,
+            workspace_dir=variant_workspace,
+            summary=summary,
+        ))
+
+    # Write a comparison report.
+    comparison_lines: list[str] = [
+        f"Fork {fork.index}: {fork.title}",
+        f"Slug: {fork_slug}",
+        "",
+        "Variants:",
+    ]
+    for vr in variant_results:
+        status = "success" if vr.exit_code == 0 else f"failed (exit {vr.exit_code})"
+        comparison_lines.append(f"  {vr.variant_name}: {vr.variant_title} — {status}")
+        comparison_lines.append(f"    run: {vr.run_dir}")
+        comparison_lines.append(f"    workspace: {vr.workspace_dir}")
+    comparison_lines.append("")
+
+    _write(fork_dir / "comparison.txt", "\n".join(comparison_lines) + "\n")
+
+    return ForkResult(
+        fork_index=fork.index,
+        fork_title=fork.title,
+        variant_results=variant_results,
+    )
+
+
 def run_pipeline(
-    pairs: list[PromptPair],
+    pairs: list[PromptPair | ForkPoint],
     run_dir: Path,
     config: RunConfig,
     claude_client: ClaudeClient,
@@ -713,13 +897,45 @@ def run_pipeline(
 
     prior_artifacts: list[PriorArtifact] = []
     prompt_results: list[PromptResult] = []
+    fork_results: list[ForkResult] = []
 
     # When resuming, track whether we have hit the first incomplete prompt.
     # All prompts before it that have a 'pass' verdict are skipped; once we
     # encounter an incomplete prompt we switch to normal forward execution.
     still_skipping = resume
 
-    for pair in pairs:
+    for item_index, item in enumerate(pairs):
+        # --- ForkPoint handling ---
+        if isinstance(item, ForkPoint):
+            fork = item
+            items_after = pairs[item_index + 1:]
+            print(
+                f"[fork] prompt {fork.index} '{fork.title}' — "
+                f"spawning {len(fork.variants)} variant(s)",
+                flush=True,
+            )
+            fork_result = _run_fork_point(
+                fork=fork,
+                fork_index_in_run=item_index,
+                items_after=items_after,
+                run_dir=run_dir,
+                workspace_dir=workspace_dir,
+                config=config,
+                source_file=source_file,
+            )
+            fork_results.append(fork_result)
+            # Parent does not continue past the fork point.
+            _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
+                      started_at=started_at, halted_early=False, halt_reason=None,
+                      fork_results=fork_results)
+            return PipelineResult(
+                prompt_results, halted_early=False, halt_reason=None,
+                fork_results=fork_results,
+            )
+
+        # --- Normal PromptPair handling ---
+        pair: PromptPair = item  # type: ignore[assignment]
+
         if config.only is not None and pair.index != config.only:
             continue
 
@@ -851,11 +1067,12 @@ def _finalise(
     source_file: Path,
     config: RunConfig,
     run_id: str,
-    pairs: list[PromptPair],
+    pairs: list[PromptPair | ForkPoint],
     prompt_results: list[PromptResult],
     started_at: datetime,
     halted_early: bool,
     halt_reason: str | None,
+    fork_results: list[ForkResult] | None = None,
 ) -> None:
     finished_at = datetime.now(timezone.utc)
     wall_time = _format_wall_time(started_at, finished_at)
@@ -871,17 +1088,19 @@ def _finalise(
     _write(run_dir / "summary.txt", _format_summary(
         source_file, run_dir, pairs, prompt_results,
         halted_early, halt_reason, wall_time,
+        fork_results=fork_results or [],
     ))
 
 
 def _format_summary(
     source_file: Path,
     run_dir: Path,
-    pairs: list[PromptPair],
+    pairs: list[PromptPair | ForkPoint],
     prompt_results: list[PromptResult],
     halted_early: bool,
     halt_reason: str | None,
     wall_time: str,
+    fork_results: list[ForkResult] | None = None,
 ) -> str:
     status = "halted" if halted_early else "completed"
     lines = [
@@ -894,22 +1113,39 @@ def _format_summary(
     ]
     # Index prompt_results by pair.index for fast lookup.
     results_by_index = {r.pair.index: r for r in prompt_results}
-    for pair in pairs:
-        slug = _prompt_dir_name(pair)
-        result = results_by_index.get(pair.index)
-        if result is None:
+    for item in pairs:
+        if isinstance(item, ForkPoint):
+            fork = item
             lines.append(
-                f"  {pair.index:02d}  {slug:<40s}  skipped"
+                f"  {fork.index:02d}  fork-{fork.index:02d}-{_slugify(fork.title):<34s}  [fork]"
             )
+            if fork_results:
+                for fr in fork_results:
+                    if fr.fork_index == fork.index:
+                        for vr in fr.variant_results:
+                            vstatus = "ok" if vr.exit_code == 0 else f"exit {vr.exit_code}"
+                            lines.append(
+                                f"        variant-{vr.variant_name}  {vr.variant_title}  {vstatus}"
+                            )
         else:
-            iter_count = len(result.iterations)
-            lines.append(
-                f"  {pair.index:02d}  {slug:<40s}  {result.final_verdict.value:<9s}  {iter_count} iter"
-            )
+            pair: PromptPair = item  # type: ignore[assignment]
+            slug = _prompt_dir_name(pair)
+            result = results_by_index.get(pair.index)
+            if result is None:
+                lines.append(
+                    f"  {pair.index:02d}  {slug:<40s}  skipped"
+                )
+            else:
+                iter_count = len(result.iterations)
+                lines.append(
+                    f"  {pair.index:02d}  {slug:<40s}  {result.final_verdict.value:<9s}  {iter_count} iter"
+                )
     total_calls = sum(len(r.iterations) * 2 for r in prompt_results)
     lines.append("")
     lines.append(f"Total claude calls: {total_calls}")
     lines.append(f"Wall time: {wall_time}")
+    if fork_results:
+        lines.append(f"Forks executed: {len(fork_results)}")
     if halt_reason:
         lines.append(f"Halt reason: {halt_reason}")
     lines.append("")

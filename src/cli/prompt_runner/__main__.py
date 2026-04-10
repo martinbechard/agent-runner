@@ -121,6 +121,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
         dangerously_skip_permissions=args.dangerously_skip_permissions,
+        variant_sequential=args.variant_sequential,
     )
 
     try:
@@ -284,6 +285,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "With a path, uses that directory. Prompts that already "
             "completed with 'pass' are skipped; execution continues from "
             "the first incomplete prompt."
+        ),
+    )
+    run_cmd.add_argument(
+        "--variant-sequential",
+        action="store_true",
+        default=False,
+        help=(
+            "Run fork-point variants one at a time instead of in parallel. "
+            "Parallel (default) is faster; sequential uses less API quota "
+            "simultaneously."
         ),
     )
     run_cmd.set_defaults(func=_cmd_run)
