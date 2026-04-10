@@ -1,25 +1,62 @@
 #!/usr/bin/env python3
 """Generate an HTML timeline report for a methodology-runner workspace.
 
-Parses file modification timestamps from the .methodology-runner/runs/
-directory to reconstruct the execution timeline, showing how long each
-step (selector, prompt-generator, generator calls, judge calls,
-cross-ref) took.
+Parses JSONL logs from .methodology-runner/runs/ to show:
+- Per-phase wall time breakdown (selector, prompt-gen, generator, judge, cross-ref)
+- Per-call drill-down: turns, thinking, tool calls, subagent spawns
+- Token usage and cost per call
+- Visual bars proportional to time spent
 
 Usage:
     python scripts/run-timeline.py <workspace-path> [--output report.html]
-
-If --output is omitted, writes to <workspace>/.methodology-runner/timeline.html
 """
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Data models
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ToolCall:
+    name: str
+    input_size: int  # chars
+    description: str = ""
+
+
+@dataclass
+class Turn:
+    turn_number: int
+    thinking_chars: int = 0
+    text_chars: int = 0
+    tool_calls: list[ToolCall] = field(default_factory=list)
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cache_read_tokens: int = 0
+
+
+@dataclass
+class CallDetail:
+    """Parsed from one JSONL log file (one claude invocation)."""
+    duration_ms: int = 0
+    duration_api_ms: int = 0
+    num_turns: int = 0
+    cost_usd: float = 0.0
+    input_tokens: int = 0
+    cache_creation_tokens: int = 0
+    cache_read_tokens: int = 0
+    output_tokens: int = 0
+    turns: list[Turn] = field(default_factory=list)
+    subagent_count: int = 0
+    stop_reason: str = ""
+    error: str = ""
 
 
 @dataclass
@@ -28,7 +65,7 @@ class Step:
     started: datetime
     ended: datetime
     size_bytes: int = 0
-    detail: str = ""
+    detail: CallDetail | None = None
 
     @property
     def duration_seconds(self) -> float:
@@ -61,14 +98,92 @@ class PhaseTimeline:
         m, s = divmod(s, 60)
         return f"{m}m{s:02d}s"
 
+    @property
+    def total_cost(self) -> float:
+        return sum(s.detail.cost_usd for s in self.steps if s.detail)
+
+
+# ---------------------------------------------------------------------------
+# JSONL log parser
+# ---------------------------------------------------------------------------
+
+def parse_log(path: Path) -> CallDetail:
+    """Parse a claude JSONL stdout log into a CallDetail."""
+    detail = CallDetail()
+    current_turn = 0
+
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        etype = obj.get("type", "")
+        subtype = obj.get("subtype", "")
+
+        # Result event — final summary
+        if etype == "result":
+            detail.duration_ms = obj.get("duration_ms", 0)
+            detail.duration_api_ms = obj.get("duration_api_ms", 0)
+            detail.num_turns = obj.get("num_turns", 0)
+            detail.cost_usd = obj.get("total_cost_usd", 0.0)
+            detail.stop_reason = obj.get("stop_reason", "")
+            usage = obj.get("usage", {})
+            detail.input_tokens = usage.get("input_tokens", 0)
+            detail.cache_creation_tokens = usage.get("cache_creation_input_tokens", 0)
+            detail.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+            detail.output_tokens = usage.get("output_tokens", 0)
+            if obj.get("is_error"):
+                detail.error = str(obj.get("error", "unknown error"))
+
+        # Assistant message — content blocks
+        elif etype == "assistant":
+            current_turn += 1
+            turn = Turn(turn_number=current_turn)
+            msg = obj.get("message", {})
+            for block in msg.get("content", []):
+                bt = block.get("type", "")
+                if bt == "thinking":
+                    turn.thinking_chars += len(block.get("thinking", ""))
+                elif bt == "text":
+                    turn.text_chars += len(block.get("text", ""))
+                elif bt == "tool_use":
+                    name = block.get("name", "?")
+                    inp = json.dumps(block.get("input", {}))
+                    turn.tool_calls.append(ToolCall(
+                        name=name,
+                        input_size=len(inp),
+                    ))
+                    if name == "Agent":
+                        detail.subagent_count += 1
+
+            usage = msg.get("usage", {})
+            turn.input_tokens = usage.get("input_tokens", 0)
+            turn.output_tokens = usage.get("output_tokens", 0)
+            turn.cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+            detail.turns.append(turn)
+
+    return detail
+
+
+# ---------------------------------------------------------------------------
+# Workspace parser
+# ---------------------------------------------------------------------------
 
 def _mtime(path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
-def _file_step(name: str, start_file: Path, end_file: Path, detail: str = "") -> Step | None:
+def _file_step(name: str, start_file: Path, end_file: Path,
+               log_file: Path | None = None) -> Step | None:
     if not start_file.exists() or not end_file.exists():
         return None
+    detail = None
+    if log_file and log_file.exists() and log_file.stat().st_size > 0:
+        detail = parse_log(log_file)
     return Step(
         name=name,
         started=_mtime(start_file),
@@ -90,12 +205,13 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
     if selector_logs.exists():
         for log in sorted(selector_logs.glob(f"selector-{phase_id}-*.stdout.log")):
             stderr = log.with_suffix("").with_suffix(".stderr.log")
-            step = _file_step("Skill-Selector", stderr if stderr.exists() else log, log)
+            step = _file_step("Skill-Selector",
+                              stderr if stderr.exists() else log, log, log)
             if step:
                 timeline.steps.append(step)
             break
 
-    # Skills yaml
+    # Prelude
     skills_yaml = phase_dir / f"phase-{phase_num:03d}-skills.yaml"
     prelude = phase_dir / "generator-prelude.txt"
     if skills_yaml.exists() and prelude.exists():
@@ -107,11 +223,19 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
     prompt_file = phase_dir / "prompt-file.md"
     if prompt_file.exists() and timeline.steps:
         prev = timeline.steps[-1]
+        pg_log = None
+        # The prompt generator runs via a claude call — check for its log
+        pg_logs_dir = phase_dir / "prompt-runner-files" / "logs"
+        if pg_logs_dir.exists():
+            for lg in pg_logs_dir.rglob("*.stdout.log"):
+                pg_log = lg
+                break
         step = Step(
             name="Prompt generator",
             started=prev.ended,
             ended=_mtime(prompt_file),
             size_bytes=prompt_file.stat().st_size,
+            detail=parse_log(pg_log) if pg_log and pg_log.stat().st_size > 0 else None,
         )
         if step.duration_seconds > 0:
             timeline.steps.append(step)
@@ -131,7 +255,7 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
                     step = _file_step(
                         f"{prompt_name} / iter {iter_num} generator",
                         stderr if stderr.exists() else iter_log,
-                        iter_log,
+                        iter_log, iter_log,
                     )
                     if step:
                         timeline.steps.append(step)
@@ -142,7 +266,7 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
                         step = _file_step(
                             f"{prompt_name} / iter {iter_num} judge",
                             judge_stderr if judge_stderr.exists() else judge_log,
-                            judge_log,
+                            judge_log, judge_log,
                         )
                         if step:
                             timeline.steps.append(step)
@@ -174,12 +298,9 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
         state = json.loads(state_path.read_text())
         for p in state.get("phases", []):
             pid = p["phase_id"]
-            # Extract phase number from the directory name convention
             for i in range(10):
-                if (runs_dir / f"phase-{i}").exists():
-                    # Match by checking if the phase_id starts with PH-00{i}
-                    if pid.startswith(f"PH-00{i}"):
-                        phases_map[i] = pid
+                if (runs_dir / f"phase-{i}").exists() and pid.startswith(f"PH-00{i}"):
+                    phases_map[i] = pid
 
     timelines = []
     for phase_dir in sorted(runs_dir.glob("phase-*")):
@@ -196,78 +317,195 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
     return timelines
 
 
+# ---------------------------------------------------------------------------
+# HTML renderer
+# ---------------------------------------------------------------------------
+
 def _bar_color(name: str) -> str:
-    if "generator" in name.lower() and "prompt generator" not in name.lower():
+    nl = name.lower()
+    if "generator" in nl and "prompt generator" not in nl:
         return "#4a90d9"
-    if "judge" in name.lower():
+    if "judge" in nl:
         return "#e67e22"
-    if "selector" in name.lower():
+    if "selector" in nl:
         return "#27ae60"
-    if "prompt generator" in name.lower():
+    if "prompt generator" in nl:
         return "#8e44ad"
-    if "cross-ref" in name.lower():
+    if "cross-ref" in nl:
         return "#c0392b"
-    if "prelude" in name.lower():
+    if "prelude" in nl:
         return "#27ae60"
     return "#95a5a6"
 
 
+def _render_detail(detail: CallDetail) -> str:
+    """Render the drill-down section for one call."""
+    if not detail or (not detail.turns and not detail.duration_ms):
+        return ""
+
+    parts = ['<div class="detail">']
+
+    # Summary line
+    api_s = detail.duration_api_ms / 1000
+    wall_s = detail.duration_ms / 1000
+    overhead_s = wall_s - api_s
+    parts.append(
+        f'<div class="detail-summary">'
+        f'API: {api_s:.0f}s'
+        f' | overhead: {overhead_s:.1f}s'
+        f' | turns: {detail.num_turns}'
+        f' | cost: ${detail.cost_usd:.2f}'
+    )
+    if detail.subagent_count:
+        parts.append(f' | <span class="warn">subagents: {detail.subagent_count}</span>')
+    parts.append('</div>')
+
+    # Token bar
+    total_tok = (detail.cache_creation_tokens + detail.cache_read_tokens
+                 + detail.input_tokens + detail.output_tokens) or 1
+    parts.append('<div class="token-bar">')
+    for label, count, color in [
+        ("cache-read", detail.cache_read_tokens, "#3498db"),
+        ("cache-create", detail.cache_creation_tokens, "#2ecc71"),
+        ("input", detail.input_tokens, "#95a5a6"),
+        ("output", detail.output_tokens, "#e74c3c"),
+    ]:
+        if count > 0:
+            pct = count / total_tok * 100
+            parts.append(
+                f'<div class="tok-seg" style="width:{pct:.1f}%;background:{color}" '
+                f'title="{label}: {count:,}"></div>'
+            )
+    parts.append('</div>')
+    parts.append(
+        f'<div class="token-legend">'
+        f'cache-read: {detail.cache_read_tokens:,} '
+        f'| cache-create: {detail.cache_creation_tokens:,} '
+        f'| fresh-input: {detail.input_tokens:,} '
+        f'| output: {detail.output_tokens:,}'
+        f'</div>'
+    )
+
+    # Per-turn table
+    if detail.turns:
+        parts.append('<table class="turns">')
+        parts.append(
+            '<tr><th>Turn</th><th>Thinking</th><th>Text</th>'
+            '<th>Tools</th><th>Details</th></tr>'
+        )
+        for turn in detail.turns:
+            tools_str = ", ".join(
+                f'{tc.name}' for tc in turn.tool_calls
+            ) or "—"
+            tool_details = "; ".join(
+                f'{tc.name}({tc.input_size}ch)'
+                for tc in turn.tool_calls
+            ) or ""
+            thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
+            parts.append(
+                f'<tr>'
+                f'<td>{turn.turn_number}</td>'
+                f'<td{thinking_cls}>{turn.thinking_chars:,}ch</td>'
+                f'<td>{turn.text_chars:,}ch</td>'
+                f'<td>{len(turn.tool_calls)}</td>'
+                f'<td class="tool-detail">{tools_str}</td>'
+                f'</tr>'
+            )
+        parts.append('</table>')
+
+    parts.append('</div>')
+    return "\n".join(parts)
+
+
 def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
     rows = []
-    grand_total = sum(t.total_seconds for t in timelines)
+    grand_total = sum(t.total_seconds for t in timelines) or 1
+    grand_cost = sum(t.total_cost for t in timelines)
 
     for tl in timelines:
-        rows.append(f'<tr class="phase-header"><td colspan="4">'
-                     f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
-                     f'</td></tr>')
+        rows.append(
+            f'<tr class="phase-header"><td colspan="5">'
+            f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
+            f' — ${tl.total_cost:.2f}'
+            f'</td></tr>'
+        )
         for step in tl.steps:
-            pct = (step.duration_seconds / grand_total * 100) if grand_total > 0 else 0
+            pct = (step.duration_seconds / grand_total * 100)
             color = _bar_color(step.name)
             size_kb = step.size_bytes / 1024
+            cost_str = f"${step.detail.cost_usd:.2f}" if step.detail else ""
+            detail_html = _render_detail(step.detail) if step.detail else ""
             rows.append(
-                f'<tr>'
+                f'<tr class="step-row">'
                 f'<td class="step-name">{step.name}</td>'
                 f'<td class="step-time">{step.duration_str}</td>'
+                f'<td class="step-cost">{cost_str}</td>'
                 f'<td class="step-size">{size_kb:.0f}KB</td>'
                 f'<td class="step-bar">'
                 f'<div class="bar" style="width:{max(pct, 0.5):.1f}%;background:{color}">'
                 f'</div></td>'
                 f'</tr>'
             )
+            if detail_html:
+                rows.append(
+                    f'<tr class="detail-row"><td colspan="5">{detail_html}</td></tr>'
+                )
 
-    grand_str = f"{int(grand_total // 60)}m{int(grand_total % 60):02d}s"
+    grand_m, grand_s = divmod(int(grand_total), 60)
 
     return f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
-<title>Methodology Runner Timeline — {workspace.name}</title>
+<title>Timeline — {workspace.name}</title>
 <style>
-  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; background: #fafafa; }}
+  body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; background: #fafafa; color: #333; }}
   h1 {{ font-size: 1.4em; }}
   h2 {{ font-size: 1.1em; color: #555; }}
-  table {{ border-collapse: collapse; width: 100%; max-width: 900px; }}
+  table {{ border-collapse: collapse; width: 100%; max-width: 1000px; }}
   tr.phase-header td {{ background: #eee; padding: 8px 12px; font-size: 1.05em; border-top: 2px solid #ccc; }}
-  td {{ padding: 4px 12px; vertical-align: middle; }}
-  .step-name {{ width: 45%; font-size: 0.9em; }}
-  .step-time {{ width: 8%; text-align: right; font-family: monospace; font-size: 0.9em; }}
-  .step-size {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #888; }}
-  .step-bar {{ width: 40%; }}
+  tr.step-row td {{ padding: 4px 12px; vertical-align: middle; }}
+  tr.detail-row td {{ padding: 0 12px 12px 24px; }}
+  .step-name {{ width: 38%; font-size: 0.9em; }}
+  .step-time {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.9em; }}
+  .step-cost {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
+  .step-size {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #888; }}
+  .step-bar {{ width: 32%; }}
   .bar {{ height: 18px; border-radius: 3px; min-width: 4px; }}
-  .legend {{ display: flex; gap: 1.5em; margin: 1em 0; font-size: 0.85em; }}
+  .legend {{ display: flex; gap: 1.5em; margin: 1em 0; font-size: 0.85em; flex-wrap: wrap; }}
   .legend-item {{ display: flex; align-items: center; gap: 0.4em; }}
   .legend-swatch {{ width: 14px; height: 14px; border-radius: 2px; }}
+
+  .detail {{ background: #f5f5f5; border-radius: 6px; padding: 10px 14px; font-size: 0.85em; margin-top: 4px; }}
+  .detail-summary {{ margin-bottom: 6px; color: #555; }}
+  .warn {{ color: #e74c3c; font-weight: bold; }}
+
+  .token-bar {{ display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 4px 0; max-width: 600px; }}
+  .tok-seg {{ height: 100%; }}
+  .token-legend {{ font-size: 0.8em; color: #777; margin-bottom: 6px; }}
+
+  table.turns {{ width: 100%; max-width: 700px; font-size: 0.85em; margin-top: 6px; }}
+  table.turns th {{ text-align: left; padding: 2px 8px; border-bottom: 1px solid #ddd; color: #666; font-weight: normal; }}
+  table.turns td {{ padding: 2px 8px; }}
+  .big-think {{ color: #e74c3c; font-weight: bold; }}
+  .tool-detail {{ color: #888; font-size: 0.9em; }}
 </style>
 </head>
 <body>
 <h1>Methodology Runner Timeline</h1>
-<h2>{workspace} — total {grand_str}</h2>
+<h2>{workspace} — total {grand_m}m{grand_s:02d}s — ${grand_cost:.2f}</h2>
 <div class="legend">
   <div class="legend-item"><div class="legend-swatch" style="background:#27ae60"></div> Selector/Prelude</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#8e44ad"></div> Prompt Generator</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#4a90d9"></div> Generator (claude)</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#e67e22"></div> Judge (claude)</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#c0392b"></div> Cross-ref</div>
+</div>
+<div class="legend">
+  Token bar: <div class="legend-item"><div class="legend-swatch" style="background:#3498db"></div> cache-read</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#2ecc71"></div> cache-create</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#95a5a6"></div> fresh-input</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#e74c3c"></div> output</div>
 </div>
 <table>
 {''.join(rows)}
@@ -276,10 +514,14 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
 </html>"""
 
 
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate timeline report for a methodology-runner workspace.")
     parser.add_argument("workspace", help="Path to the methodology-runner workspace directory.")
-    parser.add_argument("--output", "-o", default=None, help="Output HTML path (default: <workspace>/.methodology-runner/timeline.html)")
+    parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
     args = parser.parse_args(argv)
 
     workspace = Path(args.workspace).resolve()
