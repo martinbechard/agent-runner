@@ -836,12 +836,23 @@ def _popup_content(popup_id: str, text: str) -> str:
     )
 
 
-def _render_log_structured(log_path: Path, popup_id: str) -> str:
+def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "") -> str:
     """Render a JSONL log file as structured HTML with per-record formatting."""
     import json as _jlog
 
     uid = f"pcontent-{popup_id}"
     items: list[str] = []
+
+    # Show the initial prompt (passed via --print, not in the JSONL)
+    if prompt_text:
+        preview = _escape_html(prompt_text[:300]).replace("\n", " ")
+        items.append(
+            f'<div class="log-user-prompt">'
+            f'<span class="log-type">PROMPT</span> '
+            f'<span class="log-dim">{len(prompt_text):,}</span> '
+            f'{preview}{"…" if len(prompt_text) > 300 else ""}'
+            f'</div>'
+        )
     pending_log_tools: dict[str, tuple[str, str]] = {}  # tool_use_id -> (name, fname)
     # Turn tracking for dividers
     log_turn_num = 0
@@ -1318,7 +1329,7 @@ def _render_steps_rows(
                 f'<a href="#" onclick="hidePopup(\'{step_id}-log\');return false">close</a>'
                 f'</div>'
                 f'<div class="popup-body">'
-                f'{_render_log_structured(step.log_path, step_id + "-log")}'
+                f'{_render_log_structured(step.log_path, step_id + "-log", prompt_text=step.detail.prompt_text if step.detail else "")}'
                 f'</div></div>'
             )
     return step_counter
@@ -1689,6 +1700,7 @@ def render_html(
   .log-error {{ color: #b71c1c; font-weight: bold; }}
   .log-unknown .log-type {{ background: #eee; color: #666; }}
   .log-dim {{ color: #999; font-size: 0.9em; }}
+  .log-user-prompt .log-type {{ background: #fff9c4; color: #f57f17; }}
   .log-ts {{ color: #888; font-size: 0.85em; }}
   .log-turn-divider {{
     color: #888; font-size: 0.85em; font-weight: bold; padding: 6px 0 2px;
