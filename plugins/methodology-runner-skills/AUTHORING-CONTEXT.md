@@ -149,6 +149,50 @@ RIGHT — phase skill defers traceability, focuses on phase-specific judgment:
 
 ---
 
+## Schema-driven opening correlates with correct field references
+
+```
+WEAK — procedure only, no schema preview:
+  Agents wrote "contract_source: PH-003" or invented field names.
+  The procedure told them WHAT to do but not WHAT to produce.
+
+STRONG — schema block first, then procedure:
+  Agents matched the exact schema fields and got contract_source
+  pointing to PH-004. The schema anchors field awareness before
+  the procedure walks the judgment calls.
+```
+
+---
+
+## Triple reinforcement holds under adversarial pressure for expertise
+
+```
+The expected_expertise field was tested with an adversarial prompt
+that said "match the skill catalog naming convention" and "use exact
+identifiers." The skill's triple reinforcement (CORRECT/WRONG examples
++ Natural Language Test + Catalog Leak Red Flags table) resisted the
+pressure completely. All outputs used natural-language prose even
+under direct instruction to use catalog IDs.
+```
+
+---
+
+## "Database as Component" anti-pattern needs explicit counter-example
+
+```
+WEAK — no mention:
+  Baseline (no skill) produced a 3-component split with PostgreSQL
+  as CMP-003-database, an ad-hoc schema with column definitions.
+
+STRONG — explicit rule + counter-example:
+  "A component is a deployable unit of technology-coherent code,
+   NOT an infrastructure resource."
+  Plus a COUNTER-EXAMPLE showing the wrong form.
+  Result: zero occurrences of database-as-component in any variant.
+```
+
+---
+
 ## Orchestrator note
 
 The baseline validator checks ALL phases' skills globally, not just
