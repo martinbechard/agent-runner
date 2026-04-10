@@ -839,6 +839,10 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
     uid = f"pcontent-{popup_id}"
     items: list[str] = []
     pending_log_tools: dict[str, tuple[str, str]] = {}  # tool_use_id -> (name, fname)
+    # Turn tracking for dividers
+    log_turn_num = 0
+    log_prev_usage_sig: tuple | None = None
+    log_last_was_assistant = False
 
     try:
         lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
@@ -897,6 +901,22 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
 
         elif t == "assistant":
             msg = obj.get("message", {})
+            usage = msg.get("usage", {})
+            usage_sig = (
+                usage.get("input_tokens", 0),
+                usage.get("output_tokens", 0),
+                usage.get("cache_read_input_tokens", 0),
+            )
+            is_new_turn = usage_sig != log_prev_usage_sig or not log_last_was_assistant
+            if is_new_turn:
+                log_turn_num += 1
+                log_prev_usage_sig = usage_sig
+                items.append(
+                    f'<div class="log-turn-divider">'
+                    f'── Turn {log_turn_num} ──'
+                    f'</div>'
+                )
+            log_last_was_assistant = True
             model = msg.get("model", "")
             usage = msg.get("usage", {})
             out_tok = usage.get("output_tokens", "?")
@@ -943,6 +963,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                     )
 
         elif t == "user":
+            log_last_was_assistant = False
             ts = obj.get("timestamp", "")
             msg = obj.get("message", {})
             for block in msg.get("content", []):
@@ -974,6 +995,7 @@ def _render_log_structured(log_path: Path, popup_id: str) -> str:
                     )
 
         elif t == "rate_limit_event":
+            log_last_was_assistant = False
             items.append(
                 f'<div class="log-system">'
                 f'<span class="log-type">RATE</span> rate limit event'
@@ -1094,19 +1116,6 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         )
         tool_popup_counter = 0
         for turn in detail.turns:
-            # Show tool results received before this turn
-            if turn.tool_results_before:
-                results_str = ", ".join(
-                    f'←{tr.tool_name}({tr.tool_fname}) {tr.result_size:,}ch'
-                    if tr.tool_fname else
-                    f'←{tr.tool_name} {tr.result_size:,}ch'
-                    for tr in turn.tool_results_before
-                )
-                parts.append(
-                    f'<tr class="tool-return-row">'
-                    f'<td></td><td colspan="6" class="tool-returns">{results_str}</td>'
-                    f'</tr>'
-                )
             tool_parts = []
             for tc in turn.tool_calls:
                 file_path = _tool_file_path(tc)
@@ -1555,8 +1564,6 @@ def render_html(
   table.turns th {{ text-align: left; padding: 2px 8px; border-bottom: 1px solid #ddd; color: #666; font-weight: normal; }}
   table.turns td {{ padding: 2px 8px; }}
   .big-think {{ color: #e74c3c; font-weight: bold; }}
-  .tool-return-row td {{ padding: 1px 8px; }}
-  .tool-returns {{ color: #c0392b; font-size: 0.82em; font-style: italic; }}
   .tool-detail {{ color: #888; font-size: 0.9em; }}
 
   .popup-links {{ font-size: 0.8em; }}
@@ -1648,6 +1655,10 @@ def render_html(
   .log-unknown .log-type {{ background: #eee; color: #666; }}
   .log-dim {{ color: #999; font-size: 0.9em; }}
   .log-ts {{ color: #888; font-size: 0.85em; }}
+  .log-turn-divider {{
+    color: #888; font-size: 0.85em; font-weight: bold; padding: 6px 0 2px;
+    border-top: 1px solid #ddd; margin-top: 4px;
+  }}
 </style>
 <script>
 function showPopup(id) {{
