@@ -843,9 +843,13 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
     uid = f"pcontent-{popup_id}"
     items: list[str] = []
 
-    # Show the initial prompt (passed via --print, not in the JSONL)
+    # Show Turn 1 + initial prompt (passed via --print, not in the JSONL)
     if prompt_text:
+        log_turn_num = 1
         preview = _escape_html(prompt_text[:300]).replace("\n", " ")
+        items.append(
+            f'<div class="log-turn-divider">── Turn 1 ──</div>'
+        )
         items.append(
             f'<div class="log-user-prompt">'
             f'<span class="log-type">PROMPT</span> '
