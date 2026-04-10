@@ -153,12 +153,15 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_dir = Path(args.output_dir) if args.output_dir else _default_run_dir(source)
         do_resume = False
 
+    workspace_dir = Path(args.project_dir).resolve() if args.project_dir else None
+
     result = run_pipeline(
         pairs=pairs,
         run_dir=run_dir,
         config=config,
         claude_client=client,
         source_file=source,
+        workspace_dir=workspace_dir,
         resume=do_resume,
     )
 
@@ -210,6 +213,15 @@ def _build_parser() -> argparse.ArgumentParser:
         "--output-dir",
         default=None,
         help="Run directory (default: ./runs/<timestamp>-<stem>/).",
+    )
+    run_cmd.add_argument(
+        "--project-dir",
+        default=None,
+        help=(
+            "Working directory for Claude subprocesses. Defaults to cwd. "
+            "Set this when the prompt file reads workspace artifacts at "
+            "a different location (e.g., a methodology-runner workspace)."
+        ),
     )
     run_cmd.add_argument(
         "--max-iterations",
