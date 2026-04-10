@@ -1,0 +1,7 @@
+Before starting, read `plugins/methodology-runner-skills/AUTHORING-CONTEXT.md`
+for lessons learned from earlier skill-authoring sessions. Apply those
+lessons as you work on this prompt. If the file doesn't exist yet or is
+empty, skip this step.
+
+---
+
