@@ -30,7 +30,7 @@ from pathlib import Path
 # Constants
 # ---------------------------------------------------------------------------
 
-POPUP_TRUNCATE_CHARS = 50000
+POPUP_TRUNCATE_CHARS = 20_000_000  # 20 MB
 MIN_BAR_PCT = 0.5
 
 
@@ -704,7 +704,7 @@ def _format_block(text: str) -> str:
             import json as _j2
             parsed = _j2.loads(stripped)
             pretty = _j2.dumps(parsed, indent=2, ensure_ascii=False)
-            return _escape_html(pretty[:50000])
+            return _escape_html(pretty[:POPUP_TRUNCATE_CHARS])
         except (ValueError, TypeError):
             pass
 
@@ -901,7 +901,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                             # For Write/Edit: extract and unescape the content
                             # field so it renders as formatted YAML/JSON/etc
                             # instead of a JSON blob with \n escapes.
-                            display_input = tc.input_json[:20000]
+                            display_input = tc.input_json[:POPUP_TRUNCATE_CHARS]
                             if tc.name in ("Write", "Edit") and tc.input_json:
                                 try:
                                     import json as _jtool
@@ -910,12 +910,12 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                                     if file_content:
                                         other_fields = {k: v for k, v in inp_obj.items() if k != "content"}
                                         header = _jtool.dumps(other_fields, indent=2)
-                                        display_input = f"{header}\n\n--- File content ---\n{file_content[:20000]}"
+                                        display_input = f"{header}\n\n--- File content ---\n{file_content[:POPUP_TRUNCATE_CHARS]}"
                                 except (ValueError, TypeError):
                                     pass
                             popup_lines.append(f"--- Input ({tc.input_size:,} chars) ---\n{display_input}\n")
                         if tc.result_content:
-                            popup_lines.append(f"--- Result ({tc.result_size:,} chars) ---\n{tc.result_content[:20000]}\n")
+                            popup_lines.append(f"--- Result ({tc.result_size:,} chars) ---\n{tc.result_content[:POPUP_TRUNCATE_CHARS]}\n")
                     else:
                         popup_lines.append(f"Input: {tc.input_size:,} chars | Result: {tc.result_size:,} chars")
                     popups.append(
