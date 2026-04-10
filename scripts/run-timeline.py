@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
-"""Generate an HTML timeline report for a methodology-runner workspace.
+"""Generate an HTML timeline report for a methodology-runner workspace or
+a prompt-runner run directory (with or without variant forks).
 
-Parses JSONL logs from .methodology-runner/runs/ to show:
-- Per-phase wall time breakdown (selector, prompt-gen, generator, judge, cross-ref)
+Parses JSONL logs to show:
+- Per-phase/prompt wall time breakdown
 - Per-call drill-down: turns, thinking, tool calls, subagent spawns
 - Token usage and cost per call
 - Visual bars proportional to time spent
+- Fork comparison tables with delta rows when variants are present
 
 Usage:
-    python scripts/run-timeline.py <workspace-path> [--output report.html]
+    python scripts/run-timeline.py <path> [--output report.html]
+
+The path can be:
+  - A methodology-runner workspace (contains .methodology-runner/runs/)
+  - A prompt-runner run directory (contains logs/ and/or manifest.json)
 """
 from __future__ import annotations
 
@@ -18,6 +24,14 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
+POPUP_TRUNCATE_CHARS = 50000
+MIN_BAR_PCT = 0.5
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +142,14 @@ class PhaseTimeline:
     @property
     def total_cost(self) -> float:
         return sum(s.detail.cost_usd for s in self.steps if s.detail)
+
+
+@dataclass
+class ForkSection:
+    """A fork point with its variants, each containing their own steps."""
+    fork_index: int
+    fork_title: str
+    variants: dict[str, list[Step]]  # variant_name -> steps
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +284,7 @@ def parse_log(path: Path) -> CallDetail:
 
 
 # ---------------------------------------------------------------------------
-# Workspace parser
+# Shared step-building helpers
 # ---------------------------------------------------------------------------
 
 def _mtime(path: Path) -> datetime:
@@ -284,6 +306,10 @@ def _file_step(name: str, start_file: Path, end_file: Path,
         detail=detail,
     )
 
+
+# ---------------------------------------------------------------------------
+# Methodology-runner workspace parser
+# ---------------------------------------------------------------------------
 
 def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline | None:
     phase_dir = runs_dir / f"phase-{phase_num}"
@@ -458,7 +484,95 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
 
 
 # ---------------------------------------------------------------------------
-# HTML renderer
+# Prompt-runner run directory parser
+# ---------------------------------------------------------------------------
+
+def _parse_prompt_log_dir(logs_dir: Path, prefix: str = "") -> list[Step]:
+    """Parse all prompt-*/iter-* logs under a logs/ directory into Steps."""
+    steps: list[Step] = []
+    if not logs_dir.exists():
+        return steps
+    for prompt_dir in sorted(logs_dir.iterdir()):
+        if not prompt_dir.is_dir():
+            continue
+        prompt_name = (prefix + prompt_dir.name) if prefix else prompt_dir.name
+        for iter_log in sorted(prompt_dir.glob("iter-*-generator.stdout.log")):
+            iter_num = iter_log.name.split("-")[1]
+            stderr = iter_log.with_name(f"iter-{iter_num}-generator.stderr.log")
+            step = _file_step(
+                f"{prompt_name} / iter {iter_num} generator",
+                stderr if stderr.exists() else iter_log,
+                iter_log, iter_log,
+            )
+            if step:
+                steps.append(step)
+
+            judge_log = iter_log.with_name(f"iter-{iter_num}-judge.stdout.log")
+            judge_stderr = iter_log.with_name(f"iter-{iter_num}-judge.stderr.log")
+            if judge_log.exists():
+                step = _file_step(
+                    f"{prompt_name} / iter {iter_num} judge",
+                    judge_stderr if judge_stderr.exists() else judge_log,
+                    judge_log, judge_log,
+                )
+                if step:
+                    steps.append(step)
+    return steps
+
+
+def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection]]:
+    """Parse a prompt-runner run directory into shared steps and fork sections."""
+    shared_steps: list[Step] = []
+    fork_sections: list[ForkSection] = []
+
+    # Shared pre-fork steps from top-level logs/
+    top_logs = run_dir / "logs"
+    shared_steps = _parse_prompt_log_dir(top_logs)
+
+    # Fork sections from fork-*/ directories
+    for fork_dir in sorted(run_dir.iterdir()):
+        if not fork_dir.is_dir() or not fork_dir.name.startswith("fork-"):
+            continue
+
+        # Extract fork index and title from directory name (e.g. "fork-02-audit-the-requirements-inventory")
+        parts = fork_dir.name.split("-", 2)
+        try:
+            fork_index = int(parts[1])
+        except (IndexError, ValueError):
+            fork_index = 0
+        fork_title = parts[2].replace("-", " ").title() if len(parts) > 2 else fork_dir.name
+
+        variants: dict[str, list[Step]] = {}
+
+        # Each variant-*/ directory contains run-*/logs/
+        for variant_dir in sorted(fork_dir.iterdir()):
+            if not variant_dir.is_dir() or not variant_dir.name.startswith("variant-"):
+                continue
+            variant_name = variant_dir.name  # e.g. "variant-a"
+
+            # Find the run-*/ subdirectory
+            variant_steps: list[Step] = []
+            for run_subdir in sorted(variant_dir.iterdir()):
+                if not run_subdir.is_dir() or not run_subdir.name.startswith("run-"):
+                    continue
+                variant_logs = run_subdir / "logs"
+                variant_steps.extend(_parse_prompt_log_dir(variant_logs))
+
+            if variant_steps:
+                variants[variant_name] = variant_steps
+
+        if variants:
+            fork_sections.append(ForkSection(
+                fork_index=fork_index,
+                fork_title=fork_title,
+                variants=variants,
+            ))
+
+    return shared_steps, fork_sections
+
+
+# ---------------------------------------------------------------------------
+# HTML renderer helpers
 # ---------------------------------------------------------------------------
 
 def _model_abbrev(model: str) -> str:
@@ -607,84 +721,298 @@ def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 
-def _truncate(text: str, limit: int = 50000) -> str:
+def _truncate(text: str, limit: int = POPUP_TRUNCATE_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n\n... (truncated at {limit:,} chars, full: {len(text):,})"
 
 
-def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
-    rows = []
-    popups = []
-    step_counter = 0
-    grand_total = sum(t.total_seconds for t in timelines) or 1
-    grand_cost = sum(t.total_cost for t in timelines)
+def _render_steps_rows(
+    steps: list[Step],
+    grand_total: float,
+    step_counter: int,
+    rows: list[str],
+    popups: list[str],
+) -> int:
+    """Render step rows into rows/popups lists, returns updated step_counter."""
+    for step in steps:
+        step_counter += 1
+        step_id = f"step-{step_counter}"
+        pct = (step.duration_seconds / grand_total * 100)
+        color = _bar_color(step.name)
+        size_kb = step.size_bytes / 1024
+        cost_str = f"${step.detail.cost_usd:.2f}" if step.detail else ""
+        detail_html = _render_detail(step.detail) if step.detail else ""
 
-    for tl in timelines:
+        # Step name with popup links if we have prompt/output
+        has_prompt = step.detail and step.detail.prompt_text
+        has_output = step.detail and step.detail.output_text
+        name_html = step.name
+        links = []
+        if has_prompt:
+            links.append(f'<a href="#" onclick="showPopup(\'{step_id}-prompt\');return false">prompt</a>')
+        if has_output:
+            links.append(f'<a href="#" onclick="showPopup(\'{step_id}-output\');return false">output</a>')
+        if links:
+            name_html += f' <span class="popup-links">[{" | ".join(links)}]</span>'
+
         rows.append(
-            f'<tr class="phase-header"><td colspan="5">'
-            f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
-            f' — ${tl.total_cost:.2f}'
+            f'<tr class="step-row">'
+            f'<td class="step-name">{name_html}</td>'
+            f'<td class="step-time">{step.duration_str}</td>'
+            f'<td class="step-cost">{cost_str}</td>'
+            f'<td class="step-size">{size_kb:.0f}KB</td>'
+            f'<td class="step-bar">'
+            f'<div class="bar" style="width:{max(pct, MIN_BAR_PCT):.1f}%;background:{color}">'
+            f'</div></td>'
+            f'</tr>'
+        )
+        if detail_html:
+            rows.append(
+                f'<tr class="detail-row"><td colspan="5">{detail_html}</td></tr>'
+            )
+
+        # Build popup divs
+        if has_prompt:
+            popups.append(
+                f'<div id="{step_id}-prompt" class="popup">'
+                f'<div class="popup-header">'
+                f'<strong>{step.name} — Prompt</strong>'
+                f'<a href="#" onclick="hidePopup(\'{step_id}-prompt\');return false">close</a>'
+                f'</div>'
+                f'<pre>{_escape_html(_truncate(step.detail.prompt_text))}</pre>'
+                f'</div>'
+            )
+        if has_output:
+            popups.append(
+                f'<div id="{step_id}-output" class="popup">'
+                f'<div class="popup-header">'
+                f'<strong>{step.name} — Output</strong>'
+                f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
+                f'</div>'
+                f'<pre>{_escape_html(_truncate(step.detail.output_text))}</pre>'
+                f'</div>'
+            )
+    return step_counter
+
+
+def _steps_cost(steps: list[Step]) -> float:
+    return sum(s.detail.cost_usd for s in steps if s.detail)
+
+
+def _steps_turns(steps: list[Step]) -> int:
+    return sum(s.detail.num_turns for s in steps if s.detail)
+
+
+def _steps_output_tokens(steps: list[Step]) -> int:
+    return sum(s.detail.output_tokens for s in steps if s.detail)
+
+
+def _steps_duration_seconds(steps: list[Step]) -> float:
+    if not steps:
+        return 0.0
+    return sum(s.duration_seconds for s in steps)
+
+
+def _steps_verdict(steps: list[Step]) -> str:
+    """Return the last non-empty stop_reason from judge steps."""
+    for step in reversed(steps):
+        if step.detail and "judge" in step.name.lower() and step.detail.stop_reason:
+            return step.detail.stop_reason
+    return ""
+
+
+def _fmt_duration(seconds: float) -> str:
+    s = int(seconds)
+    if s < 60:
+        return f"{s}s"
+    m, s = divmod(s, 60)
+    return f"{m}m{s:02d}s"
+
+
+def _pct_delta(a: float, b: float) -> str:
+    """Format percentage change from a to b, with sign."""
+    if a == 0:
+        return "N/A"
+    delta = (b - a) / a * 100
+    sign = "+" if delta >= 0 else ""
+    return f"{sign}{delta:.0f}%"
+
+
+def _delta_color(a: float, b: float, lower_is_better: bool = True) -> str:
+    """Return green if b is better than a, red if worse."""
+    if a == 0:
+        return "#555"
+    improved = b < a if lower_is_better else b > a
+    return "#27ae60" if improved else "#e74c3c"
+
+
+def _render_fork_section(
+    fork: ForkSection,
+    grand_total: float,
+    step_counter: int,
+    rows: list[str],
+    popups: list[str],
+) -> int:
+    """Render a fork section: comparison table + per-variant detail."""
+
+    # --- Fork header ---
+    rows.append(
+        f'<tr class="fork-header"><td colspan="5">'
+        f'<strong>Fork {fork.fork_index}: {fork.fork_title}</strong>'
+        f'</td></tr>'
+    )
+
+    # --- Comparison summary table ---
+    variant_names = sorted(fork.variants.keys())
+
+    # Gather per-variant metrics
+    variant_metrics: list[dict] = []
+    for vname in variant_names:
+        vsteps = fork.variants[vname]
+        dur = _steps_duration_seconds(vsteps)
+        cost = _steps_cost(vsteps)
+        turns = _steps_turns(vsteps)
+        out_tok = _steps_output_tokens(vsteps)
+        verdict = _steps_verdict(vsteps)
+        label = vname.replace("variant-", "").upper()
+        variant_metrics.append({
+            "name": vname,
+            "label": label,
+            "dur": dur,
+            "cost": cost,
+            "turns": turns,
+            "out_tok": out_tok,
+            "verdict": verdict,
+        })
+
+    # Build comparison table HTML
+    rows.append('<tr class="fork-comparison"><td colspan="5"><div class="fork-table-wrap">')
+    rows.append('<table class="fork-compare">')
+    rows.append(
+        '<tr>'
+        '<th>Variant</th>'
+        '<th>Time</th>'
+        '<th>Cost</th>'
+        '<th>Turns</th>'
+        '<th>Output tok</th>'
+        '<th>Verdict</th>'
+        '</tr>'
+    )
+
+    for m in variant_metrics:
+        verdict_cls = ' class="verdict-pass"' if m["verdict"] == "pass" else (
+            ' class="verdict-fail"' if m["verdict"] in ("fail", "error") else ""
+        )
+        rows.append(
+            f'<tr>'
+            f'<td><strong>{m["label"]}</strong></td>'
+            f'<td>{_fmt_duration(m["dur"])}</td>'
+            f'<td>${m["cost"]:.2f}</td>'
+            f'<td>{m["turns"]}</td>'
+            f'<td>{m["out_tok"]:,}</td>'
+            f'<td{verdict_cls}>{m["verdict"] or "—"}</td>'
+            f'</tr>'
+        )
+
+    # Delta row (second vs first)
+    if len(variant_metrics) >= 2:
+        a = variant_metrics[0]
+        b = variant_metrics[1]
+        b_label = b["label"]
+        rows.append(
+            f'<tr class="delta-row">'
+            f'<td>Δ ({b_label} vs {a["label"]})</td>'
+            f'<td style="color:{_delta_color(a["dur"], b["dur"])}">'
+            f'{_pct_delta(a["dur"], b["dur"])}</td>'
+            f'<td style="color:{_delta_color(a["cost"], b["cost"])}">'
+            f'{_pct_delta(a["cost"], b["cost"])}</td>'
+            f'<td style="color:{_delta_color(float(a["turns"]), float(b["turns"]))}">'
+            f'{_pct_delta(float(a["turns"]), float(b["turns"]))}</td>'
+            f'<td style="color:{_delta_color(float(a["out_tok"]), float(b["out_tok"]))}">'
+            f'{_pct_delta(float(a["out_tok"]), float(b["out_tok"]))}</td>'
+            f'<td></td>'
+            f'</tr>'
+        )
+
+    rows.append('</table></div></td></tr>')
+
+    # --- Per-variant detail sections ---
+    for vname in variant_names:
+        vsteps = fork.variants[vname]
+        label = vname.replace("variant-", "").upper()
+        dur_str = _fmt_duration(_steps_duration_seconds(vsteps))
+        cost = _steps_cost(vsteps)
+
+        rows.append(
+            f'<tr class="variant-header"><td colspan="5">'
+            f'Variant {label} — {dur_str} — ${cost:.2f}'
             f'</td></tr>'
         )
-        for step in tl.steps:
-            step_counter += 1
-            step_id = f"step-{step_counter}"
-            pct = (step.duration_seconds / grand_total * 100)
-            color = _bar_color(step.name)
-            size_kb = step.size_bytes / 1024
-            cost_str = f"${step.detail.cost_usd:.2f}" if step.detail else ""
-            detail_html = _render_detail(step.detail) if step.detail else ""
+        step_counter = _render_steps_rows(vsteps, grand_total, step_counter, rows, popups)
 
-            # Step name with popup links if we have prompt/output
-            has_prompt = step.detail and step.detail.prompt_text
-            has_output = step.detail and step.detail.output_text
-            name_html = step.name
-            links = []
-            if has_prompt:
-                links.append(f'<a href="#" onclick="showPopup(\'{step_id}-prompt\');return false">prompt</a>')
-            if has_output:
-                links.append(f'<a href="#" onclick="showPopup(\'{step_id}-output\');return false">output</a>')
-            if links:
-                name_html += f' <span class="popup-links">[{" | ".join(links)}]</span>'
+    return step_counter
 
+
+# ---------------------------------------------------------------------------
+# HTML renderer (top-level)
+# ---------------------------------------------------------------------------
+
+def render_html(
+    timelines: list[PhaseTimeline],
+    workspace: Path,
+    shared_steps: list[Step] | None = None,
+    fork_sections: list[ForkSection] | None = None,
+    run_title: str = "Timeline",
+) -> str:
+    rows: list[str] = []
+    popups: list[str] = []
+    step_counter = 0
+
+    # Compute grand_total across all content for proportional bars
+    if timelines:
+        grand_total = sum(t.total_seconds for t in timelines) or 1
+        grand_cost = sum(t.total_cost for t in timelines)
+    else:
+        all_steps: list[Step] = list(shared_steps or [])
+        for fork in (fork_sections or []):
+            for vsteps in fork.variants.values():
+                all_steps.extend(vsteps)
+        grand_total = sum(s.duration_seconds for s in all_steps) or 1
+        grand_cost = sum(s.detail.cost_usd for s in all_steps if s.detail)
+
+    if timelines:
+        # Methodology-runner mode: phase-grouped flat table
+        for tl in timelines:
             rows.append(
-                f'<tr class="step-row">'
-                f'<td class="step-name">{name_html}</td>'
-                f'<td class="step-time">{step.duration_str}</td>'
-                f'<td class="step-cost">{cost_str}</td>'
-                f'<td class="step-size">{size_kb:.0f}KB</td>'
-                f'<td class="step-bar">'
-                f'<div class="bar" style="width:{max(pct, 0.5):.1f}%;background:{color}">'
-                f'</div></td>'
-                f'</tr>'
+                f'<tr class="phase-header"><td colspan="5">'
+                f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
+                f' — ${tl.total_cost:.2f}'
+                f'</td></tr>'
             )
-            if detail_html:
-                rows.append(
-                    f'<tr class="detail-row"><td colspan="5">{detail_html}</td></tr>'
-                )
+            step_counter = _render_steps_rows(
+                tl.steps, grand_total, step_counter, rows, popups
+            )
+    else:
+        # Prompt-runner mode: shared steps then fork sections
+        if shared_steps:
+            shared_dur = _fmt_duration(sum(s.duration_seconds for s in shared_steps))
+            shared_cost = _steps_cost(shared_steps)
+            rows.append(
+                f'<tr class="phase-header"><td colspan="5">'
+                f'<strong>Shared Pre-Fork Steps</strong>'
+                f' — {shared_dur}'
+                f' — ${shared_cost:.2f}'
+                f'</td></tr>'
+            )
+            step_counter = _render_steps_rows(
+                shared_steps, grand_total, step_counter, rows, popups
+            )
 
-            # Build popup divs
-            if has_prompt:
-                popups.append(
-                    f'<div id="{step_id}-prompt" class="popup">'
-                    f'<div class="popup-header">'
-                    f'<strong>{step.name} — Prompt</strong>'
-                    f'<a href="#" onclick="hidePopup(\'{step_id}-prompt\');return false">close</a>'
-                    f'</div>'
-                    f'<pre>{_escape_html(_truncate(step.detail.prompt_text))}</pre>'
-                    f'</div>'
-                )
-            if has_output:
-                popups.append(
-                    f'<div id="{step_id}-output" class="popup">'
-                    f'<div class="popup-header">'
-                    f'<strong>{step.name} — Output</strong>'
-                    f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
-                    f'</div>'
-                    f'<pre>{_escape_html(_truncate(step.detail.output_text))}</pre>'
-                    f'</div>'
-                )
+        for fork in (fork_sections or []):
+            step_counter = _render_fork_section(
+                fork, grand_total, step_counter, rows, popups
+            )
 
     grand_m, grand_s = divmod(int(grand_total), 60)
 
@@ -692,7 +1020,7 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
 <html>
 <head>
 <meta charset="utf-8">
-<title>Timeline — {workspace.name}</title>
+<title>{run_title} — {workspace.name}</title>
 <style>
   body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; background: #fafafa; color: #333; }}
   h1 {{ font-size: 1.4em; }}
@@ -729,6 +1057,32 @@ def render_html(timelines: list[PhaseTimeline], workspace: Path) -> str:
   .popup-links a {{ color: #4a90d9; text-decoration: none; }}
   .popup-links a:hover {{ text-decoration: underline; }}
 
+  /* Fork/variant styles */
+  tr.fork-header td {{
+    background: #d8e8f5; padding: 8px 12px; font-size: 1.05em;
+    border-top: 3px solid #4a90d9;
+  }}
+  tr.fork-comparison td {{ padding: 8px 12px 12px 12px; }}
+  .fork-table-wrap {{ overflow-x: auto; }}
+  table.fork-compare {{
+    width: auto; min-width: 500px; max-width: 700px;
+    border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em;
+  }}
+  table.fork-compare th {{
+    background: #f0f0f0; padding: 6px 12px; text-align: left;
+    border-bottom: 1px solid #ccc; font-weight: normal; color: #555;
+  }}
+  table.fork-compare td {{ padding: 5px 12px; border-bottom: 1px solid #eee; }}
+  tr.delta-row td {{
+    background: #f8f8f0; font-style: italic; border-top: 1px solid #bbb;
+  }}
+  .verdict-pass {{ color: #27ae60; font-weight: bold; }}
+  .verdict-fail {{ color: #e74c3c; font-weight: bold; }}
+  tr.variant-header td {{
+    background: #f0f4f8; padding: 6px 12px 6px 24px; font-size: 0.95em;
+    border-top: 1px solid #b0c8e0; color: #444;
+  }}
+
   .popup {{
     display: none; position: fixed; top: 5%; left: 10%; width: 80%; max-height: 85%;
     background: #fff; border: 1px solid #ccc; border-radius: 8px;
@@ -760,7 +1114,7 @@ document.addEventListener('keydown', function(e) {{
 </script>
 </head>
 <body>
-<h1>Methodology Runner Timeline</h1>
+<h1>{run_title}</h1>
 <h2>{workspace} — total {grand_m}m{grand_s:02d}s — ${grand_cost:.2f}</h2>
 <div class="legend">
   <div class="legend-item"><div class="legend-swatch" style="background:#27ae60"></div> Selector/Prelude</div>
@@ -788,23 +1142,58 @@ document.addEventListener('keydown', function(e) {{
 # ---------------------------------------------------------------------------
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate timeline report for a methodology-runner workspace.")
-    parser.add_argument("workspace", help="Path to the methodology-runner workspace directory.")
+    parser = argparse.ArgumentParser(
+        description="Generate timeline report for a methodology-runner workspace or prompt-runner run directory."
+    )
+    parser.add_argument("path", help="Path to analyze (workspace or run directory).")
     parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
     args = parser.parse_args(argv)
 
-    workspace = Path(args.workspace).resolve()
-    if not workspace.exists():
-        print(f"Workspace not found: {workspace}", file=sys.stderr)
+    input_path = Path(args.path).resolve()
+    if not input_path.exists():
+        print(f"Path not found: {input_path}", file=sys.stderr)
         return 1
 
-    timelines = parse_workspace(workspace)
-    if not timelines:
-        print(f"No phase data found in {workspace}", file=sys.stderr)
+    default_output = input_path / "timeline.html"
+    output = Path(args.output) if args.output else default_output
+
+    # Auto-detect mode
+    methodology_runs = input_path / ".methodology-runner" / "runs"
+    prompt_runner_logs = input_path / "logs"
+    prompt_runner_manifest = input_path / "manifest.json"
+
+    if methodology_runs.exists():
+        # Methodology-runner mode
+        timelines = parse_workspace(input_path)
+        if not timelines:
+            print(f"No phase data found in {input_path}", file=sys.stderr)
+            return 1
+        html = render_html(
+            timelines=timelines,
+            workspace=input_path,
+            run_title="Methodology Runner Timeline",
+        )
+    elif prompt_runner_logs.exists() or prompt_runner_manifest.exists():
+        # Prompt-runner run directory mode
+        shared_steps, fork_sections = parse_prompt_runner_run(input_path)
+        if not shared_steps and not fork_sections:
+            print(f"No prompt-runner data found in {input_path}", file=sys.stderr)
+            return 1
+        html = render_html(
+            timelines=[],
+            workspace=input_path,
+            shared_steps=shared_steps,
+            fork_sections=fork_sections,
+            run_title="Prompt Runner Timeline",
+        )
+    else:
+        print(
+            f"Cannot detect input type for {input_path}.\n"
+            f"Expected either .methodology-runner/runs/ or logs/ / manifest.json",
+            file=sys.stderr,
+        )
         return 1
 
-    html = render_html(timelines, workspace)
-    output = Path(args.output) if args.output else workspace / ".methodology-runner" / "timeline.html"
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")
     print(f"Timeline written to {output}")
