@@ -1,5 +1,7 @@
 """Tests for fork-point variant execution."""
+import subprocess
 from pathlib import Path
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -10,6 +12,30 @@ from prompt_runner.runner import (
     _serialize_pairs_to_md,
 )
 from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+
+
+@pytest.fixture(autouse=True)
+def _mock_subprocess_popen(monkeypatch):
+    """Prevent fork tests from spawning real prompt-runner subprocesses
+    that would invoke the Claude API. Each Popen call returns a mock
+    process with returncode=0."""
+    def fake_popen(cmd, **kwargs):
+        proc = MagicMock()
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        proc.stdout = b""
+        proc.stderr = b""
+        # Write a minimal summary.txt so the runner can read it
+        for i, arg in enumerate(cmd):
+            if arg == "--output-dir" and i + 1 < len(cmd):
+                run_dir = Path(cmd[i + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "summary.txt").write_text(
+                    "Prompt Runner — Run Summary\nStatus: completed\n"
+                )
+                break
+        return proc
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
 
 def _workspace(tmp_path: Path) -> Path:
