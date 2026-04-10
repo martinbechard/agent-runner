@@ -43,6 +43,9 @@ class ToolCall:
     name: str
     input_size: int  # chars — LLM output (tool_use input JSON)
     result_size: int = 0  # chars — tool response (tool_result content)
+    input_json: str = ""  # raw tool_use input JSON (for file path extraction)
+    result_content: str = ""  # raw tool_result content (for popup display)
+    tool_use_id: str = ""  # for matching tool_use to tool_result
 
 
 @dataclass
@@ -241,9 +244,14 @@ def parse_log(path: Path) -> CallDetail:
                 elif bt == "tool_use":
                     name = block.get("name", "?")
                     inp = json.dumps(block.get("input", {}))
-                    tc = ToolCall(name=name, input_size=len(inp))
-                    current_turn.tool_calls.append(tc)
                     tool_id = block.get("id", "")
+                    tc = ToolCall(
+                        name=name,
+                        input_size=len(inp),
+                        input_json=inp,
+                        tool_use_id=tool_id,
+                    )
+                    current_turn.tool_calls.append(tc)
                     if tool_id:
                         pending_tools[tool_id] = tc
                     if name == "Agent":
@@ -267,10 +275,12 @@ def parse_log(path: Path) -> CallDetail:
                 if block.get("type") == "tool_result":
                     tool_id = block.get("tool_use_id", "")
                     content = block.get("content", "")
-                    result_len = len(str(content))
+                    content_str = str(content)
+                    result_len = len(content_str)
                     tc = pending_tools.get(tool_id)
                     if tc is not None:
                         tc.result_size = result_len
+                        tc.result_content = content_str
             last_was_assistant = False
 
         else:
@@ -604,7 +614,17 @@ def _bar_color(name: str) -> str:
     return "#95a5a6"
 
 
-def _render_detail(detail: CallDetail) -> str:
+def _tool_file_path(tc: ToolCall) -> str:
+    """Extract a file path from a Read/Write/Glob tool call's input JSON."""
+    try:
+        import json as _j
+        inp = _j.loads(tc.input_json)
+        return inp.get("file_path", "") or inp.get("path", "") or inp.get("pattern", "") or inp.get("command", "")[:80]
+    except (ValueError, TypeError):
+        return ""
+
+
+def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = None) -> str:
     """Render the drill-down section for one call."""
     if not detail or (not detail.turns and not detail.duration_ms):
         return ""
@@ -665,11 +685,43 @@ def _render_detail(detail: CallDetail) -> str:
             '<th>Output</th><th>Time</th><th>tok/s</th>'
             '<th>Tools</th></tr>'
         )
+        tool_popup_counter = 0
         for turn in detail.turns:
-            tools_str = ", ".join(
-                f'{tc.name}({tc.input_size:,}→/→{tc.result_size:,})'
-                for tc in turn.tool_calls
-            ) or "—"
+            tool_parts = []
+            for tc in turn.tool_calls:
+                file_path = _tool_file_path(tc)
+                label = f'{tc.name}({tc.input_size:,}→/→{tc.result_size:,})'
+                # Add popup link if there's meaningful content
+                has_content = (tc.input_json and tc.input_size > 10) or tc.result_content
+                if has_content and step_id and popups is not None:
+                    tool_popup_counter += 1
+                    popup_id = f"{step_id}-tool-{tool_popup_counter}"
+                    short_path = file_path.split("/")[-1] if file_path else tc.name
+                    link = f'<a href="#" onclick="showPopup(\'{popup_id}\');return false">{label}</a>'
+                    tool_parts.append(link)
+                    # Build popup content: input + result
+                    popup_lines = []
+                    if file_path:
+                        popup_lines.append(f"Path: {file_path}\n")
+                    if tc.name in ("Read", "Write", "Edit", "Bash", "Grep", "Glob"):
+                        if tc.input_json:
+                            popup_lines.append(f"--- Input ({tc.input_size:,} chars) ---\n{tc.input_json[:20000]}\n")
+                        if tc.result_content:
+                            popup_lines.append(f"--- Result ({tc.result_size:,} chars) ---\n{tc.result_content[:20000]}\n")
+                    else:
+                        popup_lines.append(f"Input: {tc.input_size:,} chars | Result: {tc.result_size:,} chars")
+                    popups.append(
+                        f'<div id="{popup_id}" class="popup">'
+                        f'<div class="popup-header">'
+                        f'<strong>{tc.name}: {_escape_html(short_path)}</strong>'
+                        f'<a href="#" onclick="hidePopup(\'{popup_id}\');return false">close</a>'
+                        f'</div>'
+                        f'<pre>{_escape_html(_truncate(chr(10).join(popup_lines)))}</pre>'
+                        f'</div>'
+                    )
+                else:
+                    tool_parts.append(label)
+            tools_str = ", ".join(tool_parts) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
             est_tok = (turn.thinking_chars + turn.text_chars + turn.tool_write_chars) // 4
             dur = turn.duration_seconds
@@ -742,7 +794,7 @@ def _render_steps_rows(
         color = _bar_color(step.name)
         size_kb = step.size_bytes / 1024
         cost_str = f"${step.detail.cost_usd:.2f}" if step.detail else ""
-        detail_html = _render_detail(step.detail) if step.detail else ""
+        detail_html = _render_detail(step.detail, step_id=step_id, popups=popups) if step.detail else ""
 
         # Step name with popup links if we have prompt/output
         has_prompt = step.detail and step.detail.prompt_text
