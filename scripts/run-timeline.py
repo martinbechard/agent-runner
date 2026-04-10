@@ -67,6 +67,7 @@ class CallDetail:
     subagent_count: int = 0
     stop_reason: str = ""
     error: str = ""
+    model: str = ""
 
 
 @dataclass
@@ -162,6 +163,8 @@ def parse_log(path: Path) -> CallDetail:
         # Assistant message — one content block per line
         elif etype == "assistant":
             msg = obj.get("message", {})
+            if not detail.model and "model" in msg:
+                detail.model = msg["model"]
             usage = msg.get("usage", {})
             usage_sig = (
                 usage.get("input_tokens", 0),
@@ -378,6 +381,18 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
 # HTML renderer
 # ---------------------------------------------------------------------------
 
+def _model_abbrev(model: str) -> str:
+    """Shorten model name to a letter: o=opus, s=sonnet, h=haiku."""
+    m = model.lower()
+    if "opus" in m:
+        return "o"
+    if "sonnet" in m:
+        return "s"
+    if "haiku" in m:
+        return "h"
+    return model[:10] if model else "?"
+
+
 def _bar_color(name: str) -> str:
     nl = name.lower()
     if "generator" in nl and "prompt generator" not in nl:
@@ -407,9 +422,11 @@ def _render_detail(detail: CallDetail) -> str:
     wall_s = detail.duration_ms / 1000
     overhead_s = wall_s - api_s
     overall_tok_s = detail.output_tokens / api_s if api_s > 0 else 0
+    model_abbr = _model_abbrev(detail.model)
     parts.append(
         f'<div class="detail-summary">'
-        f'API: {api_s:.0f}s'
+        f'{model_abbr}'
+        f' | API: {api_s:.0f}s'
         f' | overhead: {overhead_s:.1f}s'
         f' | turns: {detail.num_turns}'
         f' | out: {detail.output_tokens:,} tok'
@@ -451,44 +468,49 @@ def _render_detail(detail: CallDetail) -> str:
         parts.append('<table class="turns">')
         parts.append(
             '<tr><th>Turn</th><th>Think</th><th>Text</th>'
-            '<th>~tok</th>'
-            '<th>Tool→ (write)</th><th>→Tool (read)</th>'
+            '<th>Output</th><th>Time</th><th>tok/s</th>'
             '<th>Tools</th></tr>'
         )
+        # Estimate per-turn time proportionally by estimated output tokens
+        turn_estimates = []
         for turn in detail.turns:
+            est = (turn.thinking_chars + turn.text_chars + turn.tool_write_chars) // 4
+            turn_estimates.append(est)
+        total_est = sum(turn_estimates) or 1
+
+        for turn, est_tok in zip(detail.turns, turn_estimates):
             # Tool details: name(write→/→read)
             tools_str = ", ".join(
                 f'{tc.name}({tc.input_size:,}→/→{tc.result_size:,})'
                 for tc in turn.tool_calls
             ) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
-            # Estimate tokens from chars (~4 chars/token)
-            est_tok = (turn.thinking_chars + turn.text_chars + turn.tool_write_chars) // 4
+            # Estimate this turn's share of API time
+            turn_frac = est_tok / total_est
+            turn_time_s = (detail.duration_api_ms / 1000) * turn_frac
+            tok_per_s = est_tok / turn_time_s if turn_time_s > 0 else 0
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
                 f'<td{thinking_cls}>{turn.thinking_chars:,}</td>'
                 f'<td>{turn.text_chars:,}</td>'
                 f'<td>{est_tok:,}</td>'
-                f'<td>{turn.tool_write_chars:,}</td>'
-                f'<td>{turn.tool_read_chars:,}</td>'
+                f'<td>{turn_time_s:.0f}s</td>'
+                f'<td>{tok_per_s:.0f}</td>'
                 f'<td class="tool-detail">{tools_str}</td>'
                 f'</tr>'
             )
         # Totals row
         tot_think = sum(t.thinking_chars for t in detail.turns)
         tot_text = sum(t.text_chars for t in detail.turns)
-        tot_est = sum((t.thinking_chars + t.text_chars + t.tool_write_chars) // 4 for t in detail.turns)
-        tot_tw = sum(t.tool_write_chars for t in detail.turns)
-        tot_tr = sum(t.tool_read_chars for t in detail.turns)
         parts.append(
             f'<tr style="border-top:1px solid #ccc;font-weight:bold">'
             f'<td></td>'
             f'<td>{tot_think:,}</td>'
             f'<td>{tot_text:,}</td>'
-            f'<td>{tot_est:,}</td>'
-            f'<td>{tot_tw:,}</td>'
-            f'<td>{tot_tr:,}</td>'
+            f'<td>{total_est:,}</td>'
+            f'<td>{api_s:.0f}s</td>'
+            f'<td>{overall_tok_s:.0f}</td>'
             f'<td></td>'
             f'</tr>'
         )
