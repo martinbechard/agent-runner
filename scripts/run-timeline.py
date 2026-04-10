@@ -614,6 +614,76 @@ def _bar_color(name: str) -> str:
     return "#95a5a6"
 
 
+_POPUP_COUNTER = [0]
+
+
+def _popup_content(popup_id: str, text: str) -> str:
+    """Render a popup content area with formatted/raw toggle.
+
+    Detects JSON, YAML, and Markdown and renders formatted view.
+    Raw view shows escaped plain text in a <pre> block.
+    """
+    _POPUP_COUNTER[0] += 1
+    uid = f"pcontent-{_POPUP_COUNTER[0]}"
+    truncated = _truncate(text)
+    raw_html = f'<pre class="popup-raw">{_escape_html(truncated)}</pre>'
+
+    # Detect format and build formatted view
+    stripped = text.strip()
+    formatted_html = ""
+    if stripped.startswith("{") or stripped.startswith("["):
+        # JSON — try to pretty-print
+        try:
+            import json as _j2
+            parsed = _j2.loads(stripped)
+            pretty = _j2.dumps(parsed, indent=2, ensure_ascii=False)
+            formatted_html = f'<pre class="popup-formatted">{_escape_html(pretty[:50000])}</pre>'
+        except (ValueError, TypeError):
+            pass
+    if not formatted_html and (
+        stripped.startswith("---\n")
+        or stripped.startswith("- ")
+        or ": " in stripped.split("\n")[0]
+    ):
+        # YAML — syntax highlight keys
+        lines = []
+        for line in _escape_html(truncated).splitlines():
+            # Color YAML keys (word followed by colon at start or after indent)
+            if ": " in line or line.rstrip().endswith(":"):
+                idx = line.index(":")
+                lines.append(f'<span style="color:#2980b9">{line[:idx]}</span>{line[idx:]}')
+            elif line.strip().startswith("- "):
+                lines.append(f'<span style="color:#27ae60">{line}</span>')
+            else:
+                lines.append(line)
+        formatted_html = f'<pre class="popup-formatted">{chr(10).join(lines)}</pre>'
+    if not formatted_html and (
+        stripped.startswith("#") or "\n## " in stripped or "\n- " in stripped
+    ):
+        # Markdown — basic rendering
+        import re
+        md = _escape_html(truncated)
+        # Headers
+        md = re.sub(r'^(#{1,3}) (.+)$', r'<strong>\1 \2</strong>', md, flags=re.MULTILINE)
+        # Bold
+        md = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', md)
+        # Code
+        md = re.sub(r'`([^`]+)`', r'<code>\1</code>', md)
+        formatted_html = f'<pre class="popup-formatted">{md}</pre>'
+
+    if not formatted_html:
+        # No formatting detected — just show raw
+        return raw_html
+
+    return (
+        f'<div id="{uid}" class="popup-dual">'
+        f'<button class="toggle-btn" onclick="toggleView(\'{uid}\')">raw</button>'
+        f'<div class="view-formatted">{formatted_html}</div>'
+        f'<div class="view-raw" style="display:none">{raw_html}</div>'
+        f'</div>'
+    )
+
+
 def _tool_file_path(tc: ToolCall) -> str:
     """Extract a file path from a Read/Write/Glob tool call's input JSON."""
     try:
@@ -716,7 +786,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                         f'<strong>{tc.name}: {_escape_html(short_path)}</strong>'
                         f'<a href="#" onclick="hidePopup(\'{popup_id}\');return false">close</a>'
                         f'</div>'
-                        f'<pre>{_escape_html(_truncate(chr(10).join(popup_lines)))}</pre>'
+                        f'{_popup_content(popup_id, chr(10).join(popup_lines))}'
                         f'</div>'
                     )
                 else:
@@ -832,7 +902,7 @@ def _render_steps_rows(
                 f'<strong>{step.name} — Prompt</strong>'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-prompt\');return false">close</a>'
                 f'</div>'
-                f'<pre>{_escape_html(_truncate(step.detail.prompt_text))}</pre>'
+                f'{_popup_content(step_id + "-prompt-content", step.detail.prompt_text)}'
                 f'</div>'
             )
         if has_output:
@@ -842,7 +912,7 @@ def _render_steps_rows(
                 f'<strong>{step.name} — Output</strong>'
                 f'<a href="#" onclick="hidePopup(\'{step_id}-output\');return false">close</a>'
                 f'</div>'
-                f'<pre>{_escape_html(_truncate(step.detail.output_text))}</pre>'
+                f'{_popup_content(step_id + "-output-content", step.detail.output_text)}'
                 f'</div>'
             )
     return step_counter
@@ -1150,6 +1220,14 @@ def render_html(
     padding: 12px 16px; margin: 0; font-size: 0.8em; white-space: pre-wrap;
     word-wrap: break-word; line-height: 1.4;
   }}
+  .popup-dual {{ position: relative; }}
+  .toggle-btn {{
+    position: absolute; top: 4px; right: 8px; z-index: 1;
+    padding: 2px 10px; font-size: 0.75em; cursor: pointer;
+    background: #e0e0e0; border: 1px solid #ccc; border-radius: 3px;
+  }}
+  .toggle-btn:hover {{ background: #d0d0d0; }}
+  .popup-formatted code {{ background: #eee; padding: 1px 4px; border-radius: 2px; }}
 </style>
 <script>
 function showPopup(id) {{
@@ -1157,6 +1235,21 @@ function showPopup(id) {{
 }}
 function hidePopup(id) {{
   document.getElementById(id).style.display = 'none';
+}}
+function toggleView(uid) {{
+  var el = document.getElementById(uid);
+  var fmt = el.querySelector('.view-formatted');
+  var raw = el.querySelector('.view-raw');
+  var btn = el.querySelector('.toggle-btn');
+  if (raw.style.display === 'none') {{
+    raw.style.display = 'block';
+    fmt.style.display = 'none';
+    btn.textContent = 'formatted';
+  }} else {{
+    raw.style.display = 'none';
+    fmt.style.display = 'block';
+    btn.textContent = 'raw';
+  }}
 }}
 document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{
