@@ -1,7 +1,20 @@
 Before starting, read `plugins/methodology-runner-skills/AUTHORING-CONTEXT.md`
 for lessons learned from earlier skill-authoring sessions. Apply those
-lessons as you work on this prompt. If the file doesn't exist yet or is
-empty, skip this step.
+lessons as you work on this prompt.
+
+Key patterns established in prior sessions (details in AUTHORING-CONTEXT.md):
+
+- Skills must use input->output YAML transformation examples, not just
+  prose rules. AI agents learn patterns from before/after pairs.
+- Every element needs source_quote (exact upstream text), not just
+  source_refs. This is the primary anti-hallucination mechanism.
+- Added specifics beyond the source_quote go in structured
+  open_assumptions (id, detail, needs, status: open), not in element text.
+- Assumptions propagate downstream as inherited_assumptions on elements
+  that trace to an assumption-bearing upstream element.
+- Test every skill variant with child Claude (claude -p): normal prompt,
+  adversarial "be thorough" pressure, and downstream consumption test.
+- Reference traceability-discipline/SKILL.md as the exemplar for format.
 
 ---
 
