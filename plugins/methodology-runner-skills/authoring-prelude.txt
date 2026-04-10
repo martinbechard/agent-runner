@@ -21,12 +21,15 @@ Every previous skill that skipped this process produced inferior results.
 2. Draft ALL proposed variants as complete SKILL.md files. Do NOT
    pre-filter — prompt engineering is counter-intuitive and your
    intuition about which variant is "weaker" is often wrong.
+   Use a skill-specific temp dir: /tmp/skill-variants-<skill-name>/
 3. Test ALL variants with claude -p using a NOVEL source (not the
    skill's own examples): both normal and adversarial pressure.
 4. Present a comparison report with recommendation. Always try a
    hybrid of the top two — hybrids have outperformed pure variants
    in every skill authored so far.
 5. I pick or we iterate. Deploy when solid.
+6. Before exiting: rm -rf /tmp/skill-variants-<skill-name>/ and any
+   test workspaces you created under /tmp/. Leave no temp files.
 
 If you find yourself writing a skill without having proposed variants
 first, STOP. Go back to step 1.
