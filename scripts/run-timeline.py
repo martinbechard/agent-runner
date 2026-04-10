@@ -501,7 +501,13 @@ def _render_detail(detail: CallDetail) -> str:
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
             est_tok = (turn.thinking_chars + turn.text_chars + turn.tool_write_chars) // 4
             dur = turn.duration_seconds
-            tok_s = est_tok / dur if dur > 0 else 0
+            if dur < 1 and dur > 0:
+                # Sub-second turn: clamp tok/s to output estimate
+                tok_s = est_tok
+            elif dur > 0:
+                tok_s = est_tok / dur
+            else:
+                tok_s = 0
             dur_str = f"{dur:.0f}s" if dur > 0 else "—"
             tok_s_str = f"{tok_s:.0f}" if dur > 0 else "—"
             parts.append(
