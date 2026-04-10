@@ -349,11 +349,14 @@ def _render_detail(detail: CallDetail) -> str:
     api_s = detail.duration_api_ms / 1000
     wall_s = detail.duration_ms / 1000
     overhead_s = wall_s - api_s
+    overall_tok_s = detail.output_tokens / api_s if api_s > 0 else 0
     parts.append(
         f'<div class="detail-summary">'
         f'API: {api_s:.0f}s'
         f' | overhead: {overhead_s:.1f}s'
         f' | turns: {detail.num_turns}'
+        f' | out: {detail.output_tokens:,} tok'
+        f' | {overall_tok_s:.0f} tok/s'
         f' | cost: ${detail.cost_usd:.2f}'
     )
     if detail.subagent_count:
@@ -391,23 +394,30 @@ def _render_detail(detail: CallDetail) -> str:
         parts.append('<table class="turns">')
         parts.append(
             '<tr><th>Turn</th><th>Thinking</th><th>Text</th>'
-            '<th>Tools</th><th>Details</th></tr>'
+            '<th>Out tok</th><th>Time</th><th>tok/s</th>'
+            '<th>Tools</th></tr>'
         )
+        # Estimate per-turn time by dividing total API time proportionally
+        # by output tokens (rough but better than nothing)
+        total_out = sum(t.output_tokens for t in detail.turns) or 1
         for turn in detail.turns:
             tools_str = ", ".join(
-                f'{tc.name}' for tc in turn.tool_calls
-            ) or "—"
-            tool_details = "; ".join(
-                f'{tc.name}({tc.input_size}ch)'
+                f'{tc.name}({tc.input_size // 4}tok)'
                 for tc in turn.tool_calls
-            ) or ""
+            ) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
+            # Estimate this turn's share of API time
+            turn_frac = turn.output_tokens / total_out if total_out else 0
+            turn_time_s = (detail.duration_api_ms / 1000) * turn_frac
+            tok_per_s = turn.output_tokens / turn_time_s if turn_time_s > 0 else 0
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
-                f'<td{thinking_cls}>{turn.thinking_chars:,}ch</td>'
-                f'<td>{turn.text_chars:,}ch</td>'
-                f'<td>{len(turn.tool_calls)}</td>'
+                f'<td{thinking_cls}>{turn.thinking_chars:,}</td>'
+                f'<td>{turn.text_chars:,}</td>'
+                f'<td>{turn.output_tokens:,}</td>'
+                f'<td>{turn_time_s:.0f}s</td>'
+                f'<td>{tok_per_s:.0f}</td>'
                 f'<td class="tool-detail">{tools_str}</td>'
                 f'</tr>'
             )
