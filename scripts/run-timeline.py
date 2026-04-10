@@ -1079,7 +1079,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         f'{model_abbr}'
         f' | API: {api_s:.0f}s'
         f' | overhead: {overhead_s:.1f}s'
-        f' | turns: {detail.num_turns}'
+        f' | turns: {len(detail.turns)} visible ({detail.num_turns} API)'
         f' | out: {detail.output_tokens:,} tok'
         f' | {overall_tok_s:.0f} tok/s'
         f' | cost: ${detail.cost_usd:.2f}'
