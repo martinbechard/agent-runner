@@ -1,42 +1,30 @@
-Before starting, read `plugins/methodology-runner-skills/AUTHORING-CONTEXT.md`
-for lessons learned from earlier skill-authoring sessions. Apply those
-lessons as you work on this prompt.
+Read `plugins/methodology-runner-skills/AUTHORING-CONTEXT.md` first.
+It has before/after examples for each lesson. Key patterns:
 
-Key patterns (details in AUTHORING-CONTEXT.md):
-
-- Transforms teach output patterns; explicit procedural rules teach
-  process constraints. Both are needed — neither alone is sufficient.
-- Hybrid structures (procedure + transforms) outperform pure variants
-  on consistency across pressure levels. Try hybrids, not just pure forms.
-- Rules that resist agent defaults need triple reinforcement:
-  ALWAYS emphasis + worked example + counter-example. One layer is ignored.
-- Anti-invention: the Quote Test and Invention Traps table are robust
-  regardless of position. Their presence is what matters.
-- Avoid flowcharts/decision-trees as primary structure — they create
-  blind spots for inputs that don't pattern-match decision nodes.
-- Test with novel sources different from the skill's own examples.
-  Same-source testing hides generalization failures.
-- Reference traceability-discipline/SKILL.md as the format exemplar.
+- Hybrid structure (procedure + transforms) > either alone
+- Schema shape drives behavior > prose instructions
+- Rules fighting agent defaults need: rule + example + counter-example
+- Quote Test + Invention Traps suppress all phantoms. Always include.
+- No flowcharts as primary structure — they create blind spots
+- Test with novel sources, not the skill's own examples
+- Phase skills defer traceability to traceability-discipline
+- Reference traceability-discipline/SKILL.md as format exemplar
 
 ## Authoring methodology
 
-Do NOT write one draft and present it as final. Instead:
-
-1. Propose 3-5 structural variants (different organizations — e.g.,
-   procedure-first, transforms-first, anti-pattern-first, hybrid).
-2. Draft the most promising 2-3 as complete SKILL.md files.
-3. Test each with child Claude (claude -p) using a NOVEL source
-   (not the skill's own examples): normal + adversarial pressure.
-4. Present a comparison report with recommendation. Include a hybrid
-   if the top two variants have complementary strengths.
+1. Propose 3-5 structural variants
+2. Draft best 2-3 as complete SKILL.md files
+3. Test each with claude -p using a NOVEL source: normal + adversarial
+4. Compare, recommend, include a hybrid if top two complement each other
 5. I pick or we iterate. Deploy when solid.
 
 ## In-session verification
 
-When running methodology-runner to verify a skill, NEVER run a second
-instance on the same workspace before the first finishes. The workspace
-is locked — a second attempt will fail with "already running". Wait for
-completion or use a fresh workspace path.
+Use --project-dir for workspace paths:
+
+    prompt-runner run <prompt-file> --project-dir <workspace>
+
+NEVER run two methodology-runner instances on the same workspace.
 
 ---
 
