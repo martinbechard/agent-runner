@@ -1198,56 +1198,11 @@ def _render_fork_section(
         dur_str = _fmt_duration(_steps_duration_seconds(vsteps))
         cost = _steps_cost(vsteps)
 
-        # Extract prompt and output from the first generator step
-        gen_prompt = ""
-        val_prompt = ""
-        gen_output = ""
-        for s in vsteps:
-            if s.detail:
-                if not gen_prompt and s.detail.prompt_text:
-                    gen_prompt, val_prompt = _split_prompt_fences(
-                        s.detail.prompt_text
-                    )
-                if not gen_output and s.detail.output_text:
-                    gen_output = s.detail.output_text
-
-        step_counter += 1
-        variant_id = f"variant-{step_counter}"
-
         rows.append(
             f'<tr class="variant-header"><td colspan="5">'
             f'Variant {label} — {dur_str} — ${cost:.2f}'
             f'</td></tr>'
         )
-
-        # Show prompt and output inline at the top of each variant
-        if gen_prompt or gen_output:
-            rows.append('<tr class="variant-io"><td colspan="5"><div class="variant-io-wrap">')
-            if gen_prompt:
-                prompt_id = f"{variant_id}-vprompt"
-                rows.append(
-                    f'<details class="variant-block">'
-                    f'<summary>Generation Prompt ({len(gen_prompt):,} chars)</summary>'
-                    f'{_popup_content(prompt_id, gen_prompt)}'
-                    f'</details>'
-                )
-            if val_prompt:
-                val_id = f"{variant_id}-vval"
-                rows.append(
-                    f'<details class="variant-block">'
-                    f'<summary>Validation Prompt ({len(val_prompt):,} chars)</summary>'
-                    f'{_popup_content(val_id, val_prompt)}'
-                    f'</details>'
-                )
-            if gen_output:
-                output_id = f"{variant_id}-voutput"
-                rows.append(
-                    f'<details class="variant-block" open>'
-                    f'<summary>Output ({len(gen_output):,} chars)</summary>'
-                    f'{_popup_content(output_id, gen_output)}'
-                    f'</details>'
-                )
-            rows.append('</div></td></tr>')
 
         step_counter = _render_steps_rows(vsteps, grand_total, step_counter, rows, popups)
 
