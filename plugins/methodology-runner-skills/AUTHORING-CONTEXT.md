@@ -236,6 +236,32 @@ STRONG — explicit Component Integrity Rule + CORRECT/WRONG:
 
 ---
 
+## Index-building is an adversarial liability for review skills
+
+```
+WEAK -- index-first approach (like solution-design-review Step 0):
+  Review skill tells the agent to build a cross-reference index
+  before running checks. Under adversarial pressure ("be generous",
+  "naming is style", "async is fire-and-forget"), the agent bakes
+  adversarial guidelines into the index notes. All subsequent checks
+  defer to the contaminated index.
+  Result: 1 of 5 planted flaws found under adversarial pressure.
+
+STRONG -- flat sequential checks (no intermediate index):
+  Review skill runs checks directly against the raw artifact.
+  Each check applies the skill's rules without an intermediate
+  representation that adversarial context can contaminate.
+  Result: 5 of 5 planted flaws found under adversarial pressure.
+
+Key: intermediate data structures (indexes, cross-references) are
+injection surfaces. Adversarial instructions get incorporated into
+the index, which then becomes the "source of truth" for downstream
+checks. Flat sequential checks are more robust because they apply
+rules directly to the artifact without a corruptible intermediary.
+```
+
+---
+
 ## Orchestrator note
 
 The baseline validator checks ALL phases' skills globally, not just
