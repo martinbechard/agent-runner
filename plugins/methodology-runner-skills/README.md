@@ -1,9 +1,11 @@
 # methodology-runner-skills
 
-Baseline skill pack for the AI-driven development methodology. Provides
-18 tech-agnostic skills covering all 8 phases of methodology-runner.
+Baseline skill pack for the AI-driven development methodology.
 
-## Companion spec
+All 18 v1 skills are now present in this plugin, covering all 8
+methodology-runner phases with a tech-agnostic generator/judge baseline.
+
+## Spec
 
 [Skill-Driven Methodology Runner Design](../../docs/superpowers/specs/2026-04-09-skill-driven-methodology-runner-design.md)
 
@@ -12,6 +14,20 @@ Baseline skill pack for the AI-driven development methodology. Provides
 methodology-runner discovers skills by walking
 `<cwd>/plugins/*/skills/**/SKILL.md`. Run methodology-runner from the
 repo root and these skills are picked up automatically.
+
+## Quick start
+
+From the repo root:
+
+```bash
+methodology-runner run \
+  tests/fixtures/tiny-requirements.md \
+  --workspace /tmp/test-release-smoke
+```
+
+This uses cwd-based discovery from `./plugins/`. No symlinks, no env
+vars, and no extra plugin-install step are required while developing in
+this repo.
 
 ## V1 skill list (18 tech-agnostic)
 

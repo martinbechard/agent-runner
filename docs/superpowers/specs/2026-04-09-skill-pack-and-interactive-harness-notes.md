@@ -428,3 +428,57 @@ cover discovery, priority shadowing, and the default-to-cwd behavior.
 - The session ended mid-feedback from Martin — he has more direction to
   give on this before work begins. These notes are a checkpoint, not a
   finalized plan.
+
+---
+
+## 11. Release notes — 2026-04-11
+
+### What was built
+
+- **18 v1 skills** are now present under `plugins/methodology-runner-skills/skills/`,
+  covering every generator/judge baseline across PH-000 through PH-007.
+- **7 integration agents** were authored to simulate downstream consumers
+  during single-phase development:
+  `integration-agent-PH-000-requirements-inventory.md` through
+  `integration-agent-PH-006-incremental-implementation.md`.
+- The **plugin scaffold** exists in-repo under
+  `plugins/methodology-runner-skills/`, including plugin metadata,
+  authoring context, and README/discovery documentation.
+- **prompt-runner extensions** for this workflow were added during the
+  authoring cycle, including interactive-prompt support, optional-validator
+  handling, and related audit/config plumbing needed to drive the harness.
+
+### What still needs to happen
+
+- Publish the Python tooling to **PyPI** once the smoke-test blocker below
+  is resolved.
+- Publish the plugin to the **plugin library / distribution channel**
+  after the same release gate is green.
+- Re-run the full tiny-requirements pipeline in a fresh workspace and get
+  a clean pass through **all 8 phases plus final verification** before
+  calling the pack release-ready.
+- Revisit any skills that prove too shallow once the later phases run
+  end-to-end. No individual v1 skill was conclusively identified as too
+  shallow in this pass, but PH-004 through PH-007 still lack fresh
+  end-to-end exercise because the pipeline never reached them.
+
+### Open bugs and rough edges discovered during authoring
+
+- **Release blocker:** a fresh reproducibility run on 2026-04-11 using
+  `methodology-runner run tests/fixtures/tiny-requirements.md --workspace /tmp/test-release-smoke`
+  halted in **PH-000**. The first judge iteration returned `VERDICT: revise`,
+  then prompt-runner failed to resume the second generator iteration with:
+  `Error: thread/resume: thread/resume failed: no rollout found for thread id 847a2534-e7f7-5ba5-8e0f-2bf19f16f98a`.
+- Because of that failure, the new smoke workspace produced only PH-000
+  artifacts. It did **not** generate later-phase outputs or the final
+  `docs/verification/verification-report.yaml`, so final traceability-chain
+  completeness could not be confirmed in the fresh run.
+- Artifact spot-checks from generated workspaces still show that the
+  methodology is wiring authored skills into prompts as intended. Example
+  generator preludes referenced `requirements-extraction` +
+  `traceability-discipline` in PH-000, `feature-specification` +
+  `traceability-discipline` in PH-001, and `tech-stack-catalog` +
+  `architecture-decomposition` in PH-002; the PH-002
+  `phase-002-skills.yaml` selector output also made reasonable
+  selector-judgment additions (`solution-design-patterns`,
+  `solution-design-review`) without exceeding the skill-cap.
