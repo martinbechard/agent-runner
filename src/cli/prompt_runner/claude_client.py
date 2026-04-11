@@ -28,6 +28,8 @@ class ClaudeCall:
     All generator and judge calls within a single pipeline run share the same
     workspace_dir — it is the runner's 'shared workspace' for cross-prompt
     file continuity."""
+    effort: str | None = None
+    """Effort level for thinking: low, medium, high, max. Passed as --effort to claude."""
     fork_session: bool = False
     """When True, fork from fork_from_session_id into session_id.
     Passes --resume <source> --fork-session --session-id <new>."""
@@ -312,6 +314,8 @@ class RealClaudeClient:
         ]
         if call.model is not None:
             argv += ["--model", call.model]
+        if call.effort is not None:
+            argv += ["--effort", call.effort]
         if call.fork_session:
             # Fork: resume from the source session, fork it, and assign
             # a new session ID so the fork is independently addressable.

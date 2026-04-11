@@ -248,6 +248,70 @@ def test_fork_synthetic_prompt_contains_variant_and_tail(tmp_path: Path):
     assert "gen 3" in synthetic_b
 
 
+def test_model_override_used_in_make_call(tmp_path: Path):
+    """When pair has model_override, it's used instead of config.model."""
+    from prompt_runner.runner import _make_call
+
+    pair = PromptPair(
+        index=1, title="X", generation_prompt="g", validation_prompt="v",
+        heading_line=1, generation_line=2, validation_line=5,
+        model_override="claude-sonnet-4-6",
+    )
+    call = _make_call(
+        prompt="test", session_id="sid", new_session=True,
+        model=pair.model_override or "default-model",
+        effort=pair.effort_override,
+        logs_dir=tmp_path, iteration=1, role="generator",
+        pair=pair, workspace_dir=tmp_path,
+    )
+    assert call.model == "claude-sonnet-4-6"
+    assert call.effort is None
+
+
+def test_effort_override_in_make_call(tmp_path: Path):
+    """When pair has effort_override, it's threaded through to ClaudeCall."""
+    from prompt_runner.runner import _make_call
+
+    pair = PromptPair(
+        index=1, title="X", generation_prompt="g", validation_prompt="v",
+        heading_line=1, generation_line=2, validation_line=5,
+        effort_override="low",
+    )
+    call = _make_call(
+        prompt="test", session_id="sid", new_session=True,
+        model=None, effort=pair.effort_override,
+        logs_dir=tmp_path, iteration=1, role="generator",
+        pair=pair, workspace_dir=tmp_path,
+    )
+    assert call.effort == "low"
+
+
+def test_serialize_preserves_model_and_effort():
+    """_serialize_pairs_to_md writes [MODEL:] and [EFFORT:] directives in headings."""
+    pair = PromptPair(
+        index=1, title="Test", generation_prompt="gen",
+        validation_prompt="val", heading_line=1,
+        generation_line=2, validation_line=5,
+        model_override="claude-sonnet-4-6",
+        effort_override="medium",
+    )
+    md = _serialize_pairs_to_md([pair])
+    assert "[MODEL:claude-sonnet-4-6]" in md
+    assert "[EFFORT:medium]" in md
+
+
+def test_serialize_omits_directives_when_not_set():
+    """_serialize_pairs_to_md does not add directive text when fields are None."""
+    pair = PromptPair(
+        index=1, title="Plain", generation_prompt="gen",
+        validation_prompt="val", heading_line=1,
+        generation_line=2, validation_line=5,
+    )
+    md = _serialize_pairs_to_md([pair])
+    assert "[MODEL:" not in md
+    assert "[EFFORT:" not in md
+
+
 def test_variant_sequential_flag_accepted(tmp_path: Path):
     """RunConfig.variant_sequential is accepted and stored."""
     cfg = RunConfig(variant_sequential=True)

@@ -438,6 +438,7 @@ def _make_call(
     session_id: str,
     new_session: bool,
     model: str | None,
+    effort: str | None = None,
     logs_dir: Path,
     iteration: int,
     role: str,
@@ -451,6 +452,7 @@ def _make_call(
         session_id=session_id,
         new_session=new_session,
         model=model,
+        effort=effort,
         stdout_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stdout.log",
         stderr_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stderr.log",
         fork_session=fork_session,
@@ -609,7 +611,8 @@ def run_prompt(
             prompt=gen_msg,
             session_id=fork_new_session,
             new_session=is_first and not use_fork,
-            model=config.model,
+            model=pair.model_override or config.model,
+            effort=pair.effort_override,
             logs_dir=logs_dir,
             iteration=iteration_number,
             role="generator",
@@ -656,7 +659,8 @@ def run_prompt(
             prompt=jud_msg,
             session_id=jud_session,
             new_session=is_first,
-            model=config.model,
+            model=pair.model_override or config.model,
+            effort=pair.effort_override,
             logs_dir=logs_dir,
             iteration=iteration_number,
             role="judge",
@@ -759,7 +763,12 @@ def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
     """
     sections: list[str] = []
     for pair in pairs:
-        lines: list[str] = [f"## Prompt {pair.index}: {pair.title}", ""]
+        heading = f"## Prompt {pair.index}: {pair.title}"
+        if pair.model_override:
+            heading += f" [MODEL:{pair.model_override}]"
+        if pair.effort_override:
+            heading += f" [EFFORT:{pair.effort_override}]"
+        lines: list[str] = [heading, ""]
         lines.append("```")
         lines.append(pair.generation_prompt)
         lines.append("```")
