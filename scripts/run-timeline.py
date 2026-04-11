@@ -1229,8 +1229,8 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
                 tok_s = est_tok / dur
             else:
                 tok_s = 0
-            dur_str = f"~{dur:.0f}s" if is_inferred else (f"{dur:.0f}s" if dur > 0 else "—")
-            tok_s_str = f"~{tok_s:.0f}" if is_inferred else (f"{tok_s:.0f}" if dur > 0 else "—")
+            dur_str = f"{dur:.0f}s" if dur > 0 else "—"
+            tok_s_str = f"{tok_s:.0f}" if dur > 0 else "—"
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
