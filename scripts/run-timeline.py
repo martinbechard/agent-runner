@@ -1144,6 +1144,23 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         all_est = [round(e * scale) for e in raw_est]
         total_est_for_cost = sum(all_est) or 1
 
+        # Distribute unmeasured turn time from the total API time.
+        # Turns with timestamps get their measured duration. Turns without
+        # get a share of the remaining time proportional to their output.
+        measured_time = sum(
+            t.duration_seconds for t in detail.turns if t.duration_seconds > 0
+        )
+        remaining_time = max(0, api_s - measured_time)
+        unmeasured_est = sum(
+            all_est[i] for i, t in enumerate(detail.turns) if t.duration_seconds <= 0
+        ) or 1
+        inferred_dur: list[float] = []
+        for i, t in enumerate(detail.turns):
+            if t.duration_seconds > 0:
+                inferred_dur.append(t.duration_seconds)
+            else:
+                inferred_dur.append(remaining_time * all_est[i] / unmeasured_est)
+
         for turn_idx, turn in enumerate(detail.turns):
             tool_parts = []
             for tc in turn.tool_calls:
@@ -1204,16 +1221,16 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
             tools_str = ", ".join(tool_parts) or "—"
             thinking_cls = ' class="big-think"' if turn.thinking_chars > 5000 else ""
             est_tok = all_est[turn_idx]
-            dur = turn.duration_seconds
+            dur = inferred_dur[turn_idx]
+            is_inferred = turn.duration_seconds <= 0 and dur > 0
             if dur < 1 and dur > 0:
-                # Sub-second turn: clamp tok/s to output estimate
                 tok_s = est_tok
             elif dur > 0:
                 tok_s = est_tok / dur
             else:
                 tok_s = 0
-            dur_str = f"{dur:.0f}s" if dur > 0 else "—"
-            tok_s_str = f"{tok_s:.0f}" if dur > 0 else "—"
+            dur_str = f"~{dur:.0f}s" if is_inferred else (f"{dur:.0f}s" if dur > 0 else "—")
+            tok_s_str = f"~{tok_s:.0f}" if is_inferred else (f"{tok_s:.0f}" if dur > 0 else "—")
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
