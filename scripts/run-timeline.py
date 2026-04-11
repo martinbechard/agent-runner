@@ -1428,7 +1428,8 @@ def _render_fork_section(
     for vname in variant_names:
         vsteps = fork.variants[vname]
         label = vname.replace("variant-", "").upper()
-        dur_str = _fmt_duration(_steps_duration_seconds(vsteps))
+        dur = _steps_duration_seconds(vsteps)
+        dur_str = _fmt_duration(dur)
         cost = _steps_cost(vsteps)
         turns = _steps_turns(vsteps)
         out_tok = _steps_output_tokens(vsteps)
@@ -1437,13 +1438,35 @@ def _render_fork_section(
             "verdict-fail" if verdict in ("fail", "revise", "escalate") else ""
         )
 
+        # Aggregate Think and Text across all steps
+        tot_think = sum(
+            sum(t.thinking_chars for t in s.detail.turns)
+            for s in vsteps if s.detail
+        )
+        tot_text = sum(
+            sum(t.text_chars for t in s.detail.turns)
+            for s in vsteps if s.detail
+        )
+        tok_s = out_tok / dur if dur > 0 else 0
+
         variant_css = "".join(c if c.isalnum() else "-" for c in vname.lower()).strip("-")
         variant_cls = f"in-variant variant-{variant_css}"
         rows.append(
             f'<tr class="variant-header {variant_cls}"><td colspan="5">'
-            f'Variant {label} — {dur_str} — ${cost:.2f}'
-            f' — {turns} turns — {out_tok:,} tok'
+            f'Variant {label}'
             f' — <span class="{verdict_cls}">{verdict}</span>'
+            f'<table class="variant-totals"><tr>'
+            f'<th>Think</th><th>Text</th><th>Output</th>'
+            f'<th>Time</th><th>tok/s</th><th>Cost</th><th>Turns</th>'
+            f'</tr><tr>'
+            f'<td>{tot_think:,}</td>'
+            f'<td>{tot_text:,}</td>'
+            f'<td>{out_tok:,}</td>'
+            f'<td>{dur_str}</td>'
+            f'<td>{tok_s:.0f}</td>'
+            f'<td>${cost:.2f}</td>'
+            f'<td>{turns}</td>'
+            f'</tr></table>'
             f'</td></tr>'
         )
 
@@ -1573,6 +1596,17 @@ def render_html(
   tr.variant-header td {{
     background: #f0f4f8; padding: 6px 12px 6px 24px; font-size: 0.95em;
     border-top: 1px solid #b0c8e0; color: #444;
+  }}
+  table.variant-totals {{
+    display: inline-table; margin-left: 12px; font-size: 0.85em;
+    border-collapse: collapse;
+  }}
+  table.variant-totals th {{
+    padding: 1px 8px; color: #666; font-weight: normal;
+    border-bottom: 1px solid #ccc;
+  }}
+  table.variant-totals td {{
+    padding: 1px 8px; text-align: right; font-family: monospace;
   }}
   tr.in-variant td:first-child {{
     border-left: 4px solid #b0c8e0; padding-left: 20px;
