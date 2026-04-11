@@ -62,6 +62,8 @@ class Turn:
     turn_number: int
     thinking_chars: int = 0
     text_chars: int = 0
+    thinking_content: str = ""
+    text_content: str = ""
     tool_calls: list[ToolCall] = field(default_factory=list)
     tool_results_before: list[ToolResult] = field(default_factory=list)
     """Tool results received BEFORE this turn (the user events that
@@ -255,10 +257,13 @@ def parse_log(path: Path) -> CallDetail:
             for block in msg.get("content", []):
                 bt = block.get("type", "")
                 if bt == "thinking":
-                    current_turn.thinking_chars += len(block.get("thinking", ""))
+                    think_text = block.get("thinking", "")
+                    current_turn.thinking_chars += len(think_text)
+                    current_turn.thinking_content += think_text
                 elif bt == "text":
                     txt = block.get("text", "")
                     current_turn.text_chars += len(txt)
+                    current_turn.text_content += txt
                     detail.output_text += txt
                 elif bt == "tool_use":
                     name = block.get("name", "?")
@@ -1070,6 +1075,26 @@ def _tool_file_path(tc: ToolCall) -> str:
         return ""
 
 
+def _turn_cell_link(chars: int, content: str, popup_id: str, popups: list | None) -> str:
+    """Render a turn table cell value. If content is non-empty, make it a clickable link to a popup."""
+    if not chars:
+        return "0"
+    if not content or popups is None:
+        return f"{chars:,}"
+    popups.append(
+        f'<div id="{popup_id}" class="popup">'
+        f'<div class="popup-header">'
+        f'<strong>{popup_id.split("-")[-1].title()} ({chars:,})</strong>'
+        f'{_popup_toolbar(f"pc-{popup_id}")}'
+        f'<a href="#" onclick="hidePopup(\'{popup_id}\');return false">close</a>'
+        f'</div>'
+        f'<div class="popup-body">'
+        f'{_popup_content(popup_id, content)}'
+        f'</div></div>'
+    )
+    return f'<a href="#" onclick="showPopup(\'{popup_id}\');return false">{chars:,}</a>'
+
+
 def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = None) -> str:
     """Render the drill-down section for one call."""
     if not detail or (not detail.turns and not detail.duration_ms):
@@ -1234,8 +1259,8 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
             parts.append(
                 f'<tr>'
                 f'<td>{turn.turn_number}</td>'
-                f'<td{thinking_cls}>{turn.thinking_chars:,}</td>'
-                f'<td>{turn.text_chars:,}</td>'
+                f'<td{thinking_cls}>{_turn_cell_link(turn.thinking_chars, turn.thinking_content, f"{step_id}-t{turn.turn_number}-think", popups)}</td>'
+                f'<td>{_turn_cell_link(turn.text_chars, turn.text_content, f"{step_id}-t{turn.turn_number}-text", popups)}</td>'
                 f'<td>{est_tok:,}</td>'
                 f'<td>{dur_str}</td>'
                 f'<td>{tok_s_str}</td>'
