@@ -1454,19 +1454,14 @@ def _render_fork_section(
         rows.append(
             f'<tr class="variant-header {variant_cls}"><td colspan="5">'
             f'Variant {label}'
+            f' — {turns} turns'
+            f' — Think: {tot_think:,}'
+            f' — Text: {tot_text:,}'
+            f' — Output: {out_tok:,}'
+            f' — {dur_str}'
+            f' — {tok_s:.0f} tok/s'
+            f' — ${cost:.2f}'
             f' — <span class="{verdict_cls}">{verdict}</span>'
-            f'<table class="variant-totals"><tr>'
-            f'<th>Think</th><th>Text</th><th>Output</th>'
-            f'<th>Time</th><th>tok/s</th><th>Cost</th><th>Turns</th>'
-            f'</tr><tr>'
-            f'<td>{tot_think:,}</td>'
-            f'<td>{tot_text:,}</td>'
-            f'<td>{out_tok:,}</td>'
-            f'<td>{dur_str}</td>'
-            f'<td>{tok_s:.0f}</td>'
-            f'<td>${cost:.2f}</td>'
-            f'<td>{turns}</td>'
-            f'</tr></table>'
             f'</td></tr>'
         )
 
@@ -1596,17 +1591,6 @@ def render_html(
   tr.variant-header td {{
     background: #f0f4f8; padding: 6px 12px 6px 24px; font-size: 0.95em;
     border-top: 1px solid #b0c8e0; color: #444;
-  }}
-  table.variant-totals {{
-    display: inline-table; margin-left: 12px; font-size: 0.85em;
-    border-collapse: collapse;
-  }}
-  table.variant-totals th {{
-    padding: 1px 8px; color: #666; font-weight: normal;
-    border-bottom: 1px solid #ccc;
-  }}
-  table.variant-totals td {{
-    padding: 1px 8px; text-align: right; font-family: monospace;
   }}
   tr.in-variant td:first-child {{
     border-left: 4px solid #b0c8e0; padding-left: 20px;
