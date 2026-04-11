@@ -220,3 +220,127 @@ val 2
     items = parse_text(text)
     assert len(items) == 2
     assert all(isinstance(i, PromptPair) for i in items)
+
+
+def test_model_override_on_prompt_heading():
+    text = """## Prompt 1: Test [MODEL:claude-sonnet-4-6]
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    items = parse_text(text)
+    assert items[0].model_override == "claude-sonnet-4-6"
+    assert items[0].title == "Test"
+
+
+def test_effort_override_on_prompt_heading():
+    text = """## Prompt 1: Test [EFFORT:low]
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    items = parse_text(text)
+    assert items[0].effort_override == "low"
+    assert items[0].title == "Test"
+
+
+def test_both_model_and_effort():
+    text = """## Prompt 1: Test [MODEL:claude-haiku-4-5-20251001] [EFFORT:medium]
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    items = parse_text(text)
+    assert items[0].model_override == "claude-haiku-4-5-20251001"
+    assert items[0].effort_override == "medium"
+    assert items[0].title == "Test"
+
+
+def test_model_on_variant_heading():
+    text = """## Prompt 1: Audit [VARIANTS]
+
+### Variant A: Default
+
+```
+gen
+```
+
+### Variant B: Sonnet [MODEL:claude-sonnet-4-6]
+
+```
+gen
+```
+"""
+    items = parse_text(text)
+    fork = items[0]
+    assert fork.variants[0].pairs[0].model_override is None
+    assert fork.variants[1].pairs[0].model_override == "claude-sonnet-4-6"
+
+
+def test_effort_on_variant_heading():
+    text = """## Prompt 1: Audit [VARIANTS]
+
+### Variant A: Default
+
+```
+gen
+```
+
+### Variant B: Low effort [EFFORT:low]
+
+```
+gen
+```
+"""
+    items = parse_text(text)
+    fork = items[0]
+    assert fork.variants[0].pairs[0].effort_override is None
+    assert fork.variants[1].pairs[0].effort_override == "low"
+
+
+def test_model_and_effort_not_in_title():
+    text = """## Prompt 1: My [MODEL:x] test [EFFORT:low] here
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    items = parse_text(text)
+    assert items[0].model_override == "x"
+    assert items[0].effort_override == "low"
+    assert items[0].title == "My test here"
+
+
+def test_no_directives_unchanged():
+    text = """## Prompt 1: Plain title
+
+```
+gen
+```
+
+```
+val
+```
+"""
+    items = parse_text(text)
+    assert items[0].model_override is None
+    assert items[0].effort_override is None

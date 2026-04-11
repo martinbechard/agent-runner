@@ -33,6 +33,8 @@ class PromptPair:
     generation_line: int
     validation_line: int   # 0 when there is no validator
     interactive: bool = False
+    model_override: str | None = None   # e.g. "claude-sonnet-4-6"
+    effort_override: str | None = None  # e.g. "low", "medium", "high", "max"
 
 
 @dataclass(frozen=True)
@@ -80,11 +82,38 @@ _HEADING_RE = re.compile(
 )
 _INTERACTIVE_RE = re.compile(r"\s*\[interactive\]\s*$", re.IGNORECASE)
 _VARIANTS_RE = re.compile(r"\s*\[variants\]\s*$", re.IGNORECASE)
+_MODEL_RE = re.compile(r"\[MODEL:([^\]]+)\]", re.IGNORECASE)
+_EFFORT_RE = re.compile(r"\[EFFORT:([^\]]+)\]", re.IGNORECASE)
 _VARIANT_HEADING_RE = re.compile(
     r"^###\s+Variant\s+(\S+?)\s*:\s*(.+?)\s*$"
 )
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_+\-]*\s*$")
 _UNTITLED = "(untitled)"
+
+
+def _extract_directives(raw_title: str) -> tuple[str, str | None, str | None]:
+    """Strip [MODEL:xxx] and [EFFORT:xxx] from raw_title.
+
+    Returns (cleaned_title, model_value, effort_value). Each directive is
+    removed from the title and its value captured; missing directives yield
+    None. Whitespace is normalised after removal.
+    """
+    model_value: str | None = None
+    effort_value: str | None = None
+
+    model_match = _MODEL_RE.search(raw_title)
+    if model_match is not None:
+        model_value = model_match.group(1)
+        raw_title = raw_title[:model_match.start()] + raw_title[model_match.end():]
+
+    effort_match = _EFFORT_RE.search(raw_title)
+    if effort_match is not None:
+        effort_value = effort_match.group(1)
+        raw_title = raw_title[:effort_match.start()] + raw_title[effort_match.end():]
+
+    # Collapse any double spaces left behind and strip edges.
+    cleaned = " ".join(raw_title.split())
+    return cleaned, model_value, effort_value
 _BOUNDARY_HEADING = "heading"
 _BOUNDARY_EOF = "eof"
 
@@ -101,6 +130,8 @@ class _Accumulator:
     generation_lines: list[str] = field(default_factory=list)
     validation_lines: list[str] = field(default_factory=list)
     interactive: bool = False
+    model_override: str | None = None
+    effort_override: str | None = None
 
     def to_pair(self) -> PromptPair:
         return PromptPair(
@@ -112,6 +143,8 @@ class _Accumulator:
             generation_line=self.generation_line,
             validation_line=self.validation_line,
             interactive=self.interactive,
+            model_override=self.model_override,
+            effort_override=self.effort_override,
         )
 
 
@@ -135,10 +168,12 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
     variants_heading_line: int = 0
     variants_index: int = 0
     collected_variants: list[VariantPrompt] = []
-    # Current variant being built (name, title, accumulated pairs).
+    # Current variant being built (name, title, accumulated pairs, directives).
     current_variant_name: str = ""
     current_variant_title: str = ""
     current_variant_pairs: list[PromptPair] = []
+    current_variant_model: str | None = None
+    current_variant_effort: str | None = None
     in_variants_section: bool = False
 
     def _flush_current_variant() -> None:
@@ -218,15 +253,18 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
                 current_variant_name = ""
                 current_variant_title = ""
                 current_variant_pairs.clear()
+                current_variant_model = None
+                current_variant_effort = None
                 in_variants_section = True
                 state = _State.SEEK_HEADING  # repurpose: we'll handle sub-headings below
                 continue
 
             if interactive_match is not None:
-                title = raw_title[:interactive_match.start()].rstrip()
+                title_without_interactive = raw_title[:interactive_match.start()].rstrip()
+                title, model_override, effort_override = _extract_directives(title_without_interactive)
                 interactive = True
             else:
-                title = raw_title
+                title, model_override, effort_override = _extract_directives(raw_title)
                 interactive = False
 
             current = _Accumulator(
@@ -234,6 +272,8 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
                 title=title,
                 heading_line=line_number,
                 interactive=interactive,
+                model_override=model_override,
+                effort_override=effort_override,
             )
             state = _State.SEEK_FIRST_FENCE
             continue
@@ -242,16 +282,26 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
         if in_variants_section:
             variant_heading_match = _VARIANT_HEADING_RE.match(line)
             if variant_heading_match is not None:
+                # If the previous variant ended with a single-fence (validator-less)
+                # pair, finalize it before flushing the variant.
+                if current is not None and state is _State.SEEK_SECOND_FENCE and current_variant_name:
+                    current_variant_pairs.append(current.to_pair())
                 # Finalize the previous variant (if any).
                 _flush_current_variant()
                 current_variant_name = variant_heading_match.group(1)
-                current_variant_title = variant_heading_match.group(2)
+                raw_variant_title = variant_heading_match.group(2)
+                # Extract [MODEL:xxx] and [EFFORT:xxx] from the variant heading.
+                current_variant_title, current_variant_model, current_variant_effort = (
+                    _extract_directives(raw_variant_title)
+                )
                 current_variant_pairs.clear()
                 # Reset accumulator for collecting pairs within this variant.
                 current = _Accumulator(
                     index=0,  # variants don't carry individual indices
                     title=current_variant_title,
                     heading_line=line_number,
+                    model_override=current_variant_model,
+                    effort_override=current_variant_effort,
                 )
                 state = _State.SEEK_FIRST_FENCE
                 continue
@@ -291,6 +341,8 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
                         index=0,
                         title=current_variant_title,
                         heading_line=line_number,
+                        model_override=current_variant_model,
+                        effort_override=current_variant_effort,
                     )
                     state = _State.SEEK_FIRST_FENCE
                 else:
