@@ -1453,15 +1453,17 @@ def _render_fork_section(
         variant_cls = f"in-variant variant-{variant_css}"
         rows.append(
             f'<tr class="variant-header {variant_cls}"><td colspan="5">'
-            f'Variant {label}'
-            f' — {turns} turns'
-            f' — Think: {tot_think:,}'
-            f' — Text: {tot_text:,}'
-            f' — Output: {out_tok:,}'
-            f' — {dur_str}'
-            f' — {tok_s:.0f} tok/s'
-            f' — ${cost:.2f}'
-            f' — <span class="{verdict_cls}">{verdict}</span>'
+            f'<strong>Variant {label}</strong>'
+            f' <span class="variant-metrics">'
+            f'{turns} turns'
+            f' | Think: {tot_think:,}'
+            f' | Text: {tot_text:,}'
+            f' | Output: {out_tok:,}'
+            f' | {dur_str}'
+            f' | {tok_s:.0f} tok/s'
+            f' | ${cost:.2f}'
+            f' | <span class="{verdict_cls}">{verdict}</span>'
+            f'</span>'
             f'</td></tr>'
         )
 
@@ -1545,12 +1547,9 @@ def render_html(
   .step-size {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #888; }}
   .step-bar {{ width: 32%; }}
   .bar {{ height: 18px; border-radius: 3px; min-width: 4px; }}
-  .legend {{ display: flex; gap: 1.5em; margin: 1em 0; font-size: 0.85em; flex-wrap: wrap; }}
-  .legend-item {{ display: flex; align-items: center; gap: 0.4em; }}
-  .legend-swatch {{ width: 14px; height: 14px; border-radius: 2px; }}
 
   .detail {{ background: #f5f5f5; border-radius: 6px; padding: 10px 14px; font-size: 0.85em; margin-top: 4px; }}
-  .detail-summary {{ margin-bottom: 6px; color: #555; }}
+  .detail-summary {{ margin-bottom: 6px; color: #555; font-family: monospace; }}
   .warn {{ color: #e74c3c; font-weight: bold; }}
 
   .token-bar {{ display: flex; height: 10px; border-radius: 3px; overflow: hidden; margin: 4px 0; max-width: 600px; }}
@@ -1572,43 +1571,20 @@ def render_html(
     background: #d8e8f5; padding: 8px 12px; font-size: 1.05em;
     border-top: 3px solid #4a90d9;
   }}
-  tr.fork-comparison td {{ padding: 8px 12px 12px 12px; }}
-  .fork-table-wrap {{ overflow-x: auto; }}
-  table.fork-compare {{
-    width: auto; min-width: 500px; max-width: 700px;
-    border: 1px solid #ccc; border-radius: 4px; font-size: 0.9em;
-  }}
-  table.fork-compare th {{
-    background: #f0f0f0; padding: 6px 12px; text-align: left;
-    border-bottom: 1px solid #ccc; font-weight: normal; color: #555;
-  }}
-  table.fork-compare td {{ padding: 5px 12px; border-bottom: 1px solid #eee; }}
-  tr.delta-row td {{
-    background: #f8f8f0; font-style: italic; border-top: 1px solid #bbb;
-  }}
   .verdict-pass {{ color: #27ae60; font-weight: bold; }}
   .verdict-fail {{ color: #e74c3c; font-weight: bold; }}
   tr.variant-header td {{
-    background: #f0f4f8; padding: 6px 12px 6px 24px; font-size: 0.95em;
-    border-top: 1px solid #b0c8e0; color: #444;
+    background: #f0f4f8; padding: 8px 12px 8px 24px; font-size: 0.95em;
+    border-top: 2px solid #b0c8e0; color: #444;
+  }}
+  .variant-metrics {{
+    font-size: 0.85em; color: #555; font-family: monospace;
   }}
   tr.in-variant td:first-child {{
     border-left: 4px solid #b0c8e0; padding-left: 20px;
   }}
   tr.variant-variant-a td:first-child {{ border-left-color: #4a90d9; }}
   tr.variant-variant-b td:first-child {{ border-left-color: #e67e22; }}
-  tr.variant-io td {{ padding: 0 12px 8px 24px; }}
-  .variant-io-wrap {{ display: flex; gap: 12px; flex-wrap: wrap; }}
-  .variant-block {{
-    flex: 1; min-width: 300px; max-height: 400px; overflow: auto;
-    border: 1px solid #ddd; border-radius: 6px; background: #fafafa;
-  }}
-  .variant-block summary {{
-    padding: 6px 12px; cursor: pointer; font-size: 0.85em;
-    font-weight: bold; color: #555; background: #f0f0f0;
-    border-bottom: 1px solid #ddd;
-  }}
-  .variant-block pre {{ max-height: 350px; overflow: auto; margin: 0; }}
 
   .popup {{
     display: none; position: fixed; top: 5%; left: 10%; width: 80%; max-height: 85%;
