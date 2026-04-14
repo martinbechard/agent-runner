@@ -69,22 +69,29 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     run_dir = tmp_path / "run"
     workspace = _workspace(tmp_path)
 
-    # Stub subprocess.run so the interactive prompt doesn't actually
+    # Stub subprocess.Popen so the interactive prompt doesn't actually
     # spawn claude. Record the invocation for later assertions.
     import subprocess
     interactive_calls: list[list] = []
 
-    def fake_subprocess_run(argv, **kwargs):
-        interactive_calls.append(argv)
-        # Simulate the user creating a file during the interactive session
-        (workspace / "authored-during-interactive.md").write_text(
-            "body", encoding="utf-8",
-        )
-        class R:
-            returncode = 0
-        return R()
+    class _FakeInteractiveProc:
+        def __init__(self, argv, **kwargs):
+            self.argv = argv
+            self.kwargs = kwargs
+            self.pid = 42424
 
-    monkeypatch.setattr(subprocess, "run", fake_subprocess_run)
+        def wait(self):
+            interactive_calls.append(self.argv)
+            # Simulate the user creating a file during the interactive session
+            (workspace / "authored-during-interactive.md").write_text(
+                "body", encoding="utf-8",
+            )
+            return 0
+
+    def fake_subprocess_popen(argv, **kwargs):
+        return _FakeInteractiveProc(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_subprocess_popen)
 
     # Scripted claude responses for the non-interactive prompts:
     # - Prompt 1: generator + judge = 2 calls
@@ -166,3 +173,48 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     assert verdict == "pass"
     artifact = (prompt_4_dirs[0] / "final-artifact.md").read_text("utf-8")
     assert "artifact 4 re-run" in artifact
+
+
+def test_interactive_codex_uses_local_state_overrides(tmp_path: Path, monkeypatch):
+    src = tmp_path / "smoke.md"
+    src.write_text(
+        "# Smoke\n\n## Prompt 1: Interactive [interactive]\n\n```\ninteractive mission\n```\n",
+        encoding="utf-8",
+    )
+    pairs = parse_text(src.read_text(encoding="utf-8"))
+    run_dir = tmp_path / "run"
+    workspace = _workspace(tmp_path)
+
+    import subprocess
+    captured: dict = {}
+
+    class _FakeInteractiveProc:
+        def __init__(self, argv, **kwargs):
+            captured["argv"] = argv
+            captured["cwd"] = kwargs.get("cwd")
+            self.pid = 43434
+
+        def wait(self):
+            return 0
+
+    def fake_subprocess_popen(argv, **kwargs):
+        return _FakeInteractiveProc(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_subprocess_popen)
+
+    result = run_pipeline(
+        pairs=pairs,
+        run_dir=run_dir,
+        config=RunConfig(backend="codex", dangerously_skip_permissions=True),
+        claude_client=FakeClaudeClient(scripted=[]),
+        source_file=src,
+        workspace_dir=workspace,
+    )
+
+    assert not result.halted_early
+    assert captured["argv"][0] == "codex"
+    assert f'projects."{workspace}".trust_level="trusted"' in captured["argv"]
+    assert 'approval_policy="never"' in captured["argv"]
+    assert 'history.persistence="none"' in captured["argv"]
+    assert 'sandbox_mode="danger-full-access"' in captured["argv"]
+    assert captured["cwd"] == workspace

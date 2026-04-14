@@ -28,10 +28,8 @@ simply a hint that context may become tight."""
 SKILL_LOADING_MODE = "skill-tool"
 """Default skill-loading mode for the prelude.
 
-- "skill-tool": prelude instructs the generator/judge to invoke the
-  Claude Code Skill tool by name.  Requires Phase 0 validation to
-  have confirmed that the Skill tool works inside nested claude
-  --print calls.
+- "skill-tool": prelude instructs the generator/judge to load skills
+  by exact ID at run time.
 - "inline": prelude contains the full SKILL.md content of every
   selected skill, delimited by section markers.  Fallback design
   with zero dependency on the Skill tool.

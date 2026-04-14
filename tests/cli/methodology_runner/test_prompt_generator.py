@@ -82,6 +82,40 @@ def _minimal_phase(
     )
 
 
+def _phase_001_phase(workspace: Path) -> PhaseConfig:
+    return PhaseConfig(
+        phase_id="PH-001-feature-specification",
+        phase_name="Feature Specification",
+        phase_number=1,
+        abbreviation="FS",
+        predecessors=["PH-000-requirements-inventory"],
+        input_source_templates=[
+            InputSourceTemplate(
+                ref_template="{workspace}/docs/requirements/requirements-inventory.yaml",
+                role=InputRole.PRIMARY,
+                format="yaml",
+                description="Requirements inventory produced by Phase 0",
+            ),
+            InputSourceTemplate(
+                ref_template="{workspace}/docs/requirements/raw-requirements.md",
+                role=InputRole.VALIDATION_REFERENCE,
+                format="markdown",
+                description="Raw requirements for validating traceability",
+            ),
+        ],
+        output_artifact_path="docs/features/feature-specification.yaml",
+        output_format="yaml",
+        expected_output_files=["docs/features/feature-specification.yaml"],
+        extraction_focus="Keep structural and RI-coverage checks deterministic where possible.",
+        generation_instructions="Read the requirements inventory and produce a feature specification YAML file.",
+        judge_guidance="Check RI coverage, unsupported scope, and vague acceptance criteria.",
+        artifact_format="yaml",
+        artifact_schema_description="features:\n  - id: FT-NNN",
+        checklist_examples_good=["Every RI item is covered."],
+        checklist_examples_bad=["Features cover the requirements."],
+    )
+
+
 def _create_workspace_with_input(tmp_path: Path) -> tuple[Path, PhaseConfig]:
     """Create a workspace with a raw requirements file and return
     (workspace, phase_config)."""
@@ -209,6 +243,13 @@ class TestAssembleInputContext:
         result = _assemble_input_context(phase, workspace)
         assert result.count("# Input:") == 2
         assert "---" in result
+
+    def test_file_reference_mode_lists_paths_without_embedding_content(self, tmp_path: Path) -> None:
+        workspace, phase = _create_workspace_with_input(tmp_path)
+        result = _assemble_input_context(phase, workspace, mode="file-reference")
+        assert "# Input:" in result
+        assert "Read this file directly from the workspace" in result
+        assert "The system shall do X." not in result
 
 
 # ---------------------------------------------------------------------------
@@ -392,6 +433,23 @@ class TestAssembleMetaPrompt:
         assert phase.generation_instructions in prompt
         assert phase.judge_guidance in prompt
 
+    def test_can_include_deterministic_validation_helper(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        req_dir = workspace / "docs" / "requirements"
+        req_dir.mkdir(parents=True)
+        (req_dir / "requirements-inventory.yaml").write_text("items: []\n", encoding="utf-8")
+        (req_dir / "raw-requirements.md").write_text("# Raw\n", encoding="utf-8")
+        phase = _phase_001_phase(workspace)
+        helper = tmp_path / "phase-1-deterministic-validation.py"
+        helper.write_text("# helper\n", encoding="utf-8")
+        prompt = assemble_meta_prompt(
+            PromptGenerationContext(phase_config=phase, workspace_dir=workspace),
+            deterministic_validation_helper_path=helper,
+        )
+        assert "deterministic-validation" in prompt
+        assert str(helper) in prompt
+
     def test_input_context_embedded(self, tmp_path: Path) -> None:
         workspace, phase = _create_workspace_with_input(tmp_path)
         context = PromptGenerationContext(
@@ -400,6 +458,18 @@ class TestAssembleMetaPrompt:
         )
         prompt = assemble_meta_prompt(context)
         assert "The system shall do X." in prompt
+
+    def test_input_context_file_reference_mode(self, tmp_path: Path) -> None:
+        workspace, phase = _create_workspace_with_input(tmp_path)
+        context = PromptGenerationContext(
+            phase_config=phase,
+            workspace_dir=workspace,
+            input_context_mode="file-reference",
+        )
+        prompt = assemble_meta_prompt(context)
+        assert "Do not rely on inlined file contents" in prompt
+        assert "Read this file directly from the workspace" in prompt
+        assert "The system shall do X." not in prompt
 
     def test_cross_ref_feedback_included(self, tmp_path: Path) -> None:
         workspace, phase = _create_workspace_with_input(tmp_path)
@@ -469,6 +539,29 @@ class TestGeneratePromptFile:
         assert "## Prompt 1:" in written
         assert "## Prompt 2:" in written
 
+    def test_codex_file_reference_mode_uses_deterministic_ph000_template(self, tmp_path: Path) -> None:
+        workspace, _phase = _create_workspace_with_input(tmp_path)
+        from methodology_runner.phases import get_phase
+
+        class UnusedClient:
+            def call(self, call: object) -> object:
+                raise AssertionError("deterministic template should bypass backend")
+
+        context = PromptGenerationContext(
+            phase_config=get_phase("PH-000-requirements-inventory"),
+            workspace_dir=workspace,
+            input_context_mode="file-reference",
+        )
+        result_path = generate_prompt_file(context, UnusedClient())  # type: ignore[arg-type]
+        written = result_path.read_text(encoding="utf-8")
+        assert "## Prompt 1: Produce Requirements Inventory [MODEL:gpt-5.4]" in written
+        assert "```required-files" in written
+        assert "docs/requirements/raw-requirements.md" in written
+        assert "Use the selected generator skills loaded in the prelude as the primary source" in written
+        assert "Use the selected judge skills loaded in the prelude as the primary source" in written
+        assert "## Prompt 2:" not in written
+        assert "## Prompt 3:" not in written
+
     def test_output_path_default_location(self, tmp_path: Path) -> None:
         workspace, phase = _create_workspace_with_input(tmp_path)
         client = FakeClaudeClient(
@@ -509,6 +602,33 @@ class TestGeneratePromptFile:
         )
         assert result_path == custom_path
         assert custom_path.exists()
+
+    def test_phase_001_stages_deterministic_validation_helper(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "project"
+        workspace.mkdir()
+        req_dir = workspace / "docs" / "requirements"
+        req_dir.mkdir(parents=True)
+        (req_dir / "requirements-inventory.yaml").write_text("items: []\n", encoding="utf-8")
+        (req_dir / "raw-requirements.md").write_text("# Raw\n", encoding="utf-8")
+        phase = _phase_001_phase(workspace)
+        output_path = workspace / ".methodology-runner" / "runs" / "phase-1" / "prompt-file.md"
+        client = FakeClaudeClient(
+            scripted=[
+                ClaudeResponse(
+                    stdout=_valid_prompt_runner_content(),
+                    stderr="",
+                    returncode=0,
+                ),
+            ],
+        )
+        context = PromptGenerationContext(
+            phase_config=phase,
+            workspace_dir=workspace,
+        )
+        result_path = generate_prompt_file(context, client, output_path=output_path)
+        assert result_path == output_path
+        helper_path = output_path.parent / "phase-1-deterministic-validation.py"
+        assert helper_path.exists()
 
     def test_retries_on_invalid_output(self, tmp_path: Path) -> None:
         workspace, phase = _create_workspace_with_input(tmp_path)
@@ -578,7 +698,7 @@ class TestGeneratePromptFile:
             phase_config=phase,
             workspace_dir=workspace,
         )
-        with pytest.raises(PromptGenerationError, match="Claude invocation"):
+        with pytest.raises(PromptGenerationError, match="backend invocation failed"):
             generate_prompt_file(context, FailingClient())  # type: ignore[arg-type]
 
     def test_raises_on_empty_response(self, tmp_path: Path) -> None:
@@ -694,11 +814,13 @@ class TestMetaPromptTemplate:
             "output_artifact_path",
             "output_format",
             "expected_output_files_block",
+            "deterministic_validation_block",
             "extraction_focus",
             "artifact_schema_description",
             "judge_guidance",
             "checklist_good_block",
             "checklist_bad_block",
+            "input_context_intro",
             "input_context",
             "prior_phases_block",
             "cross_ref_feedback_block",

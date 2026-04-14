@@ -5,6 +5,7 @@ See docs/design/components/CD-001-prompt-runner.md sections 9 and 11.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -21,6 +22,10 @@ from prompt_runner.claude_client import (
     ClaudeResponse,
 )
 from prompt_runner.parser import ForkPoint, PromptPair, VariantPrompt
+from prompt_runner.process_tracking import (
+    mark_process_completed,
+    write_spawn_metadata,
+)
 from prompt_runner.verdict import Verdict, VerdictParseError, parse_verdict
 
 
@@ -44,12 +49,15 @@ REVISION_GENERATOR_PREAMBLE = (
 )
 PROJECT_ORGANISER_INSTRUCTION = (
     "If this task involves producing files on disk: before writing any new "
-    "file, invoke the `project-organiser` sub-agent via the Agent tool "
-    "(subagent_type=project-organiser) with the file's content or a "
-    "description of its content. Use the `path` it returns as the exact "
-    "file path for your Write tool call. Do not guess paths from the "
-    "project layout. If this task is purely text output (no files), ignore "
-    "this instruction."
+    "file, determine its path with the repository's file-placement helper. "
+    "Prefer the dedicated `project_organiser` custom agent / "
+    "`project-organiser` sub-agent when the runtime supports it, because that "
+    "keeps taxonomy context isolated. If the dedicated agent is unavailable, "
+    "use the `project-organiser-use` skill or consult "
+    "`docs/project-taxonomy.md` directly. Use the resulting path as the exact "
+    "file path for your Write tool call. Do not guess paths from the project "
+    "layout and do not rely on an external Claude CLI wrapper. If this task "
+    "is purely text output (no files), ignore this instruction."
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
 
@@ -94,8 +102,23 @@ def _format_wall_time(started_at: datetime, finished_at: datetime) -> str:
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
 
 
+def _emit_progress(message: str) -> None:
+    """Write a terse live progress line to stdout."""
+    sys.stdout.write(f"{message}\n")
+    sys.stdout.flush()
+
+
+def _progress_prefix(started_at: datetime) -> str:
+    """Return a fixed-width elapsed-seconds prefix from a run-relative start."""
+    elapsed = datetime.now(timezone.utc) - started_at
+    seconds = max(0, int(elapsed.total_seconds()))
+    return f"T+{seconds:04d}s"
+
+
 @dataclass(frozen=True)
 class RunConfig:
+    backend: str = "claude"
+    """Agent backend to use for prompt execution."""
     max_iterations: int = MAX_ITERATIONS_DEFAULT
     model: str | None = None
     only: int | None = None
@@ -108,6 +131,9 @@ class RunConfig:
     judge_prelude: str | None = None
     """Optional text prepended to every judge Claude message in this
     run.  Symmetric to generator_prelude."""
+    include_project_organiser: bool = True
+    """When True, append the project-organiser sub-agent instruction to
+    generator prompts that create files."""
     dangerously_skip_permissions: bool = False
     """When True, pass --dangerously-skip-permissions to claude in
     interactive mode so the user is not prompted for every tool call."""
@@ -119,6 +145,9 @@ class RunConfig:
     variant_sequential: bool = False
     """When True, run fork-point variants one at a time instead of in
     parallel. Parallel (default) is faster; sequential uses less quota."""
+    placeholder_values: dict[str, str] = field(default_factory=dict)
+    """Caller-supplied placeholder bindings applied in addition to
+    built-in values such as run_dir and project_dir."""
 
 
 @dataclass(frozen=True)
@@ -143,6 +172,22 @@ class PromptResult:
     last_session_id: str = ""
     """Session ID from the last generator claude call. Used by the fork
     mechanism to inherit conversation context via --fork-session."""
+
+
+@dataclass(frozen=True)
+class DeterministicValidationResult:
+    command: list[str]
+    script_path: Path
+    returncode: int
+    stdout: str
+    stderr: str
+    stdout_log_path: Path
+    stderr_log_path: Path
+    process_metadata_path: Path
+
+
+class DeterministicValidationError(Exception):
+    """Raised when deterministic validation cannot complete successfully."""
 
 
 @dataclass(frozen=True)
@@ -196,6 +241,7 @@ def build_initial_generator_message(
     pair: PromptPair,
     prior_artifacts: list[PriorArtifact],
     generator_prelude: str | None = None,
+    include_project_organiser: bool = True,
 ) -> str:
     sections: list[str] = []
 
@@ -220,7 +266,8 @@ def build_initial_generator_message(
         )
 
     sections.append(f"# Your task\n\n{pair.generation_prompt}")
-    sections.append(PROJECT_ORGANISER_INSTRUCTION)
+    if include_project_organiser:
+        sections.append(PROJECT_ORGANISER_INSTRUCTION)
 
     return _HORIZONTAL_RULE.join(sections)
 
@@ -249,13 +296,51 @@ def _format_generator_files_section(files: list[Path]) -> str:
     )
 
 
+def _format_deterministic_validation_section(
+    result: DeterministicValidationResult | None,
+) -> str:
+    if result is None:
+        return (
+            "# Deterministic validation\n\n"
+            "(no deterministic validation configured for this prompt)"
+        )
+    stdout = result.stdout.strip() or "(empty)"
+    stderr = result.stderr.strip() or "(empty)"
+    status = (
+        "checks passed"
+        if result.returncode == 0
+        else "checks failed"
+        if result.returncode == 1
+        else "script error"
+    )
+    command_listing = "\n".join(f"- {part}" for part in result.command)
+    return (
+        "# Deterministic validation\n\n"
+        f"Script: `{result.script_path}`\n"
+        f"Return code: `{result.returncode}` ({status})\n"
+        f"Stdout log: `{result.stdout_log_path}`\n"
+        f"Stderr log: `{result.stderr_log_path}`\n"
+        f"Process metadata: `{result.process_metadata_path}`\n\n"
+        "Command argv:\n"
+        f"{command_listing}\n\n"
+        "Stdout:\n\n"
+        f"{stdout}\n\n"
+        "Stderr:\n\n"
+        f"{stderr}"
+    )
+
+
 def build_initial_judge_message(
     pair: PromptPair,
     artifact: str,
     generator_files: list[Path] | None = None,
+    deterministic_validation: DeterministicValidationResult | None = None,
     judge_prelude: str | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
+    deterministic_section = _format_deterministic_validation_section(
+        deterministic_validation,
+    )
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     return (
         f"{prelude_block}"
@@ -265,6 +350,8 @@ def build_initial_judge_message(
         f"{_HORIZONTAL_RULE}"
         f"{files_section}"
         f"{_HORIZONTAL_RULE}"
+        f"{deterministic_section}"
+        f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
 
@@ -272,30 +359,57 @@ def build_initial_judge_message(
 def build_revision_generator_message(
     judge_output: str,
     generator_prelude: str | None = None,
+    original_task: str | None = None,
+    previous_artifact: str | None = None,
+    include_project_organiser: bool = True,
 ) -> str:
     prelude_block = f"{generator_prelude}{_HORIZONTAL_RULE}" if generator_prelude else ""
-    return (
+    task_block = (
+        f"# Original task\n\n{original_task}{_HORIZONTAL_RULE}"
+        if original_task else ""
+    )
+    previous_artifact_block = (
+        f"# Previous artifact (generator's last text response)\n\n"
+        f"{previous_artifact}{_HORIZONTAL_RULE}"
+        if previous_artifact else ""
+    )
+    msg = (
         f"{prelude_block}"
+        f"{task_block}"
+        f"{previous_artifact_block}"
         f"{REVISION_GENERATOR_PREAMBLE}\n\n"
         f"# Judge feedback\n\n{judge_output}"
-        f"{_HORIZONTAL_RULE}"
-        f"{PROJECT_ORGANISER_INSTRUCTION}"
     )
+    if include_project_organiser:
+        msg += f"{_HORIZONTAL_RULE}{PROJECT_ORGANISER_INSTRUCTION}"
+    return msg
 
 
 def build_revision_judge_message(
     new_artifact: str,
     generator_files: list[Path] | None = None,
+    deterministic_validation: DeterministicValidationResult | None = None,
     judge_prelude: str | None = None,
+    validation_prompt: str | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
+    deterministic_section = _format_deterministic_validation_section(
+        deterministic_validation,
+    )
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
+    validation_block = (
+        f"{validation_prompt}{_HORIZONTAL_RULE}"
+        if validation_prompt else ""
+    )
     return (
         f"{prelude_block}"
+        f"{validation_block}"
         f"{ANTI_ANCHORING_CLAUSE}\n\n"
         f"# Revised artifact (generator's text response)\n\n{new_artifact}"
         f"{_HORIZONTAL_RULE}"
         f"{files_section}"
+        f"{_HORIZONTAL_RULE}"
+        f"{deterministic_section}"
         f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
@@ -326,6 +440,10 @@ def _write(path: Path, content: str) -> None:
 _SNAPSHOT_SKIP_DIR_NAMES: frozenset[str] = frozenset({
     ".git",
     "runs",
+    "tmp",
+    ".methodology-runner",
+    ".prompt-runner",
+    "prompt-runner-files",
     ".venv",
     "venv",
     "node_modules",
@@ -352,17 +470,35 @@ def _is_snapshot_excluded(rel_path: Path) -> bool:
 
 def _iter_workspace_files(workspace_dir: Path):
     """Yield (relative_path, mtime_ns) for every non-excluded file in the workspace."""
-    for src in workspace_dir.rglob("*"):
-        if src.is_symlink() or not src.is_file():
-            continue
-        rel = src.relative_to(workspace_dir)
-        if _is_snapshot_excluded(rel):
-            continue
+    def _onerror(_: OSError) -> None:
+        return
+
+    for root, dirnames, filenames in os.walk(workspace_dir, topdown=True, onerror=_onerror):
+        root_path = Path(root)
         try:
-            yield rel, src.stat().st_mtime_ns
-        except FileNotFoundError:
-            # File vanished between glob and stat — skip.
+            rel_root = root_path.relative_to(workspace_dir)
+        except ValueError:
             continue
+
+        kept_dirs: list[str] = []
+        for dirname in dirnames:
+            rel_dir = rel_root / dirname if rel_root != Path(".") else Path(dirname)
+            if _is_snapshot_excluded(rel_dir):
+                continue
+            kept_dirs.append(dirname)
+        dirnames[:] = kept_dirs
+
+        for filename in filenames:
+            rel = rel_root / filename if rel_root != Path(".") else Path(filename)
+            if _is_snapshot_excluded(rel):
+                continue
+            src = root_path / filename
+            try:
+                if src.is_symlink() or not src.is_file():
+                    continue
+                yield rel, src.stat().st_mtime_ns
+            except (FileNotFoundError, OSError):
+                continue
 
 
 def _snapshot_workspace(workspace_dir: Path, dest_dir: Path) -> None:
@@ -432,6 +568,30 @@ def _restore_workspace_from_snapshot(
         shutil.copy2(src, dest)
 
 
+def _materialize_generator_artifact(
+    *,
+    backend: str,
+    workspace_dir: Path,
+    created_files: list[Path],
+    generator_stdout: str,
+) -> str:
+    """Prefer on-disk artifact text for single-file Codex generations.
+
+    Codex may end a file-writing turn with a short status message such as
+    ``PASS`` or other commentary, even when it successfully wrote the real
+    artifact to disk. For prompts that create exactly one text file, the file
+    contents are the most faithful artifact to hand to the judge and to persist
+    as the final artifact for later prompts.
+    """
+    if backend != "codex" or len(created_files) != 1:
+        return generator_stdout
+    target = workspace_dir / created_files[0]
+    try:
+        return target.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return generator_stdout
+
+
 def _make_call(
     *,
     prompt: str,
@@ -471,10 +631,10 @@ def _run_interactive_prompt(
     config: RunConfig,
     workspace_dir: Path,
 ) -> PromptResult:
-    """Spawn claude interactively with pair.generation_prompt as the mission.
+    """Spawn the selected backend interactively with pair.generation_prompt.
 
     Inherits stdin/stdout/stderr so the user sees a real TTY session and
-    can drive claude directly. Waits for the subprocess to exit (human
+    can drive the agent directly. Waits for the subprocess to exit (human
     types /exit or Ctrl-C). Marks the prompt pass regardless of exit
     code — the human is the validator in interactive mode.
     """
@@ -497,12 +657,27 @@ def _run_interactive_prompt(
         pair, prior_artifacts, generator_prelude=config.generator_prelude,
     )
 
-    # Spawn claude interactively. stdin/stdout/stderr inherit from this
+    # Spawn the selected backend interactively. stdin/stdout/stderr inherit from this
     # process so the user sees a real TTY session. Wait for exit.
-    argv = ["claude"]
-    # Interactive mode always skips permissions — the human is present
-    # and driving the session, so tool-use prompts are just friction.
-    argv.append("--dangerously-skip-permissions")
+    if config.backend == "codex":
+        state_root = workspace_dir / ".prompt-runner" / "backend-state" / "codex"
+        log_dir = state_root / "log"
+        sqlite_home = state_root / "sqlite"
+        log_dir.mkdir(parents=True, exist_ok=True)
+        sqlite_home.mkdir(parents=True, exist_ok=True)
+        argv = ["codex"]
+        argv.extend([
+            "-c", f'projects."{workspace_dir}".trust_level="trusted"',
+            "-c", 'approval_policy="never"',
+            "-c", 'history.persistence="none"',
+            "-c", 'sandbox_mode="danger-full-access"',
+            "-c", f'log_dir="{log_dir}"',
+            "-c", f'sqlite_home="{sqlite_home}"',
+        ])
+    else:
+        argv = ["claude"]
+        if config.dangerously_skip_permissions:
+            argv.append("--dangerously-skip-permissions")
     if config.model:
         argv.extend(["--model", config.model])
     argv.append(mission)
@@ -511,14 +686,23 @@ def _run_interactive_prompt(
         f"\n{'=' * 70}\n"
         f"-- prompt {pair.index} '{pair.title}' / INTERACTIVE --\n"
         f"{'=' * 70}\n"
-        f"Spawning claude interactively. When done, type /exit or Ctrl-C\n"
+        f"Spawning {config.backend} interactively. When done, type /exit or Ctrl-C\n"
         f"to return control to prompt-runner.\n"
         f"{'=' * 70}\n",
         flush=True,
     )
 
-    result = subprocess.run(argv)  # no capture — inherit stdio
-    exit_code = result.returncode
+    process_meta_path = prompt_dir / "interactive-process.json"
+    proc = subprocess.Popen(argv, cwd=workspace_dir)
+    write_spawn_metadata(
+        process_meta_path,
+        kind="interactive-backend-call",
+        pid=proc.pid,
+        argv=argv,
+        cwd=workspace_dir,
+    )
+    exit_code = proc.wait()
+    mark_process_completed(process_meta_path, returncode=exit_code)
 
     # Capture files the session created
     created_files = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
@@ -555,6 +739,7 @@ def run_prompt(
     claude_client: ClaudeClient,
     run_id: str,
     workspace_dir: Path,
+    pipeline_started_at: datetime | None = None,
 ) -> PromptResult:
     if pair.interactive:
         return _run_interactive_prompt(
@@ -580,6 +765,13 @@ def run_prompt(
 
     iterations: list[IterationResult] = []
     gen_response: ClaudeResponse | None = None
+    stateless_revisions = config.backend == "codex"
+    progress_started_at = pipeline_started_at or datetime.now(timezone.utc)
+
+    _emit_progress(
+        f"{_progress_prefix(progress_started_at)} "
+        f"prompt {pair.index}/{pair.title} start"
+    )
 
     for iteration_number in range(1, config.max_iterations + 1):
         is_first = iteration_number == 1
@@ -588,11 +780,17 @@ def run_prompt(
             build_initial_generator_message(
                 pair, prior_artifacts,
                 generator_prelude=config.generator_prelude,
+                include_project_organiser=config.include_project_organiser,
             )
             if is_first
             else build_revision_generator_message(
                 iterations[-1].judge_output,
                 generator_prelude=config.generator_prelude,
+                original_task=pair.generation_prompt if stateless_revisions else None,
+                previous_artifact=(
+                    iterations[-1].generator_output if stateless_revisions else None
+                ),
+                include_project_organiser=config.include_project_organiser,
             )
         )
         # When forking from a prior session, the FIRST generator call
@@ -607,10 +805,14 @@ def run_prompt(
             fork_new_session = str(_uuid.uuid4())
         else:
             fork_new_session = gen_session
+        _emit_progress(
+            f"{_progress_prefix(progress_started_at)} "
+            f"prompt {pair.index} iter {iteration_number} generator start"
+        )
         gen_call = _make_call(
             prompt=gen_msg,
             session_id=fork_new_session,
-            new_session=is_first and not use_fork,
+            new_session=(is_first and not use_fork) or stateless_revisions,
             model=pair.model_override or config.model,
             effort=pair.effort_override,
             logs_dir=logs_dir,
@@ -624,12 +826,40 @@ def run_prompt(
         gen_response = _call_or_persist_partial(
             claude_client, gen_call, prompt_dir / f"iter-{iteration_number:02d}-generator.md"
         )
+        _emit_progress(
+            f"{_progress_prefix(progress_started_at)} "
+            f"prompt {pair.index} iter {iteration_number} generator done"
+        )
 
         # Diff the workspace against the pre-prompt snapshot to find which
         # files the generator has touched so far. Pass this list to the
         # judge so it knows exactly which files to inspect, rather than
         # having to discover them via Glob.
         files_so_far = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+        artifact_text = _materialize_generator_artifact(
+            backend=config.backend,
+            workspace_dir=workspace_dir,
+            created_files=files_so_far,
+            generator_stdout=gen_response.stdout,
+        )
+        deterministic_validation = _run_deterministic_validation(
+            pair=pair,
+            prompt_dir=prompt_dir,
+            logs_dir=logs_dir,
+            workspace_dir=workspace_dir,
+            iteration_number=iteration_number,
+        )
+        if (
+            deterministic_validation is not None
+            and deterministic_validation.returncode not in (0, 1)
+        ):
+            raise DeterministicValidationError(
+                "R-DETERMINISTIC-VALIDATION-FAILED: "
+                f"prompt {pair.index} \"{pair.title}\" deterministic "
+                f"validation returned {deterministic_validation.returncode}. "
+                f"See {deterministic_validation.stdout_log_path} and "
+                f"{deterministic_validation.stderr_log_path}."
+            )
 
         if not pair.validation_prompt:
             # Validator-less prompt: accept the generator's output without a
@@ -637,28 +867,41 @@ def run_prompt(
             iterations.append(
                 IterationResult(
                     iteration=iteration_number,
-                    generator_output=gen_response.stdout,
+                    generator_output=artifact_text,
                     judge_output="",  # no judge call
                     verdict=Verdict.PASS,
                 )
             )
+            _emit_progress(
+                f"{_progress_prefix(progress_started_at)} "
+                f"prompt {pair.index} iter {iteration_number} verdict pass"
+            )
             break
 
+        _emit_progress(
+            f"{_progress_prefix(progress_started_at)} "
+            f"prompt {pair.index} iter {iteration_number} judge start"
+        )
         jud_msg = (
             build_initial_judge_message(
-                pair, gen_response.stdout, files_so_far,
+                pair, artifact_text, files_so_far,
+                deterministic_validation=deterministic_validation,
                 judge_prelude=config.judge_prelude,
             )
             if is_first
             else build_revision_judge_message(
-                gen_response.stdout, files_so_far,
+                artifact_text, files_so_far,
+                deterministic_validation=deterministic_validation,
                 judge_prelude=config.judge_prelude,
+                validation_prompt=(
+                    pair.validation_prompt if stateless_revisions else None
+                ),
             )
         )
         jud_call = _make_call(
             prompt=jud_msg,
             session_id=jud_session,
-            new_session=is_first,
+            new_session=is_first or stateless_revisions,
             model=pair.model_override or config.model,
             effort=pair.effort_override,
             logs_dir=logs_dir,
@@ -670,15 +913,23 @@ def run_prompt(
         jud_response = _call_or_persist_partial(
             claude_client, jud_call, prompt_dir / f"iter-{iteration_number:02d}-judge.md"
         )
+        _emit_progress(
+            f"{_progress_prefix(progress_started_at)} "
+            f"prompt {pair.index} iter {iteration_number} judge done"
+        )
 
         verdict = parse_verdict(jud_response.stdout)
         iterations.append(
-            IterationResult(
-                iteration=iteration_number,
-                generator_output=gen_response.stdout,
-                judge_output=jud_response.stdout,
-                verdict=verdict,
-            )
+                IterationResult(
+                    iteration=iteration_number,
+                    generator_output=artifact_text,
+                    judge_output=jud_response.stdout,
+                    verdict=verdict,
+                )
+        )
+        _emit_progress(
+            f"{_progress_prefix(progress_started_at)} "
+            f"prompt {pair.index} iter {iteration_number} verdict {verdict.value}"
         )
         if verdict != Verdict.REVISE:
             break
@@ -755,6 +1006,184 @@ def _load_prior_artifact_from_disk(
     )
 
 
+def _resolve_required_file(path_text: str, workspace_dir: Path) -> Path:
+    candidate = Path(path_text)
+    if candidate.is_absolute():
+        return candidate
+    return (workspace_dir / candidate).resolve()
+
+
+def _resolve_deterministic_validation_script(
+    pair: PromptPair,
+    workspace_dir: Path,
+) -> Path | None:
+    if not pair.deterministic_validation:
+        return None
+    return _resolve_required_file(pair.deterministic_validation[0], workspace_dir)
+
+
+def _missing_required_files(pair: PromptPair, workspace_dir: Path) -> list[Path]:
+    missing: list[Path] = []
+    for raw_path in pair.required_files:
+        resolved = _resolve_required_file(raw_path, workspace_dir)
+        if not resolved.exists():
+            missing.append(resolved)
+    return missing
+
+
+_PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
+
+
+def _placeholder_context(
+    run_dir: Path,
+    workspace_dir: Path,
+    config: RunConfig,
+) -> dict[str, str]:
+    context = dict(config.placeholder_values)
+    context["run_dir"] = str(run_dir.resolve())
+    context["project_dir"] = str(workspace_dir.resolve())
+    return context
+
+
+def _render_placeholders(text: str, context: dict[str, str]) -> str:
+    rendered = text
+    for key, value in context.items():
+        rendered = rendered.replace(f"{{{{{key}}}}}", value)
+    return rendered
+
+
+def _render_prompt_pair(pair: PromptPair, context: dict[str, str]) -> PromptPair:
+    return PromptPair(
+        index=pair.index,
+        title=_render_placeholders(pair.title, context),
+        generation_prompt=_render_placeholders(pair.generation_prompt, context),
+        validation_prompt=_render_placeholders(pair.validation_prompt, context),
+        heading_line=pair.heading_line,
+        generation_line=pair.generation_line,
+        validation_line=pair.validation_line,
+        required_files=tuple(
+            _render_placeholders(path, context) for path in pair.required_files
+        ),
+        checks_files=tuple(
+            _render_placeholders(path, context) for path in pair.checks_files
+        ),
+        deterministic_validation=tuple(
+            _render_placeholders(value, context)
+            for value in pair.deterministic_validation
+        ),
+        interactive=pair.interactive,
+        model_override=pair.model_override,
+        effort_override=pair.effort_override,
+    )
+
+
+def _pair_unresolved_placeholders(pair: PromptPair) -> list[str]:
+    names: set[str] = set()
+    text_fields = [
+        pair.title,
+        pair.generation_prompt,
+        pair.validation_prompt,
+        *pair.required_files,
+        *pair.checks_files,
+        *pair.deterministic_validation,
+    ]
+    for text in text_fields:
+        names.update(_PLACEHOLDER_RE.findall(text))
+    return sorted(names)
+
+
+def _optional_file_checks(pair: PromptPair, workspace_dir: Path) -> list[dict[str, str | bool]]:
+    checks: list[dict[str, str | bool]] = []
+    for raw_path in pair.checks_files:
+        resolved = _resolve_required_file(raw_path, workspace_dir)
+        checks.append(
+            {
+                "path": raw_path,
+                "resolved_path": str(resolved),
+                "exists": resolved.exists(),
+            }
+        )
+    return checks
+
+
+def _write_optional_file_checks_trace(
+    prompt_dir: Path,
+    pair: PromptPair,
+    workspace_dir: Path,
+) -> None:
+    if not pair.checks_files:
+        return
+    checks = _optional_file_checks(pair, workspace_dir)
+    _write(prompt_dir / "checks-files.json", json.dumps(checks, indent=2) + "\n")
+
+
+def _run_deterministic_validation(
+    *,
+    pair: PromptPair,
+    prompt_dir: Path,
+    logs_dir: Path,
+    workspace_dir: Path,
+    iteration_number: int,
+) -> DeterministicValidationResult | None:
+    if not pair.deterministic_validation:
+        return None
+    script_path = _resolve_deterministic_validation_script(pair, workspace_dir)
+    assert script_path is not None
+    argv = [
+        sys.executable,
+        str(script_path),
+        *pair.deterministic_validation[1:],
+    ]
+    stdout_log_path = (
+        logs_dir / f"iter-{iteration_number:02d}-deterministic-validation.stdout.log"
+    )
+    stderr_log_path = (
+        logs_dir / f"iter-{iteration_number:02d}-deterministic-validation.stderr.log"
+    )
+    process_metadata_path = (
+        logs_dir / f"iter-{iteration_number:02d}-deterministic-validation.stdout.proc.json"
+    )
+    env = os.environ.copy()
+    env.update(
+        {
+            "PROMPT_RUNNER_WORKSPACE_DIR": str(workspace_dir.resolve()),
+            "PROMPT_RUNNER_PROMPT_DIR": str(prompt_dir.resolve()),
+            "PROMPT_RUNNER_PROMPT_INDEX": str(pair.index),
+            "PROMPT_RUNNER_PROMPT_TITLE": pair.title,
+            "PROMPT_RUNNER_ITERATION": str(iteration_number),
+        }
+    )
+    proc = subprocess.Popen(
+        argv,
+        cwd=workspace_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        env=env,
+    )
+    write_spawn_metadata(
+        process_metadata_path,
+        kind="deterministic-validation",
+        pid=proc.pid,
+        argv=argv,
+        cwd=workspace_dir,
+    )
+    stdout, stderr = proc.communicate()
+    mark_process_completed(process_metadata_path, returncode=proc.returncode)
+    _write(stdout_log_path, stdout)
+    _write(stderr_log_path, stderr)
+    return DeterministicValidationResult(
+        command=argv,
+        script_path=script_path,
+        returncode=proc.returncode,
+        stdout=stdout,
+        stderr=stderr,
+        stdout_log_path=stdout_log_path,
+        stderr_log_path=stderr_log_path,
+        process_metadata_path=process_metadata_path,
+    )
+
+
 def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
     """Convert a list of PromptPair objects back to prompt-runner markdown format.
 
@@ -769,6 +1198,21 @@ def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
         if pair.effort_override:
             heading += f" [EFFORT:{pair.effort_override}]"
         lines: list[str] = [heading, ""]
+        if pair.required_files:
+            lines.append("```required-files")
+            lines.extend(pair.required_files)
+            lines.append("```")
+            lines.append("")
+        if pair.checks_files:
+            lines.append("```checks-files")
+            lines.extend(pair.checks_files)
+            lines.append("```")
+            lines.append("")
+        if pair.deterministic_validation:
+            lines.append("```deterministic-validation")
+            lines.extend(pair.deterministic_validation)
+            lines.append("```")
+            lines.append("")
         lines.append("```")
         lines.append(pair.generation_prompt)
         lines.append("```")
@@ -859,7 +1303,10 @@ def _run_fork_point(
             "run", str(temp_md_path),
             "--project-dir", str(effective_project_dir),
             "--output-dir", str(variant_run_dir),
+            "--backend", config.backend,
         ]
+        for key, value in config.placeholder_values.items():
+            cmd.extend(["--var", f"{key}={value}"])
         if config.model:
             cmd.extend(["--model", config.model])
         if config.generator_prelude:
@@ -880,6 +1327,13 @@ def _run_fork_point(
         )
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        write_spawn_metadata(
+            variant_run_dir / "child-process.json",
+            kind="variant-run",
+            pid=proc.pid,
+            argv=[str(part) for part in cmd],
+            cwd=effective_project_dir,
+        )
         procs.append((variant, variant_run_dir, variant_workspace, proc))
 
         if config.variant_sequential:
@@ -890,6 +1344,10 @@ def _run_fork_point(
     for variant, variant_run_dir, variant_workspace, proc in procs:
         proc.wait()
         exit_code = proc.returncode
+        mark_process_completed(
+            variant_run_dir / "child-process.json",
+            returncode=exit_code,
+        )
         summary_path = variant_run_dir / "summary.txt"
         summary = (
             summary_path.read_text(encoding="utf-8")
@@ -999,11 +1457,16 @@ def run_pipeline(
     if not resume:
         _write_manifest(run_dir, source_file, config, run_id,
                         started_at=_format_iso(started_at))
+    _emit_progress(
+        f"{_progress_prefix(started_at)} "
+        f"run start {run_id} backend={config.backend}"
+    )
 
     prior_artifacts: list[PriorArtifact] = []
     prompt_results: list[PromptResult] = []
     fork_results: list[ForkResult] = []
     last_session_id: str = ""  # for fork context inheritance
+    placeholder_context = _placeholder_context(run_dir, workspace_dir, config)
 
     # When resuming, track whether we have hit the first incomplete prompt.
     # All prompts before it that have a 'pass' verdict are skipped; once we
@@ -1042,23 +1505,52 @@ def run_pipeline(
 
         # --- Normal PromptPair handling ---
         pair: PromptPair = item  # type: ignore[assignment]
+        rendered_pair = _render_prompt_pair(pair, placeholder_context)
 
-        if config.only is not None and pair.index != config.only:
+        if config.only is not None and rendered_pair.index != config.only:
             continue
 
+        unresolved_placeholders = _pair_unresolved_placeholders(rendered_pair)
+        if unresolved_placeholders:
+            halt_reason = (
+                f'R-UNRESOLVED-PLACEHOLDERS: prompt {rendered_pair.index} '
+                f'"{rendered_pair.title}" has unresolved placeholders: '
+                + ", ".join(unresolved_placeholders)
+            )
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt R-UNRESOLVED-PLACEHOLDERS prompt {rendered_pair.index}"
+            )
+            _finalise(
+                run_dir,
+                source_file,
+                config,
+                run_id,
+                pairs,
+                prompt_results,
+                started_at=started_at,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+            return PipelineResult(
+                prompt_results,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+
         if still_skipping:
-            prompt_dir = run_dir / _prompt_dir_name(pair)
+            prompt_dir = run_dir / _prompt_dir_name(rendered_pair)
             verdict_path = prompt_dir / "final-verdict.txt"
             if verdict_path.exists() and verdict_path.read_text(encoding="utf-8").splitlines()[0] == "pass":
                 # This prompt already completed with pass — skip it.
-                prior_artifact = _load_prior_artifact_from_disk(pair, run_dir)
+                prior_artifact = _load_prior_artifact_from_disk(rendered_pair, run_dir)
                 text_body = (prompt_dir / "final-artifact.md").read_text(encoding="utf-8")
                 files_txt = (prompt_dir / "files-created.txt").read_text(encoding="utf-8")
                 created_files = [
                     Path(line) for line in files_txt.splitlines() if line.strip()
                 ]
                 synthetic_result = PromptResult(
-                    pair=pair,
+                    pair=rendered_pair,
                     iterations=[],
                     final_verdict=Verdict.PASS,
                     final_artifact=text_body,
@@ -1067,34 +1559,132 @@ def run_pipeline(
                 prompt_results.append(synthetic_result)
                 prior_artifacts.append(prior_artifact)
                 print(
-                    f"[resume] skipping prompt {pair.index} '{pair.title}' — already pass",
+                    f"[resume] skipping prompt {rendered_pair.index} '{rendered_pair.title}' — already pass",
                     flush=True,
+                )
+                _emit_progress(
+                    f"{_progress_prefix(started_at)} "
+                    f"prompt {rendered_pair.index} resume-skip pass"
                 )
                 continue
             else:
                 # First incomplete prompt — stop skipping from here on.
                 still_skipping = False
 
+        prompt_dir = run_dir / _prompt_dir_name(rendered_pair)
+        prompt_dir.mkdir(parents=True, exist_ok=True)
+        _write_optional_file_checks_trace(prompt_dir, rendered_pair, workspace_dir)
+
+        missing_required = _missing_required_files(rendered_pair, workspace_dir)
+        if missing_required:
+            missing_lines = "\n".join(f"- {path}" for path in missing_required)
+            halt_reason = (
+                f"R-MISSING-REQUIRED-FILES: prompt {rendered_pair.index} \"{rendered_pair.title}\" "
+                f"is missing required files:\n{missing_lines}"
+            )
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt R-MISSING-REQUIRED-FILES prompt {rendered_pair.index}"
+            )
+            _finalise(
+                run_dir,
+                source_file,
+                config,
+                run_id,
+                pairs,
+                prompt_results,
+                started_at=started_at,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+            return PipelineResult(
+                prompt_results,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+        deterministic_script = _resolve_deterministic_validation_script(
+            rendered_pair,
+            workspace_dir,
+        )
+        if deterministic_script is not None and not deterministic_script.exists():
+            halt_reason = (
+                f"R-MISSING-DETERMINISTIC-VALIDATION: prompt {rendered_pair.index} "
+                f"\"{rendered_pair.title}\" is missing deterministic validation "
+                f"script:\n- {deterministic_script}"
+            )
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt R-MISSING-DETERMINISTIC-VALIDATION prompt "
+                f"{rendered_pair.index}"
+            )
+            _finalise(
+                run_dir,
+                source_file,
+                config,
+                run_id,
+                pairs,
+                prompt_results,
+                started_at=started_at,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+            return PipelineResult(
+                prompt_results,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+
         try:
             result = run_prompt(
-                pair, prior_artifacts, run_dir, config, claude_client,
-                run_id, workspace_dir,
+                rendered_pair, prior_artifacts, run_dir, config, claude_client,
+                run_id, workspace_dir, started_at,
             )
         except VerdictParseError as err:
             halt_reason = (
-                f"R-NO-VERDICT: prompt {pair.index} \"{pair.title}\" "
+                f"R-NO-VERDICT: prompt {rendered_pair.index} \"{rendered_pair.title}\" "
                 f"returned a judge response with no VERDICT line. {err}"
+            )
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt {halt_reason}"
             )
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
                       started_at=started_at, halted_early=True,
                       halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
         except ClaudeInvocationError as err:
-            halt_reason = _format_claude_failed_halt_reason(pair, err, run_dir)
+            halt_reason = _format_claude_failed_halt_reason(rendered_pair, err, run_dir)
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt R-CLAUDE-FAILED prompt {rendered_pair.index}"
+            )
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
                       started_at=started_at, halted_early=True,
                       halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
+        except DeterministicValidationError as err:
+            halt_reason = str(err)
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt R-DETERMINISTIC-VALIDATION-FAILED prompt "
+                f"{rendered_pair.index}"
+            )
+            _finalise(
+                run_dir,
+                source_file,
+                config,
+                run_id,
+                pairs,
+                prompt_results,
+                started_at=started_at,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
+            return PipelineResult(
+                prompt_results,
+                halted_early=True,
+                halt_reason=halt_reason,
+            )
 
         prompt_results.append(result)
         if result.last_session_id:
@@ -1102,18 +1692,26 @@ def run_pipeline(
         if result.final_verdict == Verdict.PASS:
             prior_artifacts.append(
                 PriorArtifact(
-                    title=pair.title,
+                    title=rendered_pair.title,
                     text_body=result.final_artifact,
                     files=list(result.created_files),
                 )
             )
         else:
-            halt_reason = f"prompt {pair.index} escalated"
+            halt_reason = f"prompt {rendered_pair.index} escalated"
+            _emit_progress(
+                f"{_progress_prefix(started_at)} "
+                f"run halt {halt_reason}"
+            )
             _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
                       started_at=started_at, halted_early=True,
                       halt_reason=halt_reason)
             return PipelineResult(prompt_results, halted_early=True, halt_reason=halt_reason)
 
+    _emit_progress(
+        f"{_progress_prefix(started_at)} "
+        f"run complete {run_id}"
+    )
     _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
               started_at=started_at, halted_early=False, halt_reason=None)
     return PipelineResult(prompt_results, halted_early=False, halt_reason=None)
@@ -1251,7 +1849,7 @@ def _format_summary(
                 )
     total_calls = sum(len(r.iterations) * 2 for r in prompt_results)
     lines.append("")
-    lines.append(f"Total claude calls: {total_calls}")
+    lines.append(f"Total backend calls: {total_calls}")
     lines.append(f"Wall time: {wall_time}")
     if fork_results:
         lines.append(f"Forks executed: {len(fork_results)}")

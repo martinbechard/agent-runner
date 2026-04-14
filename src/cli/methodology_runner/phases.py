@@ -388,7 +388,7 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
         "  Prose explanation of the decomposition choices.\n"
         "\n"
         "The expected_expertise field MUST use free-text, human-readable\n"
-        "descriptions (not Claude Code skill IDs).  A later Skill-Selector\n"
+        "descriptions (not concrete skill IDs).  A later Skill-Selector\n"
         "agent maps each description to concrete skills from a catalog;\n"
         "the architect phase is decoupled from the skill catalog so that\n"
         "architecture outputs are portable across skill pack versions."
@@ -441,7 +441,7 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
         (
             "Every component has a non-empty expected_expertise list where "
             "entries are free-text descriptions of required knowledge, not "
-            "concrete Claude Code skill IDs"
+            "concrete skill IDs"
         ),
     ],
     checklist_examples_bad=[
@@ -1183,6 +1183,16 @@ def get_phase(phase_id: str) -> PhaseConfig:
         raise ValueError(
             f"Unknown phase_id {phase_id!r}.  Valid IDs: {valid}"
         ) from None
+
+
+def normalize_phase_selection(phase_ids: list[str]) -> list[str]:
+    """Validate, deduplicate, and sort selected phase IDs by methodology order.
+
+    The caller may provide a subset in any order. The methodology runner
+    executes that subset in the canonical phase order defined by ``PHASES``.
+    """
+    requested = {get_phase(phase_id).phase_id for phase_id in phase_ids}
+    return [phase.phase_id for phase in PHASES if phase.phase_id in requested]
 
 
 def resolve_input_sources(

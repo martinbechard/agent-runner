@@ -113,7 +113,7 @@ def test_build_catalog_empty_raises_catalog_build_error(tmp_path: Path):
     user_home.mkdir()
     with pytest.raises(CatalogBuildError) as exc_info:
         build_catalog(workspace=workspace, user_home=user_home, cwd=tmp_path)
-    assert "no claude code skills discovered" in str(exc_info.value).lower()
+    assert "no claude skills discovered" in str(exc_info.value).lower()
 
 
 def test_build_catalog_skips_invalid_entries_but_keeps_valid_ones(tmp_path: Path):

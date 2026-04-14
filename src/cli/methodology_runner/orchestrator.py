@@ -49,7 +49,13 @@ from .models import (
     PhaseStatus,
     ProjectState,
 )
-from .phases import PHASES, PHASE_MAP, get_phase, resolve_input_sources
+from .phases import (
+    PHASES,
+    PHASE_MAP,
+    get_phase,
+    normalize_phase_selection,
+    resolve_input_sources,
+)
 from .prompt_generator import (
     PromptGenerationContext,
     PromptGenerationError,
@@ -69,10 +75,11 @@ from .models import BaselineSkillConfig, SkillCatalogEntry
 from .skill_catalog import CatalogBuildError, build_catalog
 from .prelude import PreludeBuildError, build_prelude
 from .skill_selector import SelectorError, SelectorInputs, invoke_skill_selector
+from prompt_runner.client_factory import make_client
 
 if TYPE_CHECKING:
     from .models import PhaseConfig
-    from prompt_runner.claude_client import ClaudeClient
+    from prompt_runner.client_types import AgentClient
 
 
 # ---------------------------------------------------------------------------
@@ -171,6 +178,7 @@ class PipelineConfig:
 
     requirements_path: Path
     workspace_dir: Path | None = None
+    backend: str = "claude"
     model: str | None = None
     resume: bool = False
     phases_to_run: list[str] | None = None
@@ -194,6 +202,8 @@ class PipelineResult:
     halt_reason: str | None
     end_to_end_result: CrossRefResult | None
     wall_time_seconds: float
+    execution_scope: str = "all-phases"
+    selected_phase_ids: list[str] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -328,7 +338,8 @@ def run_selector_and_build_prelude(
     skill_ctx: RunSkillContext,
     workspace: Path,
     run_dir: Path,
-    claude_client: "ClaudeClient",
+    claude_client: "AgentClient",
+    backend: str,
     model: str | None,
     state: ProjectState | None = None,
     existing_manifest_path: Path | None = None,
@@ -380,7 +391,12 @@ def run_selector_and_build_prelude(
         )
 
     try:
-        prelude_spec = build_prelude(manifest, skill_ctx.catalog)
+        prelude_spec = build_prelude(
+            manifest,
+            skill_ctx.catalog,
+            mode="file-reference" if backend == "codex" else None,
+            backend=backend,
+        )
     except PreludeBuildError as exc:
         raise RuntimeError(
             f"Prelude build failed for {phase_config.phase_id}: {exc}"
@@ -402,6 +418,7 @@ def run_selector_and_build_prelude(
 def build_run_skill_context(
     *,
     workspace: Path,
+    backend: str = "claude",
     baseline_path: Path | None = None,
     user_home: Path | None = None,
     cwd: Path | None = None,
@@ -412,7 +429,12 @@ def build_run_skill_context(
     (before any phase executes).  Raises on any failure so the
     orchestrator halts immediately — per spec failure modes 7 and 9.
     """
-    catalog = build_catalog(workspace=workspace, user_home=user_home, cwd=cwd)
+    catalog = build_catalog(
+        workspace=workspace,
+        backend=backend,
+        user_home=user_home,
+        cwd=cwd,
+    )
 
     if baseline_path is None:
         # Prefer a workspace-local copy if one exists, otherwise fall back
@@ -534,6 +556,17 @@ def _create_initial_state(
         git_initialized=True,
         project_name=config.requirements_path.stem,
         model=config.model,
+        backend=config.backend,
+        execution_scope=(
+            "selected-phases"
+            if config.phases_to_run is not None
+            else "all-phases"
+        ),
+        selected_phase_ids=(
+            list(config.phases_to_run)
+            if config.phases_to_run is not None
+            else None
+        ),
         phases=phase_states,
     )
 
@@ -690,7 +723,7 @@ def _invoke_prompt_runner_library(
     workspace: Path,
     run_dir: Path,
     config: PipelineConfig,
-    claude_client: ClaudeClient | None = None,
+    claude_client: AgentClient | None = None,
     generator_prelude_path: Path | None = None,
     judge_prelude_path: Path | None = None,
 ) -> tuple[bool, int, str | None]:
@@ -703,8 +736,7 @@ def _invoke_prompt_runner_library(
     from prompt_runner.runner import run_pipeline as pr_run_pipeline
 
     if claude_client is None:
-        from prompt_runner.claude_client import RealClaudeClient
-        claude_client = RealClaudeClient()
+        claude_client = make_client(config.backend)
 
     pairs = parse_file(md_file)
     max_iters = config.max_prompt_runner_iterations or 3
@@ -717,10 +749,12 @@ def _invoke_prompt_runner_library(
         judge_prelude = judge_prelude_path.read_text(encoding="utf-8")
 
     pr_config = RunConfig(
+        backend=config.backend,
         max_iterations=max_iters,
         model=config.model,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
+        include_project_organiser=False,
     )
 
     pr_result = pr_run_pipeline(
@@ -763,6 +797,7 @@ def _invoke_prompt_runner_subprocess(
         "run", str(md_file),
         "--project-dir", str(workspace),
         "--max-iterations", str(max_iters),
+        "--backend", config.backend,
     ]
     if config.model:
         base_args.extend(["--model", config.model])
@@ -799,7 +834,7 @@ def _invoke_prompt_runner(
     workspace: Path,
     run_dir: Path,
     config: PipelineConfig,
-    claude_client: ClaudeClient | None = None,
+    claude_client: AgentClient | None = None,
     generator_prelude_path: Path | None = None,
     judge_prelude_path: Path | None = None,
 ) -> tuple[bool, int, str | None]:
@@ -904,7 +939,7 @@ def _run_single_phase(
     state: ProjectState,
     workspace: Path,
     config: PipelineConfig,
-    claude_client: ClaudeClient | None = None,
+    claude_client: AgentClient | None = None,
     cross_ref_only: bool = False,
     skill_ctx: RunSkillContext | None = None,
 ) -> PhaseResult:
@@ -943,6 +978,7 @@ def _run_single_phase(
                 workspace=workspace,
                 run_dir=run_dir,
                 claude_client=claude_client,
+                backend=config.backend,
                 model=config.model,
                 state=state,
                 existing_manifest_path=existing if reuse_existing else None,
@@ -972,6 +1008,7 @@ def _run_single_phase(
             workspace_dir=workspace,
             completed_phases=completed_states,
             phase_skill_manifest=_load_phase_skill_manifest(run_dir, phase_config),
+            input_context_mode="file-reference" if config.backend == "codex" else "embed",
         )
         try:
             generate_prompt_file(ctx, claude_client, prompt_file, config.model)
@@ -986,8 +1023,16 @@ def _run_single_phase(
         ps.prompt_file = str(prompt_file)
         save_project_state(state, workspace)
 
-        # Step 4-5: invoke prompt-runner
-        pr_run_dir = run_dir / "prompt-runner-output"
+        # Step 4-5: invoke prompt-runner.
+        # The directory basename becomes prompt-runner's `run_id`, which
+        # feeds uuid5-derived claude session IDs. Including the phase
+        # number keeps those session IDs unique across phases — without
+        # it, every phase's prompt-1 gen/jud sessions collide on the
+        # same UUID and claude rejects the second invocation with
+        # "Session ID ... is already in use".
+        pr_run_dir = (
+            run_dir / f"prompt-runner-output-phase-{phase_config.phase_number}"
+        )
         gen_prelude_path = (
             skill_artifacts.generator_prelude_path if skill_artifacts else None
         )
@@ -1050,6 +1095,7 @@ def _run_single_phase(
                 phase=phase_config,
                 workspace=workspace,
                 completed_phases=completed_ids,
+                backend=config.backend,
                 model=config.model,
                 claude_client=claude_client,
             )
@@ -1104,8 +1150,13 @@ def _run_single_phase(
                 pr_success=True,
             )
 
-        # Re-run prompt-runner on the revised file — reuse locked prelude paths
-        retry_run_dir = run_dir / f"prompt-runner-output-retry-{attempt + 1}"
+        # Re-run prompt-runner on the revised file — reuse locked prelude paths.
+        # Phase number included so the retry run_id differs from other phases'
+        # retries (same session-collision concern as the main invocation above).
+        retry_run_dir = (
+            run_dir
+            / f"prompt-runner-output-phase-{phase_config.phase_number}-retry-{attempt + 1}"
+        )
         success, extra_iters, pr_error = _invoke_prompt_runner(
             prompt_file, workspace, retry_run_dir, config, claude_client,
             generator_prelude_path=gen_prelude_path,
@@ -1198,14 +1249,26 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
         f"Total wall time: {result.wall_time_seconds:.1f}s",
         f"Halted early:    {result.halted_early}",
     ]
+    if result.execution_scope == "selected-phases":
+        selected = ", ".join(result.selected_phase_ids or [])
+        lines.append(f"Execution scope: selected phases ({selected})")
+    else:
+        lines.append("Execution scope: all phases")
     if result.halt_reason:
         lines.append(f"Halt reason:     {result.halt_reason}")
 
+    target_phase_ids = (
+        list(result.selected_phase_ids)
+        if result.selected_phase_ids is not None
+        else [phase.phase_id for phase in PHASES]
+    )
     completed_count = sum(
         1 for pr in result.phase_results
-        if pr.status == PhaseStatus.COMPLETED
+        if pr.phase_id in target_phase_ids and pr.status == PhaseStatus.COMPLETED
     )
-    lines.append(f"Phases completed: {completed_count}/{len(result.phase_results)}")
+    lines.append(
+        f"Phases completed in scope: {completed_count}/{len(target_phase_ids)}"
+    )
     lines.append("")
     lines.append("-" * 60)
     lines.append("Phase Results")
@@ -1270,7 +1333,7 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
 def run_pipeline(
     config: PipelineConfig,
     *,
-    claude_client: ClaudeClient | None = None,
+    claude_client: AgentClient | None = None,
 ) -> PipelineResult:
     """Execute the methodology pipeline.
 
@@ -1291,8 +1354,8 @@ def run_pipeline(
     config:
         Pipeline configuration.
     claude_client:
-        Optional injected ClaudeClient (for testing).  When None,
-        a RealClaudeClient is created internally.
+        Optional injected backend client (for testing).  When None,
+        a real backend client is created internally.
     """
     t0 = time.monotonic()
 
@@ -1311,11 +1374,24 @@ def run_pipeline(
             halt_reason=str(exc),
             end_to_end_result=None,
             wall_time_seconds=time.monotonic() - t0,
+            execution_scope=(
+                "selected-phases"
+                if config.phases_to_run is not None
+                else "all-phases"
+            ),
+            selected_phase_ids=(
+                list(config.phases_to_run)
+                if config.phases_to_run is not None
+                else None
+            ),
         )
 
     # ---- skill catalog + baseline config (run-scoped) ----
     try:
-        skill_ctx = build_run_skill_context(workspace=workspace)
+        skill_ctx = build_run_skill_context(
+            workspace=workspace,
+            backend=config.backend,
+        )
     except (CatalogBuildError, BaselineConfigError) as exc:
         return PipelineResult(
             workspace_dir=workspace,
@@ -1324,6 +1400,16 @@ def run_pipeline(
             halt_reason=f"skill context build failed: {exc}",
             end_to_end_result=None,
             wall_time_seconds=time.monotonic() - t0,
+            execution_scope=(
+                "selected-phases"
+                if config.phases_to_run is not None
+                else "all-phases"
+            ),
+            selected_phase_ids=(
+                list(config.phases_to_run)
+                if config.phases_to_run is not None
+                else None
+            ),
         )
 
     state: ProjectState | None = None
@@ -1333,12 +1419,23 @@ def run_pipeline(
     if state is None:
         state = _create_initial_state(workspace, config)
         save_project_state(state, workspace)
+    else:
+        state.execution_scope = (
+            "selected-phases"
+            if config.phases_to_run is not None
+            else "all-phases"
+        )
+        state.selected_phase_ids = (
+            list(config.phases_to_run)
+            if config.phases_to_run is not None
+            else None
+        )
+        save_project_state(state, workspace)
 
     # ---- claude client ----
     if claude_client is None:
         try:
-            from prompt_runner.claude_client import RealClaudeClient
-            claude_client = RealClaudeClient()
+            claude_client = make_client(config.backend)
         except ImportError:
             pass  # will use subprocess fallback for prompt-runner;
                   # prompt generator and cross-ref will create their own
@@ -1346,7 +1443,9 @@ def run_pipeline(
     # ---- determine phases ----
     phases_to_run: list[PhaseConfig] = list(PHASES)
     if config.phases_to_run is not None:
-        phases_to_run = [get_phase(pid) for pid in config.phases_to_run]
+        phases_to_run = [
+            get_phase(pid) for pid in normalize_phase_selection(config.phases_to_run)
+        ]
 
     # ---- execute phases ----
     phase_results: list[PhaseResult] = []
@@ -1397,6 +1496,12 @@ def run_pipeline(
                 halt_reason=None,
                 end_to_end_result=None,
                 wall_time_seconds=time.monotonic() - t0,
+                execution_scope=state.execution_scope,
+                selected_phase_ids=(
+                    list(state.selected_phase_ids)
+                    if state.selected_phase_ids is not None
+                    else None
+                ),
             ),
         )
 
@@ -1421,6 +1526,7 @@ def run_pipeline(
         try:
             end_to_end_result = verify_end_to_end(
                 workspace=workspace,
+                backend=config.backend,
                 model=config.model,
                 claude_client=claude_client,
             )
@@ -1434,7 +1540,7 @@ def run_pipeline(
             )
 
     # ---- finalise ----
-    state.finished_at = _iso_now()
+    state.finished_at = _iso_now() if all_done and not halted_early else None
     state.current_phase = None
     save_project_state(state, workspace)
 
@@ -1446,6 +1552,12 @@ def run_pipeline(
         halt_reason=halt_reason,
         end_to_end_result=end_to_end_result,
         wall_time_seconds=wall_time,
+        execution_scope=state.execution_scope,
+        selected_phase_ids=(
+            list(state.selected_phase_ids)
+            if state.selected_phase_ids is not None
+            else None
+        ),
     )
 
     # Final summary with end-to-end results and halt status

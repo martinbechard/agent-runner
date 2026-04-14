@@ -2,7 +2,7 @@
 
 Runs after prompt-runner has completed a phase's incremental prompts.
 Verifies that the phase's output integrates correctly with all prior
-phases' outputs by calling Claude with tool access to inspect the
+phases' outputs by calling the configured backend with tool access to inspect the
 workspace.
 
 See docs/design/components/CD-002-methodology-runner.md Section 8.
@@ -32,6 +32,7 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from .log_metadata import write_call_metadata
 from .models import (
     CrossRefCheckResult,
     CrossRefIssue,
@@ -42,7 +43,7 @@ from .models import (
 from .phases import PHASES, PHASE_MAP
 
 if TYPE_CHECKING:
-    from prompt_runner.claude_client import ClaudeClient
+    from prompt_runner.client_types import AgentClient
 
 
 # ---------------------------------------------------------------------------
@@ -56,7 +57,7 @@ _JSON_FENCE_RE = re.compile(
     r"```(?:json)?\s*\n(.*?)```",
     re.DOTALL,
 )
-"""Matches a fenced JSON code block in Claude's output."""
+"""Matches a fenced JSON code block in the verifier output."""
 
 _BARE_JSON_RE = re.compile(
     r'\{\s*"verdict"\s*:.*\}',
@@ -582,7 +583,7 @@ def _format_prior_phases_block(completed_phases: list[str]) -> str:
 
 
 def _extract_json_block(text: str) -> str | None:
-    """Extract the first JSON block from Claude's response.
+    """Extract the first JSON block from the verifier response.
 
     Tries fenced code blocks first, then falls back to bare JSON
     starting with a ``"verdict"`` key.
@@ -652,9 +653,9 @@ def _build_coverage_summary(
     result: CrossReferenceResult,
     raw_percentages: dict,
 ) -> dict[str, float]:
-    """Build coverage_summary from Claude's percentages or binary fallback.
+    """Build coverage_summary from verifier percentages or binary fallback.
 
-    When Claude provides ``coverage_percentages`` in the JSON (values
+    When the verifier provides ``coverage_percentages`` in the JSON (values
     from 0 to 100), those are normalised to 0.0-1.0 fractions.  When
     percentages are absent for a category, the summary falls back to
     1.0 if the check passed and 0.0 if it failed.
@@ -680,11 +681,11 @@ def _build_coverage_summary(
 
 
 def _parse_cross_ref_result(claude_output: str) -> CrossRefResult:
-    """Parse Claude's output into a CrossRefResult.
+    """Parse verifier output into a CrossRefResult.
 
     Extracts a JSON code block from the response, parses it into a
     :class:`CrossReferenceResult` for structured issue data, then
-    builds a :class:`CrossRefResult` directly -- using Claude's
+    builds a :class:`CrossRefResult` directly -- using the verifier's
     ``coverage_percentages`` when present (actual element-level
     coverage) and falling back to binary 1.0/0.0 otherwise.
 
@@ -694,7 +695,7 @@ def _parse_cross_ref_result(claude_output: str) -> CrossRefResult:
     if json_text is None:
         raise CrossReferenceError(
             "unknown",
-            "No JSON block found in Claude's response.  "
+            "No JSON block found in verifier response.  "
             "Expected a fenced ```json ... ``` block or bare JSON with "
             "a \"verdict\" key.",
         )
@@ -704,7 +705,7 @@ def _parse_cross_ref_result(claude_output: str) -> CrossRefResult:
     except json.JSONDecodeError as exc:
         raise CrossReferenceError(
             "unknown",
-            f"Invalid JSON in Claude's response: {exc}",
+            f"Invalid JSON in verifier response: {exc}",
         ) from exc
 
     if not isinstance(data, dict):
@@ -792,35 +793,36 @@ def assemble_end_to_end_prompt() -> str:
 def _build_full_prompt(user_prompt: str) -> str:
     """Prepend CROSS_REF_SYSTEM_PROMPT to the user prompt.
 
-    The ``ClaudeCall`` dataclass has no ``system_prompt`` field, so we
+    The shared agent-call dataclass has no ``system_prompt`` field, so we
     inject the cross-reference instructions (JSON output schema, tool-use
     guidance, severity definitions) as a preamble to the user prompt.
-    ``RealClaudeClient`` separately appends ``NON_INTERACTIVE_SYSTEM_PROMPT``
+    The backend client separately appends its non-interactive system prompt
     via ``--append-system-prompt``, so the two are complementary.
     """
     return CROSS_REF_SYSTEM_PROMPT + "\n\n---\n\n" + user_prompt
 
 
-def _call_claude_for_verification(
+def _call_backend_for_verification(
     prompt: str,
     phase_id: str,
     workspace: Path,
+    backend: str,
     model: str | None,
-    claude_client: ClaudeClient | None,
+    claude_client: AgentClient | None,
 ) -> CrossRefResult:
-    """Invoke Claude with the verification prompt and parse the result.
+    """Invoke the selected backend with the verification prompt and parse the result.
 
-    Prepends :data:`CROSS_REF_SYSTEM_PROMPT` to *prompt* so Claude
+    Prepends :data:`CROSS_REF_SYSTEM_PROMPT` to *prompt* so the verifier
     receives the JSON output schema and tool-use instructions.
 
     If *claude_client* is None, creates a
-    :class:`~prompt_runner.claude_client.RealClaudeClient`.
+    backend client for *backend*.
     """
-    from prompt_runner.claude_client import ClaudeCall
+    from prompt_runner.client_types import AgentCall
 
     if claude_client is None:
-        from prompt_runner.claude_client import RealClaudeClient
-        claude_client = RealClaudeClient()
+        from prompt_runner.client_factory import make_client
+        claude_client = make_client(backend)
 
     full_prompt = _build_full_prompt(prompt)
 
@@ -828,7 +830,7 @@ def _call_claude_for_verification(
     log_dir.mkdir(parents=True, exist_ok=True)
 
     session_id = str(uuid.uuid4())
-    call = ClaudeCall(
+    call = AgentCall(
         prompt=full_prompt,
         session_id=session_id,
         new_session=True,
@@ -841,20 +843,26 @@ def _call_claude_for_verification(
         ),
         workspace_dir=workspace,
     )
+    write_call_metadata(
+        call.stdout_log_path,
+        model=model,
+        backend=backend,
+        role="cross-reference",
+    )
 
     try:
         response = claude_client.call(call)
     except Exception as exc:
         raise CrossReferenceError(
             phase_id,
-            f"Claude invocation failed: {exc}",
+            f"backend invocation failed: {exc}",
         ) from exc
 
     content = response.stdout.strip()
     if not content:
         raise CrossReferenceError(
             phase_id,
-            "Claude returned an empty response.",
+            "backend returned an empty response.",
         )
 
     try:
@@ -876,13 +884,14 @@ def verify_phase_cross_references(
     phase: PhaseConfig,
     workspace: Path,
     completed_phases: list[str],
+    backend: str = "claude",
     model: str | None = None,
     *,
-    claude_client: ClaudeClient | None = None,
+    claude_client: AgentClient | None = None,
 ) -> CrossRefResult:
     """Run cross-reference verification for a completed phase.
 
-    Calls Claude with tool access to inspect the workspace.  Claude
+    Calls the configured backend with tool access to inspect the workspace.  The verifier
     checks traceability, coverage, consistency, and integration with
     prior phases.
 
@@ -895,20 +904,21 @@ def verify_phase_cross_references(
     completed_phases:
         Phase IDs of all phases completed before this one.
     model:
-        Optional Claude model override.
+        Optional model override.
     claude_client:
-        Optional injected client (for testing).  Defaults to
-        :class:`~prompt_runner.claude_client.RealClaudeClient`.
+        Optional injected client (for testing).  Defaults to a real
+        backend client created from *backend*.
 
     Returns
     -------
     CrossRefResult with pass/fail and specific issues.
     """
     prompt = assemble_cross_ref_prompt(phase, completed_phases)
-    return _call_claude_for_verification(
+    return _call_backend_for_verification(
         prompt=prompt,
         phase_id=phase.phase_id,
         workspace=workspace,
+        backend=backend,
         model=model,
         claude_client=claude_client,
     )
@@ -916,9 +926,10 @@ def verify_phase_cross_references(
 
 def verify_end_to_end(
     workspace: Path,
+    backend: str = "claude",
     model: str | None = None,
     *,
-    claude_client: ClaudeClient | None = None,
+    claude_client: AgentClient | None = None,
 ) -> CrossRefResult:
     """Run final end-to-end verification across all phases.
 
@@ -931,20 +942,21 @@ def verify_end_to_end(
     workspace:
         Root of the project workspace.
     model:
-        Optional Claude model override.
+        Optional model override.
     claude_client:
-        Optional injected client (for testing).  Defaults to
-        :class:`~prompt_runner.claude_client.RealClaudeClient`.
+        Optional injected client (for testing).  Defaults to a real
+        backend client created from *backend*.
 
     Returns
     -------
     CrossRefResult with pass/fail and specific issues.
     """
     prompt = assemble_end_to_end_prompt()
-    return _call_claude_for_verification(
+    return _call_backend_for_verification(
         prompt=prompt,
         phase_id="end-to-end",
         workspace=workspace,
+        backend=backend,
         model=model,
         claude_client=claude_client,
     )

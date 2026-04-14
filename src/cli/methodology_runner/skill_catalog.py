@@ -1,14 +1,14 @@
-"""Auto-discovery of Claude Code skills from the local filesystem.
+"""Auto-discovery of backend skills from the local filesystem.
 
 Walks four locations in priority order, parses SKILL.md YAML
 frontmatter, and returns an in-memory catalog keyed by skill ID.
 
 Priority order (highest first):
 
-1. ``<workspace>/.claude/skills/**/SKILL.md``
+1. ``<workspace>/.<backend>/skills/**/SKILL.md``
 2. ``<cwd>/plugins/*/skills/**/SKILL.md``
-3. ``~/.claude/skills/**/SKILL.md``
-4. ``~/.claude/plugins/*/skills/**/SKILL.md``
+3. ``~/.<backend>/skills/**/SKILL.md``
+4. ``~/.<backend>/plugins/*/skills/**/SKILL.md``
 
 Higher-priority locations shadow lower ones; overrides are logged.
 If the final catalog is empty, :class:`CatalogBuildError` is raised
@@ -124,6 +124,7 @@ def _walk_skills(root: Path) -> list[Path]:
 def build_catalog(
     *,
     workspace: Path,
+    backend: str = "claude",
     user_home: Path | None = None,
     cwd: Path | None = None,
 ) -> dict[str, SkillCatalogEntry]:
@@ -133,7 +134,9 @@ def build_catalog(
     ----------
     workspace:
         The methodology-runner workspace directory.  Project-local
-        skills live under ``<workspace>/.claude/skills/``.
+        skills live under ``<workspace>/.<backend>/skills/``.
+    backend:
+        Skill namespace to search under.  Typically ``claude`` or ``codex``.
     user_home:
         Home directory to look under.  Defaults to ``Path.home()``.
         Exposed for testing.
@@ -163,7 +166,7 @@ def build_catalog(
     # (location_label, root_path) in priority order: first wins.
     # Priority: project > cwd-plugin > user > plugin (user-installed).
     sources: list[tuple[str, Path]] = [
-        ("project", workspace / ".claude" / "skills"),
+        ("project", workspace / f".{backend}" / "skills"),
     ]
 
     # cwd-plugin discovery: walk <cwd>/plugins/*/skills/ so running from a
@@ -176,10 +179,10 @@ def build_catalog(
             if plugin.is_dir():
                 sources.append(("cwd-plugin", plugin / "skills"))
 
-    sources.append(("user", user_home / ".claude" / "skills"))
+    sources.append(("user", user_home / f".{backend}" / "skills"))
 
-    # Plugins: one sub-root per plugin directory under ~/.claude/plugins
-    plugins_dir = user_home / ".claude" / "plugins"
+    # Plugins: one sub-root per plugin directory under ~/.<backend>/plugins
+    plugins_dir = user_home / f".{backend}" / "plugins"
     if plugins_dir.exists():
         for plugin in sorted(plugins_dir.iterdir()):
             if plugin.is_dir():
@@ -207,13 +210,13 @@ def build_catalog(
 
     if not catalog:
         raise CatalogBuildError(
-            "no Claude Code skills discovered.\n\n"
+            f"no {backend} skills discovered.\n\n"
             "Searched:\n"
             + "\n".join(f"  - {lbl}: {root}" for lbl, root in sources)
             + "\n\nInstall the baseline skill pack with:\n"
             "  /plugin install methodology-runner-skills\n"
-            "Or place your own SKILL.md files under .claude/skills/ in "
-            "this workspace, or under ~/.claude/skills/ for your user."
+            f"Or place your own SKILL.md files under .{backend}/skills/ in "
+            f"this workspace, or under ~/.{backend}/skills/ for your user."
         )
 
     return catalog

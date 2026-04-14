@@ -79,6 +79,7 @@ class _FakeProcess:
         self._stdout_lines = iter(stdout_lines)
         self._stderr_lines = iter(stderr_lines)
         self._returncode = returncode
+        self.pid = 12345
         self.stdin = MagicMock()
         self.stdout = self
         self.stderr = _FakeStream(stderr_lines)

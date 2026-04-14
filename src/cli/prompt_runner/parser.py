@@ -15,6 +15,9 @@ from pathlib import Path
 ERROR_IDS = (
     "E-NO-BLOCKS",
     "E-MISSING-VALIDATION",
+    "E-UNCLOSED-REQUIRED-FILES",
+    "E-UNCLOSED-CHECKS-FILES",
+    "E-UNCLOSED-DETERMINISTIC-VALIDATION",
     "E-UNCLOSED-GENERATION",
     "E-UNCLOSED-VALIDATION",
     "E-EXTRA-BLOCK",
@@ -32,6 +35,9 @@ class PromptPair:
     heading_line: int
     generation_line: int
     validation_line: int   # 0 when there is no validator
+    required_files: tuple[str, ...] = ()
+    checks_files: tuple[str, ...] = ()
+    deterministic_validation: tuple[str, ...] = ()
     interactive: bool = False
     model_override: str | None = None   # e.g. "claude-sonnet-4-6"
     effort_override: str | None = None  # e.g. "low", "medium", "high", "max"
@@ -68,6 +74,9 @@ class ParseError(Exception):
 class _State(Enum):
     SEEK_HEADING = "seek_heading"
     SEEK_FIRST_FENCE = "seek_first_fence"
+    IN_REQUIRED_FENCE = "in_required_fence"
+    IN_CHECKS_FENCE = "in_checks_fence"
+    IN_DETERMINISTIC_VALIDATION_FENCE = "in_deterministic_validation_fence"
     IN_FIRST_FENCE = "in_first_fence"
     SEEK_SECOND_FENCE = "seek_second_fence"
     IN_SECOND_FENCE = "in_second_fence"
@@ -89,6 +98,12 @@ _VARIANT_HEADING_RE = re.compile(
 )
 _FENCE_RE = re.compile(r"^```[A-Za-z0-9_+\-]*\s*$")
 _UNTITLED = "(untitled)"
+_REQUIRED_FILES_FENCE_RE = re.compile(r"^```required-files\s*$", re.IGNORECASE)
+_CHECKS_FILES_FENCE_RE = re.compile(r"^```checks-files\s*$", re.IGNORECASE)
+_DETERMINISTIC_VALIDATION_FENCE_RE = re.compile(
+    r"^```deterministic-validation\s*$",
+    re.IGNORECASE,
+)
 
 
 def _extract_directives(raw_title: str) -> tuple[str, str | None, str | None]:
@@ -127,6 +142,9 @@ class _Accumulator:
     heading_line: int
     generation_line: int = 0
     validation_line: int = 0
+    required_files: list[str] = field(default_factory=list)
+    checks_files: list[str] = field(default_factory=list)
+    deterministic_validation: list[str] = field(default_factory=list)
     generation_lines: list[str] = field(default_factory=list)
     validation_lines: list[str] = field(default_factory=list)
     interactive: bool = False
@@ -142,6 +160,9 @@ class _Accumulator:
             heading_line=self.heading_line,
             generation_line=self.generation_line,
             validation_line=self.validation_line,
+            required_files=tuple(self.required_files),
+            checks_files=tuple(self.checks_files),
+            deterministic_validation=tuple(self.deterministic_validation),
             interactive=self.interactive,
             model_override=self.model_override,
             effort_override=self.effort_override,
@@ -315,9 +336,56 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
             fence_match = _FENCE_RE.match(line)
 
             if state is _State.SEEK_FIRST_FENCE:
+                # Check for standalone [MODEL:xxx] / [EFFORT:xxx] directives
+                # between pairs. These update the model/effort for subsequent
+                # pairs within this variant.
+                mid_model = _MODEL_RE.search(line)
+                mid_effort = _EFFORT_RE.search(line)
+                if mid_model or mid_effort:
+                    if mid_model:
+                        current_variant_model = mid_model.group(1)
+                        current.model_override = current_variant_model
+                    if mid_effort:
+                        current_variant_effort = mid_effort.group(1)
+                        current.effort_override = current_variant_effort
+                    continue
                 if fence_match is not None:
-                    current.generation_line = line_number
-                    state = _State.IN_FIRST_FENCE
+                    if _REQUIRED_FILES_FENCE_RE.match(line):
+                        state = _State.IN_REQUIRED_FENCE
+                    elif _CHECKS_FILES_FENCE_RE.match(line):
+                        state = _State.IN_CHECKS_FENCE
+                    elif _DETERMINISTIC_VALIDATION_FENCE_RE.match(line):
+                        state = _State.IN_DETERMINISTIC_VALIDATION_FENCE
+                    else:
+                        current.generation_line = line_number
+                        state = _State.IN_FIRST_FENCE
+                    continue
+
+            if state is _State.IN_REQUIRED_FENCE:
+                if fence_match is not None:
+                    state = _State.SEEK_FIRST_FENCE
+                else:
+                    stripped = line.strip()
+                    if stripped:
+                        current.required_files.append(stripped)
+                continue
+
+            if state is _State.IN_CHECKS_FENCE:
+                if fence_match is not None:
+                    state = _State.SEEK_FIRST_FENCE
+                else:
+                    stripped = line.strip()
+                    if stripped:
+                        current.checks_files.append(stripped)
+                continue
+
+            if state is _State.IN_DETERMINISTIC_VALIDATION_FENCE:
+                if fence_match is not None:
+                    state = _State.SEEK_FIRST_FENCE
+                else:
+                    stripped = line.strip()
+                    if stripped:
+                        current.deterministic_validation.append(stripped)
                 continue
 
             if state is _State.IN_FIRST_FENCE:
@@ -328,6 +396,30 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
                 continue
 
             if state is _State.SEEK_SECOND_FENCE:
+                # Check for standalone directives between fences. When a
+                # directive appears here, it means the current pair is
+                # validator-less (single fence) and the directive applies
+                # to the NEXT pair.
+                mid_model = _MODEL_RE.search(line)
+                mid_effort = _EFFORT_RE.search(line)
+                if mid_model or mid_effort:
+                    # Finalize current pair as validator-less.
+                    current_variant_pairs.append(current.to_pair())
+                    # Update variant-level defaults for subsequent pairs.
+                    if mid_model:
+                        current_variant_model = mid_model.group(1)
+                    if mid_effort:
+                        current_variant_effort = mid_effort.group(1)
+                    # Start a fresh accumulator with the new directives.
+                    current = _Accumulator(
+                        index=0,
+                        title=current_variant_title,
+                        heading_line=line_number,
+                        model_override=current_variant_model,
+                        effort_override=current_variant_effort,
+                    )
+                    state = _State.SEEK_FIRST_FENCE
+                    continue
                 if fence_match is not None:
                     current.validation_line = line_number
                     state = _State.IN_SECOND_FENCE
@@ -359,8 +451,42 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
 
         if state is _State.SEEK_FIRST_FENCE:
             if fence_match is not None:
-                current.generation_line = line_number
-                state = _State.IN_FIRST_FENCE
+                if _REQUIRED_FILES_FENCE_RE.match(line):
+                    state = _State.IN_REQUIRED_FENCE
+                elif _CHECKS_FILES_FENCE_RE.match(line):
+                    state = _State.IN_CHECKS_FENCE
+                elif _DETERMINISTIC_VALIDATION_FENCE_RE.match(line):
+                    state = _State.IN_DETERMINISTIC_VALIDATION_FENCE
+                else:
+                    current.generation_line = line_number
+                    state = _State.IN_FIRST_FENCE
+            continue
+
+        if state is _State.IN_REQUIRED_FENCE:
+            if fence_match is not None:
+                state = _State.SEEK_FIRST_FENCE
+            else:
+                stripped = line.strip()
+                if stripped:
+                    current.required_files.append(stripped)
+            continue
+
+        if state is _State.IN_CHECKS_FENCE:
+            if fence_match is not None:
+                state = _State.SEEK_FIRST_FENCE
+            else:
+                stripped = line.strip()
+                if stripped:
+                    current.checks_files.append(stripped)
+            continue
+
+        if state is _State.IN_DETERMINISTIC_VALIDATION_FENCE:
+            if fence_match is not None:
+                state = _State.SEEK_FIRST_FENCE
+            else:
+                stripped = line.strip()
+                if stripped:
+                    current.deterministic_validation.append(stripped)
             continue
 
         if state is _State.IN_FIRST_FENCE:
@@ -435,6 +561,33 @@ def _raise_for_incomplete_state(
             _format_no_blocks(current, next_boundary_line=next_boundary_line,
                               boundary_kind=boundary_kind),
         )
+    if state is _State.IN_REQUIRED_FENCE:
+        raise ParseError(
+            "E-UNCLOSED-REQUIRED-FILES",
+            _format_unclosed_required_files(
+                current,
+                next_boundary_line=next_boundary_line,
+                boundary_kind=boundary_kind,
+            ),
+        )
+    if state is _State.IN_CHECKS_FENCE:
+        raise ParseError(
+            "E-UNCLOSED-CHECKS-FILES",
+            _format_unclosed_checks_files(
+                current,
+                next_boundary_line=next_boundary_line,
+                boundary_kind=boundary_kind,
+            ),
+        )
+    if state is _State.IN_DETERMINISTIC_VALIDATION_FENCE:
+        raise ParseError(
+            "E-UNCLOSED-DETERMINISTIC-VALIDATION",
+            _format_unclosed_deterministic_validation(
+                current,
+                next_boundary_line=next_boundary_line,
+                boundary_kind=boundary_kind,
+            ),
+        )
     if state is _State.SEEK_SECOND_FENCE:
         # Validator-less single-fence prompt: accepted as valid. Return normally
         # so the caller can finalise the pair with validation_prompt="".
@@ -458,6 +611,36 @@ def _raise_for_incomplete_state(
     )
 
 
+def _format_unclosed_required_files(
+    current: _Accumulator, next_boundary_line: int, boundary_kind: str
+) -> str:
+    boundary_text = (
+        f"the next prompt heading (found at line {next_boundary_line})"
+        if boundary_kind == _BOUNDARY_HEADING
+        else "the end of the file"
+    )
+    return (
+        f'Prompt {current.index} "{current.title}" (line {current.heading_line}): '
+        f"the required-files block was opened but never closed.\n\n"
+        f"Close it with a line containing exactly ``` before {boundary_text}."
+    )
+
+
+def _format_unclosed_checks_files(
+    current: _Accumulator, next_boundary_line: int, boundary_kind: str
+) -> str:
+    boundary_text = (
+        f"the next prompt heading (found at line {next_boundary_line})"
+        if boundary_kind == _BOUNDARY_HEADING
+        else "the end of the file"
+    )
+    return (
+        f'Prompt {current.index} "{current.title}" (line {current.heading_line}): '
+        f"the checks-files block was opened but never closed.\n\n"
+        f"Close it with a line containing exactly ``` before {boundary_text}."
+    )
+
+
 def _format_no_blocks(
     current: _Accumulator, next_boundary_line: int, boundary_kind: str
 ) -> str:
@@ -475,6 +658,21 @@ def _format_no_blocks(
         f"  2. the validation prompt (same delimiters)\n\n"
         f"{boundary_text} before either block appeared. "
         f"Add both blocks between line {current.heading_line} and line {next_boundary_line}."
+    )
+
+
+def _format_unclosed_deterministic_validation(
+    current: _Accumulator, next_boundary_line: int, boundary_kind: str
+) -> str:
+    boundary_text = (
+        f"the next prompt heading (found at line {next_boundary_line})"
+        if boundary_kind == _BOUNDARY_HEADING
+        else "the end of the file"
+    )
+    return (
+        f'Prompt {current.index} "{current.title}" (line {current.heading_line}): '
+        f"the deterministic-validation block was opened but never closed.\n\n"
+        f"Close it with a line containing exactly ``` before {boundary_text}."
     )
 
 

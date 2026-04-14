@@ -195,10 +195,122 @@ def test_error_ids_are_stable():
     assert ERROR_IDS == (
         "E-NO-BLOCKS",
         "E-MISSING-VALIDATION",
+        "E-UNCLOSED-REQUIRED-FILES",
+        "E-UNCLOSED-CHECKS-FILES",
+        "E-UNCLOSED-DETERMINISTIC-VALIDATION",
         "E-UNCLOSED-GENERATION",
         "E-UNCLOSED-VALIDATION",
         "E-EXTRA-BLOCK",
     )
+
+
+def test_required_files_block_is_parsed_before_generation():
+    text = """## Prompt 1: Needs inputs
+
+```required-files
+docs/request.md
+relative/extra.txt
+```
+
+```
+generate
+```
+
+```
+validate
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 1
+    assert pairs[0].required_files == ("docs/request.md", "relative/extra.txt")
+    assert pairs[0].generation_prompt == "generate"
+    assert pairs[0].validation_prompt == "validate"
+
+
+def test_error_unclosed_required_files():
+    text = """## Prompt 1: Needs inputs
+
+```required-files
+docs/request.md
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_text(text)
+    err = exc_info.value
+    assert err.error_id == "E-UNCLOSED-REQUIRED-FILES"
+    assert "required-files block" in err.message
+
+
+def test_checks_files_block_is_parsed_before_generation():
+    text = """## Prompt 1: Optional inputs
+
+```checks-files
+docs/summary.txt
+relative/maybe.txt
+```
+
+```
+generate
+```
+
+```
+validate
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 1
+    assert pairs[0].checks_files == ("docs/summary.txt", "relative/maybe.txt")
+
+
+def test_deterministic_validation_block_is_parsed_before_generation():
+    text = """## Prompt 1: Optional deterministic validation
+
+```deterministic-validation
+scripts/validate_feature_spec.py
+--strict
+```
+
+```
+generate
+```
+
+```
+validate
+```
+"""
+    pairs = parse_text(text)
+    assert len(pairs) == 1
+    assert pairs[0].deterministic_validation == (
+        "scripts/validate_feature_spec.py",
+        "--strict",
+    )
+    assert pairs[0].generation_prompt == "generate"
+    assert pairs[0].validation_prompt == "validate"
+
+
+def test_error_unclosed_checks_files():
+    text = """## Prompt 1: Optional inputs
+
+```checks-files
+docs/summary.txt
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_text(text)
+    err = exc_info.value
+    assert err.error_id == "E-UNCLOSED-CHECKS-FILES"
+    assert "checks-files block" in err.message
+
+
+def test_error_unclosed_deterministic_validation():
+    text = """## Prompt 1: Needs deterministic validation
+
+```deterministic-validation
+scripts/validate_feature_spec.py
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_text(text)
+    err = exc_info.value
+    assert err.error_id == "E-UNCLOSED-DETERMINISTIC-VALIDATION"
+    assert "deterministic-validation block" in err.message
 
 
 def test_title_starting_with_digit_is_preserved():

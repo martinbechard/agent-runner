@@ -28,6 +28,8 @@ from .models import (
     PhaseStatus,
     ProjectState,
 )
+from prompt_runner.config import resolve_default_backend
+from prompt_runner.client_factory import check_backend_cli
 
 # ---------------------------------------------------------------------------
 # Constants
@@ -118,17 +120,6 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m {remaining:.1f}s"
 
 
-def _check_claude_cli() -> str | None:
-    """Return an error message if the ``claude`` binary is not on PATH."""
-    if shutil.which("claude") is None:
-        return (
-            "The 'claude' CLI is not on PATH.\n"
-            "Install it from https://claude.ai/download and ensure "
-            "'claude' is available in your shell."
-        )
-    return None
-
-
 def _check_prompt_runner_cli() -> str | None:
     """Return an error message if ``prompt-runner`` is not on PATH."""
     if shutil.which("prompt-runner") is None:
@@ -144,21 +135,18 @@ def _check_prompt_runner_cli() -> str | None:
 # ---------------------------------------------------------------------------
 
 def cmd_run(args: argparse.Namespace) -> int:
-    """Execute the full methodology pipeline."""
+    """Execute the methodology pipeline or a selected phase subset."""
     requirements_path = Path(args.requirements_file).resolve()
     if not requirements_path.exists():
         _print_error(f"Requirements file not found: {requirements_path}")
         return EXIT_USAGE_ERROR
 
-    # Pre-flight checks for external dependencies
-    claude_err = _check_claude_cli()
-    if claude_err is not None:
-        _print_error(claude_err)
-        return EXIT_USAGE_ERROR
+    backend = resolve_default_backend(requirements_path, args.backend)
 
-    pr_err = _check_prompt_runner_cli()
-    if pr_err is not None:
-        _print_error(pr_err)
+    # Pre-flight checks for external dependencies
+    backend_err = check_backend_cli(backend)
+    if backend_err is not None:
+        _print_error(backend_err)
         return EXIT_USAGE_ERROR
 
     workspace = _resolve_workspace(args.workspace, requirements_path)
@@ -166,6 +154,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     # Late import so --help works even without prompt-runner installed.
     try:
         from .orchestrator import PipelineConfig, run_pipeline
+        from .phases import normalize_phase_selection
     except ImportError as exc:
         _print_error(
             f"Could not import methodology-runner orchestrator: {exc}\n"
@@ -181,11 +170,14 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     phases_to_run: list[str] | None = None
     if args.phases is not None:
-        phases_to_run = [p.strip() for p in args.phases.split(",")]
+        phases_to_run = normalize_phase_selection(
+            [p.strip() for p in args.phases.split(",") if p.strip()]
+        )
 
     config = PipelineConfig(
         requirements_path=requirements_path,
         workspace_dir=workspace,
+        backend=backend,
         model=args.model,
         resume=False,
         phases_to_run=phases_to_run,
@@ -197,8 +189,13 @@ def cmd_run(args: argparse.Namespace) -> int:
     _print_banner("Methodology Runner -- Starting pipeline")
     sys.stdout.write(f"Requirements: {requirements_path}\n")
     sys.stdout.write(f"Workspace:    {workspace}\n")
+    if phases_to_run is None:
+        sys.stdout.write("Phases:       all\n")
+    else:
+        sys.stdout.write(f"Phases:       {', '.join(phases_to_run)}\n")
     if args.model:
         sys.stdout.write(f"Model:        {args.model}\n")
+    sys.stdout.write(f"Backend:      {backend}\n")
     sys.stdout.write("\n")
     sys.stdout.flush()
 
@@ -340,19 +337,18 @@ def cmd_resume(args: argparse.Namespace) -> int:
         return EXIT_USAGE_ERROR
 
     # Pre-flight checks for external dependencies
-    claude_err = _check_claude_cli()
-    if claude_err is not None:
-        _print_error(claude_err)
-        return EXIT_USAGE_ERROR
-
-    pr_err = _check_prompt_runner_cli()
-    if pr_err is not None:
-        _print_error(pr_err)
+    backend = args.backend or state.backend or resolve_default_backend(
+        state.requirements_path, None
+    )
+    backend_err = check_backend_cli(backend)
+    if backend_err is not None:
+        _print_error(backend_err)
         return EXIT_USAGE_ERROR
 
     # Late import so --help works even without prompt-runner installed.
     try:
         from .orchestrator import PipelineConfig, run_pipeline
+        from .phases import normalize_phase_selection
     except ImportError as exc:
         _print_error(
             f"Could not import methodology-runner orchestrator: {exc}\n"
@@ -368,11 +364,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
 
     phases_to_run: list[str] | None = None
     if args.phases is not None:
-        phases_to_run = [p.strip() for p in args.phases.split(",")]
+        phases_to_run = normalize_phase_selection(
+            [p.strip() for p in args.phases.split(",") if p.strip()]
+        )
 
     config = PipelineConfig(
         requirements_path=state.requirements_path,
         workspace_dir=workspace,
+        backend=backend,
         model=args.model or state.model,
         resume=True,
         phases_to_run=phases_to_run,
@@ -385,8 +384,13 @@ def cmd_resume(args: argparse.Namespace) -> int:
     _print_banner("Methodology Runner -- Resuming pipeline")
     sys.stdout.write(f"Workspace:    {workspace}\n")
     sys.stdout.write(f"Requirements: {state.requirements_path}\n")
+    if phases_to_run is None:
+        sys.stdout.write("Phases:       all\n")
+    else:
+        sys.stdout.write(f"Phases:       {', '.join(phases_to_run)}\n")
     if config.model:
         sys.stdout.write(f"Model:        {config.model}\n")
+    sys.stdout.write(f"Backend:      {config.backend}\n")
     sys.stdout.write("\n")
     sys.stdout.flush()
 
@@ -513,7 +517,7 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── run ──────────────────────────────────────────────────────────────
     run_cmd = sub.add_parser(
         "run",
-        help="Execute the full methodology pipeline.",
+        help="Execute the methodology pipeline or a selected phase subset.",
     )
     run_cmd.add_argument(
         "requirements_file",
@@ -528,9 +532,19 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_cmd.add_argument(
+        "--backend",
+        choices=["claude", "codex"],
+        default=None,
+        help=(
+            "Agent backend to use for prompt generation, prompt-runner, and "
+            "verification. Overrides [run].backend from prompt-runner.toml; "
+            "defaults to claude if neither is set."
+        ),
+    )
+    run_cmd.add_argument(
         "--model",
         default=None,
-        help="Claude model to use (passed through to claude CLI).",
+        help="Model to use with the selected backend CLI.",
     )
     run_cmd.add_argument(
         "--max-iterations",
@@ -541,7 +555,11 @@ def _build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument(
         "--phases",
         default=None,
-        help="Comma-separated phase IDs to run (e.g. PH-000,PH-001).",
+        help=(
+            "Comma-separated full phase IDs to run (e.g. "
+            "PH-000-requirements-inventory,PH-001-feature-specification). "
+            "The selected subset is executed in methodology order."
+        ),
     )
     run_cmd.add_argument(
         "--escalation-policy",
@@ -571,16 +589,22 @@ def _build_parser() -> argparse.ArgumentParser:
     # ── resume ───────────────────────────────────────────────────────────
     resume_cmd = sub.add_parser(
         "resume",
-        help="Resume a halted or interrupted pipeline run.",
+        help="Resume a halted or interrupted pipeline run or selected phase subset.",
     )
     resume_cmd.add_argument(
         "workspace_dir",
         help="Path to the methodology-runner workspace directory.",
     )
     resume_cmd.add_argument(
+        "--backend",
+        choices=["claude", "codex"],
+        default=None,
+        help="Agent backend to use (defaults to the backend stored in state).",
+    )
+    resume_cmd.add_argument(
         "--model",
         default=None,
-        help="Claude model to use (overrides saved model from prior run).",
+        help="Model to use (overrides the saved model from the prior run).",
     )
     resume_cmd.add_argument(
         "--max-iterations",
@@ -591,7 +615,11 @@ def _build_parser() -> argparse.ArgumentParser:
     resume_cmd.add_argument(
         "--phases",
         default=None,
-        help="Comma-separated phase IDs to run (e.g. PH-000,PH-001).",
+        help=(
+            "Comma-separated full phase IDs to run (e.g. "
+            "PH-000-requirements-inventory,PH-001-feature-specification). "
+            "The selected subset is executed in methodology order."
+        ),
     )
     resume_cmd.add_argument(
         "--escalation-policy",

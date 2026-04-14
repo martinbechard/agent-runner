@@ -165,3 +165,14 @@ integration:
     jp = workspace / ".methodology-runner" / "runs" / "phase-0" / "judge-prelude.txt"
     assert gp.exists()
     assert jp.exists()
+    state_path = workspace / ".methodology-runner" / "state.json"
+    from methodology_runner.models import ProjectState
+    state = ProjectState.load(state_path)
+    assert state.execution_scope == "selected-phases"
+    assert state.selected_phase_ids == ["PH-000-requirements-inventory"]
+    assert state.finished_at is None
+    summary = (
+        workspace / ".methodology-runner" / "summary.txt"
+    ).read_text(encoding="utf-8")
+    assert "Execution scope: selected phases (PH-000-requirements-inventory)" in summary
+    assert "Phases completed in scope:" in summary

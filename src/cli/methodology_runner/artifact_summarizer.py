@@ -21,12 +21,14 @@ import hashlib
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+
+from .log_metadata import write_call_metadata
 from typing import TYPE_CHECKING
 
 from .constants import ARTIFACT_FULL_CONTENT_THRESHOLD
 
 if TYPE_CHECKING:
-    from prompt_runner.claude_client import ClaudeClient, ClaudeCall
+    from prompt_runner.client_types import AgentClient
 
 
 @dataclass(frozen=True)
@@ -80,9 +82,9 @@ class ArtifactSummaryProvider:
     cache_dir:
         Directory where summaries are persisted.  Created on demand.
     claude_client:
-        Injected Claude client used for summarization calls.
+        Injected backend client used for summarization calls.
     model:
-        Optional model override forwarded to claude.
+        Optional model override forwarded to the backend CLI.
     threshold:
         Size (in bytes) above which summaries are produced.  Defaults
         to :data:`ARTIFACT_FULL_CONTENT_THRESHOLD`.
@@ -92,7 +94,7 @@ class ArtifactSummaryProvider:
         self,
         *,
         cache_dir: Path,
-        claude_client: "ClaudeClient",
+        claude_client: "AgentClient",
         model: str | None = None,
         threshold: int = ARTIFACT_FULL_CONTENT_THRESHOLD,
     ) -> None:
@@ -131,7 +133,7 @@ class ArtifactSummaryProvider:
                 summary=cached,
             )
 
-        summary = self._call_claude_for_summary(path, content, size)
+        summary = self._call_backend_for_summary(path, content, size)
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         cache_path.write_text(summary, encoding="utf-8")
         return SummarizerResult(
@@ -146,10 +148,10 @@ class ArtifactSummaryProvider:
         content_hash = hashlib.sha256(content.encode("utf-8")).hexdigest()[:16]
         return self._cache_dir / f"{path_hash}-{content_hash}.txt"
 
-    def _call_claude_for_summary(
+    def _call_backend_for_summary(
         self, path: Path, content: str, size_bytes: int,
     ) -> str:
-        from prompt_runner.claude_client import ClaudeCall
+        from prompt_runner.client_types import AgentCall
 
         prompt = SUMMARY_PROMPT_TEMPLATE.format(
             path=path,
@@ -159,7 +161,7 @@ class ArtifactSummaryProvider:
         logs_dir = self._cache_dir / "logs"
         logs_dir.mkdir(parents=True, exist_ok=True)
         stem = f"summarize-{uuid.uuid4().hex[:8]}"
-        call = ClaudeCall(
+        call = AgentCall(
             prompt=prompt,
             session_id=str(uuid.uuid4()),
             new_session=True,
@@ -168,6 +170,11 @@ class ArtifactSummaryProvider:
             stderr_log_path=logs_dir / f"{stem}.stderr.log",
             stream_header=f"-- artifact summary / {path.name} --",
             workspace_dir=path.parent,
+        )
+        write_call_metadata(
+            call.stdout_log_path,
+            model=self._model,
+            role="artifact-summary",
         )
         response = self._claude_client.call(call)
         return response.stdout.strip()

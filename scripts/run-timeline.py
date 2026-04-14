@@ -24,6 +24,8 @@ import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from copy import deepcopy
+from functools import lru_cache
 
 
 # ---------------------------------------------------------------------------
@@ -32,6 +34,7 @@ from pathlib import Path
 
 POPUP_TRUNCATE_CHARS = 20_000_000  # 20 MB
 MIN_BAR_PCT = 0.5
+PRICING_FILE = Path(__file__).resolve().parents[1] / "docs" / "reference" / "openai-model-pricing.json"
 
 
 # ---------------------------------------------------------------------------
@@ -99,7 +102,8 @@ class Turn:
 
 @dataclass
 class CallDetail:
-    """Parsed from one JSONL log file (one claude invocation)."""
+    """Parsed from one JSONL log file (one backend invocation)."""
+    backend: str = "claude"
     duration_ms: int = 0
     duration_api_ms: int = 0
     num_turns: int = 0
@@ -115,6 +119,7 @@ class CallDetail:
     model: str = ""
     prompt_text: str = ""   # initial user message content
     output_text: str = ""   # concatenated assistant text blocks
+    cost_estimated: bool = False
 
 
 @dataclass
@@ -170,18 +175,55 @@ class ForkSection:
     variants: dict[str, list[Step]]  # variant_name -> steps
 
 
+@dataclass
+class ComparisonManifest:
+    title: str
+    mode: str
+    runs: list[tuple[str, Path]]
+
+
+@dataclass
+class ReportDocument:
+    run_title: str
+    workspace: Path
+    timelines: list[PhaseTimeline] = field(default_factory=list)
+    shared_steps: list[Step] = field(default_factory=list)
+    fork_sections: list[ForkSection] = field(default_factory=list)
+
+
 # ---------------------------------------------------------------------------
-# JSONL log parser
+# JSONL log parsers
 # ---------------------------------------------------------------------------
 
-def parse_log(path: Path) -> CallDetail:
+def detect_log_backend(path: Path) -> str:
+    """Best-effort backend detection for a stdout JSONL log."""
+    try:
+        for raw in path.read_text(encoding="utf-8").splitlines():
+            raw = raw.strip()
+            if not raw:
+                continue
+            try:
+                obj = json.loads(raw)
+            except json.JSONDecodeError:
+                continue
+            etype = obj.get("type", "")
+            if etype in {"thread.started", "turn.started", "item.started", "item.completed", "turn.completed"}:
+                return "codex"
+            if etype in {"assistant", "user", "result", "system", "rate_limit_event"}:
+                return "claude"
+    except OSError:
+        pass
+    return "claude"
+
+
+def parse_claude_log(path: Path) -> CallDetail:
     """Parse a claude JSONL stdout log into a CallDetail.
 
     Content blocks from the same API response share identical usage
     values. We group them into one Turn by detecting when the usage
     signature (input_tokens, output_tokens, cache_read) changes.
     """
-    detail = CallDetail()
+    detail = CallDetail(backend="claude")
     turn_num = 0
     current_turn: Turn | None = None
     prev_usage_sig: tuple[int, int, int] | None = None
@@ -328,12 +370,228 @@ def parse_log(path: Path) -> CallDetail:
     return detail
 
 
+def parse_codex_log(path: Path) -> CallDetail:
+    """Parse a Codex JSONL stdout log into a CallDetail.
+
+    Codex non-interactive JSON uses thread/turn/item events rather than the
+    Claude assistant/user/result schema.
+    """
+    detail = CallDetail(backend="codex")
+    current_turn: Turn | None = None
+    turn_num = 0
+    need_new_turn = True
+
+    def _ensure_turn() -> Turn:
+        nonlocal current_turn, turn_num, need_new_turn
+        if current_turn is None or need_new_turn:
+            if current_turn is not None:
+                detail.turns.append(current_turn)
+            turn_num += 1
+            current_turn = Turn(turn_number=turn_num)
+            need_new_turn = False
+        return current_turn
+
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        etype = obj.get("type", "")
+        if etype == "turn.started":
+            continue
+
+        if etype == "turn.completed":
+            usage = obj.get("usage", {})
+            detail.input_tokens = usage.get("input_tokens", 0)
+            detail.cache_read_tokens = usage.get("cached_input_tokens", 0)
+            detail.output_tokens = usage.get("output_tokens", 0)
+            if current_turn is not None:
+                current_turn.input_tokens = detail.input_tokens
+                current_turn.cache_read_tokens = detail.cache_read_tokens
+                current_turn.output_tokens = detail.output_tokens
+            continue
+
+        if etype not in {"item.completed", "item.started"}:
+            continue
+        item = obj.get("item", {})
+        itype = item.get("type", "")
+
+        if etype == "item.completed" and itype == "agent_message":
+            text = item.get("text", "")
+            current_turn = _ensure_turn()
+            current_turn.text_chars += len(text)
+            current_turn.text_content += text
+            detail.output_text += text
+            continue
+
+        if etype == "item.completed" and itype == "command_execution":
+            command = item.get("command", "")
+            output = item.get("aggregated_output", "")
+            tc = ToolCall(
+                name="Bash",
+                input_size=len(command),
+                result_size=len(output),
+                input_json=json.dumps({"command": command}),
+                result_content=output,
+                tool_use_id=item.get("id", ""),
+            )
+            current_turn = _ensure_turn()
+            current_turn.tool_calls.append(tc)
+            need_new_turn = True
+            continue
+
+        if etype == "item.completed" and itype == "collab_tool_call":
+            tool = item.get("tool", "?")
+            prompt = item.get("prompt") or ""
+            result_content = json.dumps(item.get("agents_states", {}))
+            tc = ToolCall(
+                name=tool,
+                input_size=len(prompt),
+                result_size=len(result_content),
+                input_json=json.dumps({"tool": tool, "prompt": prompt}),
+                result_content=result_content,
+                tool_use_id=item.get("id", ""),
+            )
+            if tool == "spawn_agent":
+                detail.subagent_count += 1
+            current_turn = _ensure_turn()
+            current_turn.tool_calls.append(tc)
+            need_new_turn = True
+            continue
+
+        if etype == "item.completed" and itype == "file_change":
+            changes = item.get("changes", [])
+            content = json.dumps(changes)
+            tc = ToolCall(
+                name="FileChange",
+                input_size=len(content),
+                result_size=len(content),
+                input_json=content,
+                result_content=content,
+                tool_use_id=item.get("id", ""),
+            )
+            current_turn = _ensure_turn()
+            current_turn.tool_calls.append(tc)
+            need_new_turn = True
+
+    if current_turn is not None:
+        detail.turns.append(current_turn)
+    detail.num_turns = len(detail.turns)
+
+    return detail
+
+
+def parse_log(path: Path) -> CallDetail:
+    backend = detect_log_backend(path)
+    if backend == "codex":
+        detail = parse_codex_log(path)
+    else:
+        detail = parse_claude_log(path)
+    detail = _apply_log_metadata(detail, path)
+    return _finalize_detail(detail)
+
+
+@lru_cache(maxsize=1)
+def _load_pricing_table() -> dict[str, dict[str, float]]:
+    try:
+        raw = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    models = raw.get("models", {})
+    if not isinstance(models, dict):
+        return {}
+    table: dict[str, dict[str, float]] = {}
+    for model, prices in models.items():
+        if isinstance(prices, dict):
+            table[model.lower()] = prices
+    return table
+
+
+def _normalize_model_name(model: str) -> str:
+    return (model or "").strip().lower()
+
+
+def _estimate_tokens(text: str) -> int:
+    if not text:
+        return 0
+    try:
+        import tiktoken
+
+        enc = tiktoken.get_encoding("cl100k_base")
+        return len(enc.encode(text))
+    except Exception:
+        return max(1, len(text) // 4)
+
+
+def _fresh_input_tokens(detail: CallDetail) -> int:
+    """Return non-cached input tokens for display."""
+    if detail.input_tokens > 0:
+        return max(0, detail.input_tokens - detail.cache_read_tokens)
+    return _estimate_tokens(detail.prompt_text)
+
+
+def _estimate_cost_usd(detail: CallDetail) -> tuple[float, bool]:
+    if detail.cost_usd > 0:
+        return detail.cost_usd, False
+    model = _normalize_model_name(detail.model)
+    if not model:
+        return 0.0, False
+    prices = _load_pricing_table().get(model)
+    if not prices:
+        return 0.0, False
+    fresh_input_tokens = _fresh_input_tokens(detail)
+    cost = (
+        fresh_input_tokens * prices.get("input_per_million", 0.0)
+        + detail.cache_read_tokens * prices.get("cached_input_per_million", 0.0)
+        + detail.output_tokens * prices.get("output_per_million", 0.0)
+    ) / 1_000_000
+    return cost, True
+
+
+def _finalize_detail(detail: CallDetail) -> CallDetail:
+    detail.cost_usd, detail.cost_estimated = _estimate_cost_usd(detail)
+    return detail
+
+
+def _apply_log_metadata(detail: CallDetail, log_path: Path) -> CallDetail:
+    meta = _load_log_metadata(log_path)
+    model = meta.get("model")
+    backend = meta.get("backend")
+    if isinstance(model, str) and model.strip() and not detail.model:
+        detail.model = model.strip()
+    if isinstance(backend, str) and backend.strip():
+        detail.backend = backend.strip()
+    return detail
+
+
 # ---------------------------------------------------------------------------
 # Shared step-building helpers
 # ---------------------------------------------------------------------------
 
 def _mtime(path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+
+
+def _parse_iso_datetime(raw: str | None) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _load_log_metadata(log_path: Path) -> dict[str, object]:
+    meta_path = log_path.with_suffix(".meta.json")
+    try:
+        raw = json.loads(meta_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    return raw if isinstance(raw, dict) else {}
 
 
 def _file_step(name: str, start_file: Path, end_file: Path,
@@ -353,11 +611,42 @@ def _file_step(name: str, start_file: Path, end_file: Path,
     )
 
 
+def _normalize_step_sequence(
+    steps: list[Step],
+    *,
+    start_anchor: datetime | None = None,
+) -> None:
+    """Make step timing sequential and monotonic.
+
+    Many artifacts are written quickly enough that their mtimes collapse to the
+    same second. For reporting, the more reliable model is:
+    - start at the known run/phase start when available
+    - each step starts when the previous one ended
+    - each step ends at its own completion marker, clamped monotically
+    """
+    if not steps:
+        return
+    cursor = start_anchor or steps[0].started
+    for step in steps:
+        completed_at = step.ended
+        if completed_at < cursor:
+            completed_at = cursor
+        step.started = cursor
+        step.ended = completed_at
+        cursor = completed_at
+
+
 # ---------------------------------------------------------------------------
 # Methodology-runner workspace parser
 # ---------------------------------------------------------------------------
 
-def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline | None:
+def parse_phase(
+    runs_dir: Path,
+    phase_num: int,
+    phase_id: str,
+    *,
+    phase_started_at: datetime | None = None,
+) -> PhaseTimeline | None:
     phase_dir = runs_dir / f"phase-{phase_num}"
     if not phase_dir.exists():
         return None
@@ -404,8 +693,15 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
         if step.duration_seconds > 0:
             timeline.steps.append(step)
 
-    # Prompt-runner iterations
-    pr_dir = phase_dir / "prompt-runner-output"
+    # Prompt-runner iterations. The orchestrator suffixes the directory
+    # with the phase number to keep claude session IDs unique across
+    # phases, so match any prompt-runner-output* child and prefer the
+    # phase-specific one if present.
+    pr_dir = next(
+        (d for d in sorted(phase_dir.glob("prompt-runner-output-phase-*"))
+         if d.is_dir()),
+        phase_dir / "prompt-runner-output",
+    )
     if pr_dir.exists():
         logs_dir = pr_dir / "logs"
         if logs_dir.exists():
@@ -453,7 +749,10 @@ def parse_phase(runs_dir: Path, phase_num: int, phase_id: str) -> PhaseTimeline 
     if prompt_file.exists():
         _backfill_prompts_from_file(timeline, prompt_file)
 
-    return timeline if timeline.steps else None
+    if timeline.steps:
+        _normalize_step_sequence(timeline.steps, start_anchor=phase_started_at)
+        return timeline
+    return None
 
 
 def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> None:
@@ -465,33 +764,44 @@ def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> N
     except OSError:
         return
 
+    def _normalize_prompt_slug(text: str) -> str:
+        slug = re.sub(r"\[model:[^\]]+\]", "", text, flags=re.IGNORECASE)
+        slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+        slug = re.sub(r"^-*prompt-\d+-", "", slug)
+        slug = re.sub(r"-+(generator|judge)$", "", slug)
+        return slug
+
+    def _extract_section_model(text: str) -> str:
+        m = re.search(r"\[MODEL:([^\]]+)\]", text, flags=re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
     # Parse prompt sections: ## Prompt N: <title> followed by code blocks
-    sections: dict[str, str] = {}
+    sections: dict[str, tuple[str, str]] = {}
     current_slug = ""
     current_lines: list[str] = []
     for line in content.splitlines():
         m = re.match(r"^## Prompt\s+\d+", line)
         if m:
             if current_slug and current_lines:
-                sections[current_slug] = "\n".join(current_lines)
+                section_text = "\n".join(current_lines)
+                sections[current_slug] = (section_text, _extract_section_model(section_text))
             # Build a slug from the heading to match step names
-            slug = re.sub(r"[^a-z0-9]+", "-", line.lower()).strip("-")
-            # Remove the "prompt-NN-" prefix to get the descriptive part
-            slug = re.sub(r"^-*prompt-\d+-", "", slug)
+            slug = _normalize_prompt_slug(line)
             current_slug = slug
             current_lines = [line]
         elif current_slug:
             current_lines.append(line)
     if current_slug and current_lines:
-        sections[current_slug] = "\n".join(current_lines)
+        section_text = "\n".join(current_lines)
+        sections[current_slug] = (section_text, _extract_section_model(section_text))
 
     for step in timeline.steps:
         if step.detail and not step.detail.prompt_text:
             # Try to match step name slug to a section
             step_slug = re.sub(r"\s*/\s*iter.*$", "", step.name)
-            step_slug = re.sub(r"[^a-z0-9]+", "-", step_slug.lower()).strip("-")
+            step_slug = _normalize_prompt_slug(step_slug)
             is_judge = "judge" in step.name.lower()
-            for section_slug, section_text in sections.items():
+            for section_slug, (section_text, section_model) in sections.items():
                 matched = (
                     (section_slug and section_slug in step_slug) or
                     (step_slug and step_slug in section_slug)
@@ -499,6 +809,9 @@ def _backfill_prompts_from_file(timeline: PhaseTimeline, prompt_file: Path) -> N
                 if matched:
                     gen, val = _split_prompt_fences(section_text)
                     step.detail.prompt_text = val if is_judge else gen
+                    if section_model and not step.detail.model:
+                        step.detail.model = section_model
+                        _finalize_detail(step.detail)
                     break
 
 
@@ -528,29 +841,41 @@ def _backfill_prompts_from_synthetic(steps: list[Step], synth_path: Path) -> Non
     except OSError:
         return
 
-    sections: dict[str, str] = {}
+    def _normalize_prompt_slug(text: str) -> str:
+        slug = re.sub(r"\[model:[^\]]+\]", "", text, flags=re.IGNORECASE)
+        slug = re.sub(r"[^a-z0-9]+", "-", slug.lower()).strip("-")
+        slug = re.sub(r"^-*prompt-\d+-", "", slug)
+        slug = re.sub(r"-+(generator|judge)$", "", slug)
+        return slug
+
+    def _extract_section_model(text: str) -> str:
+        m = re.search(r"\[MODEL:([^\]]+)\]", text, flags=re.IGNORECASE)
+        return m.group(1).strip() if m else ""
+
+    sections: dict[str, tuple[str, str]] = {}
     current_slug = ""
     current_lines: list[str] = []
     for line in content.splitlines():
         m = re.match(r"^## Prompt\s+\d+", line)
         if m:
             if current_slug and current_lines:
-                sections[current_slug] = "\n".join(current_lines)
-            slug = re.sub(r"[^a-z0-9]+", "-", line.lower()).strip("-")
-            slug = re.sub(r"^-*prompt-\d+-", "", slug)
+                section_text = "\n".join(current_lines)
+                sections[current_slug] = (section_text, _extract_section_model(section_text))
+            slug = _normalize_prompt_slug(line)
             current_slug = slug
             current_lines = [line]
         elif current_slug:
             current_lines.append(line)
     if current_slug and current_lines:
-        sections[current_slug] = "\n".join(current_lines)
+        section_text = "\n".join(current_lines)
+        sections[current_slug] = (section_text, _extract_section_model(section_text))
 
     for step in steps:
         if step.detail and not step.detail.prompt_text:
             step_slug = re.sub(r"\s*/\s*iter.*$", "", step.name)
-            step_slug = re.sub(r"[^a-z0-9]+", "-", step_slug.lower()).strip("-")
+            step_slug = _normalize_prompt_slug(step_slug)
             is_judge = "judge" in step.name.lower()
-            for section_slug, section_text in sections.items():
+            for section_slug, (section_text, section_model) in sections.items():
                 matched = (
                     (section_slug and section_slug in step_slug) or
                     (step_slug and step_slug in section_slug)
@@ -558,6 +883,9 @@ def _backfill_prompts_from_synthetic(steps: list[Step], synth_path: Path) -> Non
                 if matched:
                     gen, val = _split_prompt_fences(section_text)
                     step.detail.prompt_text = val if is_judge else gen
+                    if section_model and not step.detail.model:
+                        step.detail.model = section_model
+                        _finalize_detail(step.detail)
                     break
 
 
@@ -568,6 +896,7 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
 
     state_path = workspace / ".methodology-runner" / "state.json"
     phases_map: dict[int, str] = {}
+    phase_started_map: dict[int, datetime] = {}
     if state_path.exists():
         state = json.loads(state_path.read_text())
         for p in state.get("phases", []):
@@ -575,6 +904,9 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
             for i in range(10):
                 if (runs_dir / f"phase-{i}").exists() and pid.startswith(f"PH-00{i}"):
                     phases_map[i] = pid
+                    started_at = _parse_iso_datetime(p.get("started_at"))
+                    if started_at is not None:
+                        phase_started_map[i] = started_at
 
     timelines = []
     for phase_dir in sorted(runs_dir.glob("phase-*")):
@@ -585,7 +917,12 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
         except (IndexError, ValueError):
             continue
         phase_id = phases_map.get(num, f"PH-{num:03d}")
-        tl = parse_phase(runs_dir, num, phase_id)
+        tl = parse_phase(
+            runs_dir,
+            num,
+            phase_id,
+            phase_started_at=phase_started_map.get(num),
+        )
         if tl:
             timelines.append(tl)
     return timelines
@@ -632,10 +969,34 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
     """Parse a prompt-runner run directory into shared steps and fork sections."""
     shared_steps: list[Step] = []
     fork_sections: list[ForkSection] = []
+    run_started_at: datetime | None = None
 
     # Shared pre-fork steps from top-level logs/
     top_logs = run_dir / "logs"
     shared_steps = _parse_prompt_log_dir(top_logs)
+    manifest_path = run_dir / "manifest.json"
+    if manifest_path.exists() and shared_steps:
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            manifest = {}
+        run_started_at = _parse_iso_datetime(manifest.get("started_at"))
+        manifest_model = ((manifest.get("config") or {}).get("model") or "").strip()
+        source_file = manifest.get("source_file")
+        if source_file:
+            source_path = Path(source_file)
+            if source_path.exists():
+                _backfill_prompts_from_file(
+                    PhaseTimeline(phase_id="prompt-runner", phase_number=0, steps=shared_steps),
+                    source_path,
+                )
+        if manifest_model:
+            for step in shared_steps:
+                if step.detail and not step.detail.model:
+                    step.detail.model = manifest_model
+                    _finalize_detail(step.detail)
+    if shared_steps:
+        _normalize_step_sequence(shared_steps, start_anchor=run_started_at)
 
     # Fork sections from fork-*/ directories
     for fork_dir in sorted(run_dir.iterdir()):
@@ -677,6 +1038,7 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
                 break
 
             if variant_steps:
+                _normalize_step_sequence(variant_steps)
                 variants[variant_name] = variant_steps
 
         if variants:
@@ -687,6 +1049,165 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
             ))
 
     return shared_steps, fork_sections
+
+
+def _step_signature(step: Step) -> tuple[str, str, str]:
+    detail = step.detail
+    return (
+        step.name,
+        detail.prompt_text if detail else "",
+        "judge" if "judge" in step.name.lower() else "generator",
+    )
+
+
+def _common_prefix_length(step_lists: list[list[Step]]) -> int:
+    if not step_lists or any(not steps for steps in step_lists):
+        return 0
+    limit = min(len(steps) for steps in step_lists)
+    idx = 0
+    while idx < limit:
+        sig = _step_signature(step_lists[0][idx])
+        if any(_step_signature(steps[idx]) != sig for steps in step_lists[1:]):
+            break
+        idx += 1
+    return idx
+
+
+def load_comparison_manifest(path: Path) -> ComparisonManifest:
+    data = json.loads(path.read_text(encoding="utf-8"))
+    title = data.get("title", "Prompt Runner Comparison")
+    mode = data.get("mode", "comparison")
+    raw_runs = data.get("runs", [])
+    runs: list[tuple[str, Path]] = []
+    for item in raw_runs:
+        if not isinstance(item, dict):
+            continue
+        label = item.get("label") or item.get("name") or "variant"
+        run_path = item.get("path")
+        if not run_path:
+            continue
+        p = Path(run_path)
+        if not p.is_absolute():
+            candidate = (path.parent / p).resolve()
+            p = candidate if candidate.exists() else p.resolve()
+        runs.append((label, p))
+    return ComparisonManifest(title=title, mode=mode, runs=runs)
+
+
+def parse_comparison_manifest(path: Path) -> tuple[list[Step], list[ForkSection], str]:
+    manifest = load_comparison_manifest(path)
+    if not manifest.runs:
+        return [], [], manifest.title
+
+    variant_steps: dict[str, list[Step]] = {}
+    step_lists: list[list[Step]] = []
+    for label, run_path in manifest.runs:
+        if not run_path.exists():
+            raise ValueError(f"comparison manifest run path not found: {run_path}")
+        shared_steps, fork_sections = parse_prompt_runner_run(run_path)
+        if fork_sections:
+            # Keep this simple: synthetic comparison mode expects full runs,
+            # not existing fork reports nested inside another comparison.
+            raise ValueError(
+                f"comparison manifest does not support nested fork runs: {run_path}"
+            )
+        copied = deepcopy(shared_steps)
+        variant_name = f"variant-{label.lower().replace(' ', '-').replace('_', '-')}"
+        variant_steps[variant_name] = copied
+        step_lists.append(copied)
+
+    if manifest.mode == "diagnostic":
+        return [], [ForkSection(fork_index=1, fork_title=manifest.title, variants=variant_steps)], manifest.title
+
+    prefix_len = _common_prefix_length(step_lists)
+    shared_prefix = deepcopy(step_lists[0][:prefix_len]) if prefix_len > 0 else []
+    trimmed_variants = {
+        vname: steps[prefix_len:]
+        for vname, steps in variant_steps.items()
+    }
+    return shared_prefix, [ForkSection(fork_index=1, fork_title=manifest.title, variants=trimmed_variants)], manifest.title
+
+
+class BaseReportAdapter:
+    """Converts a source path into a normalized report document."""
+
+    @staticmethod
+    def matches(path: Path) -> bool:
+        raise NotImplementedError
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        raise NotImplementedError
+
+
+class MethodologyWorkspaceAdapter(BaseReportAdapter):
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return path.is_dir() and (path / ".methodology-runner" / "runs").exists()
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        timelines = parse_workspace(path)
+        if not timelines:
+            raise ValueError(f"No phase data found in {path}")
+        return ReportDocument(
+            run_title="Methodology Runner Timeline",
+            workspace=path,
+            timelines=timelines,
+        )
+
+
+class PromptRunnerRunAdapter(BaseReportAdapter):
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return path.is_dir() and ((path / "logs").exists() or (path / "manifest.json").exists())
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        shared_steps, fork_sections = parse_prompt_runner_run(path)
+        if not shared_steps and not fork_sections:
+            raise ValueError(f"No prompt-runner data found in {path}")
+        return ReportDocument(
+            run_title="Prompt Runner Timeline",
+            workspace=path,
+            shared_steps=shared_steps,
+            fork_sections=fork_sections,
+        )
+
+
+class ComparisonManifestAdapter(BaseReportAdapter):
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return path.is_file()
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        shared_steps, fork_sections, title = parse_comparison_manifest(path)
+        if not shared_steps and not fork_sections:
+            raise ValueError(f"No comparison data found in {path}")
+        return ReportDocument(
+            run_title=title,
+            workspace=path,
+            shared_steps=shared_steps,
+            fork_sections=fork_sections,
+        )
+
+
+ADAPTERS: list[type[BaseReportAdapter]] = [
+    ComparisonManifestAdapter,
+    MethodologyWorkspaceAdapter,
+    PromptRunnerRunAdapter,
+]
+
+
+def load_report_document(path: Path) -> ReportDocument:
+    for adapter in ADAPTERS:
+        if adapter.matches(path):
+            return adapter.build(path)
+    raise ValueError(
+        f"Cannot detect input type for {path}.\n"
+        f"Expected a comparison manifest file, .methodology-runner/runs/, or logs/ / manifest.json"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -840,19 +1361,45 @@ def _popup_toolbar(uid: str) -> str:
     )
 
 
-def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "") -> str:
+def _render_log_structured(
+    log_path: Path,
+    popup_id: str,
+    prompt_text: str = "",
+    detail: CallDetail | None = None,
+    step_duration_seconds: float = 0.0,
+) -> str:
     """Render a JSONL log file as structured HTML with per-record formatting."""
+    if detect_log_backend(log_path) == "codex":
+        return _render_codex_log_structured(
+            log_path,
+            popup_id,
+            prompt_text=prompt_text,
+            detail=detail,
+            step_duration_seconds=step_duration_seconds,
+        )
+
     import json as _jlog
 
     uid = f"pc-{popup_id}"
     items: list[str] = []
 
+    parsed_detail = detail or parse_log(log_path)
+    inferred_turns = _infer_turn_durations(parsed_detail, step_duration_seconds or parsed_detail.duration_ms / 1000)
+    turn_offsets: list[int] = []
+    elapsed = 0.0
+    for dur in inferred_turns:
+        turn_offsets.append(int(elapsed))
+        elapsed += dur
+
     # Show Turn 1 + initial prompt (passed via --print, not in the JSONL)
     if prompt_text:
         log_turn_num = 1
         preview = _escape_html(prompt_text[:300]).replace("\n", " ")
+        turn_label = "── Turn 1 ──"
+        if turn_offsets:
+            turn_label = f'── Turn 1 — T+{_fmt_elapsed_padded(turn_offsets[0])} ──'
         items.append(
-            f'<div class="log-turn-divider">── Turn 1 ──</div>'
+            f'<div class="log-turn-divider">{turn_label}</div>'
         )
         items.append(
             f'<div class="log-user-prompt">'
@@ -868,12 +1415,12 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
     log_last_was_assistant = False
 
     try:
-        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+        raw_text = log_path.read_text(encoding="utf-8", errors="replace")
+        lines = raw_text.splitlines()
     except OSError:
         return '<pre>(cannot read log)</pre>'
 
-    raw_text = log_path.read_text(encoding="utf-8", errors="replace")
-
+    parsed_any = False
     for line in lines:
         line = line.strip()
         if not line:
@@ -883,6 +1430,7 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
         except (ValueError, TypeError):
             items.append(f'<div class="log-unknown">{_escape_html(line[:500])}</div>')
             continue
+        parsed_any = True
 
         t = obj.get("type", "?")
         st = obj.get("subtype", "")
@@ -934,9 +1482,12 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
             if is_new_turn:
                 log_turn_num += 1
                 log_prev_usage_sig = usage_sig
+                turn_label = f'── Turn {log_turn_num} ──'
+                if log_turn_num - 1 < len(turn_offsets):
+                    turn_label = f'── Turn {log_turn_num} — T+{_fmt_elapsed_padded(turn_offsets[log_turn_num - 1])} ──'
                 items.append(
                     f'<div class="log-turn-divider">'
-                    f'── Turn {log_turn_num} ──'
+                    f'{turn_label}'
                     f'</div>'
                 )
             log_last_was_assistant = True
@@ -1054,9 +1605,161 @@ def _render_log_structured(log_path: Path, popup_id: str, prompt_text: str = "")
                 f'</div>'
             )
 
+    if not parsed_any:
+        formatted = f'<pre class="popup-formatted">{_format_block(raw_text[:POPUP_TRUNCATE_CHARS])}</pre>'
+        raw_html = f'<pre class="popup-raw">{_escape_html(raw_text[:POPUP_TRUNCATE_CHARS])}</pre>'
+        return (
+            f'<div id="{uid}" class="popup-dual">'
+            f'<div class="view-formatted">{formatted}</div>'
+            f'<div class="view-raw" style="display:none">{raw_html}</div>'
+            f'</div>'
+        )
+
     formatted = "\n".join(items)
     raw_html = f'<pre class="popup-raw">{_escape_html(raw_text[:POPUP_TRUNCATE_CHARS])}</pre>'
 
+    return (
+        f'<div id="{uid}" class="popup-dual">'
+        f'<div class="view-formatted"><div class="log-structured">{formatted}</div></div>'
+        f'<div class="view-raw" style="display:none">{raw_html}</div>'
+        f'</div>'
+    )
+
+
+def _render_codex_log_structured(
+    log_path: Path,
+    popup_id: str,
+    prompt_text: str = "",
+    detail: CallDetail | None = None,
+    step_duration_seconds: float = 0.0,
+) -> str:
+    """Render a Codex JSONL log file as structured HTML."""
+    import json as _jlog
+
+    uid = f"pc-{popup_id}"
+    items: list[str] = []
+    parsed_detail = detail or parse_log(log_path)
+    inferred_turns = _infer_turn_durations(parsed_detail, step_duration_seconds or parsed_detail.duration_ms / 1000)
+    turn_offsets: list[int] = []
+    elapsed = 0.0
+    for dur in inferred_turns:
+        turn_offsets.append(int(elapsed))
+        elapsed += dur
+
+    turn_num = 0
+    need_new_turn = True
+
+    if prompt_text:
+        turn_num = 1
+        need_new_turn = False
+        preview = _escape_html(prompt_text[:300]).replace("\n", " ")
+        turn_label = "── Turn 1 ──"
+        if turn_offsets:
+            turn_label = f'── Turn 1 — T+{_fmt_elapsed_padded(turn_offsets[0])} ──'
+        items.append(
+            f'<div class="log-turn-divider">{turn_label}</div>'
+            f'<div class="log-user-prompt">'
+            f'<span class="log-type">PROMPT</span> '
+            f'<span class="log-dim">{len(prompt_text):,}</span> '
+            f'{preview}{"…" if len(prompt_text) > 300 else ""}'
+            f'</div>'
+        )
+
+    try:
+        lines = log_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return '<pre>(cannot read log)</pre>'
+
+    raw_text = log_path.read_text(encoding="utf-8", errors="replace")
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            obj = _jlog.loads(line)
+        except (ValueError, TypeError):
+            items.append(f'<div class="log-unknown">{_escape_html(line[:500])}</div>')
+            continue
+
+        etype = obj.get("type", "?")
+        if etype == "thread.started":
+            items.append(
+                f'<div class="log-system"><span class="log-type">THREAD</span> '
+                f'{_escape_html(obj.get("thread_id", "?"))}</div>'
+            )
+        elif etype == "turn.started":
+            continue
+        elif etype in {"item.started", "item.completed"}:
+            item = obj.get("item", {})
+            itype = item.get("type", "?")
+            prefix = "▶" if etype == "item.started" else "✓"
+            if etype == "item.completed" and itype in {
+                "agent_message", "command_execution", "collab_tool_call", "file_change",
+            }:
+                if need_new_turn:
+                    turn_num += 1
+                    turn_label = f'── Turn {turn_num} ──'
+                    if turn_num - 1 < len(turn_offsets):
+                        turn_label = f'── Turn {turn_num} — T+{_fmt_elapsed_padded(turn_offsets[turn_num - 1])} ──'
+                    items.append(f'<div class="log-turn-divider">{turn_label}</div>')
+                    need_new_turn = False
+            if itype == "agent_message":
+                text = item.get("text", "")
+                preview = _escape_html(text[:200]).replace("\n", " ")
+                items.append(
+                    f'<div class="log-text"><span class="log-type">MSG{prefix}</span> '
+                    f'<span class="log-dim">{len(text):,}</span> '
+                    f'{preview}{"…" if len(text) > 200 else ""}</div>'
+                )
+            elif itype == "command_execution":
+                cmd = item.get("command", "")
+                output = item.get("aggregated_output", "")
+                preview = _escape_html(cmd[:120]).replace("\n", " ")
+                items.append(
+                    f'<div class="log-tool"><span class="log-type">CMD{prefix}</span> '
+                    f'<strong>{preview}</strong> '
+                    f'<span class="log-dim">out={len(output):,}</span></div>'
+                )
+                if etype == "item.completed":
+                    need_new_turn = True
+            elif itype == "collab_tool_call":
+                tool = item.get("tool", "?")
+                prompt = item.get("prompt") or ""
+                items.append(
+                    f'<div class="log-tool"><span class="log-type">AGT{prefix}</span> '
+                    f'<strong>{_escape_html(tool)}</strong> '
+                    f'<span class="log-dim">{len(prompt):,}</span></div>'
+                )
+                if etype == "item.completed":
+                    need_new_turn = True
+            elif itype == "file_change":
+                changes = item.get("changes", [])
+                items.append(
+                    f'<div class="log-result"><span class="log-type">FILE{prefix}</span> '
+                    f'{len(changes)} change(s)</div>'
+                )
+                if etype == "item.completed":
+                    need_new_turn = True
+            else:
+                items.append(
+                    f'<div class="log-unknown"><span class="log-type">{_escape_html(etype)}</span> '
+                    f'{_escape_html(itype)}</div>'
+                )
+        elif etype == "turn.completed":
+            usage = obj.get("usage", {})
+            items.append(
+                f'<div class="log-result-final"><span class="log-type">DONE</span> '
+                f'in={usage.get("input_tokens", 0):,} | '
+                f'cached={usage.get("cached_input_tokens", 0):,} | '
+                f'out={usage.get("output_tokens", 0):,}</div>'
+            )
+        else:
+            items.append(
+                f'<div class="log-unknown"><span class="log-type">{_escape_html(etype)}</span></div>'
+            )
+
+    formatted = "\n".join(items)
+    raw_html = f'<pre class="popup-raw">{_escape_html(raw_text[:POPUP_TRUNCATE_CHARS])}</pre>'
     return (
         f'<div id="{uid}" class="popup-dual">'
         f'<div class="view-formatted"><div class="log-structured">{formatted}</div></div>'
@@ -1070,7 +1773,21 @@ def _tool_file_path(tc: ToolCall) -> str:
     try:
         import json as _j
         inp = _j.loads(tc.input_json)
-        return inp.get("file_path", "") or inp.get("path", "") or inp.get("pattern", "") or inp.get("command", "")[:80]
+        if isinstance(inp, dict):
+            return (
+                inp.get("file_path", "")
+                or inp.get("path", "")
+                or inp.get("pattern", "")
+                or inp.get("command", "")[:80]
+            )
+        if isinstance(inp, list):
+            for item in inp:
+                if isinstance(item, dict):
+                    path = item.get("path", "")
+                    if path:
+                        return path
+            return ""
+        return ""
     except (ValueError, TypeError):
         return ""
 
@@ -1095,7 +1812,13 @@ def _turn_cell_link(chars: int, content: str, popup_id: str, popups: list | None
     return f'<a href="#" onclick="showPopup(\'{popup_id}\');return false">{chars:,}</a>'
 
 
-def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = None) -> str:
+def _render_detail(
+    detail: CallDetail,
+    *,
+    step_id: str = "",
+    popups: list | None = None,
+    step_duration_seconds: float = 0.0,
+) -> str:
     """Render the drill-down section for one call."""
     if not detail or (not detail.turns and not detail.duration_ms):
         return ""
@@ -1104,15 +1827,21 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
 
     # Summary line
     api_s = detail.duration_api_ms / 1000
-    wall_s = detail.duration_ms / 1000
-    overhead_s = wall_s - api_s
-    overall_tok_s = detail.output_tokens / api_s if api_s > 0 else 0
+    measured_wall_s = detail.duration_ms / 1000
+    wall_s = measured_wall_s if measured_wall_s > 0 else step_duration_seconds
+    overhead_s = wall_s - api_s if api_s > 0 and wall_s > 0 else 0
+    rate_basis_s = api_s if api_s > 0 else wall_s
+    overall_tok_s = detail.output_tokens / rate_basis_s if rate_basis_s > 0 else 0
     model_abbr = _model_abbrev(detail.model)
+    if model_abbr == "?":
+        model_abbr = detail.backend.upper()
+    fresh_input_tokens = _fresh_input_tokens(detail)
     parts.append(
         f'<div class="detail-summary">'
         f'{model_abbr}'
-        f' | API: {api_s:.0f}s'
-        f' | overhead: {overhead_s:.1f}s'
+        f' | wall: {_fmt_duration(wall_s) if wall_s > 0 else "—"}'
+        f' | API: {_fmt_duration(api_s) if api_s > 0 else "—"}'
+        f' | overhead: {f"{overhead_s:.1f}s" if api_s > 0 and wall_s > 0 else "—"}'
         f' | turns: {len(detail.turns)}'
         f' | output: {detail.output_tokens:,} tok'
         f' | {overall_tok_s:.0f} tok/s'
@@ -1123,13 +1852,17 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
     parts.append('</div>')
 
     # Token bar
-    total_tok = (detail.cache_creation_tokens + detail.cache_read_tokens
-                 + detail.input_tokens + detail.output_tokens) or 1
+    total_tok = (
+        detail.cache_creation_tokens
+        + detail.cache_read_tokens
+        + fresh_input_tokens
+        + detail.output_tokens
+    ) or 1
     parts.append('<div class="token-bar">')
     for label, count, color in [
         ("cache-read", detail.cache_read_tokens, "#3498db"),
         ("cache-create", detail.cache_creation_tokens, "#2ecc71"),
-        ("input", detail.input_tokens, "#95a5a6"),
+        ("input", fresh_input_tokens, "#95a5a6"),
         ("output", detail.output_tokens, "#e74c3c"),
     ]:
         if count > 0:
@@ -1143,7 +1876,7 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         f'<div class="token-legend">'
         f'<span style="color:#3498db">cache-read: {detail.cache_read_tokens:,}</span>'
         f' | <span style="color:#2ecc71">cache-create: {detail.cache_creation_tokens:,}</span>'
-        f' | <span style="color:#95a5a6">fresh-input: {detail.input_tokens:,}</span>'
+        f' | <span style="color:#95a5a6">fresh-input: {fresh_input_tokens:,}</span>'
         f' | <span style="color:#e74c3c">output: {detail.output_tokens:,}</span>'
         f'</div>'
     )
@@ -1175,7 +1908,8 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         measured_time = sum(
             t.duration_seconds for t in detail.turns if t.duration_seconds > 0
         )
-        remaining_time = max(0, api_s - measured_time)
+        time_budget = api_s if api_s > 0 else wall_s
+        remaining_time = max(0, time_budget - measured_time)
         unmeasured_est = sum(
             all_est[i] for i, t in enumerate(detail.turns) if t.duration_seconds <= 0
         ) or 1
@@ -1272,14 +2006,15 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
         tot_think = sum(t.thinking_chars for t in detail.turns)
         tot_text = sum(t.text_chars for t in detail.turns)
         tot_est = sum(all_est)
+        total_tok_s_str = f"{overall_tok_s:.0f}" if time_budget > 0 else "—"
         parts.append(
             f'<tr style="border-top:1px solid #ccc;font-weight:bold">'
             f'<td>Total</td>'
             f'<td>{tot_think:,}</td>'
             f'<td>{tot_text:,}</td>'
             f'<td>{tot_est:,}</td>'
-            f'<td>{api_s:.0f}s</td>'
-            f'<td>{overall_tok_s:.0f}</td>'
+            f'<td>{_fmt_duration(time_budget) if time_budget > 0 else "—"}</td>'
+            f'<td>{total_tok_s_str}</td>'
             f'<td>${detail.cost_usd:.2f}</td>'
             f'<td></td>'
             f'</tr>'
@@ -1288,6 +2023,31 @@ def _render_detail(detail: CallDetail, step_id: str = "", popups: list | None = 
 
     parts.append('</div>')
     return "\n".join(parts)
+
+
+def _infer_turn_durations(detail: CallDetail, total_duration_seconds: float) -> list[float]:
+    if not detail.turns:
+        return []
+    raw_est = [
+        (t.thinking_chars + t.text_chars + t.tool_write_chars) // 4
+        for t in detail.turns
+    ]
+    raw_total = sum(raw_est) or 1
+    real_total = detail.output_tokens or raw_total
+    scale = real_total / raw_total
+    all_est = [round(e * scale) for e in raw_est]
+    measured_time = sum(t.duration_seconds for t in detail.turns if t.duration_seconds > 0)
+    remaining_time = max(0, total_duration_seconds - measured_time)
+    unmeasured_est = sum(
+        all_est[i] for i, t in enumerate(detail.turns) if t.duration_seconds <= 0
+    ) or 1
+    inferred: list[float] = []
+    for i, turn in enumerate(detail.turns):
+        if turn.duration_seconds > 0:
+            inferred.append(turn.duration_seconds)
+        else:
+            inferred.append(remaining_time * all_est[i] / unmeasured_est)
+    return inferred
 
 
 def _escape_html(text: str) -> str:
@@ -1306,6 +2066,7 @@ def _render_steps_rows(
     step_counter: int,
     rows: list[str],
     popups: list[str],
+    report_started_at: datetime,
     row_class: str = "",
 ) -> int:
     """Render step rows into rows/popups lists, returns updated step_counter."""
@@ -1316,7 +2077,14 @@ def _render_steps_rows(
         color = _bar_color(step.name)
         size_kb = step.size_bytes / 1024
         cost_str = f"${step.detail.cost_usd:.2f}" if step.detail else ""
-        detail_html = _render_detail(step.detail, step_id=step_id, popups=popups) if step.detail else ""
+        detail_html = _render_detail(
+            step.detail,
+            step_id=step_id,
+            popups=popups,
+            step_duration_seconds=step.duration_seconds,
+        ) if step.detail else ""
+        elapsed_str = _fmt_elapsed_padded((step.started - report_started_at).total_seconds())
+        start_str = _fmt_clock(step.started)
 
         # Step name with popup links if we have prompt/output
         has_prompt = step.detail and step.detail.prompt_text
@@ -1330,16 +2098,18 @@ def _render_steps_rows(
             links.append(f'<a href="#" onclick="showPopup(\'{step_id}-output\');return false">output</a>')
         if has_log:
             links.append(f'<a href="#" onclick="showPopup(\'{step_id}-log\');return false">log</a>')
-        if links:
-            name_html += f' <span class="popup-links">[{" | ".join(links)}]</span>'
+        links_html = f'<span class="popup-links">{" | ".join(links)}</span>' if links else "—"
 
         tr_cls = f"step-row {row_class}".strip()
         rows.append(
             f'<tr class="{tr_cls}">'
+            f'<td class="step-elapsed">{elapsed_str}</td>'
+            f'<td class="step-start">{start_str}</td>'
             f'<td class="step-name">{name_html}</td>'
             f'<td class="step-time">{step.duration_str}</td>'
             f'<td class="step-cost">{cost_str}</td>'
             f'<td class="step-size">{size_kb:.0f}KB</td>'
+            f'<td class="step-links">{links_html}</td>'
             f'<td class="step-bar">'
             f'<div class="bar" style="width:{max(pct, MIN_BAR_PCT):.1f}%;background:{color}">'
             f'</div></td>'
@@ -1348,7 +2118,7 @@ def _render_steps_rows(
         if detail_html:
             det_cls = f"detail-row {row_class}".strip()
             rows.append(
-                f'<tr class="{det_cls}"><td colspan="5">{detail_html}</td></tr>'
+                f'<tr class="{det_cls}"><td colspan="8">{detail_html}</td></tr>'
             )
 
         # Build popup divs
@@ -1388,7 +2158,7 @@ def _render_steps_rows(
                 f'<a href="#" onclick="hidePopup(\'{step_id}-log\');return false">close</a>'
                 f'</div>'
                 f'<div class="popup-body">'
-                f'{_render_log_structured(step.log_path, step_id + "-log", prompt_text=step.detail.prompt_text if step.detail else "")}'
+                f'{_render_log_structured(step.log_path, step_id + "-log", prompt_text=step.detail.prompt_text if step.detail else "", detail=step.detail, step_duration_seconds=step.duration_seconds)}'
                 f'</div></div>'
             )
     return step_counter
@@ -1424,11 +2194,22 @@ def _steps_verdict(steps: list[Step]) -> str:
 
 
 def _fmt_duration(seconds: float) -> str:
+    if 0 < seconds < 1:
+        return "<1s"
     s = int(seconds)
     if s < 60:
         return f"{s}s"
     m, s = divmod(s, 60)
     return f"{m}m{s:02d}s"
+
+
+def _fmt_elapsed_padded(seconds: float) -> str:
+    s = max(0, int(seconds))
+    return f"{s:04d}s"
+
+
+def _fmt_clock(dt: datetime) -> str:
+    return dt.astimezone().strftime("%H:%M:%S")
 
 
 def _pct_delta(a: float, b: float) -> str:
@@ -1454,12 +2235,13 @@ def _render_fork_section(
     step_counter: int,
     rows: list[str],
     popups: list[str],
+    report_started_at: datetime,
 ) -> int:
     """Render a fork section: comparison table + per-variant detail."""
 
     # --- Fork header ---
     rows.append(
-        f'<tr class="fork-header"><td colspan="5">'
+        f'<tr class="fork-header"><td colspan="8">'
         f'<strong>Fork {fork.fork_index}: {fork.fork_title}</strong>'
         f'</td></tr>'
     )
@@ -1494,7 +2276,7 @@ def _render_fork_section(
         variant_css = "".join(c if c.isalnum() else "-" for c in vname.lower()).strip("-")
         variant_cls = f"in-variant variant-{variant_css}"
         rows.append(
-            f'<tr class="variant-header {variant_cls}"><td colspan="5">'
+            f'<tr class="variant-header {variant_cls}"><td colspan="8">'
             f'<strong>Variant {label}</strong>'
             f' <span class="variant-metrics">'
             f'{turns} turns'
@@ -1510,7 +2292,7 @@ def _render_fork_section(
         )
 
         step_counter = _render_steps_rows(
-            vsteps, grand_total, step_counter, rows, popups,
+            vsteps, grand_total, step_counter, rows, popups, report_started_at,
             row_class=variant_cls,
         )
 
@@ -1522,20 +2304,27 @@ def _render_fork_section(
 # ---------------------------------------------------------------------------
 
 def render_html(
-    timelines: list[PhaseTimeline],
-    workspace: Path,
-    shared_steps: list[Step] | None = None,
-    fork_sections: list[ForkSection] | None = None,
-    run_title: str = "Timeline",
+    document: ReportDocument,
 ) -> str:
+    timelines = document.timelines
+    workspace = document.workspace
+    shared_steps = document.shared_steps
+    fork_sections = document.fork_sections
+    run_title = document.run_title
     rows: list[str] = []
     popups: list[str] = []
     step_counter = 0
+    all_details: list[CallDetail] = []
 
     # Compute grand_total across all content for proportional bars
     if timelines:
         grand_total = sum(t.total_seconds for t in timelines) or 1
         grand_cost = sum(t.total_cost for t in timelines)
+        all_details = [step.detail for tl in timelines for step in tl.steps if step.detail]
+        report_started_at = min(
+            (step.started for tl in timelines for step in tl.steps),
+            default=datetime.now(timezone.utc),
+        )
     else:
         all_steps: list[Step] = list(shared_steps or [])
         for fork in (fork_sections or []):
@@ -1543,29 +2332,35 @@ def render_html(
                 all_steps.extend(vsteps)
         grand_total = sum(s.duration_seconds for s in all_steps) or 1
         grand_cost = sum(s.detail.cost_usd for s in all_steps if s.detail)
+        all_details = [s.detail for s in all_steps if s.detail]
+        report_started_at = min(
+            (step.started for step in all_steps),
+            default=datetime.now(timezone.utc),
+        )
+    has_estimated_cost = any(detail.cost_estimated for detail in all_details)
 
     if timelines:
         # Methodology-runner mode: phase-grouped flat table
         for tl in timelines:
             rows.append(
-                f'<tr class="phase-header"><td colspan="5">'
+                f'<tr class="phase-header"><td colspan="8">'
                 f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
                 f' — ${tl.total_cost:.2f}'
                 f'</td></tr>'
             )
             step_counter = _render_steps_rows(
-                tl.steps, grand_total, step_counter, rows, popups
+                tl.steps, grand_total, step_counter, rows, popups, report_started_at
             )
     else:
         # Prompt-runner mode: steps and fork sections interleaved
         if shared_steps:
             step_counter = _render_steps_rows(
-                shared_steps, grand_total, step_counter, rows, popups
+                shared_steps, grand_total, step_counter, rows, popups, report_started_at
             )
 
         for fork in (fork_sections or []):
             step_counter = _render_fork_section(
-                fork, grand_total, step_counter, rows, popups
+                fork, grand_total, step_counter, rows, popups, report_started_at
             )
 
     grand_m, grand_s = divmod(int(grand_total), 60)
@@ -1579,15 +2374,23 @@ def render_html(
   body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; background: #fafafa; color: #333; }}
   h1 {{ font-size: 1.4em; }}
   h2 {{ font-size: 1.1em; color: #555; }}
-  table {{ border-collapse: collapse; width: 100%; max-width: 1000px; }}
+  table {{ border-collapse: collapse; width: 100%; max-width: 1400px; }}
+  thead th {{
+    position: sticky; top: 0; background: #fafafa; z-index: 2;
+    text-align: left; padding: 6px 12px; border-bottom: 2px solid #ddd;
+    font-size: 0.85em; color: #666;
+  }}
   tr.phase-header td {{ background: #eee; padding: 8px 12px; font-size: 1.05em; border-top: 2px solid #ccc; }}
   tr.step-row td {{ padding: 4px 12px; vertical-align: middle; }}
   tr.detail-row td {{ padding: 0 12px 12px 24px; }}
-  .step-name {{ width: 38%; font-size: 0.9em; }}
+  .step-elapsed {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
+  .step-start {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
+  .step-name {{ width: 30%; font-size: 0.9em; }}
   .step-time {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.9em; }}
   .step-cost {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
   .step-size {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #888; }}
-  .step-bar {{ width: 32%; }}
+  .step-links {{ width: 11%; font-size: 0.82em; color: #4a90d9; }}
+  .step-bar {{ width: 26%; }}
   .bar {{ height: 18px; border-radius: 3px; min-width: 4px; }}
 
   .detail {{ background: #f5f5f5; border-radius: 6px; padding: 10px 14px; font-size: 0.85em; margin-top: 4px; }}
@@ -1824,8 +2627,23 @@ document.addEventListener('keydown', function(e) {{
 <h1>{run_title}</h1>
 <h2>{workspace} — total {grand_m}m{grand_s:02d}s — ${grand_cost:.2f}</h2>
 <table>
+<thead>
+<tr>
+<th>T+</th>
+<th>Start</th>
+<th>Step</th>
+<th>Time</th>
+<th>Cost</th>
+<th>Size</th>
+<th>Links</th>
+<th></th>
+</tr>
+</thead>
+<tbody>
 {''.join(rows)}
+</tbody>
 </table>
+{'<div style="margin:12px 0 0;color:#666;font-size:0.9em">Pricing note: when the backend log does not provide direct cost, this report estimates cost from local model pricing metadata in docs/reference/openai-model-pricing.json and the token counts available for the call.</div>' if has_estimated_cost else ''}
 {''.join(popups)}
 </body>
 </html>"""
@@ -1837,7 +2655,7 @@ document.addEventListener('keydown', function(e) {{
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Generate timeline report for a methodology-runner workspace or prompt-runner run directory."
+        description="Generate timeline report for a methodology-runner workspace, prompt-runner run directory, or comparison manifest."
     )
     parser.add_argument("path", help="Path to analyze (workspace or run directory).")
     parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
@@ -1848,45 +2666,20 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Path not found: {input_path}", file=sys.stderr)
         return 1
 
-    default_output = input_path / "timeline.html"
+    default_output = (
+        input_path.with_suffix(".html")
+        if input_path.is_file()
+        else input_path / "timeline.html"
+    )
     output = Path(args.output) if args.output else default_output
 
-    # Auto-detect mode
-    methodology_runs = input_path / ".methodology-runner" / "runs"
-    prompt_runner_logs = input_path / "logs"
-    prompt_runner_manifest = input_path / "manifest.json"
-
-    if methodology_runs.exists():
-        # Methodology-runner mode
-        timelines = parse_workspace(input_path)
-        if not timelines:
-            print(f"No phase data found in {input_path}", file=sys.stderr)
-            return 1
-        html = render_html(
-            timelines=timelines,
-            workspace=input_path,
-            run_title="Methodology Runner Timeline",
-        )
-    elif prompt_runner_logs.exists() or prompt_runner_manifest.exists():
-        # Prompt-runner run directory mode
-        shared_steps, fork_sections = parse_prompt_runner_run(input_path)
-        if not shared_steps and not fork_sections:
-            print(f"No prompt-runner data found in {input_path}", file=sys.stderr)
-            return 1
-        html = render_html(
-            timelines=[],
-            workspace=input_path,
-            shared_steps=shared_steps,
-            fork_sections=fork_sections,
-            run_title="Prompt Runner Timeline",
-        )
-    else:
-        print(
-            f"Cannot detect input type for {input_path}.\n"
-            f"Expected either .methodology-runner/runs/ or logs/ / manifest.json",
-            file=sys.stderr,
-        )
+    try:
+        document = load_report_document(input_path)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
         return 1
+
+    html = render_html(document)
 
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(html, encoding="utf-8")

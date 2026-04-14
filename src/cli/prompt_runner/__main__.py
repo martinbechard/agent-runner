@@ -6,11 +6,17 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from prompt_runner.claude_client import (
+try:
+    import tomllib
+except ImportError:  # pragma: no cover
+    import tomli as tomllib  # type: ignore[no-redef]
+
+from prompt_runner.client_factory import (
     ClaudeBinaryNotFound,
-    DryRunClaudeClient,
-    RealClaudeClient,
+    CodexBinaryNotFound,
+    make_client,
 )
+from prompt_runner.config import load_config
 from prompt_runner.parser import ParseError, PromptPair, parse_file
 from prompt_runner.runner import PipelineResult, RunConfig, run_pipeline
 
@@ -63,19 +69,25 @@ def _cmd_parse(args: argparse.Namespace) -> int:
     return 0
 
 
-def _default_run_dir(source: Path) -> Path:
+def _runs_root(project_dir: Path | None) -> Path:
+    base = project_dir.resolve() if project_dir is not None else Path.cwd().resolve()
+    return base / ".prompt-runner" / "runs"
+
+
+def _default_run_dir(source: Path, project_dir: Path | None = None) -> Path:
     ts = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-    return Path("runs") / f"{ts}-{source.stem}"
+    return _runs_root(project_dir) / f"{ts}-{source.stem}"
 
 
-def _find_latest_run_dir(source: Path) -> Path | None:
+def _find_latest_run_dir(source: Path, project_dir: Path | None = None) -> Path | None:
     """Find the most recent run directory matching *source*'s stem.
 
-    Run directories are named ``<timestamp>-<stem>`` under ``runs/``.
+    Run directories are named ``<timestamp>-<stem>`` under
+    ``.prompt-runner/runs/`` inside the working project.
     Timestamps sort lexicographically, so the last match is the most
     recent.  Returns None if no match is found.
     """
-    runs_dir = Path("runs")
+    runs_dir = _runs_root(project_dir)
     if not runs_dir.exists():
         return None
     candidates = sorted(runs_dir.glob(f"*-{source.stem}"))
@@ -86,11 +98,23 @@ def _find_latest_run_dir(source: Path) -> Path | None:
 
 def _cmd_run(args: argparse.Namespace) -> int:
     source = Path(args.file)
+    sys.stdout.write(
+        f"prompt-runner starting: {source}\n"
+    )
+    sys.stdout.flush()
     try:
         pairs = parse_file(source)
     except ParseError as err:
         _print_error_banner(err.error_id, err.message)
         return 2
+    try:
+        file_config = load_config(source)
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as err:
+        _print_error_banner("R-CONFIG-INVALID", str(err))
+        return 2
+
+    backend = args.backend or file_config.run.backend or "claude"
+    model = args.model or file_config.run.model
 
     generator_prelude: str | None = None
     judge_prelude: str | None = None
@@ -113,32 +137,48 @@ def _cmd_run(args: argparse.Namespace) -> int:
             return 2
         judge_prelude = jp_path.read_text(encoding="utf-8")
 
+    placeholder_values: dict[str, str] = {}
+    for item in args.var:
+        if "=" not in item:
+            _print_error_banner(
+                "R-INVALID-VAR",
+                f"invalid --var (expected NAME=VALUE): {item}",
+            )
+            return 2
+        name, value = item.split("=", 1)
+        placeholder_values[name] = value
+
     config = RunConfig(
+        backend=backend,
         max_iterations=args.max_iterations,
-        model=args.model,
+        model=model,
         only=args.only,
         dry_run=args.dry_run,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
+        include_project_organiser=not args.no_project_organiser,
         dangerously_skip_permissions=args.dangerously_skip_permissions,
         variant_sequential=args.variant_sequential,
         fork_from_session=getattr(args, "fork_from_session", None),
+        placeholder_values=placeholder_values,
     )
 
     try:
-        client = DryRunClaudeClient() if args.dry_run else RealClaudeClient()
-    except ClaudeBinaryNotFound as err:
-        _print_error_banner("R-NO-CLAUDE", str(err))
+        client = make_client(backend, dry_run=args.dry_run)
+    except (ClaudeBinaryNotFound, CodexBinaryNotFound) as err:
+        _print_error_banner("R-NO-BACKEND", str(err))
         return 3
+
+    workspace_dir = Path(args.project_dir).resolve() if args.project_dir else None
 
     if args.resume is not None:
         if args.resume == "auto":
-            resume_path = _find_latest_run_dir(source)
+            resume_path = _find_latest_run_dir(source, workspace_dir)
             if resume_path is None:
                 _print_error_banner(
                     "R-RESUME-NOT-FOUND",
                     f"No existing run directory found for {source.name} "
-                    f"under runs/. Run without --resume first.",
+                    f"under {_runs_root(workspace_dir)}. Run without --resume first.",
                 )
                 return 2
         else:
@@ -152,10 +192,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
         run_dir = resume_path
         do_resume = True
     else:
-        run_dir = Path(args.output_dir) if args.output_dir else _default_run_dir(source)
+        run_dir = (
+            Path(args.output_dir)
+            if args.output_dir else
+            _default_run_dir(source, workspace_dir)
+        )
         do_resume = False
-
-    workspace_dir = Path(args.project_dir).resolve() if args.project_dir else None
 
     result = run_pipeline(
         pairs=pairs,
@@ -196,7 +238,7 @@ def _print_success_banner(run_dir: Path) -> None:
 def _build_parser() -> argparse.ArgumentParser:
     root = argparse.ArgumentParser(
         prog="prompt-runner",
-        description="Run prompt/validator pairs from a markdown file through the Claude CLI.",
+        description="Run prompt/validator pairs from a markdown file through a supported coding-agent CLI.",
     )
     sub = root.add_subparsers(dest="command", required=True)
 
@@ -212,17 +254,48 @@ def _build_parser() -> argparse.ArgumentParser:
     run_cmd = sub.add_parser("run", help="Execute the full pipeline.")
     run_cmd.add_argument("file", help="Path to the input markdown file.")
     run_cmd.add_argument(
+        "--backend",
+        choices=("claude", "codex"),
+        default=None,
+        help=(
+            "Agent backend to use for generation/judging. Overrides [run].backend "
+            "from prompt-runner.toml; defaults to claude if neither is set."
+        ),
+    )
+    run_cmd.add_argument(
         "--output-dir",
         default=None,
-        help="Run directory (default: ./runs/<timestamp>-<stem>/).",
+        help=(
+            "Run directory (default: <project>/.prompt-runner/runs/"
+            "<timestamp>-<stem>/)."
+        ),
+    )
+    run_cmd.add_argument(
+        "--no-project-organiser",
+        action="store_true",
+        help=(
+            "Do not append the project-organiser file-placement instruction "
+            "to generator prompts. Use this when prompt paths are already "
+            "fully controlled by the prompt or caller."
+        ),
     )
     run_cmd.add_argument(
         "--project-dir",
         default=None,
         help=(
-            "Working directory for Claude subprocesses. Defaults to cwd. "
+            "Working directory for backend subprocesses. Defaults to cwd. "
             "Set this when the prompt file reads workspace artifacts at "
             "a different location (e.g., a methodology-runner workspace)."
+        ),
+    )
+    run_cmd.add_argument(
+        "--var",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help=(
+            "Extra placeholder binding. May be repeated. Built-in values such "
+            "as run_dir and project_dir are always supplied by prompt-runner."
         ),
     )
     run_cmd.add_argument(
@@ -234,7 +307,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument(
         "--model",
         default=None,
-        help="Passed through as --model to claude -p.",
+        help="Passed through as --model to the selected backend CLI.",
     )
     run_cmd.add_argument(
         "--only",
@@ -245,14 +318,14 @@ def _build_parser() -> argparse.ArgumentParser:
     run_cmd.add_argument(
         "--dry-run",
         action="store_true",
-        help="Parse and show the planned sequence without calling claude.",
+        help="Parse and show the planned sequence without calling the backend CLI.",
     )
     run_cmd.add_argument(
         "--generator-prelude",
         default=None,
         help=(
             "Path to a text file whose contents are prepended to every "
-            "generator Claude message in this run.  Used by "
+            "generator message in this run. Used by "
             "methodology-runner to inject phase-specific skill loading "
             "instructions; opaque text from prompt-runner's perspective."
         ),
@@ -262,7 +335,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Path to a text file whose contents are prepended to every "
-            "judge Claude message in this run.  Symmetric to "
+            "judge message in this run. Symmetric to "
             "--generator-prelude."
         ),
     )
@@ -270,9 +343,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dangerously-skip-permissions",
         action="store_true",
         help=(
-            "Pass --dangerously-skip-permissions to claude in interactive "
-            "mode so the user is not prompted for every tool call. Only "
-            "affects [interactive] prompts; ignored for non-interactive."
+            "Use the backend's lowest-friction interactive mode when "
+            "available. For Claude this passes "
+            "--dangerously-skip-permissions; for Codex it enables "
+            "--full-auto. Only affects [interactive] prompts; ignored "
+            "for non-interactive."
         ),
     )
     run_cmd.add_argument(
@@ -282,7 +357,8 @@ def _build_parser() -> argparse.ArgumentParser:
         default=None,
         help=(
             "Resume an existing run. Without a path, auto-finds the most "
-            "recent run directory matching the input file under runs/. "
+            "recent run directory matching the input file under "
+            "<project>/.prompt-runner/runs/. "
             "With a path, uses that directory. Prompts that already "
             "completed with 'pass' are skipped; execution continues from "
             "the first incomplete prompt."
@@ -302,9 +378,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--fork-from-session",
         default=None,
         help=(
-            "Fork from an existing Claude session. The first generator call "
-            "uses --resume <session-id> --fork-session to inherit conversation "
-            "context. Used internally by the variant fork mechanism."
+            "Fork from an existing backend session. The first generator call "
+            "uses backend-specific session inheritance when supported. "
+            "Used internally by the variant fork mechanism."
         ),
     )
     run_cmd.set_defaults(func=_cmd_run)

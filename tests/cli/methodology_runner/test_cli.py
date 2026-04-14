@@ -20,7 +20,6 @@ from methodology_runner.cli import (
     _any_escalated,
     _auto_workspace,
     _build_parser,
-    _check_claude_cli,
     _check_prompt_runner_cli,
     _downstream_phase_ids,
     _format_duration,
@@ -41,6 +40,7 @@ from methodology_runner.models import (
     PhaseStatus,
     ProjectState,
 )
+from prompt_runner.client_factory import check_backend_cli
 
 
 # ---------------------------------------------------------------------------
@@ -232,20 +232,30 @@ class TestLoadState:
 
 
 # ---------------------------------------------------------------------------
-# Tests: _check_claude_cli / _check_prompt_runner_cli
+# Tests: backend CLI checks / _check_prompt_runner_cli
 # ---------------------------------------------------------------------------
 
 class TestPreflightChecks:
 
     def test_claude_cli_found(self) -> None:
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/claude"):
-            assert _check_claude_cli() is None
+        with patch("prompt_runner.client_factory.shutil.which", return_value="/usr/bin/claude"):
+            assert check_backend_cli("claude") is None
 
     def test_claude_cli_missing(self) -> None:
-        with patch("methodology_runner.cli.shutil.which", return_value=None):
-            result = _check_claude_cli()
+        with patch("prompt_runner.client_factory.shutil.which", return_value=None):
+            result = check_backend_cli("claude")
             assert result is not None
             assert "claude" in result.lower()
+
+    def test_codex_cli_found(self) -> None:
+        with patch("prompt_runner.client_factory.shutil.which", return_value="/usr/bin/codex"):
+            assert check_backend_cli("codex") is None
+
+    def test_codex_cli_missing(self) -> None:
+        with patch("prompt_runner.client_factory.shutil.which", return_value=None):
+            result = check_backend_cli("codex")
+            assert result is not None
+            assert "codex" in result.lower()
 
     def test_prompt_runner_found(self) -> None:
         with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/prompt-runner"):
@@ -315,6 +325,7 @@ class TestBuildParser:
         args = parser.parse_args(["run", "req.md"])
         assert args.requirements_file == "req.md"
         assert args.workspace is None
+        assert args.backend is None
         assert args.model is None
         assert args.max_iterations is None
         assert args.phases is None
@@ -328,14 +339,18 @@ class TestBuildParser:
             "--workspace", "/tmp/ws",
             "--model", "opus",
             "--max-iterations", "5",
-            "--phases", "PH-000,PH-001",
+            "--phases",
+            "PH-000-requirements-inventory,PH-001-feature-specification",
             "--escalation-policy", "flag-and-continue",
             "--max-cross-ref-retries", "3",
         ])
         assert args.workspace == "/tmp/ws"
         assert args.model == "opus"
         assert args.max_iterations == 5
-        assert args.phases == "PH-000,PH-001"
+        assert (
+            args.phases
+            == "PH-000-requirements-inventory,PH-001-feature-specification"
+        )
         assert args.escalation_policy == "flag-and-continue"
         assert args.max_cross_ref_retries == 3
 
@@ -381,14 +396,51 @@ class TestCmdRun:
         rc = cmd_run(args)
         assert rc == EXIT_USAGE_ERROR
 
-    def test_missing_claude_cli(self, tmp_path: Path) -> None:
+    def test_missing_backend_cli(self, tmp_path: Path) -> None:
         req = tmp_path / "req.md"
         req.write_text("# Requirements\n")
         parser = _build_parser()
-        args = parser.parse_args(["run", str(req)])
-        with patch("methodology_runner.cli.shutil.which", return_value=None):
+        args = parser.parse_args(["run", str(req), "--backend", "codex"])
+        with patch("prompt_runner.client_factory.shutil.which", return_value=None):
             rc = cmd_run(args)
         assert rc == EXIT_USAGE_ERROR
+
+    def test_run_uses_backend_from_prompt_runner_config(self, tmp_path: Path) -> None:
+        req = tmp_path / "req.md"
+        req.write_text("# Requirements\n")
+        (tmp_path / "prompt-runner.toml").write_text(
+            "[run]\nbackend = \"codex\"\n",
+            encoding="utf-8",
+        )
+        parser = _build_parser()
+        args = parser.parse_args(["run", str(req), "--workspace", str(tmp_path / "ws")])
+
+        from methodology_runner.orchestrator import PipelineConfig, PipelineResult
+
+        captured_config: list[PipelineConfig] = []
+        mock_result = PipelineResult(
+            workspace_dir=tmp_path / "ws",
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        def capturing_run(config: PipelineConfig) -> PipelineResult:
+            captured_config.append(config)
+            return mock_result
+
+        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = capturing_run
+            try:
+                cmd_run(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert captured_config[0].backend == "codex"
 
     def test_successful_run(self, tmp_path: Path) -> None:
         req = tmp_path / "req.md"
@@ -530,7 +582,8 @@ class TestCmdRun:
         args = parser.parse_args([
             "run", str(req),
             "--workspace", str(tmp_path / "ws"),
-            "--phases", "PH-000,PH-001",
+            "--phases",
+            "PH-001-feature-specification,PH-000-requirements-inventory",
         ])
 
         from methodology_runner.orchestrator import PipelineConfig, PipelineResult
@@ -558,7 +611,49 @@ class TestCmdRun:
             finally:
                 orch_mod.run_pipeline = original_run
 
-        assert captured_config[0].phases_to_run == ["PH-000", "PH-001"]
+        assert captured_config[0].phases_to_run == [
+            "PH-000-requirements-inventory",
+            "PH-001-feature-specification",
+        ]
+
+    def test_run_banner_shows_selected_phases(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        req = tmp_path / "req.md"
+        req.write_text("# Requirements\n")
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", str(req),
+            "--workspace", str(tmp_path / "ws"),
+            "--phases",
+            "PH-001-feature-specification,PH-000-requirements-inventory",
+        ])
+
+        from methodology_runner.orchestrator import PipelineResult
+        mock_result = PipelineResult(
+            workspace_dir=tmp_path / "ws",
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = lambda config: mock_result
+            try:
+                rc = cmd_run(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert rc == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert (
+            "Phases:       PH-000-requirements-inventory, "
+            "PH-001-feature-specification"
+        ) in captured.out
 
 
 # ---------------------------------------------------------------------------
@@ -662,13 +757,13 @@ class TestCmdResume:
         rc = cmd_resume(args)
         assert rc == EXIT_USAGE_ERROR
 
-    def test_missing_claude_cli(self, tmp_path: Path) -> None:
+    def test_missing_backend_cli(self, tmp_path: Path) -> None:
         workspace = tmp_path / "ws"
         workspace.mkdir()
         _make_project_state(workspace)
         parser = _build_parser()
-        args = parser.parse_args(["resume", str(workspace)])
-        with patch("methodology_runner.cli.shutil.which", return_value=None):
+        args = parser.parse_args(["resume", str(workspace), "--backend", "codex"])
+        with patch("prompt_runner.client_factory.shutil.which", return_value=None):
             rc = cmd_resume(args)
         assert rc == EXIT_USAGE_ERROR
 
@@ -706,6 +801,46 @@ class TestCmdResume:
 
         assert captured_config[0].model == "saved-model"
         assert captured_config[0].resume is True
+
+    def test_resume_banner_shows_selected_phases(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _make_project_state(workspace, model="saved-model")
+        parser = _build_parser()
+        args = parser.parse_args([
+            "resume",
+            str(workspace),
+            "--phases",
+            "PH-001-feature-specification,PH-000-requirements-inventory",
+        ])
+
+        from methodology_runner.orchestrator import PipelineResult
+        mock_result = PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = lambda config: mock_result
+            try:
+                rc = cmd_resume(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert rc == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert (
+            "Phases:       PH-000-requirements-inventory, "
+            "PH-001-feature-specification"
+        ) in captured.out
 
     def test_model_override(self, tmp_path: Path) -> None:
         workspace = tmp_path / "ws"

@@ -1,9 +1,9 @@
 """Skill-Selector agent.
 
 Runs once per phase before the phase's meta-prompt.  Assembles a
-Claude prompt from the phase definition, the compact skill catalog,
+selector prompt from the phase definition, the compact skill catalog,
 prior phase artifacts, and the stack manifest (if any), invokes
-Claude, parses the YAML reply, and validates it against the catalog
+the configured backend, parses the YAML reply, and validates it against the catalog
 and the baseline config.
 
 On success, returns a :class:`PhaseSkillManifest` ready to be written
@@ -26,6 +26,7 @@ import yaml
 
 from .artifact_summarizer import ArtifactSummaryProvider
 from .constants import MAX_SKILLS_PER_PHASE
+from .log_metadata import write_call_metadata
 from .models import (
     BaselineSkillConfig,
     PhaseConfig,
@@ -36,7 +37,7 @@ from .models import (
 )
 
 if TYPE_CHECKING:
-    from prompt_runner.claude_client import ClaudeClient
+    from prompt_runner.client_types import AgentClient
 
 
 class SelectorError(RuntimeError):
@@ -57,8 +58,8 @@ class SelectorInputs:
 
 _SELECTOR_SYSTEM_PROMPT = """\
 You are the Skill-Selector for an AI-driven software development
-methodology pipeline.  Your sole job is to choose which Claude Code
-skills the generator agent and the judge agent should load for one
+methodology pipeline.  Your sole job is to choose which skills
+the generator agent and the judge agent should load for one
 specific phase of the pipeline.
 
 You do not generate artifacts, you do not evaluate artifacts, and
@@ -325,12 +326,12 @@ def _parse_and_validate(
 def invoke_skill_selector(
     inputs: SelectorInputs,
     *,
-    claude_client: "ClaudeClient",
+    claude_client: "AgentClient",
     model: str | None,
 ) -> PhaseSkillManifest:
     """Run the Skill-Selector for *inputs.phase_config*.
 
-    Assembles the selector prompt, invokes Claude, parses and
+    Assembles the selector prompt, invokes the configured backend, parses and
     validates the YAML reply, and returns a ``PhaseSkillManifest``.
     """
     cache_dir = inputs.workspace_dir / ".methodology-runner" / "artifact-summaries"
@@ -341,12 +342,12 @@ def invoke_skill_selector(
     )
     prompt = _assemble_selector_prompt(inputs, summarizer, selector_model=model)
 
-    from prompt_runner.claude_client import ClaudeCall, ClaudeInvocationError
+    from prompt_runner.client_types import AgentCall, AgentInvocationError
 
     logs_dir = inputs.workspace_dir / ".methodology-runner" / "runs" / "selector-logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
     stem = f"selector-{inputs.phase_config.phase_id}-{uuid.uuid4().hex[:8]}"
-    call = ClaudeCall(
+    call = AgentCall(
         prompt=prompt,
         session_id=str(uuid.uuid4()),
         new_session=True,
@@ -356,11 +357,16 @@ def invoke_skill_selector(
         stream_header=f"── skill-selector / {inputs.phase_config.phase_id} ──",
         workspace_dir=inputs.workspace_dir,
     )
+    write_call_metadata(
+        call.stdout_log_path,
+        model=model,
+        role="skill-selector",
+    )
     try:
         response = claude_client.call(call)
-    except ClaudeInvocationError as exc:
+    except AgentInvocationError as exc:
         raise SelectorError(
-            f"skill-selector claude call failed: {exc}"
+            f"skill-selector backend call failed: {exc}"
         ) from exc
 
     return _parse_and_validate(response.stdout, inputs)

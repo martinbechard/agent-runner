@@ -29,7 +29,15 @@ def _workspace(tmp_path: Path) -> Path:
     return w
 
 
-def _pair(index: int, title: str, gen: str = "GEN", val: str = "VAL") -> PromptPair:
+def _pair(
+    index: int,
+    title: str,
+    gen: str = "GEN",
+    val: str = "VAL",
+    required_files: tuple[str, ...] = (),
+    checks_files: tuple[str, ...] = (),
+    deterministic_validation: tuple[str, ...] = (),
+) -> PromptPair:
     return PromptPair(
         index=index,
         title=title,
@@ -38,6 +46,9 @@ def _pair(index: int, title: str, gen: str = "GEN", val: str = "VAL") -> PromptP
         heading_line=1,
         generation_line=2,
         validation_line=5,
+        required_files=required_files,
+        checks_files=checks_files,
+        deterministic_validation=deterministic_validation,
     )
 
 
@@ -88,10 +99,39 @@ def test_initial_generator_message_instructs_about_reading_prior_files():
     assert "current working directory" in msg
 
 
+def test_initial_generator_message_can_skip_organiser_instruction():
+    p = _pair(1, "First", gen="the body")
+    msg = build_initial_generator_message(
+        p, [], include_project_organiser=False,
+    )
+    assert "the body" in msg
+    assert "project-organiser" not in msg
+
+
 def test_revision_generator_message_includes_organiser_instruction():
     msg = build_revision_generator_message("feedback text")
     assert "feedback text" in msg
     assert "project-organiser" in msg
+
+
+def test_revision_generator_message_can_skip_organiser_instruction():
+    msg = build_revision_generator_message(
+        "feedback text",
+        include_project_organiser=False,
+    )
+    assert "feedback text" in msg
+    assert "project-organiser" not in msg
+
+
+def test_revision_generator_message_can_be_self_contained():
+    msg = build_revision_generator_message(
+        "feedback text",
+        original_task="original task body",
+        previous_artifact="old artifact body",
+    )
+    assert "original task body" in msg
+    assert "old artifact body" in msg
+    assert "feedback text" in msg
 
 
 def test_initial_judge_message_lists_generator_files():
@@ -124,6 +164,39 @@ def test_revision_judge_message_lists_generator_files():
     )
     assert "src/models.py" in msg
     assert "Files produced by the generator" in msg
+
+
+def test_revision_judge_message_can_be_self_contained():
+    msg = build_revision_judge_message(
+        "revised artifact",
+        generator_files=[Path("src/models.py")],
+        validation_prompt="strict validator prompt",
+    )
+    assert "strict validator prompt" in msg
+    assert "revised artifact" in msg
+
+
+def test_initial_judge_message_includes_deterministic_validation_report():
+    p = _pair(1, "X")
+    from prompt_runner.runner import DeterministicValidationResult
+    result = DeterministicValidationResult(
+        command=["python", "scripts/check.py", "--strict"],
+        script_path=Path("/tmp/check.py"),
+        returncode=1,
+        stdout="failed checks",
+        stderr="",
+        stdout_log_path=Path("/tmp/out.log"),
+        stderr_log_path=Path("/tmp/err.log"),
+        process_metadata_path=Path("/tmp/proc.json"),
+    )
+    msg = build_initial_judge_message(
+        p,
+        "artifact text",
+        deterministic_validation=result,
+    )
+    assert "Deterministic validation" in msg
+    assert "failed checks" in msg
+    assert "/tmp/check.py" in msg
 
 
 def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
@@ -173,6 +246,10 @@ from prompt_runner.runner import (
 def test_is_snapshot_excluded_catches_common_junk():
     assert _is_snapshot_excluded(Path(".git/HEAD"))
     assert _is_snapshot_excluded(Path("runs/foo"))
+    assert _is_snapshot_excluded(Path("tmp/scratch/file.txt"))
+    assert _is_snapshot_excluded(Path(".methodology-runner/state.json"))
+    assert _is_snapshot_excluded(Path(".prompt-runner/backend-state/codex/sqlite/state.sqlite"))
+    assert _is_snapshot_excluded(Path("prompt-runner-files/logs/PH-000/attempt-1-stdout.log"))
     assert _is_snapshot_excluded(Path("node_modules/a/b.js"))
     assert _is_snapshot_excluded(Path("src/__pycache__/x.pyc"))
     assert _is_snapshot_excluded(Path("src/my_pkg.egg-info/PKG-INFO"))
@@ -568,6 +645,50 @@ def test_resume_flag_set_on_iterations_after_first(tmp_path: Path):
     assert [c.new_session for c in client.received] == [True, True, False, False]
 
 
+def test_codex_revisions_are_stateless_and_self_contained(tmp_path: Path):
+    pair = _pair(1, "Alpha", gen="ORIGINAL TASK", val="VALIDATION TASK")
+    client = FakeClaudeClient(scripted=[
+        _pass_response("artifact v1"), _judge_revise(),
+        _pass_response("artifact v2"), _judge_pass(),
+    ])
+    run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(backend="codex"), claude_client=client, run_id="myrun",
+        workspace_dir=_workspace(tmp_path),
+    )
+    assert [c.new_session for c in client.received] == [True, True, True, True]
+    assert "ORIGINAL TASK" in client.received[2].prompt
+    assert "artifact v1" in client.received[2].prompt
+    assert "VALIDATION TASK" in client.received[3].prompt
+
+
+def test_codex_prefers_single_written_file_contents_as_artifact(tmp_path: Path):
+    pair = _pair(1, "Alpha", gen="Write docs/out.txt", val="Check docs/out.txt")
+    workspace = _workspace(tmp_path)
+
+    class WritingClient:
+        def __init__(self):
+            self.received = []
+
+        def call(self, call):
+            self.received.append(call)
+            if "generator" in call.stream_header:
+                out = call.workspace_dir / "docs" / "out.txt"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text("artifact from file\n", encoding="utf-8")
+                return ClaudeResponse(stdout="PASS", stderr="", returncode=0)
+            return _judge_pass()
+
+    client = WritingClient()
+    result = run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(backend="codex"), claude_client=client, run_id="myrun",
+        workspace_dir=workspace,
+    )
+    assert result.final_artifact == "artifact from file\n"
+    assert "artifact from file" in client.received[1].prompt
+
+
 def test_log_paths_passed_to_every_call(tmp_path: Path):
     pair = _pair(1, "Alpha")
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
@@ -638,6 +759,229 @@ def test_unparseable_verdict_halts_pipeline(tmp_path: Path):
     assert result.halted_early
     assert result.halt_reason is not None
     assert "R-NO-VERDICT" in result.halt_reason
+
+
+def test_missing_required_files_halts_before_any_backend_call(tmp_path: Path):
+    pair = _pair(
+        1,
+        "Alpha",
+        required_files=("missing/input.md",),
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
+    )
+    assert result.halted_early
+    assert result.halt_reason is not None
+    assert "R-MISSING-REQUIRED-FILES" in result.halt_reason
+    assert client.received == []
+
+
+def test_checks_files_writes_trace_without_halting(tmp_path: Path):
+    pair = _pair(
+        1,
+        "Alpha",
+        checks_files=("present.txt", "missing.txt"),
+    )
+    workspace = _workspace(tmp_path)
+    (workspace / "present.txt").write_text("ok", encoding="utf-8")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_dir = tmp_path / "run"
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=workspace,
+    )
+    assert result.halted_early is False
+    checks_path = run_dir / "prompt-01-alpha" / "checks-files.json"
+    assert checks_path.exists()
+    import json as _json
+    checks = _json.loads(checks_path.read_text(encoding="utf-8"))
+    assert checks == [
+        {
+            "path": "present.txt",
+            "resolved_path": str((workspace / "present.txt").resolve()),
+            "exists": True,
+        },
+        {
+            "path": "missing.txt",
+            "resolved_path": str((workspace / "missing.txt").resolve()),
+            "exists": False,
+        },
+    ]
+
+
+def test_missing_deterministic_validation_halts_before_backend_call(tmp_path: Path):
+    pair = _pair(
+        1,
+        "Alpha",
+        deterministic_validation=("scripts/missing_validator.py",),
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
+    )
+    assert result.halted_early
+    assert result.halt_reason is not None
+    assert "R-MISSING-DETERMINISTIC-VALIDATION" in result.halt_reason
+    assert client.received == []
+
+
+def test_deterministic_validation_runs_and_is_injected_into_judge_prompt(tmp_path: Path):
+    workspace = _workspace(tmp_path)
+    scripts_dir = workspace / "scripts"
+    scripts_dir.mkdir()
+    validator = scripts_dir / "validate_feature_spec.py"
+    validator.write_text(
+        "import os\n"
+        "print('workspace=' + os.environ['PROMPT_RUNNER_WORKSPACE_DIR'])\n"
+        "print('prompt_index=' + os.environ['PROMPT_RUNNER_PROMPT_INDEX'])\n",
+        encoding="utf-8",
+    )
+
+    pair = _pair(
+        1,
+        "Alpha",
+        deterministic_validation=("scripts/validate_feature_spec.py", "--strict"),
+    )
+
+    class ValidationAwareClient:
+        def __init__(self) -> None:
+            self._n = 0
+            self.judge_prompt = ""
+
+        def call(self, call):
+            self._n += 1
+            if self._n == 1:
+                return _pass_response("artifact")
+            self.judge_prompt = call.prompt
+            return _judge_pass()
+
+    client = ValidationAwareClient()
+    run_dir = tmp_path / "run"
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=workspace,
+    )
+    assert result.halted_early is False
+    assert "Deterministic validation" in client.judge_prompt
+    assert "prompt_index=1" in client.judge_prompt
+    assert "scripts/validate_feature_spec.py" in client.judge_prompt
+    proc_path = (
+        run_dir
+        / "logs"
+        / "prompt-01-alpha"
+        / "iter-01-deterministic-validation.stdout.proc.json"
+    )
+    assert proc_path.exists()
+
+
+def test_deterministic_validation_runtime_error_halts_pipeline(tmp_path: Path):
+    workspace = _workspace(tmp_path)
+    scripts_dir = workspace / "scripts"
+    scripts_dir.mkdir()
+    validator = scripts_dir / "explode.py"
+    validator.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
+    pair = _pair(
+        1,
+        "Alpha",
+        deterministic_validation=("scripts/explode.py",),
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=workspace,
+    )
+    assert result.halted_early
+    assert result.halt_reason is not None
+    assert "R-DETERMINISTIC-VALIDATION-FAILED" in result.halt_reason
+
+
+def test_required_files_support_built_in_placeholder_rendering(tmp_path: Path):
+    workspace = _workspace(tmp_path)
+    run_dir = tmp_path / "run"
+    (run_dir / "inputs").mkdir(parents=True, exist_ok=True)
+    (run_dir / "inputs" / "request.md").write_text("hi", encoding="utf-8")
+    pair = _pair(
+        1,
+        "Alpha",
+        gen="Read {{run_dir}}/inputs/request.md from {{project_dir}}",
+        required_files=("{{run_dir}}/inputs/request.md",),
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=workspace,
+    )
+    assert result.halted_early is False
+    assert str(run_dir.resolve()) in client.received[0].prompt
+    assert str(workspace.resolve()) in client.received[0].prompt
+
+
+def test_placeholder_values_accept_caller_supplied_bindings(tmp_path: Path):
+    workspace = _workspace(tmp_path)
+    pair = _pair(
+        1,
+        "Alpha",
+        gen="Use {{extra_path}}",
+        required_files=("{{extra_path}}",),
+    )
+    extra = workspace / "evidence.txt"
+    extra.write_text("ok", encoding="utf-8")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(placeholder_values={"extra_path": str(extra)}),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=workspace,
+    )
+    assert result.halted_early is False
+    assert str(extra) in client.received[0].prompt
+
+
+def test_unresolved_placeholders_halt_before_backend_call(tmp_path: Path):
+    pair = _pair(1, "Alpha", gen="Use {{missing_value}}")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
+    )
+    assert result.halted_early
+    assert result.halt_reason is not None
+    assert "R-UNRESOLVED-PLACEHOLDERS" in result.halt_reason
+    assert "missing_value" in result.halt_reason
+    assert client.received == []
 
 
 def test_dry_run_makes_no_real_calls(tmp_path: Path):
@@ -755,6 +1099,25 @@ def test_summary_includes_wall_time(tmp_path: Path):
     assert _re.search(r"Wall time: \d{2}:\d{2}:\d{2}", summary), summary
 
 
+def test_run_pipeline_emits_terse_progress_to_stdout(tmp_path: Path, capsys):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_pipeline(
+        pairs=[pair], run_dir=tmp_path / "run", config=RunConfig(),
+        claude_client=client, source_file=tmp_path / "source.md",
+        workspace_dir=_workspace(tmp_path),
+    )
+    out = capsys.readouterr().out
+    assert "run start" in out
+    assert "prompt 1/Alpha start" in out
+    assert "prompt 1 iter 1 generator start" in out
+    assert "prompt 1 iter 1 generator done" in out
+    assert "prompt 1 iter 1 judge start" in out
+    assert "prompt 1 iter 1 judge done" in out
+    assert "prompt 1 iter 1 verdict pass" in out
+    assert "run complete" in out
+
+
 def test_manifest_includes_wall_time(tmp_path: Path):
     """manifest.json must include a 'wall_time' field after finalisation."""
     import json as _json
@@ -830,6 +1193,7 @@ def test_run_config_defaults_have_none_preludes():
     cfg = RunConfig()
     assert cfg.generator_prelude is None
     assert cfg.judge_prelude is None
+    assert cfg.include_project_organiser is True
 
 
 def test_build_initial_generator_message_prepends_generator_prelude():
@@ -908,22 +1272,23 @@ def test_no_validator_skips_judge_and_marks_pass(tmp_path: Path):
 # ---------------------------------------------------------------------------
 
 def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monkeypatch):
-    """Verify interactive prompts spawn claude via subprocess.run, inherit
+    """Verify interactive prompts spawn claude via subprocess.Popen, inherit
     stdio, and mark the prompt pass regardless of exit code."""
     from prompt_runner.runner import run_prompt
     from prompt_runner.claude_client import FakeClaudeClient
     import subprocess
 
-    # Capture subprocess.run invocations to verify argv and stdio behavior
+    # Capture subprocess.Popen invocations to verify argv and stdio behavior
     captured: dict = {}
-    def fake_run(argv, **kwargs):
+    class _Proc:
+        pid = 12345
+        def wait(self):
+            return 0
+    def fake_popen(argv, **kwargs):
         captured["argv"] = argv
         captured["kwargs"] = kwargs
-        # stdio should NOT be captured — kwargs should not contain
-        # stdout/stderr/stdin/capture_output
-        class R: returncode = 0
-        return R()
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        return _Proc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     pair = PromptPair(
         index=1, title="Interactive author",
@@ -961,11 +1326,14 @@ def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch
     import subprocess
 
     captured: dict = {}
-    def fake_run(argv, **kwargs):
+    class _Proc:
+        pid = 12345
+        def wait(self):
+            return 0
+    def fake_popen(argv, **kwargs):
         captured["argv"] = argv
-        class R: returncode = 0
-        return R()
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        return _Proc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     pair = PromptPair(
         index=1, title="X", generation_prompt="m", validation_prompt="",
@@ -989,12 +1357,15 @@ def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
     import subprocess
 
     workspace = _workspace(tmp_path)
-    def fake_run(argv, **kwargs):
+    class _Proc:
+        pid = 12345
+        def wait(self):
+            (workspace / "newly-authored-skill.md").write_text("skill body", encoding="utf-8")
+            return 0
+    def fake_popen(argv, **kwargs):
         # Simulate the user creating a file during the interactive session
-        (workspace / "newly-authored-skill.md").write_text("skill body", encoding="utf-8")
-        class R: returncode = 0
-        return R()
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        return _Proc()
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     pair = PromptPair(
         index=1, title="Author",

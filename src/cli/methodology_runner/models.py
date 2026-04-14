@@ -577,6 +577,9 @@ class ProjectState:
     # -- optional fields -----------------------------------------------------
     project_name: str = ""
     model: str | None = None
+    backend: str = "claude"
+    execution_scope: str = "all-phases"
+    selected_phase_ids: list[str] | None = None
     finished_at: str | None = None
     current_phase: str | None = None
     phases: list[PhaseState] = field(default_factory=list)
@@ -594,6 +597,13 @@ class ProjectState:
             "git_initialized": self.git_initialized,
             "project_name": self.project_name,
             "model": self.model,
+            "backend": self.backend,
+            "execution_scope": self.execution_scope,
+            "selected_phase_ids": (
+                list(self.selected_phase_ids)
+                if self.selected_phase_ids is not None
+                else None
+            ),
             "finished_at": self.finished_at,
             "current_phase": self.current_phase,
             "phases": [p.to_dict() for p in self.phases],
@@ -612,6 +622,13 @@ class ProjectState:
             git_initialized=d["git_initialized"],
             project_name=d.get("project_name", ""),
             model=d.get("model"),
+            backend=d.get("backend", "claude"),
+            execution_scope=d.get("execution_scope", "all-phases"),
+            selected_phase_ids=(
+                list(d["selected_phase_ids"])
+                if d.get("selected_phase_ids") is not None
+                else None
+            ),
             finished_at=d.get("finished_at"),
             current_phase=d.get("current_phase"),
             phases=[

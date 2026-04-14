@@ -105,6 +105,11 @@ def test_invoke_selector_happy_path(tmp_path: Path):
     assert len(manifest.generator_skills) == 3
     assert manifest.generator_skills[0].id == "tdd"
     assert manifest.generator_skills[2].mapped_from == "Python backend development"
+    meta_files = list((tmp_path / ".methodology-runner" / "runs" / "selector-logs").glob("*.stdout.meta.json"))
+    assert len(meta_files) == 1
+    meta = meta_files[0].read_text(encoding="utf-8")
+    assert '"model": "test-model"' in meta
+    assert '"role": "skill-selector"' in meta
 
 
 def test_malformed_yaml_raises_selector_error(tmp_path: Path):

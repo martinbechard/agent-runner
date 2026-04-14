@@ -32,7 +32,7 @@ from methodology_runner.cross_reference import (
     _JSON_FENCE_RE,
     _build_coverage_summary,
     _build_full_prompt,
-    _call_claude_for_verification,
+    _call_backend_for_verification,
     _collect_issues,
     _extract_json_block,
     _format_prior_phases_block,
@@ -116,6 +116,35 @@ def _wrap_in_fence(body: str) -> str:
 def _wrap_bare(body: str) -> str:
     """Return *body* preceded by reasoning prose."""
     return f"I checked all cross-references.\n\n{body}\n"
+
+
+def test_call_backend_for_verification_uses_selected_backend(
+    tmp_path: Path, monkeypatch,
+):
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout=_wrap_in_fence(_passing_json()), stderr="", returncode=0),
+    ])
+    captured: list[str] = []
+
+    def _fake_make_client(backend: str):
+        captured.append(backend)
+        return client
+
+    monkeypatch.setattr("prompt_runner.client_factory.make_client", _fake_make_client)
+
+    result = _call_backend_for_verification(
+        prompt="Verify",
+        phase_id="PH-000",
+        workspace=workspace,
+        backend="codex",
+        model=None,
+        claude_client=None,
+    )
+
+    assert result.passed is True
+    assert captured == ["codex"]
 
 
 def _minimal_phase(

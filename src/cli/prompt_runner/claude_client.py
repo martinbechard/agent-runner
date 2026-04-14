@@ -11,6 +11,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Protocol
 
+from prompt_runner.process_tracking import (
+    mark_process_completed,
+    write_spawn_metadata,
+)
+
 
 @dataclass(frozen=True)
 class ClaudeCall:
@@ -233,6 +238,14 @@ class RealClaudeClient:
             env=_build_child_env(),
             cwd=str(call.workspace_dir),
         )
+        process_meta_path = call.stdout_log_path.with_suffix(".proc.json")
+        write_spawn_metadata(
+            process_meta_path,
+            kind="backend-call",
+            pid=proc.pid,
+            argv=argv,
+            cwd=call.workspace_dir,
+        )
         assert proc.stdout is not None and proc.stderr is not None
 
         stderr_buffer: list[str] = []
@@ -280,6 +293,7 @@ class RealClaudeClient:
 
         returncode = proc.wait()
         stderr_thread.join()
+        mark_process_completed(process_meta_path, returncode=returncode)
 
         reconstructed = "".join(text_buffer)
         response = ClaudeResponse(

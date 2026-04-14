@@ -344,3 +344,136 @@ val
     items = parse_text(text)
     assert items[0].model_override is None
     assert items[0].effort_override is None
+
+
+def test_mid_variant_model_switch():
+    """[MODEL:xxx] between fences overrides model for subsequent pairs."""
+    text = """## Prompt 1: Pipeline [VARIANTS]
+
+### Variant Optimized: Split pipeline [MODEL:claude-haiku-4-5-20251001]
+
+```
+extraction prompt
+```
+
+[MODEL:claude-opus-4-6]
+
+```
+judgment prompt
+```
+
+```
+judgment validator
+```
+"""
+    items = parse_text(text)
+    fork = items[0]
+    assert isinstance(fork, ForkPoint)
+    pairs = fork.variants[0].pairs
+    assert len(pairs) == 2
+    # First pair: inherits Haiku from heading (no validator)
+    assert pairs[0].model_override == "claude-haiku-4-5-20251001"
+    assert pairs[0].generation_prompt == "extraction prompt"
+    assert pairs[0].validation_prompt == ""
+    # Second pair: switched to Opus via mid-variant directive
+    assert pairs[1].model_override == "claude-opus-4-6"
+    assert pairs[1].generation_prompt == "judgment prompt"
+    assert pairs[1].validation_prompt == "judgment validator"
+
+
+def test_mid_variant_effort_switch():
+    """[EFFORT:xxx] between fences overrides effort for subsequent pairs."""
+    text = """## Prompt 1: Test [VARIANTS]
+
+### Variant A: Multi-effort [EFFORT:low]
+
+```
+pass 1
+```
+
+```
+val 1
+```
+
+[EFFORT:high]
+
+```
+pass 2
+```
+
+```
+val 2
+```
+"""
+    items = parse_text(text)
+    pairs = items[0].variants[0].pairs
+    assert len(pairs) == 2
+    assert pairs[0].effort_override == "low"
+    assert pairs[1].effort_override == "high"
+
+
+def test_mid_variant_both_model_and_effort():
+    """Both [MODEL:xxx] and [EFFORT:xxx] on same standalone line."""
+    text = """## Prompt 1: Test [VARIANTS]
+
+### Variant A: Split [MODEL:claude-haiku-4-5-20251001]
+
+```
+extraction
+```
+
+[MODEL:claude-opus-4-6] [EFFORT:high]
+
+```
+judgment
+```
+
+```
+validator
+```
+"""
+    items = parse_text(text)
+    pairs = items[0].variants[0].pairs
+    assert pairs[0].model_override == "claude-haiku-4-5-20251001"
+    assert pairs[0].effort_override is None
+    assert pairs[1].model_override == "claude-opus-4-6"
+    assert pairs[1].effort_override == "high"
+
+
+def test_mid_variant_directive_does_not_affect_other_variants():
+    """Mid-variant directives only affect the variant they appear in."""
+    text = """## Prompt 1: Test [VARIANTS]
+
+### Variant A: Haiku then Opus [MODEL:claude-haiku-4-5-20251001]
+
+```
+extraction
+```
+
+[MODEL:claude-opus-4-6]
+
+```
+judgment
+```
+
+```
+validator
+```
+
+### Variant B: Default model
+
+```
+single gen
+```
+
+```
+single val
+```
+"""
+    items = parse_text(text)
+    fork = items[0]
+    # Variant A: two pairs, different models
+    assert fork.variants[0].pairs[0].model_override == "claude-haiku-4-5-20251001"
+    assert fork.variants[0].pairs[1].model_override == "claude-opus-4-6"
+    # Variant B: no model override
+    assert fork.variants[1].pairs[0].model_override is None

@@ -74,9 +74,20 @@ def test_skill_tool_mode_lists_skill_ids(tmp_path: Path):
     assert "tdd" in spec.generator_text
     assert "python-backend-impl" in spec.generator_text
     assert "code-review-discipline" in spec.judge_text
-    assert "Skill tool" in spec.generator_text
+    assert "exact ID" in spec.generator_text
     # Body content NOT inlined in skill-tool mode
     assert "TDD body content" not in spec.generator_text
+
+
+def test_skill_tool_mode_codex_uses_backend_neutral_wording(tmp_path: Path):
+    spec = build_prelude(
+        _manifest(),
+        _catalog(tmp_path),
+        mode="skill-tool",
+        backend="codex",
+    )
+    assert "Skill tool" not in spec.generator_text
+    assert "load and apply the following skills" in spec.generator_text
 
 
 def test_inline_mode_embeds_skill_bodies(tmp_path: Path):
@@ -92,6 +103,51 @@ def test_inline_mode_strips_frontmatter(tmp_path: Path):
     # Frontmatter delimiters and keys must NOT leak into the prelude
     assert "name: tdd" not in spec.generator_text
     assert "description: tdd skill" not in spec.generator_text
+
+
+def test_file_reference_mode_lists_skill_paths_without_embedding_bodies(tmp_path: Path):
+    catalog = _catalog(tmp_path)
+    spec = build_prelude(_manifest(), catalog, mode="file-reference")
+    assert "Skill File References" in spec.generator_text
+    assert str(catalog["tdd"].source_path) in spec.generator_text
+    assert str(catalog["code-review-discipline"].source_path) in spec.judge_text
+    assert "TDD body content" not in spec.generator_text
+
+
+def test_judge_prelude_adds_feedback_discipline_when_reasoning_skills_present(tmp_path: Path):
+    catalog = _catalog(tmp_path)
+    for name in ("structured-debate", "rule-writing"):
+        p = tmp_path / name / "SKILL.md"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_text(
+            f"---\nname: {name}\ndescription: {name} skill\n---\n\nbody for {name}\n",
+            encoding="utf-8",
+        )
+        catalog[name] = SkillCatalogEntry(
+            id=name,
+            description=f"{name} skill",
+            source_path=p,
+            source_location="user",
+        )
+
+    manifest = PhaseSkillManifest(
+        phase_id="PH-000-requirements-inventory",
+        selector_run_at="2026-04-09T10:00:00+00:00",
+        selector_model="test",
+        generator_skills=[
+            SkillChoice(id="tdd", source=SkillSource.BASELINE, rationale="B"),
+        ],
+        judge_skills=[
+            SkillChoice(id="code-review-discipline", source=SkillSource.BASELINE, rationale="B"),
+            SkillChoice(id="structured-debate", source=SkillSource.BASELINE, rationale="B"),
+            SkillChoice(id="rule-writing", source=SkillSource.BASELINE, rationale="B"),
+        ],
+        overall_rationale="Test manifest",
+    )
+    spec = build_prelude(manifest, catalog, mode="file-reference")
+    assert "Feedback discipline for this judge call:" in spec.judge_text
+    assert "`RULE:` block" in spec.judge_text
+    assert "`IMPACT:`" in spec.judge_text
 
 
 def test_build_prelude_rejects_unknown_mode(tmp_path: Path):

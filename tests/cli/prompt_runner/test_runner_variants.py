@@ -21,6 +21,7 @@ def _mock_subprocess_popen(monkeypatch):
     process with returncode=0."""
     def fake_popen(cmd, **kwargs):
         proc = MagicMock()
+        proc.pid = 12345
         proc.returncode = 0
         proc.wait.return_value = 0
         proc.stdout = b""
@@ -202,11 +203,62 @@ def test_fork_point_creates_variant_directories(tmp_path: Path):
 
     # Comparison report should exist.
     assert (fork_dir / "comparison.txt").exists()
+    assert (fork_dir / "variant-a" / "run-variant-a" / "child-process.json").exists()
+    assert (fork_dir / "variant-b" / "run-variant-b" / "child-process.json").exists()
 
     # Parent pipeline does not continue past the fork — no extra prompt_results.
     # (Only prompt 1 ran in the parent.)
     assert len(result.prompt_results) == 1
     assert not result.halted_early
+
+
+def test_fork_subprocess_propagates_backend(tmp_path: Path, monkeypatch):
+    items = parse_text(INPUT_WITH_FORK)
+    workspace = _workspace(tmp_path)
+
+    captured_cmds: list[list[str]] = []
+
+    def fake_popen(cmd, **kwargs):
+        captured_cmds.append(cmd)
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        proc.stdout = b""
+        proc.stderr = b""
+        for i, arg in enumerate(cmd):
+            if arg == "--output-dir" and i + 1 < len(cmd):
+                run_dir = Path(cmd[i + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                (run_dir / "summary.txt").write_text(
+                    "Prompt Runner — Run Summary\nStatus: completed\n"
+                )
+                break
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+    ])
+
+    run_pipeline(
+        pairs=items,
+        run_dir=tmp_path / "run",
+        config=RunConfig(max_iterations=3, backend="codex"),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        workspace_dir=workspace,
+    )
+
+    assert captured_cmds, "expected fork subprocesses to be spawned"
+    assert all("--backend" in cmd for cmd in captured_cmds)
+    assert all("codex" in cmd for cmd in captured_cmds)
+    assert all("--project-dir" in cmd for cmd in captured_cmds)
+    for cmd in captured_cmds:
+        project_dir = Path(cmd[cmd.index("--project-dir") + 1])
+        assert project_dir.name == "workspace"
 
 
 def test_fork_synthetic_prompt_contains_variant_and_tail(tmp_path: Path):

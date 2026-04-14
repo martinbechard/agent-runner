@@ -1,7 +1,7 @@
 """Prompt generator for methodology-runner phases.
 
 Assembles a meta-prompt from a PhaseConfig and workspace state, calls
-Claude to produce a prompt-runner .md file, validates the output, and
+the configured backend to produce a prompt-runner .md file, validates the output, and
 writes it to the workspace.
 
 See docs/design/components/CD-002-methodology-runner.md Section 7.
@@ -9,10 +9,10 @@ See docs/design/components/CD-002-methodology-runner.md Section 7.
 Public API
 ----------
 generate_phase_prompts(phase, workspace, model)
-    Simple API that creates a RealClaudeClient internally.
+    Simple API that creates a backend client internally.
 
 generate_prompt_file(context, claude_client, output_path, model)
-    Testable API accepting a ClaudeClient protocol.
+    Testable API accepting an AgentClient protocol.
 
 assemble_meta_prompt(context)
     Build the meta-prompt string.  Exposed for testing.
@@ -23,6 +23,7 @@ META_PROMPT_TEMPLATE
 from __future__ import annotations
 
 import re
+import shutil
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -35,10 +36,11 @@ from .models import (
     PhaseSkillManifest,
     PhaseState,
 )
+from .log_metadata import write_call_metadata
 from .phases import PHASE_MAP, resolve_input_sources
 
 if TYPE_CHECKING:
-    from prompt_runner.claude_client import ClaudeClient
+    from prompt_runner.client_types import AgentClient
 
 
 # ---------------------------------------------------------------------------
@@ -67,6 +69,170 @@ _FENCE_RE = re.compile(r"^```", re.MULTILINE)
 """Matches code fence boundaries (opening or closing)."""
 
 
+_PH000_CODEX_TEMPLATE = """\
+## Prompt 1: Produce Requirements Inventory [MODEL:gpt-5.4]
+
+```required-files
+docs/requirements/raw-requirements.md
+```
+
+```
+You are producing the phase artifact for PH-000-requirements-inventory.
+
+Read:
+- docs/requirements/raw-requirements.md
+
+Write:
+- docs/requirements/requirements-inventory.yaml
+
+Task:
+Produce the final acceptance-ready YAML requirements inventory in one file.
+Use this prompt pair's built-in revise loop to correct any issues the judge
+finds. Do not create draft-only or partial versions on purpose.
+
+Use the selected generator skills loaded in the prelude as the primary source
+of phase-specific extraction, traceability, and decomposition discipline.
+The prompt contract here is intentionally stable:
+- read the copied raw requirements from the methodology worktree
+- write exactly one acceptance-ready inventory file
+- satisfy the required artifact schema and structural rules
+- revise that same file until the judge can pass or escalate
+
+Artifact contract:
+- Inventory the requirement-bearing content from the source document.
+- Preserve exact source wording in each item's verbatim_quote.
+- Split independent requirements into separate RI-* items when the selected
+  skills determine they are separable.
+- Use sequential zero-padded IDs starting at RI-001.
+- Use only these categories: functional, non_functional, constraint,
+  assumption.
+- Include source_location for every item using a consistent section-and-local
+  reference scheme.
+- Add concise domain tags for cross-referencing.
+- For rationale, use:
+  rule: the rule applied
+  because: why the item is represented separately
+- For open_assumptions, include only specifics that go beyond the quote. If
+  none, use an empty list.
+- Capture explicitly deferred items in out_of_scope with an inventory_ref and
+  reason.
+- Build coverage_check by mapping requirement-bearing source phrases or bullets
+  to the RI-* IDs that cover them.
+- Build coverage_verdict with conservative counts and PASS/FAIL based on file
+  contents.
+
+Output schema to satisfy:
+source_document: "docs/requirements/raw-requirements.md"
+items:
+  - id: "RI-NNN"
+    category: "functional"
+    verbatim_quote: "exact source text"
+    source_location: "Section > paragraph-or-bullet-id"
+    tags: ["..."]
+    rationale:
+      rule: "..."
+      because: "..."
+    open_assumptions:
+      - id: "ASM-NNN"
+        detail: "..."
+        needs: "..."
+        status: "open"
+out_of_scope:
+  - inventory_ref: "RI-NNN"
+    reason: "..."
+coverage_check:
+  "phrase from source": ["RI-NNN"]
+  status: "N/N phrases covered, 0 orphans, 0 invented"
+coverage_verdict:
+  total_upstream_phrases: 0
+  covered: 0
+  orphaned: 0
+  out_of_scope: 0
+  open_assumptions: 0
+  verdict: "PASS"
+
+Acceptance requirements:
+- The file must be valid YAML parseable by a standard YAML parser.
+- The top-level keys must appear exactly as required:
+  source_document
+  items
+  out_of_scope
+  coverage_check
+  coverage_verdict
+- Every RI-* item must contain:
+  id
+  category
+  verbatim_quote
+  source_location
+  tags
+  rationale
+  open_assumptions
+- Rationale must contain both rule and because.
+- Every open assumption must contain id, detail, needs, and status.
+- All RI-* IDs must be unique, sequential, and zero-padded to three digits.
+- Do not create any files other than docs/requirements/requirements-inventory.yaml.
+- Use the Write tool to write the full file contents to docs/requirements/requirements-inventory.yaml.
+```
+
+```
+Read:
+- docs/requirements/raw-requirements.md
+- docs/requirements/requirements-inventory.yaml
+
+Run the PH-000 acceptance review with a requirements-quality and traceability mindset.
+Use the selected judge skills loaded in the prelude as the primary source of
+phase-specific review discipline. The stable prompt contract here is to decide
+whether the generated file satisfies the PH-000 artifact contract and the
+selected review skills, then drive revision through this prompt pair's built-in
+loop.
+
+Acceptance checklist:
+1. Every requirement-bearing source statement is represented by at least one
+   RI-* item or an explicit out_of_scope entry when the source clearly defers it.
+2. Every verbatim_quote can be found verbatim in the source document.
+3. Any unsplit compound requirement, invented requirement, unsupported
+   assumption, or category drift identified by the selected judge skills is
+   called out explicitly.
+4. source_location values are specific and consistent enough to trace each
+   item back to the original document quickly.
+5. The YAML structure matches the required top-level keys and item fields.
+6. coverage_check maps source phrases to RI-* IDs precisely rather than
+   summarizing loosely.
+7. coverage_verdict counts are internally consistent with the file contents and
+   remain conservative.
+8. out_of_scope contains only explicitly deferred items from the source.
+
+Review instructions:
+- Compare section by section.
+- Flag missing traceability, invented text, category drift, and unsplit compounds explicitly.
+- If you find issues, cite the exact RI-* IDs or missing source locations involved.
+- For each material correction, include at least one corrective rule in this form:
+  - RULE: the generator MUST / MUST NOT / SHOULD / SHOULD NOT make a specific change
+    - BECAUSE: why that correction is necessary
+- Use VERDICT: pass only if the artifact is phase-ready with no material omissions or traceability defects.
+- Use VERDICT: revise if the artifact can be corrected within this same file.
+- Use VERDICT: escalate only if the source is too ambiguous or contradictory to inventory faithfully without external clarification.
+
+End with exactly one of:
+VERDICT: pass
+VERDICT: revise
+VERDICT: escalate
+```
+"""
+
+
+def _deterministic_prompt_file_content(
+    context: PromptGenerationContext,
+) -> str | None:
+    """Return a canned prompt-runner file when the phase has a stable template."""
+    if (
+        context.input_context_mode == "file-reference"
+        and context.phase_config.phase_id == "PH-000-requirements-inventory"
+    ):
+        return _PH000_CODEX_TEMPLATE
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Error types (CD-002 Section 10.3)
 # ---------------------------------------------------------------------------
@@ -93,6 +259,7 @@ class PromptGenerationContext:
     completed_phases: list[PhaseState] = field(default_factory=list)
     cross_ref_feedback: CrossReferenceResult | None = None
     phase_skill_manifest: "PhaseSkillManifest | None" = None
+    input_context_mode: str = "embed"
 
 
 # ---------------------------------------------------------------------------
@@ -108,13 +275,13 @@ that, when executed by prompt-runner, will produce the artifacts
 for one phase of the methodology.
 
 prompt-runner executes each prompt pair sequentially.  For each pair,
-a generator Claude session produces an artifact and a separate judge
-Claude session evaluates it.  The judge can request revisions up to
+a generator session produces an artifact and a separate judge
+session evaluates it.  The judge can request revisions up to
 3 times.  Prior approved artifacts are carried as context to later
 prompts.
 
 You must produce a complete .md file.  Do not produce the artifacts
-themselves -- produce the prompts that will instruct another Claude
+themselves -- produce the prompts that will instruct another agent
 to produce them.
 
 YOUR ENTIRE RESPONSE must be a valid prompt-runner markdown file and
@@ -141,6 +308,9 @@ Output artifact:
 Expected output files:
 {expected_output_files_block}
 
+Deterministic validation helper:
+{deterministic_validation_block}
+
 Extraction focus (what the phase's checklist should verify):
 {extraction_focus}
 
@@ -161,9 +331,7 @@ Example bad checklist items (too vague -- avoid this level):
 
 ## INPUT CONTEXT
 
-The following input files are available in the workspace.  Generators
-can Read any of them.  Their content is shown below for your reference
-when designing prompts.
+{input_context_intro}
 
 {input_context}
 
@@ -191,6 +359,14 @@ Your output must be a valid prompt-runner input file.  The format is:
 5. Prose, notes, and explanations may appear between the heading
    and first fence, between the fences, and after the second fence
    -- but they are ignored by prompt-runner.
+6. Optional typed blocks may appear before the generation prompt:
+   - ```required-files
+   - ```checks-files
+   - ```deterministic-validation
+   The deterministic-validation block is a Python argv list. prompt-runner
+   executes that script after the generator writes files and before the judge
+   runs, then injects the script's stdout, stderr, and return code into the
+   judge prompt.
 
 Example structure:
 
@@ -274,7 +450,12 @@ def _read_and_truncate(path: Path) -> tuple[str, bool]:
     return content[:MAX_INPUT_FILE_CHARS], True
 
 
-def _assemble_input_context(phase: PhaseConfig, workspace: Path) -> str:
+def _assemble_input_context(
+    phase: PhaseConfig,
+    workspace: Path,
+    *,
+    mode: str = "embed",
+) -> str:
     """Read input files and assemble them into a context block.
 
     Each input file is rendered with a header showing its resolved path
@@ -296,20 +477,34 @@ def _assemble_input_context(phase: PhaseConfig, workspace: Path) -> str:
             f"{predecessors}):\n{details}",
         )
 
+    if mode not in ("embed", "file-reference"):
+        raise PromptGenerationError(
+            phase.phase_id,
+            f"unknown input context mode: {mode!r}",
+        )
+
     blocks: list[str] = []
     for path, role, description in resolved:
-        content, truncated = _read_and_truncate(path)
         try:
             rel_path = path.relative_to(workspace)
         except ValueError:
             rel_path = path
         header = f"# Input: {rel_path} (role: {role.value})"
-        block = f"{header}\n# {description}\n\n{content}"
-        if truncated:
-            block += (
-                f"\n\n[... truncated at {MAX_INPUT_FILE_CHARS:,} characters."
-                f"  Generators should Read the full file directly. ...]"
+        if mode == "file-reference":
+            block = (
+                f"{header}\n"
+                f"# {description}\n\n"
+                f"Read this file directly from the workspace when designing "
+                f"prompts: {rel_path}"
             )
+        else:
+            content, truncated = _read_and_truncate(path)
+            block = f"{header}\n# {description}\n\n{content}"
+            if truncated:
+                block += (
+                    f"\n\n[... truncated at {MAX_INPUT_FILE_CHARS:,} characters."
+                    f"  Generators should Read the full file directly. ...]"
+                )
         blocks.append(block)
 
     return "\n\n---\n\n".join(blocks) if blocks else "(no input files)"
@@ -343,6 +538,40 @@ def _format_input_artifacts_block(
 def _format_expected_files_block(files: list[str]) -> str:
     """Format expected output files as a bullet list."""
     return "\n".join(f"  - {f}" for f in files)
+
+
+def _prepare_deterministic_validation_helper(
+    phase: PhaseConfig,
+    output_dir: Path,
+) -> Path | None:
+    if phase.phase_id != "PH-001-feature-specification":
+        return None
+    source = Path(__file__).with_name("phase_1_validation.py")
+    helper_path = output_dir / "phase-1-deterministic-validation.py"
+    helper_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, helper_path)
+    return helper_path
+
+
+def _format_deterministic_validation_block(helper_path: Path | None) -> str:
+    if helper_path is None:
+        return "  (no staged helper for this phase)"
+    return "\n".join(
+        [
+            f"  - Script path: {helper_path}",
+            "  - Preferred typed block:",
+            "    ```deterministic-validation",
+            f"    {helper_path}",
+            "    --feature-spec",
+            "    docs/features/feature-specification.yaml",
+            "    --requirements-inventory",
+            "    docs/requirements/requirements-inventory.yaml",
+            "    ```",
+            "  - Use this helper for deterministic schema, RI-coverage, dependency-target,",
+            "    and cross-cutting-concern cardinality checks so the judge can focus on",
+            "    semantic issues and unsupported scope.",
+        ]
+    )
 
 
 def _format_prior_phases_block(completed_phases: list[PhaseState]) -> str:
@@ -496,12 +725,16 @@ def _validate_prompt_runner_file(content: str) -> list[str]:
 # Meta-prompt assembly (CD-002 Section 10.3)
 # ---------------------------------------------------------------------------
 
-def assemble_meta_prompt(context: PromptGenerationContext) -> str:
+def assemble_meta_prompt(
+    context: PromptGenerationContext,
+    *,
+    deterministic_validation_helper_path: Path | None = None,
+) -> str:
     """Build the complete meta-prompt string from context.
 
     Exposed for testing.  The generate_prompt_file function calls this
     internally; tests can call it directly to inspect the assembled
-    prompt without invoking Claude.
+    prompt without invoking the backend.
     """
     phase = context.phase_config
     workspace = context.workspace_dir
@@ -518,6 +751,9 @@ def assemble_meta_prompt(context: PromptGenerationContext) -> str:
         expected_output_files_block=_format_expected_files_block(
             phase.expected_output_files,
         ),
+        deterministic_validation_block=_format_deterministic_validation_block(
+            deterministic_validation_helper_path,
+        ),
         extraction_focus=phase.extraction_focus,
         artifact_schema_description=phase.artifact_schema_description,
         judge_guidance=phase.judge_guidance,
@@ -527,7 +763,22 @@ def assemble_meta_prompt(context: PromptGenerationContext) -> str:
         checklist_bad_block=_format_bullet_list(
             phase.checklist_examples_bad,
         ),
-        input_context=_assemble_input_context(phase, workspace),
+        input_context_intro=(
+            "The following input files are available in the workspace.  "
+            "Generators can Read any of them.  Their content is shown below "
+            "for your reference when designing prompts."
+            if context.input_context_mode == "embed"
+            else
+            "The following input files are available in the workspace.  "
+            "Do not rely on inlined file contents; read the files directly "
+            "from the workspace when you need more detail while designing "
+            "prompts."
+        ),
+        input_context=_assemble_input_context(
+            phase,
+            workspace,
+            mode=context.input_context_mode,
+        ),
         prior_phases_block=_format_prior_phases_block(
             context.completed_phases,
         ),
@@ -547,20 +798,20 @@ def assemble_meta_prompt(context: PromptGenerationContext) -> str:
 
 def generate_prompt_file(
     context: PromptGenerationContext,
-    claude_client: ClaudeClient,
+    claude_client: AgentClient,
     output_path: Path | None = None,
     model: str | None = None,
 ) -> Path:
-    """Call Claude to produce a prompt-runner .md file for a phase.
+    """Call the configured backend to produce a prompt-runner .md file for a phase.
 
-    Assembles the meta-prompt from the context, calls Claude, validates
+    Assembles the meta-prompt from the context, calls the backend, validates
     the result, writes it to *output_path* (or a default location), and
     returns the path.
 
-    Raises PromptGenerationError if Claude fails to produce a valid
+    Raises PromptGenerationError if the backend fails to produce a valid
     prompt-runner file after MAX_GENERATION_ATTEMPTS attempts.
     """
-    from prompt_runner.claude_client import ClaudeCall
+    from prompt_runner.client_types import AgentCall
 
     phase = context.phase_config
     workspace = context.workspace_dir
@@ -569,11 +820,23 @@ def generate_prompt_file(
         output_dir = workspace / PROMPT_RUNNER_FILES_DIR
         output_path = output_dir / f"{phase.phase_id}.md"
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    deterministic_validation_helper = _prepare_deterministic_validation_helper(
+        phase,
+        output_path.parent,
+    )
 
     log_dir = workspace / PROMPT_RUNNER_FILES_DIR / "logs" / phase.phase_id
     log_dir.mkdir(parents=True, exist_ok=True)
 
-    meta_prompt = assemble_meta_prompt(context)
+    deterministic = _deterministic_prompt_file_content(context)
+    if deterministic is not None:
+        output_path.write_text(deterministic + "\n", encoding="utf-8")
+        return output_path
+
+    meta_prompt = assemble_meta_prompt(
+        context,
+        deterministic_validation_helper_path=deterministic_validation_helper,
+    )
 
     last_issues: list[str] = []
     for attempt in range(MAX_GENERATION_ATTEMPTS):
@@ -588,7 +851,7 @@ def generate_prompt_file(
             )
 
         session_id = str(uuid.uuid4())
-        call = ClaudeCall(
+        call = AgentCall(
             prompt=prompt,
             session_id=session_id,
             new_session=True,
@@ -602,18 +865,23 @@ def generate_prompt_file(
             ),
             workspace_dir=workspace,
         )
+        write_call_metadata(
+            call.stdout_log_path,
+            model=model,
+            role="prompt-generator",
+        )
 
         try:
             response = claude_client.call(call)
         except Exception as exc:
             raise PromptGenerationError(
                 phase.phase_id,
-                f"Claude invocation failed: {exc}",
+                f"backend invocation failed: {exc}",
             ) from exc
 
         content = response.stdout.strip()
         if not content:
-            last_issues = ["Claude returned an empty response"]
+            last_issues = ["backend returned an empty response"]
             continue
 
         last_issues = _validate_prompt_runner_file(content)
@@ -633,23 +901,24 @@ def generate_prompt_file(
 def generate_phase_prompts(
     phase: PhaseConfig,
     workspace: Path,
+    backend: str = "claude",
     model: str | None = None,
 ) -> Path:
-    """Call Claude to produce a prompt-runner .md file for this phase.
+    """Call the configured backend to produce a prompt-runner .md file for this phase.
 
-    Simple API that creates a RealClaudeClient internally.  For testable
-    code, use generate_prompt_file with a ClaudeClient protocol object.
+    Simple API that creates a backend client internally.  For testable
+    code, use generate_prompt_file with an AgentClient protocol object.
 
     Reads the input source files from the workspace, assembles them
-    with the phase configuration into a meta-prompt, calls Claude,
+    with the phase configuration into a meta-prompt, calls the backend,
     writes the resulting .md file to:
         {workspace}/prompt-runner-files/{phase.phase_id}.md
 
     Returns the path to the written .md file.
     """
-    from prompt_runner.claude_client import RealClaudeClient
+    from prompt_runner.client_factory import make_client
 
-    client = RealClaudeClient()
+    client = make_client(backend)
     context = PromptGenerationContext(
         phase_config=phase,
         workspace_dir=workspace,

@@ -204,6 +204,7 @@ def test_orchestrator_runs_selector_once_per_phase_and_writes_manifest(tmp_path:
         workspace=workspace,
         run_dir=workspace / ".methodology-runner" / "runs" / "phase-0",
         claude_client=client,
+        backend="claude",
         model="test",
     )
 
@@ -215,6 +216,80 @@ def test_orchestrator_runs_selector_once_per_phase_and_writes_manifest(tmp_path:
     assert result.generator_prelude_path.exists()
     assert result.judge_prelude_path.exists()
     assert len(client.received) == 1  # selector called once
+
+
+def test_orchestrator_uses_file_reference_prelude_for_codex(tmp_path: Path):
+    from methodology_runner.orchestrator import run_selector_and_build_prelude
+    from methodology_runner.phases import get_phase
+    from methodology_runner.models import BaselineSkillConfig, SkillCatalogEntry
+    from methodology_runner.orchestrator import RunSkillContext
+
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    run_dir = workspace / ".methodology-runner" / "runs" / "phase-0"
+    run_dir.mkdir(parents=True)
+
+    catalog = {
+        "requirements-extraction": SkillCatalogEntry(
+            id="requirements-extraction",
+            description="Extract reqs",
+            source_path=tmp_path / "a" / "SKILL.md",
+            source_location="user",
+        ),
+        "traceability-discipline": SkillCatalogEntry(
+            id="traceability-discipline",
+            description="Trace",
+            source_path=tmp_path / "b" / "SKILL.md",
+            source_location="user",
+        ),
+        "requirements-quality-review": SkillCatalogEntry(
+            id="requirements-quality-review",
+            description="QA reqs",
+            source_path=tmp_path / "c" / "SKILL.md",
+            source_location="user",
+        ),
+    }
+    for e in catalog.values():
+        e.source_path.parent.mkdir(parents=True, exist_ok=True)
+        e.source_path.write_text(
+            f"---\nname: {e.id}\ndescription: {e.description}\n---\n\nbody for {e.id}\n",
+            encoding="utf-8",
+        )
+
+    baseline = BaselineSkillConfig(
+        version=1,
+        phases={
+            "PH-000-requirements-inventory": {
+                "generator": ["requirements-extraction", "traceability-discipline"],
+                "judge": ["requirements-quality-review", "traceability-discipline"],
+            },
+        },
+    )
+    skill_ctx = RunSkillContext(catalog=catalog, baseline_config=baseline)
+    phase = get_phase("PH-000-requirements-inventory")
+    client = _ScriptedClaude(responses=[
+        _minimal_selector_reply(
+            "PH-000-requirements-inventory",
+            gen=["requirements-extraction", "traceability-discipline"],
+            jud=["requirements-quality-review", "traceability-discipline"],
+        ),
+    ])
+
+    result = run_selector_and_build_prelude(
+        phase_config=phase,
+        skill_ctx=skill_ctx,
+        workspace=workspace,
+        run_dir=run_dir,
+        claude_client=client,
+        backend="codex",
+        model="test",
+    )
+
+    assert result.mode == "file-reference"
+    gen_text = result.generator_prelude_path.read_text("utf-8")
+    assert "Skill File References" in gen_text
+    assert str(catalog["requirements-extraction"].source_path) in gen_text
+    assert "body for requirements-extraction" not in gen_text
 
 
 # ---------------------------------------------------------------------------

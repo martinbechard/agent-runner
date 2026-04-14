@@ -84,6 +84,7 @@ overall_rationale: Previous manifest
         workspace=workspace,
         run_dir=run_dir,
         claude_client=fake_client,
+        backend="claude",
         model="test",
         state=None,
         existing_manifest_path=existing,
