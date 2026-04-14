@@ -1,0 +1,18 @@
+{
+  "title": "PR-008 Codex Compare",
+  "mode": "comparison",
+  "runs": [
+    {
+      "label": "opus-high",
+      "path": "runs/2026-04-11T22-00-00-PR-008-opus-high"
+    },
+    {
+      "label": "sonnet-high",
+      "path": "runs/2026-04-11T22-05-00-PR-008-sonnet-high"
+    },
+    {
+      "label": "haiku-high",
+      "path": "runs/2026-04-11T22-10-00-PR-008-haiku-high"
+    }
+  ]
+}

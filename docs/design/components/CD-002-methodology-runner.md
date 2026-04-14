@@ -65,7 +65,7 @@ Source code lives under *src/cli/methodology_runner/*. Tests mirror under *tests
 
 **phases.py** -- The Python representation of the seven phases from M-002. Each phase is a PhaseConfig instance containing: phase ID, phase name, input artifact paths, output artifact path, extraction focus text, generation instructions text, judge guidance text, artifact schema description, example checklist items, and the list of predecessor phase IDs. This module is a data registry -- it builds and returns a list of PhaseConfig objects, one per phase.
 
-**prompt_generator.py** -- Takes a PhaseConfig and the current workspace state, assembles the meta-prompt (Section 5), calls Claude, and returns the generated prompt-runner .md file content. This is the most critical module: it bridges the methodology corpus with prompt-runner's input format.
+**prompt_generator.py** -- Takes a PhaseConfig and the current workspace state, assembles the meta-prompt (Section 5), stages any phase-local deterministic validation helpers, calls Claude, and returns the generated prompt-runner .md file content. This is the most critical module: it bridges the methodology corpus with prompt-runner's input format.
 
 **cross_reference.py** -- Takes a PhaseConfig and the workspace path, assembles a verification prompt (Section 6), calls Claude with tool access to inspect workspace files, and returns a CrossReferenceResult with pass/fail verdict and specific issues.
 
@@ -756,6 +756,12 @@ The state file is written atomically (write to a temp file, then rename) after e
         """
         ...
 
+        # For phases with reusable deterministic checks, stage a phase-local
+        # helper beside output_path before assembling the meta-prompt. For
+        # PH-001 this is phase-1-deterministic-validation.py, which checks
+        # schema, RI coverage, dependency targets, and cross-cutting-concern
+        # cardinality so the LLM judge can focus on semantic issues.
+
     def assemble_meta_prompt(
         context: PromptGenerationContext,
     ) -> str:
@@ -766,6 +772,10 @@ The state file is written atomically (write to a temp file, then rename) after e
         without invoking Claude.
         """
         ...
+
+        # When a deterministic helper is available, the meta-prompt should
+        # expose the exact `deterministic-validation` block the architect is
+        # expected to include in the generated prompt-runner file.
 
     class PromptGenerationError(Exception):
         """Raised when prompt file generation fails."""

@@ -1,14 +1,16 @@
 # agent-runner
 
-This project uses a `project-organiser` sub-agent to keep all artifacts in the
+This project uses a dedicated file-placement mechanism to keep artifacts in the
 right place. The canonical taxonomy lives in `docs/project-taxonomy.md`.
 
 ## Rule: before creating any file
 
 Before creating **any** new file in this repository, you MUST invoke the
-`project-organiser` sub-agent (via the Agent tool, `subagent_type: project-organiser`).
-Pass it the file's content (if you have drafted it) or a description of its
-intended content. Use the `path` it returns as the target for your Write call.
+repository's file-placement helper. Prefer the dedicated custom agent when the
+runtime supports it. Otherwise use the repo-local placement skill or consult
+`docs/project-taxonomy.md` directly. Pass the helper the file's content (if you
+have drafted it) or a description of its intended content. Use the resulting
+path as the target for your Write call.
 
 Do not place files by intuition. The taxonomy is the source of truth.
 
@@ -31,6 +33,10 @@ receive either a success shape with `ok: true, path, rationale,
 taxonomy_extended, extension_summary` or an error shape with
 `ok: false, error_code, error_message`. Act on the `path` only when
 `ok` is true.
+
+Do not rely on an external `claude` CLI wrapper for file placement. Use the
+current runtime's native custom-agent path, the repo-local placement skill, or
+the taxonomy directly.
 
 ## Stack
 

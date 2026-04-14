@@ -49,6 +49,12 @@
 - **Filename pattern:** `snake_case.py`
 - **Tests location:** `tests/cli/` — mirror path, `test_<module>.py`.
 
+### scripts/
+- **Purpose:** Repository-local operational scripts and workflow helpers that are run directly from the checkout rather than installed as product CLI entry points. These scripts orchestrate development tasks, reports, or local workflow automation for this repository.
+- **Signals:** shebang-based Python or shell helper, invoked as `python scripts/...` or `./scripts/...`, repository-maintenance utility, local workflow launcher, report generator, one-off operational helper that belongs to this repo but is not a shipped `src/cli/` command.
+- **Filename pattern:** `snake_case.py` for Python, `kebab-case.sh` for shell.
+- **Tests location:** `tests/cli/` — `test_<script_basename>.py` for Python helpers.
+
 ### src/server/
 - **Purpose:** TypeScript web server and API route handlers.
 - **Signals:** Express / Fastify / Hono routes, HTTP handler functions, `req` / `res` types, `app.get` / `app.post`, API middleware, request validation schemas.
@@ -71,7 +77,13 @@
 - **Purpose:** Transient, TDD-style implementation plans — sequential task groups that decompose a finished design into bite-sized, test-first steps. Not a design document (no decisions), not a requirements document, and not acceptance criteria. Historical value once implementation is complete.
 - **Signals:** "task group", "write failing test", "run pytest", "step-N deliverable", references a companion `CD-NNN` or `HLD-NNN` doc, implementation order section, TDD cadence (failing test → minimal implementation → commit).
 - **Filename pattern:** `PLAN-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature being implemented.
-- **Example:** `PLAN-001-prompt-runner.md`
+- **Example:** `docs/plans/retired/PLAN-001-prompt-runner.md`
+
+### docs/reviews/
+- **Purpose:** Structured review outputs such as completed review checklists, findings documents, and other review artifacts derived from an explicit review process. These are not design authorities, not implementation plans, and not acceptance-criteria specs; they record the result of reviewing another artifact.
+- **Signals:** "review checklist", "review findings", "structured review", "issues found", "coverage check", "internal logic review", paired checklist/findings documents derived from a design, plan, prompt, or other structured artifact.
+- **Filename pattern:** `RVW-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the reviewed artifact plus the review output type.
+- **Example:** `RVW-001-active-design-stack-checklist.md`
 
 ### docs/testing/
 - **Purpose:** Implementation acceptance criteria and test plans — concrete, runnable checks that verify finished code matches a design spec. Not the design itself and not the test code; the layer in between.
@@ -152,14 +164,16 @@
 - **Tests location:** n/a — plugin directories are documentation and configuration, not runnable source code.
 
 ### (project root)
-- **Purpose:** Tooling configuration files that must live at the repository root by ecosystem convention.
-- **Signals:** `package.json`, `tsconfig.json`, `pyproject.toml`, `.gitignore`, `README.md`, `CLAUDE.md`, `.editorconfig`, `.prettierrc`, lockfiles.
+- **Purpose:** Tooling configuration files and agent instruction files that must live at the repository root by ecosystem convention.
+- **Signals:** `package.json`, `tsconfig.json`, `pyproject.toml`, `.gitignore`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `.editorconfig`, `.prettierrc`, lockfiles.
 - **Filename pattern:** tool-specific, fixed names — use the exact filename the tooling expects.
 - **Tests location:** n/a
 
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-14 — docs/reviews/ added — structured review outputs are not designs or plans and need a dedicated review-artifacts layer.
+- 2026-04-13 — scripts/ added — repository-local operational scripts and workflow helpers already exist in the repo and need an explicit taxonomy home distinct from shipped src/cli commands.
 - 2026-04-09 — plugins/<plugin-name>/docs/ added — plugin-level supplementary reference documents (authoring guides, lessons-learned, pattern catalogues) are not SKILL.md files, not plugin manifests, and not plugin READMEs; they need a dedicated docs/ layer scoped to the plugin.
 - 2026-04-09 — plugins/<plugin-name>/skills/<skill-name>/ added — individual skill definition files (SKILL.md) inside a plugin's skills/ subdirectory are a distinct layer from the plugin root README and the plugin manifest; they need their own taxonomy entry covering the fixed SKILL.md filename convention.
 - 2026-04-09 — plugins/<plugin-name>/.claude-plugin/ added — Claude Code plugin manifest directory (plugin.json with name/version/description/author) is a distinct machine-readable registration layer inside a plugin package and needs its own taxonomy entry separate from the human-readable plugin root.
