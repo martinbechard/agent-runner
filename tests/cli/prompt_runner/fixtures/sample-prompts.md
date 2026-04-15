@@ -1,31 +1,27 @@
-# Example prompt file
+# Sample prompt-runner file
 
 ## Prompt 1: First Thing
 
-### 1.1 Generation Prompt
+Introductory prose for the first prompt.
 
-```
+### Generation Prompt
+
 Generate the first thing.
 It has multiple lines.
-```
 
-### 1.2 Validation Prompt
+### Validation Prompt
 
-```
 Validate the first thing.
-```
 
 ## Prompt 2: Second Thing
 
-### 2.1 Generation Prompt
+More prose between prompt sections.
 
-```
+### Generation Prompt
+
 Generate the second thing.
-```
 
-### 2.2 Validation Prompt
+### Validation Prompt
 
-```
 Validate the second thing.
 It has multiple lines too.
-```

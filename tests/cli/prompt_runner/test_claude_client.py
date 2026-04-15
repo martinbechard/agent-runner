@@ -20,7 +20,7 @@ def _make_call(prefix: str = "test") -> ClaudeCall:
         stdout_log_path=Path(f"/tmp/{prefix}.stdout.log"),
         stderr_log_path=Path(f"/tmp/{prefix}.stderr.log"),
         stream_header=f"── {prefix} ──",
-        workspace_dir=Path("/tmp"),
+        worktree_dir=Path("/tmp"),
     )
 
 
@@ -113,7 +113,7 @@ def _call(stdout_log: Path, stderr_log: Path) -> ClaudeCall:
         stdout_log_path=stdout_log,
         stderr_log_path=stderr_log,
         stream_header="── test ──",
-        workspace_dir=stdout_log.parent,
+        worktree_dir=stdout_log.parent,
     )
 
 
@@ -251,9 +251,9 @@ def test_real_client_argv_uses_session_id_on_first_call(monkeypatch, log_paths):
     sys_prompt = argv[sp_idx + 1]
     assert "Do not ask clarifying questions" in sys_prompt
     assert "Do not offer follow-up options" in sys_prompt
-    # Subprocess cwd is set to the call's workspace_dir (the shared workspace
+    # Subprocess cwd is set to the call's worktree_dir (the shared worktree
     # for all generator/judge calls in a run), not inherited from the parent.
-    # In this test _call() sets workspace_dir = stdout_log.parent.
+    # In this test _call() sets worktree_dir = stdout_log.parent.
     assert captured["cwd"] == str(stdout_log.parent)
 
 
@@ -272,7 +272,7 @@ def test_real_client_argv_uses_resume_on_subsequent_call(monkeypatch, log_paths)
         prompt="p", session_id="s", new_session=False, model=None,
         stdout_log_path=stdout_log, stderr_log_path=stderr_log,
         stream_header="── test ──",
-        workspace_dir=stdout_log.parent,
+        worktree_dir=stdout_log.parent,
     )
     client.call(call)
     assert "--resume" in captured["argv"]

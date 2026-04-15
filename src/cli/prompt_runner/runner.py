@@ -60,6 +60,7 @@ PROJECT_ORGANISER_INSTRUCTION = (
     "is purely text output (no files), ignore this instruction."
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
+RUN_FILES_DIRNAME = ".run-files"
 
 # Stable namespace for deterministic session-ID UUID generation.
 # The Claude CLI requires --session-id to be a valid UUID, so we map our
@@ -117,7 +118,7 @@ def _progress_prefix(started_at: datetime) -> str:
 
 @dataclass(frozen=True)
 class RunConfig:
-    backend: str = "claude"
+    backend: str = "codex"
     """Agent backend to use for prompt execution."""
     max_iterations: int = MAX_ITERATIONS_DEFAULT
     model: str | None = None
@@ -145,6 +146,8 @@ class RunConfig:
     variant_sequential: bool = False
     """When True, run fork-point variants one at a time instead of in
     parallel. Parallel (default) is faster; sequential uses less quota."""
+    verbose: bool = False
+    """When True, mirror backend stdout/stderr live to the terminal."""
     placeholder_values: dict[str, str] = field(default_factory=dict)
     """Caller-supplied placeholder bindings applied in addition to
     built-in values such as run_dir and project_dir."""
@@ -166,7 +169,7 @@ class PromptResult:
     final_artifact: str
     created_files: list[Path] = field(default_factory=list)
     """Relative paths of files added or modified by this prompt's generator,
-    relative to the workspace directory. Empty for text-only prompts. Passed
+    relative to the worktree directory. Empty for text-only prompts. Passed
     to subsequent prompts' generator messages as part of the file manifest so
     they know what the prior prompt produced on disk."""
     last_session_id: str = ""
@@ -198,7 +201,7 @@ class VariantResult:
     variant_title: str
     exit_code: int
     run_dir: Path
-    workspace_dir: Path
+    worktree_dir: Path
     summary: str  # content of summary.txt, or empty if not found
 
 
@@ -226,9 +229,9 @@ class PriorArtifact:
     title: str
     text_body: str
     files: list[Path]
-    """Relative paths (relative to workspace_dir) of files created by the
+    """Relative paths (relative to worktree_dir) of files created by the
     prior prompt. The current prompt's generator can Read them directly
-    since it shares the same workspace."""
+    since it shares the same worktree."""
 
 
 def _format_file_manifest(files: list[Path]) -> str:
@@ -428,13 +431,161 @@ def _prompt_dir_name(pair: PromptPair) -> str:
     return f"prompt-{pair.index:02d}-{_slugify(pair.title)}"
 
 
+def _module_slug(pair: PromptPair) -> str:
+    return pair.module_slug or _slugify(pair.title)
+
+
+def _module_dir(run_dir: Path, pair: PromptPair) -> Path:
+    return _run_files_dir(run_dir) / _module_slug(pair)
+
+
+def _module_log_path(run_dir: Path, pair: PromptPair) -> Path:
+    return _module_dir(run_dir, pair) / "module.log"
+
+
+def _prompt_file_stem(pair: PromptPair) -> str:
+    return f"prompt-{pair.index:02d}"
+
+
+def _prompt_artifact_dir(run_dir: Path, pair: PromptPair) -> Path:
+    return _module_dir(run_dir, pair)
+
+
+def _append_log(path: Path, content: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("a", encoding="utf-8") as f:
+        f.write(content)
+
+
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
 
 
+def _run_files_dir(run_dir: Path) -> Path:
+    return run_dir / RUN_FILES_DIRNAME
+
+
+def _git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        check=check,
+        text=True,
+        capture_output=True,
+    )
+
+
+def _git_is_worktree(path: Path) -> bool:
+    try:
+        proc = _git(["rev-parse", "--is-inside-work-tree"], cwd=path, check=False)
+    except OSError:
+        return False
+    return proc.returncode == 0 and proc.stdout.strip() == "true"
+
+
+def _git_worktree_root(path: Path) -> Path | None:
+    if not _git_is_worktree(path):
+        return None
+    proc = _git(["rev-parse", "--show-toplevel"], cwd=path)
+    return Path(proc.stdout.strip()).resolve()
+
+
+def _git_status_paths(
+    worktree_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
+) -> list[Path]:
+    proc = _git(
+        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+        cwd=worktree_dir,
+    )
+    raw_entries = [entry for entry in proc.stdout.split("\0") if entry]
+    changed: list[Path] = []
+    i = 0
+    while i < len(raw_entries):
+        entry = raw_entries[i]
+        if len(entry) < 4:
+            i += 1
+            continue
+        code = entry[:2]
+        path_text = entry[3:]
+        if code.startswith("R") or code.startswith("C"):
+            i += 1
+            if i >= len(raw_entries):
+                break
+            path_text = raw_entries[i]
+        rel = Path(path_text)
+        if _is_snapshot_excluded(rel, extra_excluded_roots):
+            i += 1
+            continue
+        full = worktree_dir / rel
+        if full.exists():
+            changed.append(rel)
+        i += 1
+    return sorted(dict.fromkeys(changed))
+
+
+def _git_has_changes(
+    worktree_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
+) -> bool:
+    return bool(_git_status_paths(worktree_dir, extra_excluded_roots))
+
+
+def _git_commit_prompt_changes(worktree_dir: Path, pair: PromptPair) -> None:
+    _git(["add", "-A"], cwd=worktree_dir)
+    proc = _git(["diff", "--cached", "--quiet"], cwd=worktree_dir, check=False)
+    if proc.returncode == 0:
+        return
+    _git(
+        [
+            "-c", "user.name=prompt-runner",
+            "-c", "user.email=prompt-runner@local",
+            "commit",
+            "--no-gpg-sign",
+            "-m",
+            f"prompt-runner: prompt {pair.index} {pair.title}",
+        ],
+        cwd=worktree_dir,
+    )
+
+
+def _git_restore_prompt_baseline(worktree_dir: Path) -> None:
+    _git(["reset", "--hard", "HEAD"], cwd=worktree_dir)
+    _git(["clean", "-fd"], cwd=worktree_dir)
+
+
+def _using_git_change_tracking(worktree_dir: Path, run_dir: Path) -> bool:
+    root = _git_worktree_root(worktree_dir)
+    if root is None:
+        return False
+    git_entry = run_dir / ".git"
+    return (
+        git_entry.is_file()
+        and root == worktree_dir.resolve() == run_dir.resolve()
+    )
+
+
+def _git_commit_current_state(worktree_dir: Path, message: str) -> None:
+    _git(["add", "-A"], cwd=worktree_dir)
+    proc = _git(["diff", "--cached", "--quiet"], cwd=worktree_dir, check=False)
+    if proc.returncode == 0:
+        return
+    _git(
+        [
+            "-c", "user.name=prompt-runner",
+            "-c", "user.email=prompt-runner@local",
+            "commit",
+            "--no-gpg-sign",
+            "-m",
+            message,
+        ],
+        cwd=worktree_dir,
+    )
+
+
 # Directory names that are always skipped when snapshotting or diffing the
-# workspace. These are either the tool's own outputs (runs), dependency caches
+# worktree. These are either the tool's own outputs (runs), dependency caches
 # (.venv, node_modules), Python bytecode caches (__pycache__, .pytest_cache),
 # version-control state (.git), or build artifacts.
 _SNAPSHOT_SKIP_DIR_NAMES: frozenset[str] = frozenset({
@@ -443,6 +594,7 @@ _SNAPSHOT_SKIP_DIR_NAMES: frozenset[str] = frozenset({
     "tmp",
     ".methodology-runner",
     ".prompt-runner",
+    ".run-files",
     "prompt-runner-files",
     ".venv",
     "venv",
@@ -456,8 +608,17 @@ _SNAPSHOT_SKIP_DIR_NAMES: frozenset[str] = frozenset({
 })
 
 
-def _is_snapshot_excluded(rel_path: Path) -> bool:
+def _is_snapshot_excluded(
+    rel_path: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
+) -> bool:
     """Return True if this relative path should be excluded from snapshot/diff."""
+    for root in extra_excluded_roots:
+        try:
+            rel_path.relative_to(root)
+            return True
+        except ValueError:
+            pass
     for part in rel_path.parts:
         if part in _SNAPSHOT_SKIP_DIR_NAMES:
             return True
@@ -468,29 +629,32 @@ def _is_snapshot_excluded(rel_path: Path) -> bool:
     return False
 
 
-def _iter_workspace_files(workspace_dir: Path):
-    """Yield (relative_path, mtime_ns) for every non-excluded file in the workspace."""
+def _iter_worktree_files(
+    worktree_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
+):
+    """Yield (relative_path, mtime_ns) for every non-excluded file in the worktree."""
     def _onerror(_: OSError) -> None:
         return
 
-    for root, dirnames, filenames in os.walk(workspace_dir, topdown=True, onerror=_onerror):
+    for root, dirnames, filenames in os.walk(worktree_dir, topdown=True, onerror=_onerror):
         root_path = Path(root)
         try:
-            rel_root = root_path.relative_to(workspace_dir)
+            rel_root = root_path.relative_to(worktree_dir)
         except ValueError:
             continue
 
         kept_dirs: list[str] = []
         for dirname in dirnames:
             rel_dir = rel_root / dirname if rel_root != Path(".") else Path(dirname)
-            if _is_snapshot_excluded(rel_dir):
+            if _is_snapshot_excluded(rel_dir, extra_excluded_roots):
                 continue
             kept_dirs.append(dirname)
         dirnames[:] = kept_dirs
 
         for filename in filenames:
             rel = rel_root / filename if rel_root != Path(".") else Path(filename)
-            if _is_snapshot_excluded(rel):
+            if _is_snapshot_excluded(rel, extra_excluded_roots):
                 continue
             src = root_path / filename
             try:
@@ -501,47 +665,55 @@ def _iter_workspace_files(workspace_dir: Path):
                 continue
 
 
-def _snapshot_workspace(workspace_dir: Path, dest_dir: Path) -> None:
-    """Copy every non-excluded file from workspace_dir into dest_dir.
+def _snapshot_worktree(
+    worktree_dir: Path,
+    dest_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
+) -> None:
+    """Copy every non-excluded file from worktree_dir into dest_dir.
 
     Used before each prompt so an escalated prompt can be rolled back by
     restoring from the snapshot. The dest_dir must not already exist (or if
     it does, it will be overlaid — caller is responsible for cleanup).
     """
     dest_dir.mkdir(parents=True, exist_ok=True)
-    for rel, _ in _iter_workspace_files(workspace_dir):
-        src = workspace_dir / rel
+    for rel, _ in _iter_worktree_files(worktree_dir, extra_excluded_roots):
+        src = worktree_dir / rel
         dest = dest_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
 
 
-def _diff_workspace_since_snapshot(
-    workspace_dir: Path, snapshot_dir: Path
+def _diff_worktree_since_snapshot(
+    worktree_dir: Path,
+    snapshot_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
 ) -> list[Path]:
-    """Return the list of relative paths that exist in workspace but differ
+    """Return the list of relative paths that exist in worktree but differ
     from (or are missing from) the snapshot. These are the files the prompt
     created or modified."""
     snapshot_mtimes: dict[Path, int] = {}
     if snapshot_dir.exists():
-        for rel, mtime in _iter_workspace_files(snapshot_dir):
+        for rel, mtime in _iter_worktree_files(snapshot_dir, extra_excluded_roots):
             snapshot_mtimes[rel] = mtime
     changed: list[Path] = []
-    for rel, mtime in _iter_workspace_files(workspace_dir):
+    for rel, mtime in _iter_worktree_files(worktree_dir, extra_excluded_roots):
         prev = snapshot_mtimes.get(rel)
         if prev is None or prev != mtime:
             changed.append(rel)
     return sorted(changed)
 
 
-def _restore_workspace_from_snapshot(
-    workspace_dir: Path, snapshot_dir: Path
+def _restore_worktree_from_snapshot(
+    worktree_dir: Path,
+    snapshot_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
 ) -> None:
-    """Restore workspace_dir to match snapshot_dir exactly (within exclusions).
+    """Restore worktree_dir to match snapshot_dir exactly (within exclusions).
 
-    1. Remove any file in workspace that is not in the snapshot (files the
+    1. Remove any file in worktree that is not in the snapshot (files the
        failed prompt added).
-    2. Copy every file from snapshot back into workspace (overwrites files
+    2. Copy every file from snapshot back into worktree (overwrites files
        the failed prompt modified; recreates files the failed prompt may have
        deleted).
     """
@@ -549,29 +721,105 @@ def _restore_workspace_from_snapshot(
         return
 
     snapshot_rels: set[Path] = set()
-    for rel, _ in _iter_workspace_files(snapshot_dir):
+    for rel, _ in _iter_worktree_files(snapshot_dir, extra_excluded_roots):
         snapshot_rels.add(rel)
 
-    # Pass 1: remove files present in workspace but absent from snapshot.
-    for rel, _ in list(_iter_workspace_files(workspace_dir)):
+    # Pass 1: remove files present in worktree but absent from snapshot.
+    for rel, _ in list(_iter_worktree_files(worktree_dir, extra_excluded_roots)):
         if rel not in snapshot_rels:
             try:
-                (workspace_dir / rel).unlink()
+                (worktree_dir / rel).unlink()
             except FileNotFoundError:
                 pass
 
     # Pass 2: copy everything from snapshot back.
     for rel in snapshot_rels:
         src = snapshot_dir / rel
-        dest = workspace_dir / rel
+        dest = worktree_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
+
+
+def _excluded_run_roots(worktree_dir: Path, run_dir: Path) -> tuple[Path, ...]:
+    if worktree_dir.resolve() == run_dir.resolve():
+        return (Path(RUN_FILES_DIRNAME),)
+    try:
+        return (run_dir.resolve().relative_to(worktree_dir.resolve()),)
+    except ValueError:
+        return (Path(RUN_FILES_DIRNAME),)
+
+
+def _ensure_run_files_gitignored(run_dir: Path) -> None:
+    entry = f"{RUN_FILES_DIRNAME}/"
+    if _git_is_worktree(run_dir):
+        proc = _git(["rev-parse", "--git-path", "info/exclude"], cwd=run_dir)
+        exclude_path = Path(proc.stdout.strip())
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = (
+            exclude_path.read_text(encoding="utf-8").splitlines()
+            if exclude_path.exists() else []
+        )
+        if entry in existing:
+            return
+        content = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+        suffix = "" if content.endswith("\n") or content == "" else "\n"
+        _write(exclude_path, content + suffix + entry + "\n")
+        return
+
+    gitignore_path = run_dir / ".gitignore"
+    if gitignore_path.exists():
+        existing = gitignore_path.read_text(encoding="utf-8").splitlines()
+        if entry in existing:
+            return
+        content = gitignore_path.read_text(encoding="utf-8")
+        suffix = "" if content.endswith("\n") or content == "" else "\n"
+        _write(gitignore_path, content + suffix + entry + "\n")
+        return
+    _write(gitignore_path, entry + "\n")
+
+
+def _initial_copy_excluded_roots(
+    project_dir: Path,
+    run_dir: Path,
+) -> tuple[Path, ...]:
+    excluded: list[Path] = [Path(RUN_FILES_DIRNAME)]
+    try:
+        excluded.append(run_dir.resolve().relative_to(project_dir.resolve()))
+    except ValueError:
+        pass
+    return tuple(excluded)
+
+
+def _initialise_run_worktree(project_dir: Path, run_dir: Path) -> None:
+    project_dir = project_dir.resolve()
+    run_dir = run_dir.resolve()
+    if project_dir == run_dir:
+        _ensure_run_files_gitignored(run_dir)
+        return
+
+    existing_files = [p for p in run_dir.iterdir()] if run_dir.exists() else []
+    if existing_files:
+        _ensure_run_files_gitignored(run_dir)
+        return
+
+    if _git_is_worktree(project_dir):
+        run_dir.parent.mkdir(parents=True, exist_ok=True)
+        _git(["worktree", "prune"], cwd=project_dir, check=False)
+        _git(["worktree", "add", "--detach", str(run_dir), "HEAD"], cwd=project_dir)
+        excluded = _initial_copy_excluded_roots(project_dir, run_dir)
+        _restore_worktree_from_snapshot(run_dir, project_dir, excluded)
+        _git_commit_current_state(run_dir, "prompt-runner: baseline")
+    else:
+        run_dir.mkdir(parents=True, exist_ok=True)
+        excluded = _initial_copy_excluded_roots(project_dir, run_dir)
+        _snapshot_worktree(project_dir, run_dir, excluded)
+    _ensure_run_files_gitignored(run_dir)
 
 
 def _materialize_generator_artifact(
     *,
     backend: str,
-    workspace_dir: Path,
+    worktree_dir: Path,
     created_files: list[Path],
     generator_stdout: str,
 ) -> str:
@@ -585,7 +833,7 @@ def _materialize_generator_artifact(
     """
     if backend != "codex" or len(created_files) != 1:
         return generator_stdout
-    target = workspace_dir / created_files[0]
+    target = worktree_dir / created_files[0]
     try:
         return target.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError):
@@ -599,11 +847,11 @@ def _make_call(
     new_session: bool,
     model: str | None,
     effort: str | None = None,
-    logs_dir: Path,
+    module_log_path: Path,
     iteration: int,
     role: str,
     pair: PromptPair,
-    workspace_dir: Path,
+    worktree_dir: Path,
     fork_session: bool = False,
     fork_from_session_id: str = "",
 ) -> ClaudeCall:
@@ -613,14 +861,14 @@ def _make_call(
         new_session=new_session,
         model=model,
         effort=effort,
-        stdout_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stdout.log",
-        stderr_log_path=logs_dir / f"iter-{iteration:02d}-{role}.stderr.log",
+        stdout_log_path=module_log_path,
+        stderr_log_path=module_log_path,
         fork_session=fork_session,
         fork_from_session_id=fork_from_session_id,
         stream_header=(
             f"── prompt {pair.index} '{pair.title}' / iter {iteration} / {role} ──"
         ),
-        workspace_dir=workspace_dir,
+        worktree_dir=worktree_dir,
     )
 
 
@@ -629,7 +877,7 @@ def _run_interactive_prompt(
     prior_artifacts: list[PriorArtifact],
     run_dir: Path,
     config: RunConfig,
-    workspace_dir: Path,
+    worktree_dir: Path,
 ) -> PromptResult:
     """Spawn the selected backend interactively with pair.generation_prompt.
 
@@ -643,11 +891,16 @@ def _run_interactive_prompt(
     from prompt_runner.verdict import Verdict
 
     prompt_slug = _prompt_dir_name(pair)
-    prompt_dir = run_dir / prompt_slug
+    run_files_dir = _run_files_dir(run_dir)
+    prompt_dir = _prompt_artifact_dir(run_dir, pair)
+    module_log_path = _module_log_path(run_dir, pair)
     prompt_dir.mkdir(parents=True, exist_ok=True)
 
-    snapshot_dir = run_dir / "snapshots" / f"{prompt_slug}-pre"
-    _snapshot_workspace(workspace_dir, snapshot_dir)
+    excluded_roots = _excluded_run_roots(worktree_dir, run_dir)
+    snapshot_dir = prompt_dir / "snapshot-pre"
+    use_git_tracking = _using_git_change_tracking(worktree_dir, run_dir)
+    if not use_git_tracking:
+        _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
 
     # Build the mission text: prior-artifact context + the pair's
     # generation prompt. We use the same message builder as the
@@ -660,14 +913,14 @@ def _run_interactive_prompt(
     # Spawn the selected backend interactively. stdin/stdout/stderr inherit from this
     # process so the user sees a real TTY session. Wait for exit.
     if config.backend == "codex":
-        state_root = workspace_dir / ".prompt-runner" / "backend-state" / "codex"
+        state_root = run_files_dir / "backend-state" / "codex"
         log_dir = state_root / "log"
         sqlite_home = state_root / "sqlite"
         log_dir.mkdir(parents=True, exist_ok=True)
         sqlite_home.mkdir(parents=True, exist_ok=True)
         argv = ["codex"]
         argv.extend([
-            "-c", f'projects."{workspace_dir}".trust_level="trusted"',
+            "-c", f'projects."{worktree_dir}".trust_level="trusted"',
             "-c", 'approval_policy="never"',
             "-c", 'history.persistence="none"',
             "-c", 'sandbox_mode="danger-full-access"',
@@ -692,20 +945,26 @@ def _run_interactive_prompt(
         flush=True,
     )
 
-    process_meta_path = prompt_dir / "interactive-process.json"
-    proc = subprocess.Popen(argv, cwd=workspace_dir)
+    process_meta_path = prompt_dir / f"{prompt_slug}.interactive-process.json"
+    proc = subprocess.Popen(argv, cwd=worktree_dir)
     write_spawn_metadata(
         process_meta_path,
         kind="interactive-backend-call",
         pid=proc.pid,
         argv=argv,
-        cwd=workspace_dir,
+        cwd=worktree_dir,
     )
     exit_code = proc.wait()
     mark_process_completed(process_meta_path, returncode=exit_code)
 
     # Capture files the session created
-    created_files = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+    created_files = (
+        _git_status_paths(worktree_dir, excluded_roots)
+        if use_git_tracking else
+        _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
+    )
+    if use_git_tracking and _git_has_changes(worktree_dir, excluded_roots):
+        _git_commit_prompt_changes(worktree_dir, pair)
 
     # Write artifact stubs so downstream resume logic can see the pair completed.
     # There is no generator text to capture (stdio was inherited), so the
@@ -715,10 +974,15 @@ def _run_interactive_prompt(
         f"Mission: {pair.title}\n"
         f"Exit code: {exit_code}\n"
     )
-    _write(prompt_dir / "final-artifact.md", artifact_stub)
-    _write(prompt_dir / "final-verdict.txt", Verdict.PASS.value + "\n")
+    _append_log(
+        module_log_path,
+        f"\n=== interactive prompt {pair.index}: {pair.title} ===\n"
+        f"exit_code={exit_code}\n",
+    )
+    _write(prompt_dir / f"{prompt_slug}.final-artifact.md", artifact_stub)
+    _write(prompt_dir / f"{prompt_slug}.final-verdict.txt", Verdict.PASS.value + "\n")
     _write(
-        prompt_dir / "files-created.txt",
+        prompt_dir / f"{prompt_slug}.files-created.txt",
         "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
     )
 
@@ -738,12 +1002,12 @@ def run_prompt(
     config: RunConfig,
     claude_client: ClaudeClient,
     run_id: str,
-    workspace_dir: Path,
+    worktree_dir: Path,
     pipeline_started_at: datetime | None = None,
 ) -> PromptResult:
     if pair.interactive:
         return _run_interactive_prompt(
-            pair, prior_artifacts, run_dir, config, workspace_dir,
+            pair, prior_artifacts, run_dir, config, worktree_dir,
         )
     if config.max_iterations < 1:
         raise ValueError(
@@ -752,16 +1016,18 @@ def run_prompt(
     gen_session = _session_id(f"gen-prompt-{pair.index}-{run_id}")
     jud_session = _session_id(f"jud-prompt-{pair.index}-{run_id}")
     prompt_slug = _prompt_dir_name(pair)
-    prompt_dir = run_dir / prompt_slug
-    logs_dir = run_dir / "logs" / prompt_slug
-    snapshot_dir = run_dir / "snapshots" / f"{prompt_slug}-pre"
+    prompt_dir = _prompt_artifact_dir(run_dir, pair)
+    module_log_path = _module_log_path(run_dir, pair)
     prompt_dir.mkdir(parents=True, exist_ok=True)
-    logs_dir.mkdir(parents=True, exist_ok=True)
+    excluded_roots = _excluded_run_roots(worktree_dir, run_dir)
+    snapshot_dir = prompt_dir / "snapshot-pre"
+    use_git_tracking = _using_git_change_tracking(worktree_dir, run_dir)
 
-    # Snapshot the workspace before the prompt runs so we can roll back to
+    # Snapshot the worktree before the prompt runs so we can roll back to
     # this state if the prompt escalates. Also lets us diff at the end to
     # find out which files the prompt's generator created.
-    _snapshot_workspace(workspace_dir, snapshot_dir)
+    if not use_git_tracking:
+        _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
 
     iterations: list[IterationResult] = []
     gen_response: ClaudeResponse | None = None
@@ -809,17 +1075,21 @@ def run_prompt(
             f"{_progress_prefix(progress_started_at)} "
             f"prompt {pair.index} iter {iteration_number} generator start"
         )
+        _append_log(
+            module_log_path,
+            f"\n=== generator prompt {pair.index} iter {iteration_number} start ===\n",
+        )
         gen_call = _make_call(
             prompt=gen_msg,
             session_id=fork_new_session,
             new_session=(is_first and not use_fork) or stateless_revisions,
             model=pair.model_override or config.model,
             effort=pair.effort_override,
-            logs_dir=logs_dir,
+            module_log_path=module_log_path,
             iteration=iteration_number,
             role="generator",
             pair=pair,
-            workspace_dir=workspace_dir,
+            worktree_dir=worktree_dir,
             fork_session=use_fork,
             fork_from_session_id=config.fork_from_session if use_fork else "",
         )
@@ -830,23 +1100,31 @@ def run_prompt(
             f"{_progress_prefix(progress_started_at)} "
             f"prompt {pair.index} iter {iteration_number} generator done"
         )
+        _append_log(
+            module_log_path,
+            f"\n=== generator prompt {pair.index} iter {iteration_number} end ===\n",
+        )
 
-        # Diff the workspace against the pre-prompt snapshot to find which
+        # Diff the worktree against the pre-prompt snapshot to find which
         # files the generator has touched so far. Pass this list to the
         # judge so it knows exactly which files to inspect, rather than
         # having to discover them via Glob.
-        files_so_far = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+        files_so_far = (
+            _git_status_paths(worktree_dir, excluded_roots)
+            if use_git_tracking else
+            _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
+        )
         artifact_text = _materialize_generator_artifact(
             backend=config.backend,
-            workspace_dir=workspace_dir,
+            worktree_dir=worktree_dir,
             created_files=files_so_far,
             generator_stdout=gen_response.stdout,
         )
         deterministic_validation = _run_deterministic_validation(
             pair=pair,
             prompt_dir=prompt_dir,
-            logs_dir=logs_dir,
-            workspace_dir=workspace_dir,
+            module_log_path=module_log_path,
+            worktree_dir=worktree_dir,
             iteration_number=iteration_number,
         )
         if (
@@ -882,6 +1160,10 @@ def run_prompt(
             f"{_progress_prefix(progress_started_at)} "
             f"prompt {pair.index} iter {iteration_number} judge start"
         )
+        _append_log(
+            module_log_path,
+            f"\n=== validation prompt {pair.index} iter {iteration_number} start ===\n",
+        )
         jud_msg = (
             build_initial_judge_message(
                 pair, artifact_text, files_so_far,
@@ -904,11 +1186,11 @@ def run_prompt(
             new_session=is_first or stateless_revisions,
             model=pair.model_override or config.model,
             effort=pair.effort_override,
-            logs_dir=logs_dir,
+            module_log_path=module_log_path,
             iteration=iteration_number,
             role="judge",
             pair=pair,
-            workspace_dir=workspace_dir,
+            worktree_dir=worktree_dir,
         )
         jud_response = _call_or_persist_partial(
             claude_client, jud_call, prompt_dir / f"iter-{iteration_number:02d}-judge.md"
@@ -916,6 +1198,10 @@ def run_prompt(
         _emit_progress(
             f"{_progress_prefix(progress_started_at)} "
             f"prompt {pair.index} iter {iteration_number} judge done"
+        )
+        _append_log(
+            module_log_path,
+            f"\n=== validation prompt {pair.index} iter {iteration_number} end ===\n",
         )
 
         verdict = parse_verdict(jud_response.stdout)
@@ -942,18 +1228,29 @@ def run_prompt(
     if final_verdict == Verdict.PASS:
         # Compute the list of files this prompt created so they can be
         # injected into subsequent prompts' prior-artifact context, and
-        # preserve the workspace state (do not restore).
-        created_files = _diff_workspace_since_snapshot(workspace_dir, snapshot_dir)
+        # preserve the worktree state (do not restore).
+        created_files = (
+            _git_status_paths(worktree_dir, excluded_roots)
+            if use_git_tracking else
+            _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
+        )
+        if use_git_tracking and _git_has_changes(worktree_dir, excluded_roots):
+            _git_commit_prompt_changes(worktree_dir, pair)
     else:
-        # Escalation — roll back the workspace so a half-done prompt does
+        # Escalation — roll back the worktree so a half-done prompt does
         # not pollute later prompts or leave garbage in the tree.
-        _restore_workspace_from_snapshot(workspace_dir, snapshot_dir)
+        if use_git_tracking:
+            _git_restore_prompt_baseline(worktree_dir)
+        else:
+            _restore_worktree_from_snapshot(
+                worktree_dir, snapshot_dir, excluded_roots,
+            )
         created_files = []
 
-    _write(prompt_dir / "final-artifact.md", final.generator_output)
-    _write(prompt_dir / "final-verdict.txt", final_verdict.value + "\n")
+    _write(prompt_dir / f"{prompt_slug}.final-artifact.md", final.generator_output)
+    _write(prompt_dir / f"{prompt_slug}.final-verdict.txt", final_verdict.value + "\n")
     _write(
-        prompt_dir / "files-created.txt",
+        prompt_dir / f"{prompt_slug}.files-created.txt",
         "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
     )
 
@@ -993,9 +1290,10 @@ def _load_prior_artifact_from_disk(
     final-artifact and files-created files. Used by --resume to rebuild the
     prior-artifact context for prompts that were already completed in a
     previous run."""
-    prompt_dir = run_dir / _prompt_dir_name(pair)
-    text_body = (prompt_dir / "final-artifact.md").read_text(encoding="utf-8")
-    files_txt = (prompt_dir / "files-created.txt").read_text(encoding="utf-8")
+    prompt_slug = _prompt_dir_name(pair)
+    prompt_dir = _prompt_artifact_dir(run_dir, pair)
+    text_body = (prompt_dir / f"{prompt_slug}.final-artifact.md").read_text(encoding="utf-8")
+    files_txt = (prompt_dir / f"{prompt_slug}.files-created.txt").read_text(encoding="utf-8")
     files = [
         Path(line) for line in files_txt.splitlines() if line.strip()
     ]
@@ -1006,26 +1304,38 @@ def _load_prior_artifact_from_disk(
     )
 
 
-def _resolve_required_file(path_text: str, workspace_dir: Path) -> Path:
+def _resolve_required_file(path_text: str, worktree_dir: Path) -> Path:
     candidate = Path(path_text)
     if candidate.is_absolute():
+        worktree_prefix = str(worktree_dir.resolve())
+        raw = str(candidate)
+        if raw.startswith(worktree_prefix + os.sep):
+            tail = raw[len(worktree_prefix):]
+            tail_path = Path(tail)
+            # Repair only the specific duplicated-prefix case:
+            #   <worktree>/<absolute-path>
+            # when the stripped absolute tail is itself a real path. Do not
+            # rewrite ordinary absolute paths that legitimately live under the
+            # worktree, such as <worktree>/docs/request.md>.
+            if tail_path.is_absolute() and tail_path.exists():
+                return tail_path
         return candidate
-    return (workspace_dir / candidate).resolve()
+    return (worktree_dir / candidate).resolve()
 
 
 def _resolve_deterministic_validation_script(
     pair: PromptPair,
-    workspace_dir: Path,
+    worktree_dir: Path,
 ) -> Path | None:
     if not pair.deterministic_validation:
         return None
-    return _resolve_required_file(pair.deterministic_validation[0], workspace_dir)
+    return _resolve_required_file(pair.deterministic_validation[0], worktree_dir)
 
 
-def _missing_required_files(pair: PromptPair, workspace_dir: Path) -> list[Path]:
+def _missing_required_files(pair: PromptPair, worktree_dir: Path) -> list[Path]:
     missing: list[Path] = []
     for raw_path in pair.required_files:
-        resolved = _resolve_required_file(raw_path, workspace_dir)
+        resolved = _resolve_required_file(raw_path, worktree_dir)
         if not resolved.exists():
             missing.append(resolved)
     return missing
@@ -1036,12 +1346,12 @@ _PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 
 def _placeholder_context(
     run_dir: Path,
-    workspace_dir: Path,
+    worktree_dir: Path,
     config: RunConfig,
 ) -> dict[str, str]:
     context = dict(config.placeholder_values)
     context["run_dir"] = str(run_dir.resolve())
-    context["project_dir"] = str(workspace_dir.resolve())
+    context["project_dir"] = str(worktree_dir.resolve())
     return context
 
 
@@ -1071,6 +1381,11 @@ def _render_prompt_pair(pair: PromptPair, context: dict[str, str]) -> PromptPair
             _render_placeholders(value, context)
             for value in pair.deterministic_validation
         ),
+        module_slug=(
+            _render_placeholders(pair.module_slug, context)
+            if pair.module_slug is not None
+            else None
+        ),
         interactive=pair.interactive,
         model_override=pair.model_override,
         effort_override=pair.effort_override,
@@ -1092,10 +1407,10 @@ def _pair_unresolved_placeholders(pair: PromptPair) -> list[str]:
     return sorted(names)
 
 
-def _optional_file_checks(pair: PromptPair, workspace_dir: Path) -> list[dict[str, str | bool]]:
+def _optional_file_checks(pair: PromptPair, worktree_dir: Path) -> list[dict[str, str | bool]]:
     checks: list[dict[str, str | bool]] = []
     for raw_path in pair.checks_files:
-        resolved = _resolve_required_file(raw_path, workspace_dir)
+        resolved = _resolve_required_file(raw_path, worktree_dir)
         checks.append(
             {
                 "path": raw_path,
@@ -1107,46 +1422,47 @@ def _optional_file_checks(pair: PromptPair, workspace_dir: Path) -> list[dict[st
 
 
 def _write_optional_file_checks_trace(
-    prompt_dir: Path,
+    run_dir: Path,
     pair: PromptPair,
-    workspace_dir: Path,
+    worktree_dir: Path,
 ) -> None:
     if not pair.checks_files:
         return
-    checks = _optional_file_checks(pair, workspace_dir)
-    _write(prompt_dir / "checks-files.json", json.dumps(checks, indent=2) + "\n")
+    checks = _optional_file_checks(pair, worktree_dir)
+    _append_log(
+        _module_log_path(run_dir, pair),
+        "\n=== checks files ===\n"
+        f"{json.dumps(checks, indent=2)}\n"
+        "=== checks files end ===\n",
+    )
 
 
 def _run_deterministic_validation(
     *,
     pair: PromptPair,
     prompt_dir: Path,
-    logs_dir: Path,
-    workspace_dir: Path,
+    module_log_path: Path,
+    worktree_dir: Path,
     iteration_number: int,
 ) -> DeterministicValidationResult | None:
     if not pair.deterministic_validation:
         return None
-    script_path = _resolve_deterministic_validation_script(pair, workspace_dir)
+    script_path = _resolve_deterministic_validation_script(pair, worktree_dir)
     assert script_path is not None
     argv = [
         sys.executable,
         str(script_path),
         *pair.deterministic_validation[1:],
     ]
-    stdout_log_path = (
-        logs_dir / f"iter-{iteration_number:02d}-deterministic-validation.stdout.log"
-    )
-    stderr_log_path = (
-        logs_dir / f"iter-{iteration_number:02d}-deterministic-validation.stderr.log"
-    )
+    stdout_log_path = module_log_path
+    stderr_log_path = module_log_path
     process_metadata_path = (
-        logs_dir / f"iter-{iteration_number:02d}-deterministic-validation.stdout.proc.json"
+        prompt_dir / f"prompt-{pair.index:02d}.iter-{iteration_number:02d}-deterministic-validation.proc.json"
     )
     env = os.environ.copy()
     env.update(
         {
-            "PROMPT_RUNNER_WORKSPACE_DIR": str(workspace_dir.resolve()),
+            "PROMPT_RUNNER_WORKTREE_DIR": str(worktree_dir.resolve()),
             "PROMPT_RUNNER_PROMPT_DIR": str(prompt_dir.resolve()),
             "PROMPT_RUNNER_PROMPT_INDEX": str(pair.index),
             "PROMPT_RUNNER_PROMPT_TITLE": pair.title,
@@ -1155,7 +1471,7 @@ def _run_deterministic_validation(
     )
     proc = subprocess.Popen(
         argv,
-        cwd=workspace_dir,
+        cwd=worktree_dir,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -1166,12 +1482,22 @@ def _run_deterministic_validation(
         kind="deterministic-validation",
         pid=proc.pid,
         argv=argv,
-        cwd=workspace_dir,
+        cwd=worktree_dir,
+    )
+    _append_log(
+        module_log_path,
+        f"\n=== deterministic validation prompt {pair.index} iter {iteration_number} start ===\n"
+        f"command: {' '.join(argv)}\n",
     )
     stdout, stderr = proc.communicate()
     mark_process_completed(process_metadata_path, returncode=proc.returncode)
-    _write(stdout_log_path, stdout)
-    _write(stderr_log_path, stderr)
+    _append_log(
+        module_log_path,
+        f"exit_code: {proc.returncode}\n"
+        f"stdout:\n{stdout if stdout.endswith(chr(10)) or not stdout else stdout + chr(10)}"
+        f"stderr:\n{stderr if stderr.endswith(chr(10)) or not stderr else stderr + chr(10)}"
+        f"=== deterministic validation prompt {pair.index} iter {iteration_number} end ===\n",
+    )
     return DeterministicValidationResult(
         command=argv,
         script_path=script_path,
@@ -1185,11 +1511,7 @@ def _run_deterministic_validation(
 
 
 def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
-    """Convert a list of PromptPair objects back to prompt-runner markdown format.
-
-    Each pair becomes a '## Prompt N: <title>' section with two fenced code
-    blocks.  Validator-less pairs (empty validation_prompt) get only one block.
-    """
+    """Convert PromptPair objects back to heading-based prompt-runner markdown."""
     sections: list[str] = []
     for pair in pairs:
         heading = f"## Prompt {pair.index}: {pair.title}"
@@ -1198,35 +1520,40 @@ def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
         if pair.effort_override:
             heading += f" [EFFORT:{pair.effort_override}]"
         lines: list[str] = [heading, ""]
+        if pair.module_slug:
+            lines.append("### Module")
+            lines.append("")
+            lines.append(pair.module_slug)
+            lines.append("")
         if pair.required_files:
-            lines.append("```required-files")
+            lines.append("### Required Files")
+            lines.append("")
             lines.extend(pair.required_files)
-            lines.append("```")
             lines.append("")
         if pair.checks_files:
-            lines.append("```checks-files")
+            lines.append("### Checks Files")
+            lines.append("")
             lines.extend(pair.checks_files)
-            lines.append("```")
             lines.append("")
         if pair.deterministic_validation:
-            lines.append("```deterministic-validation")
-            lines.extend(pair.deterministic_validation)
-            lines.append("```")
+            lines.append("### Deterministic Validation")
             lines.append("")
-        lines.append("```")
+            lines.extend(pair.deterministic_validation)
+            lines.append("")
+        lines.append("### Generation Prompt")
+        lines.append("")
         lines.append(pair.generation_prompt)
-        lines.append("```")
         if pair.validation_prompt:
             lines.append("")
-            lines.append("```")
+            lines.append("### Validation Prompt")
+            lines.append("")
             lines.append(pair.validation_prompt)
-            lines.append("```")
         sections.append("\n".join(lines))
     return "\n\n".join(sections) + "\n"
 
 
-def _copy_workspace_for_variant(src_workspace: Path, dest_workspace: Path) -> None:
-    """Copy a workspace directory to a new location, excluding build/cache dirs.
+def _copy_worktree_for_variant(src_workspace: Path, dest_workspace: Path) -> None:
+    """Copy a worktree directory to a new location, excluding build/cache dirs.
 
     dest_workspace must not already exist.
     """
@@ -1246,7 +1573,7 @@ def _run_fork_point(
     fork_index_in_run: int,
     items_after: list[PromptPair | ForkPoint],
     run_dir: Path,
-    workspace_dir: Path,
+    worktree_dir: Path,
     config: RunConfig,
     source_file: Path,
     fork_from_session: str = "",
@@ -1254,30 +1581,25 @@ def _run_fork_point(
     """Execute all variants of a fork point and return their aggregated results.
 
     For each variant:
-    1. Copy the current workspace into a per-variant directory.
+    1. Copy the current worktree into a per-variant directory.
     2. Build a synthetic prompt file (variant pairs + items_after).
     3. Spawn a prompt-runner subprocess.
     4. Collect results.
     """
     fork_slug = f"fork-{fork.index:02d}-{_slugify(fork.title)}"
-    fork_dir = run_dir / fork_slug
+    run_files_dir = _run_files_dir(run_dir)
+    fork_dir = run_files_dir / fork_slug
     fork_dir.mkdir(parents=True, exist_ok=True)
 
-    procs: list[tuple[VariantPrompt, Path, Path, subprocess.Popen[bytes]]] = []
+    procs: list[tuple[VariantPrompt, Path, subprocess.Popen[bytes]]] = []
 
     for variant in fork.variants:
         variant_slug = f"variant-{_slugify(variant.variant_name)}"
-        variant_dir = fork_dir / variant_slug
-        variant_workspace = variant_dir / "workspace"
-        # Use a unique run-dir name per variant so _session_id() generates
-        # distinct UUIDs (it hashes the run_dir.name as the run_id).
-        variant_run_dir = variant_dir / f"run-{variant_slug}"
+        variant_run_dir = fork_dir / variant_slug
 
-        variant_dir.mkdir(parents=True, exist_ok=True)
-        variant_run_dir.mkdir(parents=True, exist_ok=True)
-
-        # Copy the workspace into the variant directory.
-        _copy_workspace_for_variant(workspace_dir, variant_workspace)
+        # Copy the worktree into the variant directory.
+        _copy_worktree_for_variant(worktree_dir, variant_run_dir)
+        _ensure_run_files_gitignored(variant_run_dir)
 
         # Build a synthetic prompt list: variant pairs + all subsequent items.
         # Only PromptPair items from items_after are serialised (ForkPoints
@@ -1289,20 +1611,12 @@ def _run_fork_point(
         synthetic_pairs = list(variant.pairs) + tail_pairs
         synthetic_md = _serialize_pairs_to_md(synthetic_pairs)
 
-        temp_md_path = variant_dir / "synthetic-prompt.md"
-        temp_md_path.write_text(synthetic_md, encoding="utf-8")
-
-        # When forking sessions, use the ORIGINAL workspace as project-dir
-        # so claude finds the session (sessions are stored per-project-path).
-        # Variants share the original workspace — must run sequentially.
-        effective_project_dir = (
-            workspace_dir if fork_from_session else variant_workspace
-        )
+        temp_md_path = _run_files_dir(variant_run_dir) / "synthetic-prompt.md"
+        _write(temp_md_path, synthetic_md)
         cmd: list[str] = [
             sys.executable, "-m", "prompt_runner",
             "run", str(temp_md_path),
-            "--project-dir", str(effective_project_dir),
-            "--output-dir", str(variant_run_dir),
+            "--run-dir", str(variant_run_dir),
             "--backend", config.backend,
         ]
         for key, value in config.placeholder_values.items():
@@ -1310,12 +1624,12 @@ def _run_fork_point(
         if config.model:
             cmd.extend(["--model", config.model])
         if config.generator_prelude:
-            prelude_path = variant_dir / "generator-prelude.txt"
-            prelude_path.write_text(config.generator_prelude, encoding="utf-8")
+            prelude_path = _run_files_dir(variant_run_dir) / "generator-prelude.txt"
+            _write(prelude_path, config.generator_prelude)
             cmd.extend(["--generator-prelude", str(prelude_path)])
         if config.judge_prelude:
-            prelude_path = variant_dir / "judge-prelude.txt"
-            prelude_path.write_text(config.judge_prelude, encoding="utf-8")
+            prelude_path = _run_files_dir(variant_run_dir) / "judge-prelude.txt"
+            _write(prelude_path, config.judge_prelude)
             cmd.extend(["--judge-prelude", str(prelude_path)])
         if fork_from_session:
             cmd.extend(["--fork-from-session", fork_from_session])
@@ -1328,27 +1642,27 @@ def _run_fork_point(
 
         proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         write_spawn_metadata(
-            variant_run_dir / "child-process.json",
+            _run_files_dir(variant_run_dir) / "child-process.json",
             kind="variant-run",
             pid=proc.pid,
             argv=[str(part) for part in cmd],
-            cwd=effective_project_dir,
+            cwd=variant_run_dir,
         )
-        procs.append((variant, variant_run_dir, variant_workspace, proc))
+        procs.append((variant, variant_run_dir, proc))
 
         if config.variant_sequential:
             proc.wait()
 
     # Wait for all subprocesses.
     variant_results: list[VariantResult] = []
-    for variant, variant_run_dir, variant_workspace, proc in procs:
+    for variant, variant_run_dir, proc in procs:
         proc.wait()
         exit_code = proc.returncode
         mark_process_completed(
-            variant_run_dir / "child-process.json",
+            _run_files_dir(variant_run_dir) / "child-process.json",
             returncode=exit_code,
         )
-        summary_path = variant_run_dir / "summary.txt"
+        summary_path = _run_files_dir(variant_run_dir) / "summary.txt"
         summary = (
             summary_path.read_text(encoding="utf-8")
             if summary_path.exists()
@@ -1359,7 +1673,7 @@ def _run_fork_point(
             variant_title=variant.variant_title,
             exit_code=exit_code,
             run_dir=variant_run_dir,
-            workspace_dir=variant_workspace,
+            worktree_dir=variant_run_dir,
             summary=summary,
         ))
 
@@ -1406,7 +1720,7 @@ def _run_fork_point(
         comparison_lines.append(f"  Variant {vr.variant_name}: {vr.variant_title}")
         comparison_lines.append(f"    exit code : {vr.exit_code} ({status})")
         comparison_lines.append(f"    run dir   : {vr.run_dir}")
-        comparison_lines.append(f"    workspace : {vr.workspace_dir}")
+        comparison_lines.append(f"    worktree : {vr.worktree_dir}")
 
         # Summary excerpt (first 3 lines).
         summary_lines = [ln for ln in vr.summary.splitlines() if ln.strip()][:3]
@@ -1415,15 +1729,15 @@ def _run_fork_point(
             for ln in summary_lines:
                 comparison_lines.append(f"      {ln}")
 
-        # Files created in the variant workspace.
-        if vr.workspace_dir.exists():
+        # Files created in the variant worktree.
+        if vr.worktree_dir.exists():
             ws_files = sorted(
-                str(p.relative_to(vr.workspace_dir))
-                for p in vr.workspace_dir.rglob("*")
+                str(p.relative_to(vr.worktree_dir))
+                for p in vr.worktree_dir.rglob("*")
                 if p.is_file()
             )
             if ws_files:
-                comparison_lines.append(f"    workspace files ({len(ws_files)}):")
+                comparison_lines.append(f"    worktree files ({len(ws_files)}):")
                 for f in ws_files:
                     comparison_lines.append(f"      {f}")
 
@@ -1444,15 +1758,22 @@ def run_pipeline(
     config: RunConfig,
     claude_client: ClaudeClient,
     source_file: Path,
-    workspace_dir: Path | None = None,
+    source_project_dir: Path | None = None,
+    worktree_dir: Path | None = None,
     resume: bool = False,
 ) -> PipelineResult:
+    run_dir = run_dir.resolve()
     run_id = run_dir.name
     run_dir.mkdir(parents=True, exist_ok=True)
-    if workspace_dir is None:
-        workspace_dir = Path.cwd().resolve()
+    if source_project_dir is None and worktree_dir is not None:
+        source_project_dir = worktree_dir
+    if source_project_dir is None:
+        source_project_dir = run_dir
     else:
-        workspace_dir = Path(workspace_dir).resolve()
+        source_project_dir = Path(source_project_dir).resolve()
+    worktree_dir = run_dir
+    if not resume:
+        _initialise_run_worktree(source_project_dir, run_dir)
     started_at = datetime.now(timezone.utc)
     if not resume:
         _write_manifest(run_dir, source_file, config, run_id,
@@ -1466,7 +1787,7 @@ def run_pipeline(
     prompt_results: list[PromptResult] = []
     fork_results: list[ForkResult] = []
     last_session_id: str = ""  # for fork context inheritance
-    placeholder_context = _placeholder_context(run_dir, workspace_dir, config)
+    placeholder_context = _placeholder_context(run_dir, worktree_dir, config)
 
     # When resuming, track whether we have hit the first incomplete prompt.
     # All prompts before it that have a 'pass' verdict are skipped; once we
@@ -1488,7 +1809,7 @@ def run_pipeline(
                 fork_index_in_run=item_index,
                 items_after=items_after,
                 run_dir=run_dir,
-                workspace_dir=workspace_dir,
+                worktree_dir=worktree_dir,
                 config=config,
                 source_file=source_file,
                 fork_from_session=last_session_id,
@@ -1539,13 +1860,14 @@ def run_pipeline(
             )
 
         if still_skipping:
-            prompt_dir = run_dir / _prompt_dir_name(rendered_pair)
-            verdict_path = prompt_dir / "final-verdict.txt"
+            prompt_slug = _prompt_dir_name(rendered_pair)
+            prompt_dir = _prompt_artifact_dir(run_dir, rendered_pair)
+            verdict_path = prompt_dir / f"{prompt_slug}.final-verdict.txt"
             if verdict_path.exists() and verdict_path.read_text(encoding="utf-8").splitlines()[0] == "pass":
                 # This prompt already completed with pass — skip it.
                 prior_artifact = _load_prior_artifact_from_disk(rendered_pair, run_dir)
-                text_body = (prompt_dir / "final-artifact.md").read_text(encoding="utf-8")
-                files_txt = (prompt_dir / "files-created.txt").read_text(encoding="utf-8")
+                text_body = (prompt_dir / f"{prompt_slug}.final-artifact.md").read_text(encoding="utf-8")
+                files_txt = (prompt_dir / f"{prompt_slug}.files-created.txt").read_text(encoding="utf-8")
                 created_files = [
                     Path(line) for line in files_txt.splitlines() if line.strip()
                 ]
@@ -1571,11 +1893,11 @@ def run_pipeline(
                 # First incomplete prompt — stop skipping from here on.
                 still_skipping = False
 
-        prompt_dir = run_dir / _prompt_dir_name(rendered_pair)
+        prompt_dir = _prompt_artifact_dir(run_dir, rendered_pair)
         prompt_dir.mkdir(parents=True, exist_ok=True)
-        _write_optional_file_checks_trace(prompt_dir, rendered_pair, workspace_dir)
+        _write_optional_file_checks_trace(run_dir, rendered_pair, worktree_dir)
 
-        missing_required = _missing_required_files(rendered_pair, workspace_dir)
+        missing_required = _missing_required_files(rendered_pair, worktree_dir)
         if missing_required:
             missing_lines = "\n".join(f"- {path}" for path in missing_required)
             halt_reason = (
@@ -1604,7 +1926,7 @@ def run_pipeline(
             )
         deterministic_script = _resolve_deterministic_validation_script(
             rendered_pair,
-            workspace_dir,
+            worktree_dir,
         )
         if deterministic_script is not None and not deterministic_script.exists():
             halt_reason = (
@@ -1637,7 +1959,7 @@ def run_pipeline(
         try:
             result = run_prompt(
                 rendered_pair, prior_artifacts, run_dir, config, claude_client,
-                run_id, workspace_dir, started_at,
+                run_id, worktree_dir, started_at,
             )
         except VerdictParseError as err:
             halt_reason = (
@@ -1721,10 +2043,11 @@ def _format_claude_failed_halt_reason(
     pair: PromptPair, err: ClaudeInvocationError, run_dir: Path,
 ) -> str:
     """Build a multi-line R-CLAUDE-FAILED halt reason per CD-001 §11.2."""
-    partial_md_path = err.call.stdout_log_path.parent.parent.parent / (
-        _prompt_dir_name(pair) + "/" + err.call.stdout_log_path.stem.removesuffix(".stdout") + ".md"
+    prompt_slug = _prompt_dir_name(pair)
+    partial_md_path = _prompt_artifact_dir(run_dir, pair) / (
+        f"{prompt_slug}.iter-01-generator.md"
     )
-    logs_dir = err.call.stdout_log_path.parent
+    module_log_path = _module_log_path(run_dir, pair)
     stderr_tail = _tail_lines(err.response.stderr, STDERR_TAIL_LINES)
     return (
         f"R-CLAUDE-FAILED: prompt {pair.index} \"{pair.title}\" "
@@ -1736,10 +2059,10 @@ def _format_claude_failed_halt_reason(
         f"{stderr_tail}\n"
         f"\n"
         f"Partial output saved to: {partial_md_path}\n"
-        f"Full logs saved to: {logs_dir}/\n"
+        f"Full log saved to: {module_log_path}\n"
         f"\n"
         f"To retry, re-run prompt-runner. To investigate, look at the "
-        f".stdout.log and .stderr.log files in the logs directory above."
+        f"module log above."
     )
 
 
@@ -1766,7 +2089,7 @@ def _write_manifest(
         "started_at": started_at,
         "finished_at": None,
     }
-    _write(run_dir / "manifest.json", json.dumps(manifest, indent=2) + "\n")
+    _write(_run_files_dir(run_dir) / "manifest.json", json.dumps(manifest, indent=2) + "\n")
 
 
 def _finalise(
@@ -1785,14 +2108,14 @@ def _finalise(
     wall_time = _format_wall_time(started_at, finished_at)
 
     # Rewrite manifest.json with finished_at and halt_reason.
-    manifest_path = run_dir / "manifest.json"
+    manifest_path = _run_files_dir(run_dir) / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     manifest["finished_at"] = _format_iso(finished_at)
     manifest["halt_reason"] = halt_reason
     manifest["wall_time"] = wall_time
     _write(manifest_path, json.dumps(manifest, indent=2) + "\n")
 
-    _write(run_dir / "summary.txt", _format_summary(
+    _write(_run_files_dir(run_dir) / "summary.txt", _format_summary(
         source_file, run_dir, pairs, prompt_results,
         halted_early, halt_reason, wall_time,
         fork_results=fork_results or [],

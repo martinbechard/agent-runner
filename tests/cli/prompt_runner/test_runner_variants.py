@@ -7,6 +7,7 @@ import pytest
 
 from prompt_runner.parser import ForkPoint, PromptPair, VariantPrompt, parse_text
 from prompt_runner.runner import (
+    RUN_FILES_DIRNAME,
     RunConfig,
     run_pipeline,
     _serialize_pairs_to_md,
@@ -28,10 +29,11 @@ def _mock_subprocess_popen(monkeypatch):
         proc.stderr = b""
         # Write a minimal summary.txt so the runner can read it
         for i, arg in enumerate(cmd):
-            if arg == "--output-dir" and i + 1 < len(cmd):
+            if arg == "--run-dir" and i + 1 < len(cmd):
                 run_dir = Path(cmd[i + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "summary.txt").write_text(
+                _run_files(run_dir).mkdir(parents=True, exist_ok=True)
+                (_run_files(run_dir) / "summary.txt").write_text(
                     "Prompt Runner — Run Summary\nStatus: completed\n"
                 )
                 break
@@ -39,54 +41,58 @@ def _mock_subprocess_popen(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
 
-def _workspace(tmp_path: Path) -> Path:
-    w = tmp_path / "workspace"
+def _worktree(tmp_path: Path) -> Path:
+    w = tmp_path / "worktree"
     w.mkdir(exist_ok=True)
     return w
+
+
+def _run_files(run_dir: Path) -> Path:
+    return run_dir / RUN_FILES_DIRNAME
 
 
 INPUT_WITH_FORK = """\
 ## Prompt 1: Setup
 
-```
-gen 1
-```
+### Generation Prompt
 
-```
+gen 1
+
+### Validation Prompt
+
 val 1
-```
 
 ## Prompt 2: Audit [VARIANTS]
 
 ### Variant A: Approach one
 
-```
-gen 2a
-```
+#### Generation Prompt
 
-```
+gen 2a
+
+#### Validation Prompt
+
 val 2a
-```
 
 ### Variant B: Approach two
 
-```
-gen 2b
-```
+#### Generation Prompt
 
-```
+gen 2b
+
+#### Validation Prompt
+
 val 2b
-```
 
 ## Prompt 3: Final
 
-```
-gen 3
-```
+### Generation Prompt
 
-```
+gen 3
+
+### Validation Prompt
+
 val 3
-```
 """
 
 
@@ -98,6 +104,8 @@ def test_serialize_pairs_to_md():
     )
     md = _serialize_pairs_to_md([pair])
     assert "## Prompt 1: Test" in md
+    assert "### Generation Prompt" in md
+    assert "### Validation Prompt" in md
     assert "gen body" in md
     assert "val body" in md
 
@@ -110,9 +118,9 @@ def test_serialize_pair_without_validator():
     )
     md = _serialize_pairs_to_md([pair])
     assert "## Prompt 1: No val" in md
+    assert "### Generation Prompt" in md
     assert "gen" in md
-    # Should have only one code fence pair (open + close)
-    assert md.count("```") == 2
+    assert "### Validation Prompt" not in md
 
 
 def test_serialize_multiple_pairs():
@@ -154,12 +162,12 @@ def test_parse_text_with_fork_returns_fork_point():
 
 
 def test_fork_point_creates_variant_directories(tmp_path: Path):
-    """Verify that a fork point creates per-variant workspace copies
+    """Verify that a fork point creates per-variant worktree copies
     and run directories."""
     items = parse_text(INPUT_WITH_FORK)
-    workspace = _workspace(tmp_path)
-    # Write a marker file so we can verify the workspace was copied.
-    (workspace / "marker.txt").write_text("original")
+    worktree = _worktree(tmp_path)
+    # Write a marker file so we can verify the worktree was copied.
+    (worktree / "marker.txt").write_text("original")
 
     # Prompt 1 needs gen + judge responses.
     client = FakeClaudeClient(scripted=[
@@ -173,7 +181,7 @@ def test_fork_point_creates_variant_directories(tmp_path: Path):
         config=RunConfig(max_iterations=3),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
 
     # One ForkResult should be collected.
@@ -188,23 +196,23 @@ def test_fork_point_creates_variant_directories(tmp_path: Path):
     assert fr.variant_results[1].variant_name == "B"
 
     # Variant directories must have been created.
-    fork_dir = tmp_path / "run" / "fork-02-audit"
+    fork_dir = _run_files(tmp_path / "run") / "fork-02-audit"
     assert fork_dir.exists()
     assert (fork_dir / "variant-a").exists()
     assert (fork_dir / "variant-b").exists()
 
-    # Each variant workspace should be a copy of the original (marker.txt present).
-    assert (fork_dir / "variant-a" / "workspace" / "marker.txt").exists()
-    assert (fork_dir / "variant-b" / "workspace" / "marker.txt").exists()
+    # Each variant worktree should be a copy of the original (marker.txt present).
+    assert (fork_dir / "variant-a" / "marker.txt").exists()
+    assert (fork_dir / "variant-b" / "marker.txt").exists()
 
     # Synthetic prompt file should have been written for each variant.
-    assert (fork_dir / "variant-a" / "synthetic-prompt.md").exists()
-    assert (fork_dir / "variant-b" / "synthetic-prompt.md").exists()
+    assert (_run_files(fork_dir / "variant-a") / "synthetic-prompt.md").exists()
+    assert (_run_files(fork_dir / "variant-b") / "synthetic-prompt.md").exists()
 
     # Comparison report should exist.
     assert (fork_dir / "comparison.txt").exists()
-    assert (fork_dir / "variant-a" / "run-variant-a" / "child-process.json").exists()
-    assert (fork_dir / "variant-b" / "run-variant-b" / "child-process.json").exists()
+    assert (_run_files(fork_dir / "variant-a") / "child-process.json").exists()
+    assert (_run_files(fork_dir / "variant-b") / "child-process.json").exists()
 
     # Parent pipeline does not continue past the fork — no extra prompt_results.
     # (Only prompt 1 ran in the parent.)
@@ -214,7 +222,7 @@ def test_fork_point_creates_variant_directories(tmp_path: Path):
 
 def test_fork_subprocess_propagates_backend(tmp_path: Path, monkeypatch):
     items = parse_text(INPUT_WITH_FORK)
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     captured_cmds: list[list[str]] = []
 
@@ -227,10 +235,11 @@ def test_fork_subprocess_propagates_backend(tmp_path: Path, monkeypatch):
         proc.stdout = b""
         proc.stderr = b""
         for i, arg in enumerate(cmd):
-            if arg == "--output-dir" and i + 1 < len(cmd):
+            if arg == "--run-dir" and i + 1 < len(cmd):
                 run_dir = Path(cmd[i + 1])
                 run_dir.mkdir(parents=True, exist_ok=True)
-                (run_dir / "summary.txt").write_text(
+                _run_files(run_dir).mkdir(parents=True, exist_ok=True)
+                (_run_files(run_dir) / "summary.txt").write_text(
                     "Prompt Runner — Run Summary\nStatus: completed\n"
                 )
                 break
@@ -249,23 +258,23 @@ def test_fork_subprocess_propagates_backend(tmp_path: Path, monkeypatch):
         config=RunConfig(max_iterations=3, backend="codex"),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
 
     assert captured_cmds, "expected fork subprocesses to be spawned"
     assert all("--backend" in cmd for cmd in captured_cmds)
     assert all("codex" in cmd for cmd in captured_cmds)
-    assert all("--project-dir" in cmd for cmd in captured_cmds)
+    assert all("--run-dir" in cmd for cmd in captured_cmds)
     for cmd in captured_cmds:
-        project_dir = Path(cmd[cmd.index("--project-dir") + 1])
-        assert project_dir.name == "workspace"
+        run_dir = Path(cmd[cmd.index("--run-dir") + 1])
+        assert run_dir.name.startswith("variant-")
 
 
 def test_fork_synthetic_prompt_contains_variant_and_tail(tmp_path: Path):
     """The synthetic prompt for each variant includes that variant's pairs and
     the items that come after the fork in the original file."""
     items = parse_text(INPUT_WITH_FORK)
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     client = FakeClaudeClient(scripted=[
         ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
@@ -278,12 +287,12 @@ def test_fork_synthetic_prompt_contains_variant_and_tail(tmp_path: Path):
         config=RunConfig(max_iterations=3),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
 
-    fork_dir = tmp_path / "run" / "fork-02-audit"
-    synthetic_a = (fork_dir / "variant-a" / "synthetic-prompt.md").read_text()
-    synthetic_b = (fork_dir / "variant-b" / "synthetic-prompt.md").read_text()
+    fork_dir = _run_files(tmp_path / "run") / "fork-02-audit"
+    synthetic_a = (_run_files(fork_dir / "variant-a") / "synthetic-prompt.md").read_text()
+    synthetic_b = (_run_files(fork_dir / "variant-b") / "synthetic-prompt.md").read_text()
 
     # Variant A's own prompt
     assert "gen 2a" in synthetic_a
@@ -314,7 +323,7 @@ def test_model_override_used_in_make_call(tmp_path: Path):
         model=pair.model_override or "default-model",
         effort=pair.effort_override,
         logs_dir=tmp_path, iteration=1, role="generator",
-        pair=pair, workspace_dir=tmp_path,
+        pair=pair, worktree_dir=tmp_path,
     )
     assert call.model == "claude-sonnet-4-6"
     assert call.effort is None
@@ -333,7 +342,7 @@ def test_effort_override_in_make_call(tmp_path: Path):
         prompt="test", session_id="sid", new_session=True,
         model=None, effort=pair.effort_override,
         logs_dir=tmp_path, iteration=1, role="generator",
-        pair=pair, workspace_dir=tmp_path,
+        pair=pair, worktree_dir=tmp_path,
     )
     assert call.effort == "low"
 
@@ -376,7 +385,7 @@ def test_variant_sequential_flag_accepted(tmp_path: Path):
 def test_comparison_report_contains_variant_names(tmp_path: Path):
     """The comparison.txt should list each variant's name and exit code."""
     items = parse_text(INPUT_WITH_FORK)
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     client = FakeClaudeClient(scripted=[
         ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
         ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
@@ -387,9 +396,9 @@ def test_comparison_report_contains_variant_names(tmp_path: Path):
         config=RunConfig(max_iterations=3),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
-    comparison = (tmp_path / "run" / "fork-02-audit" / "comparison.txt").read_text()
+    comparison = (_run_files(tmp_path / "run") / "fork-02-audit" / "comparison.txt").read_text()
     assert "Variant A" in comparison or "variant-a" in comparison.lower()
     assert "Variant B" in comparison or "variant-b" in comparison.lower()
     # Exit codes should be mentioned
@@ -403,7 +412,7 @@ def test_run_pipeline_no_fork_unaffected(tmp_path: Path):
         validation_prompt="check it", heading_line=1,
         generation_line=2, validation_line=5,
     )
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     client = FakeClaudeClient(scripted=[
         ClaudeResponse(stdout="done", stderr="", returncode=0),
         ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
@@ -414,7 +423,7 @@ def test_run_pipeline_no_fork_unaffected(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert not result.halted_early
     assert len(result.prompt_results) == 1

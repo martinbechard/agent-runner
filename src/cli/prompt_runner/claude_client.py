@@ -26,12 +26,12 @@ class ClaudeCall:
     stdout_log_path: Path
     stderr_log_path: Path
     stream_header: str
-    workspace_dir: Path
+    worktree_dir: Path
     """Directory the nested claude subprocess runs in. Set to the project root
     (not the log directory), so the generator can write files directly into
     the project tree and the judge can Read them without path juggling.
     All generator and judge calls within a single pipeline run share the same
-    workspace_dir — it is the runner's 'shared workspace' for cross-prompt
+    worktree_dir — it is the runner's 'shared worktree' for cross-prompt
     file continuity."""
     effort: str | None = None
     """Effort level for thinking: low, medium, high, max. Passed as --effort to claude."""
@@ -211,21 +211,34 @@ class RealClaudeClient:
     def __post_init__(self) -> None:
         _ensure_claude_on_path()
 
+    @staticmethod
+    def _prepare_log_paths(call: ClaudeCall) -> None:
+        call.stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
+        call.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+        if call.stdout_log_path == call.stderr_log_path:
+            call.stdout_log_path.touch(exist_ok=True)
+            return
+        call.stdout_log_path.write_text("", encoding="utf-8")
+        call.stderr_log_path.write_text("", encoding="utf-8")
+
+    @staticmethod
+    def _process_meta_path(call: ClaudeCall) -> Path:
+        meta_dir = call.worktree_dir / ".run-files" / "backend-state" / "claude" / "process"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        return meta_dir / f"{call.session_id or 'session'}.proc.json"
+
     def call(self, call: ClaudeCall) -> ClaudeResponse:
         argv = self._build_argv(call)
         sys.stdout.write(call.stream_header + "\n")
         sys.stdout.flush()
 
         # Truncate log files at the start of the call; we append during streaming.
-        call.stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
-        call.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
-        call.stdout_log_path.write_text("", encoding="utf-8")
-        call.stderr_log_path.write_text("", encoding="utf-8")
+        self._prepare_log_paths(call)
 
-        # Run the child in the shared workspace directory (the project root),
+        # Run the child in the shared worktree directory (the project root),
         # not in the log directory. This is what lets the generator write
         # files directly into the project tree (src/cli/foo.py becomes a
-        # real file at <workspace>/src/cli/foo.py, not an orphan in the
+        # real file at <worktree>/src/cli/foo.py, not an orphan in the
         # logs folder) and lets the judge inspect them with Read/Bash.
         proc = subprocess.Popen(
             argv,
@@ -236,15 +249,15 @@ class RealClaudeClient:
             bufsize=1,
             encoding="utf-8",
             env=_build_child_env(),
-            cwd=str(call.workspace_dir),
+            cwd=str(call.worktree_dir),
         )
-        process_meta_path = call.stdout_log_path.with_suffix(".proc.json")
+        process_meta_path = self._process_meta_path(call)
         write_spawn_metadata(
             process_meta_path,
             kind="backend-call",
             pid=proc.pid,
             argv=argv,
-            cwd=call.workspace_dir,
+            cwd=call.worktree_dir,
         )
         assert proc.stdout is not None and proc.stderr is not None
 

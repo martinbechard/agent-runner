@@ -8,6 +8,7 @@ from prompt_runner.runner import (
     ANTI_ANCHORING_CLAUSE,
     REVISION_GENERATOR_PREAMBLE,
     PROJECT_ORGANISER_INSTRUCTION,
+    RUN_FILES_DIRNAME,
     PriorArtifact,
     build_initial_generator_message,
     build_initial_judge_message,
@@ -16,17 +17,34 @@ from prompt_runner.runner import (
 )
 
 
-def _workspace(tmp_path: Path) -> Path:
-    """Create (or return) a clean workspace directory sibling to the run directory.
+def _worktree(tmp_path: Path) -> Path:
+    """Create (or return) a clean worktree directory sibling to the run directory.
 
-    Tests pass this as workspace_dir to run_prompt/run_pipeline so the
+    Tests pass this as worktree_dir to run_prompt/run_pipeline so the
     snapshot/restore helpers have a real directory to operate on (without
     catching the per-test run_dir itself in their sweeps). Idempotent — calling
     twice in the same test returns the same directory.
     """
-    w = tmp_path / "workspace"
+    w = tmp_path / "worktree"
     w.mkdir(exist_ok=True)
     return w
+
+
+def _run_files(run_dir: Path) -> Path:
+    return run_dir / RUN_FILES_DIRNAME
+
+
+def _slugify(title: str) -> str:
+    import re
+    return re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "untitled"
+
+
+def _module_dir(run_dir: Path, title: str) -> Path:
+    return _run_files(run_dir) / _slugify(title)
+
+
+def _prompt_slug(index: int, title: str) -> str:
+    return f"prompt-{index:02d}-{_slugify(title)}"
 
 
 def _pair(
@@ -89,7 +107,7 @@ def test_initial_generator_message_injects_priors_with_file_manifests():
 
 def test_initial_generator_message_instructs_about_reading_prior_files():
     """When prior artifacts include files, the message tells the current
-    generator it can Read them from the shared workspace."""
+    generator it can Read them from the shared worktree."""
     p = _pair(2, "Second")
     msg = build_initial_generator_message(
         p,
@@ -202,7 +220,7 @@ def test_initial_judge_message_includes_deterministic_validation_report():
 def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
     """End-to-end: when the generator creates a file, that file's path is
     included in the prompt the judge sees on the same iteration."""
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     pair = _pair(1, "Alpha")
 
     class FileCreatingThenPassingClient:
@@ -212,8 +230,8 @@ def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
         def call(self, call):
             self._n += 1
             if self._n == 1:
-                # Generator: write a new file in the workspace.
-                (workspace / "created_by_gen.py").write_text("x = 1\n")
+                # Generator: write a new file in the worktree.
+                (worktree / "created_by_gen.py").write_text("x = 1\n")
                 return _pass_response("here is the artifact")
             # Judge: return pass, but record the prompt we received so
             # the test can assert the file is mentioned.
@@ -224,7 +242,7 @@ def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="testrun",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
 
     # The judge prompt must list the file the generator just created.
@@ -236,10 +254,11 @@ def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
 # ─── Workspace snapshot / diff / restore ─────────────────────────────────────
 
 from prompt_runner.runner import (
-    _snapshot_workspace,
-    _diff_workspace_since_snapshot,
-    _restore_workspace_from_snapshot,
+    _snapshot_worktree,
+    _diff_worktree_since_snapshot,
+    _restore_worktree_from_snapshot,
     _is_snapshot_excluded,
+    _initialise_run_worktree,
 )
 
 
@@ -259,83 +278,205 @@ def test_is_snapshot_excluded_catches_common_junk():
 
 
 def test_snapshot_and_diff_detects_new_file(tmp_path: Path):
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "existing.py").write_text("print('before')\n")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "existing.py").write_text("print('before')\n")
 
     snapshot = tmp_path / "snap"
-    _snapshot_workspace(workspace, snapshot)
+    _snapshot_worktree(worktree, snapshot)
 
     # Simulate generator adding a new file.
-    (workspace / "new.py").write_text("print('added')\n")
+    (worktree / "new.py").write_text("print('added')\n")
 
-    changed = _diff_workspace_since_snapshot(workspace, snapshot)
+    changed = _diff_worktree_since_snapshot(worktree, snapshot)
     assert Path("new.py") in changed
     assert Path("existing.py") not in changed  # unchanged
 
 
 def test_snapshot_and_diff_detects_modified_file(tmp_path: Path):
     import time as _time
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "models.py").write_text("print('v1')\n")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "models.py").write_text("print('v1')\n")
 
     snapshot = tmp_path / "snap"
-    _snapshot_workspace(workspace, snapshot)
+    _snapshot_worktree(worktree, snapshot)
 
     # Wait a bit, then modify. mtime changes.
     _time.sleep(0.01)
-    (workspace / "models.py").write_text("print('v2')\n")
+    (worktree / "models.py").write_text("print('v2')\n")
 
-    changed = _diff_workspace_since_snapshot(workspace, snapshot)
+    changed = _diff_worktree_since_snapshot(worktree, snapshot)
     assert Path("models.py") in changed
 
 
 def test_restore_workspace_removes_new_files_and_restores_modified(tmp_path: Path):
     import time as _time
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "keep.py").write_text("keep content\n")
-    (workspace / "modified.py").write_text("original\n")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "keep.py").write_text("keep content\n")
+    (worktree / "modified.py").write_text("original\n")
 
     snapshot = tmp_path / "snap"
-    _snapshot_workspace(workspace, snapshot)
+    _snapshot_worktree(worktree, snapshot)
 
     _time.sleep(0.01)
     # Add new file and modify existing file.
-    (workspace / "added.py").write_text("new garbage\n")
-    (workspace / "modified.py").write_text("CHANGED\n")
+    (worktree / "added.py").write_text("new garbage\n")
+    (worktree / "modified.py").write_text("CHANGED\n")
 
-    _restore_workspace_from_snapshot(workspace, snapshot)
+    _restore_worktree_from_snapshot(worktree, snapshot)
 
     # added.py is gone.
-    assert not (workspace / "added.py").exists()
+    assert not (worktree / "added.py").exists()
     # modified.py is back to original content.
-    assert (workspace / "modified.py").read_text() == "original\n"
+    assert (worktree / "modified.py").read_text() == "original\n"
     # keep.py is untouched.
-    assert (workspace / "keep.py").read_text() == "keep content\n"
+    assert (worktree / "keep.py").read_text() == "keep content\n"
 
 
 def test_snapshot_excludes_runs_dir(tmp_path: Path):
     """The snapshot must not recursively capture its own output directory."""
-    workspace = tmp_path / "workspace"
-    workspace.mkdir()
-    (workspace / "keep.py").write_text("x\n")
-    (workspace / "runs").mkdir()
-    (workspace / "runs" / "prev-run.log").write_text("old log\n")
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "keep.py").write_text("x\n")
+    (worktree / "runs").mkdir()
+    (worktree / "runs" / "prev-run.log").write_text("old log\n")
 
     snapshot = tmp_path / "snap"
-    _snapshot_workspace(workspace, snapshot)
+    _snapshot_worktree(worktree, snapshot)
 
     assert (snapshot / "keep.py").exists()
     assert not (snapshot / "runs").exists()
 
 
-def test_escalation_restores_workspace(tmp_path: Path):
+def test_snapshot_does_not_recurse_when_dest_dir_is_inside_worktree(
+    tmp_path: Path, monkeypatch,
+):
+    """A snapshot destination under work/ must not be re-walked while the
+    snapshot is being created."""
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    (worktree / "keep.py").write_text("x\n")
+    dest_dir = worktree / "work" / "pr-021-run" / "snapshots" / "pre"
+
+    from prompt_runner import runner as r
+    real_copy2 = r.shutil.copy2
+    copied_sources: list[Path] = []
+
+    def fake_copy2(src, dst, *args, **kwargs):
+        src_path = Path(src)
+        copied_sources.append(src_path)
+        return real_copy2(src, dst, *args, **kwargs)
+
+    monkeypatch.setattr(r.shutil, "copy2", fake_copy2)
+
+    _snapshot_worktree(worktree, dest_dir, (Path("work/pr-021-run"),))
+
+    assert all(dest_dir not in src.parents for src in copied_sources)
+
+
+def test_initialise_run_worktree_uses_git_worktree_when_project_is_git_repo(
+    tmp_path: Path,
+):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "tracked.txt").write_text("hello\n", encoding="utf-8")
+    import subprocess as _subprocess
+    _subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+    _subprocess.run(["git", "add", "tracked.txt"], cwd=project, check=True, capture_output=True, text=True)
+    _subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c", "user.email=test@example.com",
+            "commit", "-m", "init", "--no-gpg-sign",
+        ],
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    run_dir = project / "work" / "pr-run"
+    _initialise_run_worktree(project, run_dir)
+
+    assert (run_dir / "tracked.txt").exists()
+    assert (run_dir / ".git").exists()
+
+
+def test_git_tracked_prompt_run_does_not_create_snapshot_dir(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "tracked.txt").write_text("hello\n", encoding="utf-8")
+    import subprocess as _subprocess
+    _subprocess.run(["git", "init"], cwd=project, check=True, capture_output=True, text=True)
+    _subprocess.run(["git", "add", "tracked.txt"], cwd=project, check=True, capture_output=True, text=True)
+    _subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c", "user.email=test@example.com",
+            "commit", "-m", "init", "--no-gpg-sign",
+        ],
+        cwd=project,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    run_dir = project / "work" / "pr-run"
+    _initialise_run_worktree(project, run_dir)
+
+    pair = _pair(1, "Alpha")
+
+    class WritingClient:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def call(self, call):
+            self.calls += 1
+            if self.calls == 1:
+                (call.worktree_dir / "docs").mkdir(exist_ok=True)
+                (call.worktree_dir / "docs" / "out.txt").write_text("artifact\n", encoding="utf-8")
+                return _pass_response("artifact")
+            return _judge_pass()
+
+    client = WritingClient()
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=run_dir,
+        config=RunConfig(),
+        claude_client=client,
+        run_id="testrun",
+        worktree_dir=run_dir,
+    )
+
+    prompt_dir = _module_dir(run_dir, "Alpha")
+    assert not (prompt_dir / "snapshot-pre").exists()
+    assert (prompt_dir / "module.log").exists()
+
+
+def test_restore_from_project_tree_excludes_nested_run_dir(tmp_path: Path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "keep.txt").write_text("keep\n", encoding="utf-8")
+    run_dir = project / "work" / "pr-run"
+    (run_dir / "nested.txt").parent.mkdir(parents=True, exist_ok=True)
+    (run_dir / "nested.txt").write_text("nested\n", encoding="utf-8")
+
+    target = tmp_path / "target"
+    target.mkdir()
+    from prompt_runner.runner import _initial_copy_excluded_roots
+    excluded = _initial_copy_excluded_roots(project, run_dir)
+    _restore_worktree_from_snapshot(target, project, excluded)
+
+    assert (target / "keep.txt").exists()
+    assert not (target / "work" / "pr-run" / "nested.txt").exists()
+
+
+def test_escalation_restores_worktree(tmp_path: Path):
     """When a prompt escalates, files the generator created are removed."""
-    workspace = _workspace(tmp_path)
-    # Put a pre-existing file in the workspace.
-    (workspace / "existing.py").write_text("stable\n")
+    worktree = _worktree(tmp_path)
+    # Put a pre-existing file in the worktree.
+    (worktree / "existing.py").write_text("stable\n")
 
     pair = _pair(1, "Alpha")
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_escalate()])
@@ -343,7 +484,7 @@ def test_escalation_restores_workspace(tmp_path: Path):
     # Simulate the generator creating a file by writing it ourselves
     # BEFORE the run, then having an escalation — the file should be
     # cleaned up. We do this by wrapping the fake client so that between
-    # the generator call and the judge call, a file appears in the workspace.
+    # the generator call and the judge call, a file appears in the worktree.
     class FileCreatingClient:
         def __init__(self) -> None:
             self._n = 0
@@ -352,7 +493,7 @@ def test_escalation_restores_workspace(tmp_path: Path):
             self._n += 1
             if self._n == 1:
                 # Generator: pretend it wrote a new file.
-                (workspace / "garbage.py").write_text("temporary\n")
+                (worktree / "garbage.py").write_text("temporary\n")
                 return _pass_response("artifact")
             else:
                 return _judge_escalate()
@@ -360,19 +501,19 @@ def test_escalation_restores_workspace(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=FileCreatingClient(),
-        run_id="testrun", workspace_dir=workspace,
+        run_id="testrun", worktree_dir=worktree,
     )
 
     # The garbage file must be gone.
-    assert not (workspace / "garbage.py").exists(), "escalation did not clean up"
+    assert not (worktree / "garbage.py").exists(), "escalation did not clean up"
     # The pre-existing file is still there.
-    assert (workspace / "existing.py").read_text() == "stable\n"
+    assert (worktree / "existing.py").read_text() == "stable\n"
 
 
 def test_pass_preserves_files_and_records_them(tmp_path: Path):
     """When a prompt passes, the files the generator created are preserved
     and listed in PromptResult.created_files."""
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     pair = _pair(1, "Alpha")
 
     class FileCreatingClient:
@@ -382,18 +523,18 @@ def test_pass_preserves_files_and_records_them(tmp_path: Path):
         def call(self, call):
             self._n += 1
             if self._n == 1:
-                (workspace / "created.py").write_text("# new file\n")
+                (worktree / "created.py").write_text("# new file\n")
                 return _pass_response("artifact")
             return _judge_pass()
 
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=FileCreatingClient(),
-        run_id="testrun", workspace_dir=workspace,
+        run_id="testrun", worktree_dir=worktree,
     )
 
     assert result.final_verdict == Verdict.PASS
-    assert (workspace / "created.py").exists()
+    assert (worktree / "created.py").exists()
     assert Path("created.py") in result.created_files
 
 
@@ -464,7 +605,7 @@ def test_single_prompt_passes_first_try(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         run_id="testrun",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.final_verdict == Verdict.PASS
     assert len(result.iterations) == 1
@@ -484,8 +625,8 @@ def test_single_prompt_passes_on_second_iteration(tmp_path: Path):
     ])
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
-        config=RunConfig(), claude_client=client, run_id="testrun",
-        workspace_dir=_workspace(tmp_path),
+        config=RunConfig(backend="claude"), claude_client=client, run_id="testrun",
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.final_verdict == Verdict.PASS
     assert len(result.iterations) == 2
@@ -510,7 +651,7 @@ def test_escalation_on_max_iterations(tmp_path: Path):
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(max_iterations=3), claude_client=client,
-        run_id="testrun", workspace_dir=_workspace(tmp_path),
+        run_id="testrun", worktree_dir=_worktree(tmp_path),
     )
     assert result.final_verdict == Verdict.ESCALATE
     assert len(result.iterations) == 3
@@ -523,7 +664,7 @@ def test_direct_escalation(tmp_path: Path):
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=client, run_id="testrun",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.final_verdict == Verdict.ESCALATE
     assert len(result.iterations) == 1
@@ -563,7 +704,7 @@ def test_escalation_halts_pipeline(tmp_path: Path):
     result = run_pipeline(
         pairs=[p1, p2, p3], run_dir=tmp_path / "run", config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.halted_early
     assert len(result.prompt_results) == 2
@@ -599,8 +740,8 @@ def test_session_ids_are_valid_uuids_and_distinct(tmp_path: Path):
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
-        config=RunConfig(), claude_client=client, run_id="myrun",
-        workspace_dir=_workspace(tmp_path),
+        config=RunConfig(backend="claude"), claude_client=client, run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
     )
     gen_call, jud_call = client.received
     # Must be valid UUIDs.
@@ -621,8 +762,8 @@ def test_session_ids_are_deterministic(tmp_path: Path):
     ])
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
-        config=RunConfig(), claude_client=client, run_id="myrun",
-        workspace_dir=_workspace(tmp_path),
+        config=RunConfig(backend="claude"), claude_client=client, run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
     )
     # Iteration 1 generator and iteration 2 generator share the same session.
     assert client.received[0].session_id == client.received[2].session_id
@@ -638,8 +779,8 @@ def test_resume_flag_set_on_iterations_after_first(tmp_path: Path):
     ])
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
-        config=RunConfig(), claude_client=client, run_id="myrun",
-        workspace_dir=_workspace(tmp_path),
+        config=RunConfig(backend="claude"), claude_client=client, run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
     )
     # Iter 1: both calls new_session=True. Iter 2: both calls new_session=False.
     assert [c.new_session for c in client.received] == [True, True, False, False]
@@ -654,7 +795,7 @@ def test_codex_revisions_are_stateless_and_self_contained(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(backend="codex"), claude_client=client, run_id="myrun",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert [c.new_session for c in client.received] == [True, True, True, True]
     assert "ORIGINAL TASK" in client.received[2].prompt
@@ -664,7 +805,7 @@ def test_codex_revisions_are_stateless_and_self_contained(tmp_path: Path):
 
 def test_codex_prefers_single_written_file_contents_as_artifact(tmp_path: Path):
     pair = _pair(1, "Alpha", gen="Write docs/out.txt", val="Check docs/out.txt")
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     class WritingClient:
         def __init__(self):
@@ -673,7 +814,7 @@ def test_codex_prefers_single_written_file_contents_as_artifact(tmp_path: Path):
         def call(self, call):
             self.received.append(call)
             if "generator" in call.stream_header:
-                out = call.workspace_dir / "docs" / "out.txt"
+                out = call.worktree_dir / "docs" / "out.txt"
                 out.parent.mkdir(parents=True, exist_ok=True)
                 out.write_text("artifact from file\n", encoding="utf-8")
                 return ClaudeResponse(stdout="PASS", stderr="", returncode=0)
@@ -683,7 +824,7 @@ def test_codex_prefers_single_written_file_contents_as_artifact(tmp_path: Path):
     result = run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(backend="codex"), claude_client=client, run_id="myrun",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert result.final_artifact == "artifact from file\n"
     assert "artifact from file" in client.received[1].prompt
@@ -696,12 +837,11 @@ def test_log_paths_passed_to_every_call(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=run_dir,
         config=RunConfig(), claude_client=client, run_id="myrun",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     for call in client.received:
-        assert call.stdout_log_path.parent.parent == run_dir / "logs"
-        assert call.stdout_log_path.name.startswith("iter-01-")
-        assert call.stdout_log_path.name.endswith(".stdout.log")
+        assert call.stdout_log_path == _module_dir(run_dir, "Alpha") / "module.log"
+        assert call.stderr_log_path == _module_dir(run_dir, "Alpha") / "module.log"
 
 
 def test_logs_dir_created_before_first_call(tmp_path: Path):
@@ -717,7 +857,7 @@ def test_logs_dir_created_before_first_call(tmp_path: Path):
     run_prompt(
         pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
         config=RunConfig(), claude_client=AssertingClient(), run_id="myrun",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert all(captured), "logs directory was not created before a claude call"
 
@@ -732,7 +872,7 @@ def test_halt_on_claude_failure_writes_partial_md(tmp_path: Path):
         prompt="", session_id="x", new_session=True, model=None,
         stdout_log_path=Path("/tmp/x"), stderr_log_path=Path("/tmp/x"),
         stream_header="── test ──",
-        workspace_dir=Path("/tmp"),
+        worktree_dir=Path("/tmp"),
     )
     err = ClaudeInvocationError(dummy_call, judge_partial)
     client = FakeClaudeClient(scripted=[gen_ok, err])
@@ -740,9 +880,9 @@ def test_halt_on_claude_failure_writes_partial_md(tmp_path: Path):
         run_prompt(
             pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
             config=RunConfig(), claude_client=client, run_id="myrun",
-            workspace_dir=_workspace(tmp_path),
+            worktree_dir=_worktree(tmp_path),
         )
-    judge_md = tmp_path / "run" / "prompt-01-alpha" / "iter-01-judge.md"
+    judge_md = _module_dir(tmp_path / "run", "Alpha") / "iter-01-judge.md"
     assert judge_md.exists()
     assert judge_md.read_text() == "PARTIAL-JUDGE-OUTPUT"
 
@@ -754,7 +894,7 @@ def test_unparseable_verdict_halts_pipeline(tmp_path: Path):
     result = run_pipeline(
         pairs=[pair], run_dir=tmp_path / "run", config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.halted_early
     assert result.halt_reason is not None
@@ -774,7 +914,7 @@ def test_missing_required_files_halts_before_any_backend_call(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.halted_early
     assert result.halt_reason is not None
@@ -788,8 +928,8 @@ def test_checks_files_writes_trace_without_halting(tmp_path: Path):
         "Alpha",
         checks_files=("present.txt", "missing.txt"),
     )
-    workspace = _workspace(tmp_path)
-    (workspace / "present.txt").write_text("ok", encoding="utf-8")
+    worktree = _worktree(tmp_path)
+    (worktree / "present.txt").write_text("ok", encoding="utf-8")
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
     run_dir = tmp_path / "run"
     result = run_pipeline(
@@ -798,25 +938,16 @@ def test_checks_files_writes_trace_without_halting(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert result.halted_early is False
-    checks_path = run_dir / "prompt-01-alpha" / "checks-files.json"
-    assert checks_path.exists()
-    import json as _json
-    checks = _json.loads(checks_path.read_text(encoding="utf-8"))
-    assert checks == [
-        {
-            "path": "present.txt",
-            "resolved_path": str((workspace / "present.txt").resolve()),
-            "exists": True,
-        },
-        {
-            "path": "missing.txt",
-            "resolved_path": str((workspace / "missing.txt").resolve()),
-            "exists": False,
-        },
-    ]
+    module_log = _module_dir(run_dir, "Alpha") / "module.log"
+    assert module_log.exists()
+    checks = module_log.read_text(encoding="utf-8")
+    assert '"path": "present.txt"' in checks
+    assert '"exists": true' in checks
+    assert '"path": "missing.txt"' in checks
+    assert '"exists": false' in checks
 
 
 def test_missing_deterministic_validation_halts_before_backend_call(tmp_path: Path):
@@ -832,7 +963,7 @@ def test_missing_deterministic_validation_halts_before_backend_call(tmp_path: Pa
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.halted_early
     assert result.halt_reason is not None
@@ -841,13 +972,13 @@ def test_missing_deterministic_validation_halts_before_backend_call(tmp_path: Pa
 
 
 def test_deterministic_validation_runs_and_is_injected_into_judge_prompt(tmp_path: Path):
-    workspace = _workspace(tmp_path)
-    scripts_dir = workspace / "scripts"
+    worktree = _worktree(tmp_path)
+    scripts_dir = worktree / "scripts"
     scripts_dir.mkdir()
     validator = scripts_dir / "validate_feature_spec.py"
     validator.write_text(
         "import os\n"
-        "print('workspace=' + os.environ['PROMPT_RUNNER_WORKSPACE_DIR'])\n"
+        "print('worktree=' + os.environ['PROMPT_RUNNER_WORKTREE_DIR'])\n"
         "print('prompt_index=' + os.environ['PROMPT_RUNNER_PROMPT_INDEX'])\n",
         encoding="utf-8",
     )
@@ -878,24 +1009,22 @@ def test_deterministic_validation_runs_and_is_injected_into_judge_prompt(tmp_pat
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert result.halted_early is False
     assert "Deterministic validation" in client.judge_prompt
     assert "prompt_index=1" in client.judge_prompt
     assert "scripts/validate_feature_spec.py" in client.judge_prompt
     proc_path = (
-        run_dir
-        / "logs"
-        / "prompt-01-alpha"
-        / "iter-01-deterministic-validation.stdout.proc.json"
+        _module_dir(run_dir, "Alpha")
+        / "prompt-01.iter-01-deterministic-validation.proc.json"
     )
     assert proc_path.exists()
 
 
 def test_deterministic_validation_runtime_error_halts_pipeline(tmp_path: Path):
-    workspace = _workspace(tmp_path)
-    scripts_dir = workspace / "scripts"
+    worktree = _worktree(tmp_path)
+    scripts_dir = worktree / "scripts"
     scripts_dir.mkdir()
     validator = scripts_dir / "explode.py"
     validator.write_text("import sys\nsys.exit(2)\n", encoding="utf-8")
@@ -911,7 +1040,7 @@ def test_deterministic_validation_runtime_error_halts_pipeline(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert result.halted_early
     assert result.halt_reason is not None
@@ -919,7 +1048,7 @@ def test_deterministic_validation_runtime_error_halts_pipeline(tmp_path: Path):
 
 
 def test_required_files_support_built_in_placeholder_rendering(tmp_path: Path):
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     run_dir = tmp_path / "run"
     (run_dir / "inputs").mkdir(parents=True, exist_ok=True)
     (run_dir / "inputs" / "request.md").write_text("hi", encoding="utf-8")
@@ -936,22 +1065,45 @@ def test_required_files_support_built_in_placeholder_rendering(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert result.halted_early is False
     assert str(run_dir.resolve()) in client.received[0].prompt
-    assert str(workspace.resolve()) in client.received[0].prompt
+    assert str(run_dir.resolve()) in client.received[0].prompt
+
+
+def test_required_files_tolerate_project_dir_prefixed_absolute_run_dir(tmp_path: Path):
+    worktree = _worktree(tmp_path)
+    run_dir = tmp_path / "run"
+    (run_dir / "inputs").mkdir(parents=True, exist_ok=True)
+    (run_dir / "inputs" / "request.md").write_text("hi", encoding="utf-8")
+    pair = _pair(
+        1,
+        "Alpha",
+        gen="Use duplicated placeholder path form.",
+        required_files=("{{project_dir}}/{{run_dir}}/inputs/request.md",),
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        worktree_dir=worktree,
+    )
+    assert result.halted_early is False
 
 
 def test_placeholder_values_accept_caller_supplied_bindings(tmp_path: Path):
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     pair = _pair(
         1,
         "Alpha",
         gen="Use {{extra_path}}",
         required_files=("{{extra_path}}",),
     )
-    extra = workspace / "evidence.txt"
+    extra = worktree / "evidence.txt"
     extra.write_text("ok", encoding="utf-8")
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
     result = run_pipeline(
@@ -960,7 +1112,7 @@ def test_placeholder_values_accept_caller_supplied_bindings(tmp_path: Path):
         config=RunConfig(placeholder_values={"extra_path": str(extra)}),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert result.halted_early is False
     assert str(extra) in client.received[0].prompt
@@ -975,7 +1127,7 @@ def test_unresolved_placeholders_halt_before_backend_call(tmp_path: Path):
         config=RunConfig(),
         claude_client=client,
         source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.halted_early
     assert result.halt_reason is not None
@@ -1012,9 +1164,9 @@ def test_summary_txt_is_written_on_halt(tmp_path: Path):
     run_pipeline(
         pairs=[pair], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
-    summary_path = run_dir / "summary.txt"
+    summary_path = _run_files(run_dir) / "summary.txt"
     assert summary_path.exists()
     text = summary_path.read_text()
     assert "alpha" in text
@@ -1036,9 +1188,9 @@ def test_skipped_prompts_appear_in_summary(tmp_path: Path):
     run_pipeline(
         pairs=[p1, p2, p3], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
-    summary_text = (run_dir / "summary.txt").read_text()
+    summary_text = (_run_files(run_dir) / "summary.txt").read_text()
     # p1 ran and passed
     assert "first" in summary_text
     assert "pass" in summary_text
@@ -1058,7 +1210,7 @@ def test_max_iterations_zero_raises(tmp_path: Path):
             pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
             config=RunConfig(max_iterations=0),
             claude_client=client, run_id="testrun",
-            workspace_dir=_workspace(tmp_path),
+            worktree_dir=_worktree(tmp_path),
         )
 
 
@@ -1079,7 +1231,7 @@ def test_cli_parse_subcommand_reports_parse_error(tmp_path, capsys):
     exit_code = main(["parse", str(fixture)])
     err = capsys.readouterr().err
     assert exit_code == 2
-    assert "E-NO-BLOCKS" in err
+    assert "E-NO-GENERATION" in err
 
 
 def test_summary_includes_wall_time(tmp_path: Path):
@@ -1090,9 +1242,9 @@ def test_summary_includes_wall_time(tmp_path: Path):
     run_pipeline(
         pairs=[pair], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
-    summary = (run_dir / "summary.txt").read_text()
+    summary = (_run_files(run_dir) / "summary.txt").read_text()
     assert "Wall time:" in summary
     # Format must look like HH:MM:SS.
     import re as _re
@@ -1105,7 +1257,7 @@ def test_run_pipeline_emits_terse_progress_to_stdout(tmp_path: Path, capsys):
     run_pipeline(
         pairs=[pair], run_dir=tmp_path / "run", config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     out = capsys.readouterr().out
     assert "run start" in out
@@ -1127,9 +1279,9 @@ def test_manifest_includes_wall_time(tmp_path: Path):
     run_pipeline(
         pairs=[pair], run_dir=run_dir, config=RunConfig(),
         claude_client=client, source_file=tmp_path / "source.md",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
-    manifest = _json.loads((run_dir / "manifest.json").read_text())
+    manifest = _json.loads((_run_files(run_dir) / "manifest.json").read_text())
     assert "wall_time" in manifest
     import re as _re
     assert _re.match(r"^\d{2}:\d{2}:\d{2}$", manifest["wall_time"])
@@ -1260,7 +1412,7 @@ def test_no_validator_skips_judge_and_marks_pass(tmp_path: Path):
         pair=pair, prior_artifacts=[],
         run_dir=tmp_path / "run", config=RunConfig(max_iterations=3),
         claude_client=client, run_id="test-run",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert result.final_verdict.value == "pass"
     assert result.iterations[0].judge_output == ""
@@ -1299,10 +1451,10 @@ def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monke
     )
     result = run_prompt(
         pair=pair, prior_artifacts=[],
-        run_dir=tmp_path / "run", config=RunConfig(max_iterations=3),
+        run_dir=tmp_path / "run", config=RunConfig(max_iterations=3, backend="claude"),
         claude_client=FakeClaudeClient(scripted=[]),
         run_id="test-run",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     # claude was invoked, with the mission as the last argv element
     assert captured["argv"][0] == "claude"
@@ -1315,9 +1467,10 @@ def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monke
     assert result.final_verdict.value == "pass"
     assert result.iterations == []
     # Final artifact marker files written
-    prompt_dir = (tmp_path / "run" / "prompt-01-interactive-author")
-    assert (prompt_dir / "final-verdict.txt").read_text("utf-8").strip() == "pass"
-    assert "interactive prompt" in (prompt_dir / "final-artifact.md").read_text("utf-8").lower()
+    prompt_dir = _module_dir(tmp_path / "run", "Interactive author")
+    prompt_slug = _prompt_slug(1, "Interactive author")
+    assert (prompt_dir / f"{prompt_slug}.final-verdict.txt").read_text("utf-8").strip() == "pass"
+    assert "interactive prompt" in (prompt_dir / f"{prompt_slug}.final-artifact.md").read_text("utf-8").lower()
 
 
 def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch):
@@ -1345,7 +1498,7 @@ def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch
         config=RunConfig(max_iterations=3, model="opus-test"),
         claude_client=FakeClaudeClient(scripted=[]),
         run_id="test-run",
-        workspace_dir=_workspace(tmp_path),
+        worktree_dir=_worktree(tmp_path),
     )
     assert "--model" in captured["argv"]
     assert "opus-test" in captured["argv"]
@@ -1356,11 +1509,11 @@ def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
     from prompt_runner.claude_client import FakeClaudeClient
     import subprocess
 
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
     class _Proc:
         pid = 12345
         def wait(self):
-            (workspace / "newly-authored-skill.md").write_text("skill body", encoding="utf-8")
+            (worktree / "newly-authored-skill.md").write_text("skill body", encoding="utf-8")
             return 0
     def fake_popen(argv, **kwargs):
         # Simulate the user creating a file during the interactive session
@@ -1378,7 +1531,7 @@ def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
         run_dir=tmp_path / "run", config=RunConfig(max_iterations=3),
         claude_client=FakeClaudeClient(scripted=[]),
         run_id="test-run",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
     assert any(p.name == "newly-authored-skill.md" for p in result.created_files)
 
@@ -1395,20 +1548,21 @@ def test_resume_skips_completed_prompts(tmp_path: Path):
     from prompt_runner.parser import PromptPair
 
     run_dir = tmp_path / "run"
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     # Set up the resume state: prompts 1 and 2 have pass verdicts on disk
     for i in (1, 2):
-        slug = f"prompt-0{i}-prompt-{i}"
-        pd = run_dir / slug
+        title = f"Prompt {i}"
+        slug = _prompt_slug(i, title)
+        pd = _module_dir(run_dir, title)
         pd.mkdir(parents=True)
-        (pd / "final-verdict.txt").write_text("pass\n", encoding="utf-8")
-        (pd / "final-artifact.md").write_text(f"artifact {i}", encoding="utf-8")
-        (pd / "files-created.txt").write_text("", encoding="utf-8")
+        (pd / f"{slug}.final-verdict.txt").write_text("pass\n", encoding="utf-8")
+        (pd / f"{slug}.final-artifact.md").write_text(f"artifact {i}", encoding="utf-8")
+        (pd / f"{slug}.files-created.txt").write_text("", encoding="utf-8")
 
     # We also need a manifest.json since _finalise will read it
     import json as _json
-    (run_dir / "manifest.json").write_text(
+    (_run_files(run_dir) / "manifest.json").write_text(
         _json.dumps({
             "source_file": str(tmp_path / "src.md"),
             "run_id": run_dir.name,
@@ -1438,7 +1592,7 @@ def test_resume_skips_completed_prompts(tmp_path: Path):
         config=RunConfig(max_iterations=3),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
         resume=True,
     )
 
@@ -1460,25 +1614,27 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
     from prompt_runner.parser import PromptPair
 
     run_dir = tmp_path / "run"
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     # Prompt 1: completed
-    pd1 = run_dir / "prompt-01-prompt-1"
+    pd1 = _module_dir(run_dir, "Prompt 1")
     pd1.mkdir(parents=True)
-    (pd1 / "final-verdict.txt").write_text("pass\n", encoding="utf-8")
-    (pd1 / "final-artifact.md").write_text("1", encoding="utf-8")
-    (pd1 / "files-created.txt").write_text("", encoding="utf-8")
+    slug1 = _prompt_slug(1, "Prompt 1")
+    (pd1 / f"{slug1}.final-verdict.txt").write_text("pass\n", encoding="utf-8")
+    (pd1 / f"{slug1}.final-artifact.md").write_text("1", encoding="utf-8")
+    (pd1 / f"{slug1}.files-created.txt").write_text("", encoding="utf-8")
     # Prompt 2: no state at all (incomplete — absence of final-verdict.txt is the trigger)
     # Prompt 3: has a stale pass from an earlier run we don't care about
-    pd3 = run_dir / "prompt-03-prompt-3"
+    pd3 = _module_dir(run_dir, "Prompt 3")
     pd3.mkdir(parents=True)
-    (pd3 / "final-verdict.txt").write_text("pass\n", encoding="utf-8")
-    (pd3 / "final-artifact.md").write_text("old 3", encoding="utf-8")
-    (pd3 / "files-created.txt").write_text("", encoding="utf-8")
+    slug3 = _prompt_slug(3, "Prompt 3")
+    (pd3 / f"{slug3}.final-verdict.txt").write_text("pass\n", encoding="utf-8")
+    (pd3 / f"{slug3}.final-artifact.md").write_text("old 3", encoding="utf-8")
+    (pd3 / f"{slug3}.files-created.txt").write_text("", encoding="utf-8")
 
     # Need manifest.json for _finalise
     import json as _json
-    (run_dir / "manifest.json").write_text(
+    (_run_files(run_dir) / "manifest.json").write_text(
         _json.dumps({
             "source_file": str(tmp_path / "src.md"),
             "run_id": run_dir.name,
@@ -1507,7 +1663,7 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
         config=RunConfig(max_iterations=3),
         claude_client=client,
         source_file=tmp_path / "src.md",
-        workspace_dir=workspace,
+        worktree_dir=worktree,
         resume=True,
     )
     assert len(client.received) == 4
@@ -1521,7 +1677,7 @@ def test_resume_errors_on_missing_run_dir(tmp_path: Path, capsys):
 
     src = tmp_path / "src.md"
     src.write_text(
-        "## Prompt 1: X\n\n```\ngen\n```\n\n```\nval\n```\n",
+        "## Prompt 1: X\n\n### Generation Prompt\n\ngen\n\n### Validation Prompt\n\nval\n",
         encoding="utf-8",
     )
     rc = main([

@@ -11,13 +11,13 @@ from prompt_runner.claude_client import (
 from prompt_runner.codex_client import CodexBinaryNotFound, RealCodexClient
 
 
-def make_client(backend: str, *, dry_run: bool = False):
+def make_client(backend: str, *, dry_run: bool = False, verbose: bool = False):
     if dry_run:
         return DryRunClaudeClient()
     if backend == "claude":
         return RealClaudeClient()
     if backend == "codex":
-        return RealCodexClient()
+        return RealCodexClient(verbose=verbose)
     raise ValueError(f"unknown backend: {backend}")
 
 
@@ -38,4 +38,3 @@ def check_backend_cli(backend: str) -> str | None:
             )
         return None
     return f"Unknown backend: {backend}"
-

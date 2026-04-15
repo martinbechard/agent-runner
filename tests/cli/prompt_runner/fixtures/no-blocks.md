@@ -1,13 +1,13 @@
 ## Prompt 1: Empty Section
 
-Some prose but no code blocks at all.
+Some prose but no generation section at all.
 
 ## Prompt 2: Second
 
-```
-Generator body.
-```
+### Generation Prompt
 
-```
-Validator body.
-```
+gen
+
+### Validation Prompt
+
+val

@@ -4,7 +4,7 @@ from pathlib import Path
 
 def _prompt_file(path: Path) -> Path:
     path.write_text(
-        "# Header\n\n## Prompt 1: X\n\n```\ngen\n```\n\n```\nval\n```\n",
+        "# Header\n\n## Prompt 1: X\n\n### Generation Prompt\n\ngen\n\n### Validation Prompt\n\nval\n",
         encoding="utf-8",
     )
     return path
@@ -21,7 +21,7 @@ def test_cmd_run_uses_backend_from_config(tmp_path: Path, monkeypatch):
 
     captured: dict = {}
 
-    def fake_make_client(backend, *, dry_run=False):
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
         captured["backend"] = backend
 
         class DummyClient:
@@ -40,7 +40,7 @@ def test_cmd_run_uses_backend_from_config(tmp_path: Path, monkeypatch):
     rc = m.main([
         "run", str(pfile),
         "--dry-run",
-        "--output-dir", str(tmp_path / "out"),
+        "--run-dir", str(tmp_path / "out"),
     ])
     assert rc == 0
     assert captured["backend"] == "codex"
@@ -58,7 +58,7 @@ def test_cli_backend_overrides_config(tmp_path: Path, monkeypatch):
 
     captured: dict = {}
 
-    def fake_make_client(backend, *, dry_run=False):
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
         captured["backend"] = backend
 
         class DummyClient:
@@ -78,7 +78,7 @@ def test_cli_backend_overrides_config(tmp_path: Path, monkeypatch):
         "run", str(pfile),
         "--backend", "claude",
         "--dry-run",
-        "--output-dir", str(tmp_path / "out"),
+        "--run-dir", str(tmp_path / "out"),
     ])
     assert rc == 0
     assert captured["backend"] == "claude"
@@ -106,14 +106,14 @@ def test_default_run_dir_uses_project_prompt_runner_runs(tmp_path: Path, monkeyp
     pfile = _prompt_file(tmp_path / "pr.md")
     captured: dict = {}
 
-    def fake_make_client(backend, *, dry_run=False):
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
         class DummyClient:
             pass
         return DummyClient()
 
     def fake_run_pipeline(**kwargs):
         captured["run_dir"] = kwargs["run_dir"]
-        captured["workspace_dir"] = kwargs["workspace_dir"]
+        captured["source_project_dir"] = kwargs["source_project_dir"]
         from prompt_runner.runner import PipelineResult
         return PipelineResult(prompt_results=[], halted_early=False, halt_reason=None)
 
@@ -127,7 +127,7 @@ def test_default_run_dir_uses_project_prompt_runner_runs(tmp_path: Path, monkeyp
     ])
 
     assert rc == 0
-    assert captured["workspace_dir"] == tmp_path.resolve()
+    assert captured["source_project_dir"] == tmp_path.resolve()
     assert captured["run_dir"].parent == (tmp_path / ".prompt-runner" / "runs").resolve()
 
 
@@ -137,7 +137,7 @@ def test_cli_var_flags_populate_placeholder_values(tmp_path: Path, monkeypatch):
     pfile = _prompt_file(tmp_path / "pr.md")
     captured: dict = {}
 
-    def fake_make_client(backend, *, dry_run=False):
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
         class DummyClient:
             pass
         return DummyClient()
@@ -162,3 +162,32 @@ def test_cli_var_flags_populate_placeholder_values(tmp_path: Path, monkeypatch):
         "workflow_prompt": "/tmp/workflow.md",
         "raw_request": "/tmp/request.md",
     }
+
+
+def test_cmd_run_required_files_support_project_dir_placeholder(tmp_path: Path):
+    from prompt_runner import __main__ as m
+
+    (tmp_path / "docs" / "requests").mkdir(parents=True)
+    (tmp_path / "docs" / "requests" / "hello-world-python-app.md").write_text(
+        "hello\n",
+        encoding="utf-8",
+    )
+    pfile = tmp_path / "pr.md"
+    pfile.write_text(
+        "## Prompt 1: X\n\n"
+        "### Required Files\n\n"
+        "{{project_dir}}/docs/requests/hello-world-python-app.md\n\n"
+        "### Generation Prompt\n\n"
+        "hello\n",
+        encoding="utf-8",
+    )
+    run_dir = tmp_path.parent / f"{tmp_path.name}-out"
+
+    rc = m.main([
+        "run", str(pfile),
+        "--dry-run",
+        "--project-dir", str(tmp_path),
+        "--run-dir", str(run_dir),
+    ])
+
+    assert rc == 0

@@ -43,7 +43,7 @@ def test_cmd_run_reads_prelude_files(tmp_path: Path, monkeypatch):
     # Minimal valid prompt file
     pfile = tmp_path / "pr.md"
     pfile.write_text(
-        "# Header\n\n## Prompt 1: X\n\n```\ngen\n```\n\n```\nval\n```\n",
+        "# Header\n\n## Prompt 1: X\n\n### Generation Prompt\n\ngen\n\n### Validation Prompt\n\nval\n",
         encoding="utf-8",
     )
 
@@ -52,7 +52,7 @@ def test_cmd_run_reads_prelude_files(tmp_path: Path, monkeypatch):
         "--generator-prelude", str(gp),
         "--judge-prelude", str(jp),
         "--dry-run",
-        "--output-dir", str(tmp_path / "out"),
+        "--run-dir", str(tmp_path / "out"),
     ])
     assert rc == 0
     cfg = captured["config"]
@@ -64,7 +64,7 @@ def test_cmd_run_missing_prelude_file_errors(tmp_path: Path, capsys):
     from prompt_runner import __main__ as m
     pfile = tmp_path / "pr.md"
     pfile.write_text(
-        "# H\n\n## Prompt 1: X\n\n```\ngen\n```\n\n```\nval\n```\n",
+        "# H\n\n## Prompt 1: X\n\n### Generation Prompt\n\ngen\n\n### Validation Prompt\n\nval\n",
         encoding="utf-8",
     )
     rc = m.main([

@@ -17,8 +17,8 @@ from prompt_runner.client_factory import (
     make_client,
 )
 from prompt_runner.config import load_config
-from prompt_runner.parser import ParseError, PromptPair, parse_file
-from prompt_runner.runner import PipelineResult, RunConfig, run_pipeline
+from prompt_runner.parser import ForkPoint, ParseError, PromptPair, parse_file
+from prompt_runner.runner import PipelineResult, RUN_FILES_DIRNAME, RunConfig, run_pipeline
 
 
 BANNER_RULE = "═" * 70
@@ -54,6 +54,20 @@ def _format_pair_summary(pair: PromptPair, full: bool) -> str:
     )
 
 
+def _format_fork_summary(fork: ForkPoint) -> str:
+    lines = [
+        f"═══ Prompt {fork.index}: {fork.title} [VARIANTS] ═══",
+        f"  heading line: {fork.heading_line}",
+        f"  variants: {len(fork.variants)}",
+    ]
+    for variant in fork.variants:
+        lines.append(
+            f"  - {variant.variant_name}: {variant.variant_title} "
+            f"({len(variant.pairs)} pair{'s' if len(variant.pairs) != 1 else ''})"
+        )
+    return "\n".join(lines)
+
+
 def _indent(text: str, prefix: str = "    ") -> str:
     return "\n".join(prefix + line for line in text.splitlines())
 
@@ -65,7 +79,10 @@ def _cmd_parse(args: argparse.Namespace) -> int:
         sys.stderr.write(f"{err.error_id}\n\n{err.message}\n")
         return 2
     for pair in pairs:
-        sys.stdout.write(_format_pair_summary(pair, full=args.full) + "\n\n")
+        if isinstance(pair, ForkPoint):
+            sys.stdout.write(_format_fork_summary(pair) + "\n\n")
+        else:
+            sys.stdout.write(_format_pair_summary(pair, full=args.full) + "\n\n")
     return 0
 
 
@@ -154,6 +171,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         model=model,
         only=args.only,
         dry_run=args.dry_run,
+        verbose=args.verbose,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
         include_project_organiser=not args.no_project_organiser,
@@ -164,21 +182,21 @@ def _cmd_run(args: argparse.Namespace) -> int:
     )
 
     try:
-        client = make_client(backend, dry_run=args.dry_run)
+        client = make_client(backend, dry_run=args.dry_run, verbose=args.verbose)
     except (ClaudeBinaryNotFound, CodexBinaryNotFound) as err:
         _print_error_banner("R-NO-BACKEND", str(err))
         return 3
 
-    workspace_dir = Path(args.project_dir).resolve() if args.project_dir else None
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else None
 
     if args.resume is not None:
         if args.resume == "auto":
-            resume_path = _find_latest_run_dir(source, workspace_dir)
+            resume_path = _find_latest_run_dir(source, project_dir)
             if resume_path is None:
                 _print_error_banner(
                     "R-RESUME-NOT-FOUND",
                     f"No existing run directory found for {source.name} "
-                    f"under {_runs_root(workspace_dir)}. Run without --resume first.",
+                    f"under {_runs_root(project_dir)}. Run without --resume first.",
                 )
                 return 2
         else:
@@ -193,9 +211,9 @@ def _cmd_run(args: argparse.Namespace) -> int:
         do_resume = True
     else:
         run_dir = (
-            Path(args.output_dir)
-            if args.output_dir else
-            _default_run_dir(source, workspace_dir)
+            Path(args.run_dir)
+            if args.run_dir else
+            _default_run_dir(source, project_dir)
         )
         do_resume = False
 
@@ -205,7 +223,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         config=config,
         claude_client=client,
         source_file=source,
-        workspace_dir=workspace_dir,
+        source_project_dir=project_dir,
         resume=do_resume,
     )
 
@@ -228,7 +246,7 @@ def _print_error_banner(error_id: str, message: str) -> None:
 
 
 def _print_success_banner(run_dir: Path) -> None:
-    summary_path = run_dir / "summary.txt"
+    summary_path = run_dir / RUN_FILES_DIRNAME / "summary.txt"
     summary = summary_path.read_text(encoding="utf-8") if summary_path.exists() else ""
     sys.stdout.write(f"\n{BANNER_RULE}\nPrompt Runner — Run complete\n{BANNER_RULE}\n")
     sys.stdout.write(f"{summary}\n{BANNER_RULE}\n")
@@ -263,7 +281,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_cmd.add_argument(
-        "--output-dir",
+        "--run-dir",
         default=None,
         help=(
             "Run directory (default: <project>/.prompt-runner/runs/"
@@ -283,9 +301,9 @@ def _build_parser() -> argparse.ArgumentParser:
         "--project-dir",
         default=None,
         help=(
-            "Working directory for backend subprocesses. Defaults to cwd. "
-            "Set this when the prompt file reads workspace artifacts at "
-            "a different location (e.g., a methodology-runner workspace)."
+            "Source project tree used to initialise a new run worktree. "
+            "Defaults to cwd. When omitted, prompt-runner treats --run-dir "
+            "itself as the editable project tree."
         ),
     )
     run_cmd.add_argument(
@@ -319,6 +337,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--dry-run",
         action="store_true",
         help="Parse and show the planned sequence without calling the backend CLI.",
+    )
+    run_cmd.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Stream backend stdout/stderr live to the terminal during execution.",
     )
     run_cmd.add_argument(
         "--generator-prelude",

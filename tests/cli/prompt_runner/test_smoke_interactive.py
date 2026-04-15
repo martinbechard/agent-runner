@@ -1,6 +1,6 @@
 """Integration smoke test for the extended prompt-runner.
 
-Exercises parser (single-fence, interactive marker), runner (interactive
+Exercises parser (heading-only sections, interactive marker), runner (interactive
 spawn, validator-less skip-judge), and --resume (skip completed, identify
 incomplete) in one end-to-end flow.
 """
@@ -10,48 +10,52 @@ import pytest
 
 from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
 from prompt_runner.parser import parse_text
-from prompt_runner.runner import RunConfig, run_pipeline
+from prompt_runner.runner import RUN_FILES_DIRNAME, RunConfig, run_pipeline
 
 
-def _workspace(tmp_path: Path) -> Path:
-    w = tmp_path / "workspace"
+def _worktree(tmp_path: Path) -> Path:
+    w = tmp_path / "worktree"
     w.mkdir(exist_ok=True)
     return w
 
 
+def _run_files(run_dir: Path) -> Path:
+    return run_dir / RUN_FILES_DIRNAME
+
+
 INPUT = """# Smoke test
 
-## Prompt 1: Normal two-fence
+## Prompt 1: Normal headed prompt
 
-```
+### Generation Prompt
+
 generate artifact one
-```
 
-```
+### Validation Prompt
+
 validate artifact one
-```
 
 ## Prompt 2: Validator-less mode
 
-```
+### Generation Prompt
+
 generate artifact two, no validator
-```
 
 ## Prompt 3: Interactive mode [interactive]
 
-```
+### Generation Prompt
+
 interactive mission text
-```
 
 ## Prompt 4: Back to normal
 
-```
-generate artifact four
-```
+### Generation Prompt
 
-```
+generate artifact four
+
+### Validation Prompt
+
 validate artifact four
-```
 """
 
 
@@ -67,7 +71,7 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     assert pairs[3].interactive is False and pairs[3].validation_prompt
 
     run_dir = tmp_path / "run"
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     # Stub subprocess.Popen so the interactive prompt doesn't actually
     # spawn claude. Record the invocation for later assertions.
@@ -83,7 +87,7 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
         def wait(self):
             interactive_calls.append(self.argv)
             # Simulate the user creating a file during the interactive session
-            (workspace / "authored-during-interactive.md").write_text(
+            (worktree / "authored-during-interactive.md").write_text(
                 "body", encoding="utf-8",
             )
             return 0
@@ -109,8 +113,8 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
 
     # --- act: first pass (full run) ----------------------------------------
     result = run_pipeline(
-        pairs=pairs, run_dir=run_dir, config=RunConfig(max_iterations=3),
-        claude_client=client, source_file=src, workspace_dir=workspace,
+        pairs=pairs, run_dir=run_dir, config=RunConfig(max_iterations=3, backend="claude"),
+        claude_client=client, source_file=src, worktree_dir=worktree,
     )
 
     # --- assert first pass -------------------------------------------------
@@ -130,7 +134,7 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     # Each prompt dir has a final-verdict.txt == pass
     for i in range(1, 5):
         # Slug matches what _prompt_dir_name produces
-        slug_candidates = list(run_dir.glob(f"prompt-0{i}-*"))
+        slug_candidates = list(_run_files(run_dir).glob(f"prompt-0{i}-*"))
         assert len(slug_candidates) == 1, f"prompt {i} dir missing"
         verdict = (slug_candidates[0] / "final-verdict.txt").read_text("utf-8").strip()
         assert verdict == "pass", f"prompt {i} verdict is {verdict!r}"
@@ -140,8 +144,8 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     interactive_calls.clear()
 
     result2 = run_pipeline(
-        pairs=pairs, run_dir=run_dir, config=RunConfig(max_iterations=3),
-        claude_client=client2, source_file=src, workspace_dir=workspace,
+        pairs=pairs, run_dir=run_dir, config=RunConfig(max_iterations=3, backend="claude"),
+        claude_client=client2, source_file=src, worktree_dir=worktree,
         resume=True,
     )
     assert not result2.halted_early
@@ -150,7 +154,7 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
 
     # --- act: third pass (simulate crash right before prompt 4) ------------
     # Delete prompt 4's verdict file to mark it incomplete
-    prompt_4_dirs = list(run_dir.glob("prompt-04-*"))
+    prompt_4_dirs = list(_run_files(run_dir).glob("prompt-04-*"))
     assert len(prompt_4_dirs) == 1
     (prompt_4_dirs[0] / "final-verdict.txt").unlink()
 
@@ -161,8 +165,8 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     interactive_calls.clear()
 
     result3 = run_pipeline(
-        pairs=pairs, run_dir=run_dir, config=RunConfig(max_iterations=3),
-        claude_client=client3, source_file=src, workspace_dir=workspace,
+        pairs=pairs, run_dir=run_dir, config=RunConfig(max_iterations=3, backend="claude"),
+        claude_client=client3, source_file=src, worktree_dir=worktree,
         resume=True,
     )
     assert not result3.halted_early
@@ -178,12 +182,12 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
 def test_interactive_codex_uses_local_state_overrides(tmp_path: Path, monkeypatch):
     src = tmp_path / "smoke.md"
     src.write_text(
-        "# Smoke\n\n## Prompt 1: Interactive [interactive]\n\n```\ninteractive mission\n```\n",
+        "# Smoke\n\n## Prompt 1: Interactive [interactive]\n\n### Generation Prompt\n\ninteractive mission\n",
         encoding="utf-8",
     )
     pairs = parse_text(src.read_text(encoding="utf-8"))
     run_dir = tmp_path / "run"
-    workspace = _workspace(tmp_path)
+    worktree = _worktree(tmp_path)
 
     import subprocess
     captured: dict = {}
@@ -208,13 +212,13 @@ def test_interactive_codex_uses_local_state_overrides(tmp_path: Path, monkeypatc
         config=RunConfig(backend="codex", dangerously_skip_permissions=True),
         claude_client=FakeClaudeClient(scripted=[]),
         source_file=src,
-        workspace_dir=workspace,
+        worktree_dir=worktree,
     )
 
     assert not result.halted_early
     assert captured["argv"][0] == "codex"
-    assert f'projects."{workspace}".trust_level="trusted"' in captured["argv"]
+    assert f'projects."{run_dir}".trust_level="trusted"' in captured["argv"]
     assert 'approval_policy="never"' in captured["argv"]
     assert 'history.persistence="none"' in captured["argv"]
     assert 'sandbox_mode="danger-full-access"' in captured["argv"]
-    assert captured["cwd"] == workspace
+    assert captured["cwd"] == run_dir

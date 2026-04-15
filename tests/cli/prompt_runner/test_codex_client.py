@@ -19,15 +19,8 @@ def _call(tmp_path: Path, *, new_session: bool, session_id: str = "sid") -> Clau
         stdout_log_path=tmp_path / "stdout.log",
         stderr_log_path=tmp_path / "stderr.log",
         stream_header="header",
-        workspace_dir=tmp_path,
+        worktree_dir=tmp_path,
     )
-
-
-class _Completed:
-    def __init__(self, *, stdout: str, stderr: str = "", returncode: int = 0):
-        self.stdout = stdout
-        self.stderr = stderr
-        self.returncode = returncode
 
 
 class _FakePopen:
@@ -36,9 +29,11 @@ class _FakePopen:
         self._stderr = stderr
         self.returncode = returncode
         self.pid = pid
+        self.stdout = iter(stdout.splitlines(keepends=True))
+        self.stderr = iter(stderr.splitlines(keepends=True))
 
-    def communicate(self):
-        return self._stdout, self._stderr
+    def wait(self):
+        return self.returncode
 
 
 def test_raises_when_codex_not_on_path(monkeypatch):
@@ -72,9 +67,13 @@ def test_new_session_uses_codex_exec_and_reads_last_message(monkeypatch, tmp_pat
     assert "test prompt" in captured["argv"][-1]
     assert response.stdout == "artifact body"
     assert response.session_id == "123e4567-e89b-12d3-a456-426614174000"
-    process_meta = (tmp_path / "stdout.proc.json").read_text(encoding="utf-8")
+    process_meta = (
+        tmp_path / ".run-files" / "backend-state" / "codex" / "process" / "sid.proc.json"
+    ).read_text(encoding="utf-8")
     assert '"pid": 43210' in process_meta
     assert '"status": "completed"' in process_meta
+    assert (tmp_path / "stdout.log").exists()
+    assert (tmp_path / "stderr.log").exists()
 
 
 def test_output_last_message_uses_absolute_path(monkeypatch, tmp_path: Path):
@@ -89,7 +88,7 @@ def test_output_last_message_uses_absolute_path(monkeypatch, tmp_path: Path):
         stdout_log_path=Path("relative") / "stdout.log",
         stderr_log_path=Path("relative") / "stderr.log",
         stream_header="header",
-        workspace_dir=tmp_path,
+        worktree_dir=tmp_path,
     )
 
     def fake_popen(argv, **kwargs):
@@ -159,6 +158,26 @@ def test_nonzero_exit_raises_with_partial_message(monkeypatch, tmp_path: Path):
         client.call(_call(tmp_path, new_session=True))
     assert exc_info.value.response.stdout == "partial artifact"
     assert exc_info.value.response.stderr == "boom\n"
+
+
+def test_creates_stdout_and_stderr_logs_before_completion(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
+
+    def fake_popen(argv, **kwargs):
+        stdout_log = tmp_path / "stdout.log"
+        stderr_log = tmp_path / "stderr.log"
+        assert stdout_log.exists()
+        assert stderr_log.exists()
+        message_path = Path(argv[argv.index("--output-last-message") + 1])
+        message_path.write_text("artifact body\n", encoding="utf-8")
+        return _FakePopen(stdout='{"type":"turn.started"}\n', stderr="warn\n")
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    client = RealCodexClient()
+    response = client.call(_call(tmp_path, new_session=True))
+    assert response.stdout == "artifact body"
+    assert (tmp_path / "stdout.log").read_text(encoding="utf-8") == '{"type":"turn.started"}\n'
+    assert (tmp_path / "stderr.log").read_text(encoding="utf-8") == "warn\n"
 
 
 def test_fork_session_is_unsupported(monkeypatch, tmp_path: Path):

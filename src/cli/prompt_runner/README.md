@@ -1,278 +1,222 @@
-# prompt-runner — input file format
+# prompt-runner input format
 
-*How to write a markdown file that the prompt-runner tool will accept. This guide is for people (and AIs) producing input files, not for people running the CLI.*
+This guide is for people and agents authoring prompt files for `prompt-runner`.
 
 ## What this tool does
 
-prompt-runner is a small Python CLI that takes a markdown file of prompt/validator pairs, runs each prompt through a configured coding-agent CLI, runs the matching validator in a separate session, and iterates on revision feedback. It runs any markdown file that matches the format described below — it has no knowledge of any specific prompt content.
+`prompt-runner` reads a markdown workflow, executes each generation prompt with a configured backend, optionally executes a matching validation prompt in a separate session, and iterates on revision feedback.
+
+## Related References
+
+Use these together:
+
+- `src/cli/prompt_runner/README.md`: authoring guide and file-format reference
+- `docs/design/components/CD-001-prompt-runner.md`: implementation contract and parser model
+- `docs/testing/AC-001-prompt-runner.md`: acceptance criteria and verification targets
+- `tests/cli/prompt_runner/fixtures/readme-example.md`: minimal valid example prompt file
+
+## Run Model
+
+`prompt-runner` treats the run directory as the editable worktree for the run.
+
+- Permanent project artifacts are written at their real project-relative paths inside `--run-dir`.
+- Runner-owned temporary and forensic files live under `--run-dir/.run-files/`.
+- Runner-owned files are grouped per module under `--run-dir/.run-files/<module-slug>/`.
+- Each module directory contains one consolidated `module.log` plus the module's prompt-result files.
+- If `--run-dir` points at a fresh directory and `--project-dir` is set, prompt-runner initialises the run worktree as a linked Git worktree when the source project is Git-backed; otherwise it falls back to copying the source project tree into `--run-dir`.
+- If `--run-dir` points at the project root, prompt-runner ensures `.run-files/` is listed in `.gitignore`.
 
 ## Required file structure
 
-Your file must contain one or more prompt sections of this shape:
+Each prompt starts with a level-2 heading whose first word is `Prompt`.
 
 ```markdown
 ## Prompt 1: Your Title Here
 
-Whatever prose or sub-headings you like (or none at all).
+### Generation Prompt
 
-   (code block 1: the generation prompt)
+Write the generation task here.
 
-More optional prose.
+### Validation Prompt
 
-   (code block 2: the validation prompt)
+Write the validation task here.
 ```
 
-(In the real file the two code blocks would each be wrapped in triple-backtick lines, not the parenthetical placeholders shown above.)
+The generation subsection is required. The validation subsection is optional.
 
-See *tests/cli/prompt_runner/fixtures/readme-example.md* for a minimal, parseable example.
+See `tests/cli/prompt_runner/fixtures/readme-example.md` for a minimal parseable example.
 
-## The heading rule
+## Prompt headings
 
-Every prompt section starts with a level-2 heading whose first word is *Prompt*. All of the following are accepted:
+All of these forms are accepted:
 
-- *## Prompt 1: First Thing*
-- *## Prompt: First Thing*
-- *## Prompt First Thing*
-- *## Prompt 3 — Agent Roles*
-- *## Prompt* (the prompt will be listed as "(untitled)")
+- `## Prompt 1: First Thing`
+- `## Prompt: First Thing`
+- `## Prompt First Thing`
+- `## Prompt 3 — Agent Roles`
+- `## Prompt`
 
-To mark a prompt for interactive execution, append *[interactive]* (case-insensitive) at the very end of the heading:
+Any number in the heading is ignored. Prompt-runner uses the prompt's position in the file.
 
-- *## Prompt 1: Author tdd skill [interactive]*
+Append `[interactive]` at the end of the prompt heading to mark a prompt for interactive execution:
 
-The marker is stripped from the displayed title and exposed as the `interactive` field on the parsed `PromptPair`. It has no effect on parsing — the runner uses it to decide whether to pause for human input before running the generation step.
+- `## Prompt 1: Author tdd skill [interactive]`
 
 You may also add heading directives:
 
-- *[MODEL:...]*
-- *[EFFORT:...]*
+- `[MODEL:...]`
+- `[EFFORT:...]`
 
 Examples:
 
-- *## Prompt 1: Extract facts [MODEL:gpt-5.4-mini]*
-- *## Prompt 2: Judge structure [MODEL:gpt-5.4] [EFFORT:high]*
+- `## Prompt 1: Extract facts [MODEL:gpt-5.4-mini]`
+- `## Prompt 2: Judge structure [MODEL:gpt-5.4] [EFFORT:high]`
 
-These directives are stripped from the displayed title and exposed on the parsed prompt as `model_override` and `effort_override`.
+`[interactive]` and `[VARIANTS]` cannot appear on the same heading.
 
-Any number in the heading is ignored — the runner assigns each prompt a 1-based index based on its position in the file. If you want prompts to run in a specific order, put them in the file in that order.
+## Prompt subsections
 
-## Variant forks
+Normal prompts use `###` subsections. Allowed subsection headings are:
 
-You may mark a prompt heading with *[VARIANTS]* to replace that prompt with multiple alternative prompt definitions that will be run as separate branches.
+- `### Module`
+- `### Required Files`
+- `### Checks Files`
+- `### Deterministic Validation`
+- `### Generation Prompt`
+- `### Validation Prompt`
 
-Shape:
+Rules:
+
+- `### Generation Prompt` is required.
+- `### Validation Prompt` is optional.
+- `### Module`, `### Required Files`, `### Checks Files`, and `### Deterministic Validation`, if present, must appear before `### Generation Prompt`.
+- Each subsection may appear at most once per prompt.
+- Prompt bodies may contain deeper headings such as `####` or `#####`; only the exact reserved subsection level is structural.
+
+## Variants
+
+Add `[VARIANTS]` to a prompt heading to replace that prompt with variant branches.
 
 ```markdown
 ## Prompt 2: Audit [VARIANTS]
 
 ### Variant A: Long checklist
 
-```
-generator for variant A
-```
+#### Generation Prompt
 
-```
+generator for variant A
+
+#### Validation Prompt
+
 validator for variant A
-```
 
 ### Variant B: Short checklist
 
-```
-generator for variant B
-```
+#### Generation Prompt
 
-```
+generator for variant B
+
+#### Validation Prompt
+
 validator for variant B
-```
 ```
 
 Rules:
 
-- Each variant subsection must start with *### Variant <name>: <title>*.
-- Each variant contains one or more prompt pairs using the same one-or-two-code-block rule as normal prompts.
-- *[interactive]* and *[VARIANTS]* cannot appear on the same heading.
-- A variant fork replaces that prompt position with alternative branches; later prompts in the file are appended after each branch.
+- Each variant starts with `### Variant <name>: <title>`.
+- Prompt subsections inside variants use `####` instead of `###`.
+- A variant may contain multiple prompt pairs by repeating `#### Generation Prompt` and optional `#### Validation Prompt`.
+- Standalone `[MODEL:...]` and `[EFFORT:...]` lines between variant pairs update the defaults for the next pair in that variant only.
 
-## The code blocks
+## Optional metadata subsections
 
-Between a prompt heading and the next prompt heading (or end of file), the parser reads one or two fenced code blocks:
+### Module
 
-1. The **generation prompt** — the body of the first code block (required).
-2. The **validation prompt** — the body of the second code block (optional).
+Optional stable slug for runner-owned files under `.run-files/<module-slug>/`.
 
-If only one code block is present, the prompt is accepted as *validator-less*: the parsed `PromptPair` has `validation_prompt=""` and `validation_line=0`. The runner skips the judge step for such prompts.
+- Use this when prompt titles are long or likely to change.
+- If omitted, prompt-runner falls back to a slug derived from the prompt title.
+- This affects only runner-owned bookkeeping paths, not the artifact output paths inside the run worktree.
 
-The order determines the role. The parser does not look at sub-headings like *### 1.1 Generation Prompt* — you can use those for readability, or not use them at all. You can put any prose, sub-headings, or notes between the two code blocks; only the code blocks are extracted.
+### Required Files
 
-Each code block is delimited by a line of exactly three backticks. You may add a language tag to the opening line (for example, *text* or *markdown*) — it is ignored.
+Each non-empty line is treated as a path that must exist before the generator runs.
 
-### Optional `required-files`, `checks-files`, and `deterministic-validation` blocks
+### Checks Files
 
-Before the generation prompt, you may add one typed code block named
-`required-files`, one typed code block named `checks-files`, and one
-typed code block named `deterministic-validation`:
+Each non-empty line is treated as a path whose existence should be recorded without failing the prompt.
+The results are appended to the module's `module.log`; prompt-runner does not create a separate checks file.
 
-````markdown
-## Prompt 1: Needs inputs
+### Deterministic Validation
 
-```required-files
-docs/request.md
-tmp/context.json
-```
-
-```checks-files
-tmp/summary.txt
-tmp/previous-report.html
-```
-
-```deterministic-validation
-scripts/validate_feature_spec.py
---feature-spec
-docs/features/feature-specification.yaml
---requirements-inventory
-docs/requirements/requirements-inventory.yaml
-```
-
-```
-generator body
-```
-
-```
-validator body
-```
-````
-
-Each non-empty line inside that block is treated as a path that must
-exist before the runner will make any backend call for that prompt. If a
-path is relative, it is resolved against the runner workspace.
-
-Each non-empty line inside `checks-files` is also treated as a path, but
-the runner only records whether it exists in
-`<prompt-dir>/checks-files.json`; it does not fail the prompt and it
-does not invoke an LLM to perform the check.
-
-Each non-empty line inside `deterministic-validation` becomes one argv
-element for a Python script invocation. prompt-runner runs that script
-after the generator has written files and before the judge runs. The
-script's stdout, stderr, return code, and process metadata are written
-to the prompt logs and injected into the judge prompt as deterministic
-validation context.
+Each non-empty line becomes one argv element for a Python script invocation that runs after generation and before the judge.
 
 Exit code conventions for deterministic validation:
 
-- `0`: deterministic checks passed
-- `1`: deterministic checks failed, but the judge should use the report
-  to drive revision
+- `0`: checks passed
+- `1`: checks failed, but the judge should drive revision
 - `>1`: deterministic validation itself failed, so prompt-runner halts
 
-### Placeholder rendering
+## Placeholder rendering
 
-prompt-runner resolves built-in placeholders directly inside prompt
-bodies and typed file blocks:
+Prompt-runner resolves placeholders inside prompt bodies and metadata sections:
 
 - `{{run_dir}}`
 - `{{project_dir}}`
 
-You can also pass extra placeholder values on the CLI:
+Both resolve to the run worktree root. `run_dir` is the concrete run location; `project_dir` remains available as a compatibility alias for prompts that still use the older name.
+
+You can also pass extra values on the CLI:
 
 ```bash
 prompt-runner run your-file.md --var workflow_prompt=/tmp/workflow.md --var raw_request=/tmp/request.md
 ```
 
-If any placeholder remains unresolved when a prompt is about to run, the
-runner halts before making a backend call.
+If any placeholder remains unresolved when a prompt is about to run, the runner halts before making a backend call.
 
-## What NOT to do
+## What not to do
 
-- **Do not** include a third code block inside a prompt section. If your prompt body needs a code example, indent the example four spaces instead of wrapping it in triple backticks.
-- **Do not** nest triple-backtick blocks inside a prompt body. v1 does not support this — the parser would see the inner backticks as the end of the outer block. Workaround: indent the inner example four spaces.
-- **Do not** put your own VERDICT-format instruction in the validation prompt. The runner automatically appends an instruction telling the judge to end its response with *VERDICT: pass*, *VERDICT: revise*, or *VERDICT: escalate*. If your validation prompt prescribes a different verdict format, the two instructions will conflict.
-- **Do not** rely on the number you write in the heading being preserved. The runner uses the prompt's position in the file.
-
-## What the runner does with your prompts
-
-- The first prompt's generator is invoked with the generation prompt body as-is.
-- Each subsequent prompt's generator is invoked with every prior approved artifact prepended as context, followed by the generation prompt body.
-- Each prompt's judge is invoked in a **separate backend session** with the validation prompt body, followed by the artifact the generator just produced, followed by the VERDICT instruction.
-- If the judge returns *VERDICT: revise*, the generator is resumed with the judge's feedback and produces a revised artifact. The judge is then resumed to re-evaluate. Up to *--max-iterations* (default 3).
-- If the judge returns *VERDICT: escalate* or the iteration cap is reached, the pipeline halts and the remaining prompts are skipped.
-
-Generator and judge **never** share a backend session — they are always separate processes with separate session IDs.
-
-## Writing good validation prompts
-
-Your validation prompt is what the judge sees on every iteration. When the generator needs to revise, the only feedback it gets is whatever the judge wrote. Good validation prompts:
-
-- List specific, checkable criteria (not "be thorough" or "use good judgement").
-- Ask the judge to point at specific parts of the artifact that fail (line numbers, section names).
-- Explain what a "revise" feedback should contain — the generator will act on it verbatim.
+- Do not omit `### Generation Prompt` or `#### Generation Prompt`.
+- Do not invent other subsection headings at the reserved structural level.
+- Do not place `Required Files`, `Checks Files`, or `Deterministic Validation` after the generation subsection.
+- Do not put your own verdict-format instruction in the validation prompt; prompt-runner appends its own verdict instruction.
 
 ## Parser error IDs
 
-If the parser rejects your file, it prints one of these error IDs and a friendly repair instruction:
-
-- **E-NO-BLOCKS** — a prompt heading was found but no code blocks followed before the next heading or end of file.
-- **E-MISSING-VALIDATION** — reserved; no longer raised (single-fence prompts are accepted as validator-less).
-- **E-UNCLOSED-REQUIRED-FILES** — the optional `required-files` block was opened but never closed.
-- **E-UNCLOSED-CHECKS-FILES** — the optional `checks-files` block was opened but never closed.
-- **E-UNCLOSED-DETERMINISTIC-VALIDATION** — the optional `deterministic-validation` block was opened but never closed.
-- **E-UNCLOSED-GENERATION** — the generation prompt's code block was opened but never closed.
-- **E-UNCLOSED-VALIDATION** — the validation prompt's code block was opened but never closed.
-- **E-EXTRA-BLOCK** — more than two code blocks were found inside a single prompt section.
+- `E-NO-GENERATION` — a prompt or variant pair has no generation subsection.
+- `E-BAD-SECTION-ORDER` — a subsection appears in the wrong order.
+- `E-DUPLICATE-SECTION` — a subsection appears more than once in one prompt pair.
+- `E-UNKNOWN-SUBSECTION` — an unrecognized reserved-level subsection heading was found.
+- `E-NO-VARIANTS` — a `[VARIANTS]` prompt contains no `### Variant ...` subsections.
 
 ## Running the tool
 
-prompt-runner also supports a repo-level config file named
-`prompt-runner.toml` (or `.prompt-runner.toml`). The runner searches
-upward from the input file location and uses the nearest config it
-finds.
-
-Example:
-
-```toml
-[run]
-backend = "codex"
-```
-
-CLI flags still win over config values, so `--backend claude` overrides
-`[run].backend = "codex"` for a single invocation.
-
-Once your file is ready:
+Validate the file:
 
 ```bash
 prompt-runner parse your-file.md
 ```
 
-verifies that the parser accepts it. Then:
+Run the workflow:
 
 ```bash
 prompt-runner run your-file.md
 ```
 
-executes the full pipeline. See *prompt-runner run --help* for options.
+Use a specific run directory:
 
-Current runs can also be resumed:
+```bash
+prompt-runner run your-file.md --run-dir /tmp/my-run
+```
+
+Initialise a new run worktree from an existing project tree:
+
+```bash
+prompt-runner run your-file.md --project-dir /path/to/project --run-dir /tmp/my-run
+```
+
+Resume the latest run for the same source file:
 
 ```bash
 prompt-runner run your-file.md --resume auto
 ```
-
-or:
-
-```bash
-prompt-runner run your-file.md --resume path/to/existing-run-dir
-```
-
-By default, runs are written under:
-
-```text
-<project>/.prompt-runner/runs/<timestamp>-<prompt-stem>/
-```
-
-where `<project>` is `--project-dir` if provided, otherwise the current working directory.
-
-## Known limitations (v1)
-
-- Code blocks inside prompt bodies must not use triple backticks — indent them instead.
-- On failure, the only escalation policy is *halt* — the runner does not automatically re-route to a prior phase.
-- Nested variant forks are not yet fully supported in serialized tail prompts.

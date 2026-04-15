@@ -5,6 +5,8 @@ import json
 import re
 import shutil
 import subprocess
+import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -71,8 +73,27 @@ def _ensure_codex_on_path() -> None:
 class RealCodexClient:
     """Uses stateless `codex exec` calls for prompt-runner generator/judge turns."""
 
+    verbose: bool = False
+
     def __post_init__(self) -> None:
         _ensure_codex_on_path()
+
+    @staticmethod
+    def _prepare_log_paths(call: ClaudeCall) -> None:
+        call.stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
+        call.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
+        if call.stdout_log_path == call.stderr_log_path:
+            call.stdout_log_path.touch(exist_ok=True)
+            return
+        call.stdout_log_path.write_text("", encoding="utf-8")
+        call.stderr_log_path.write_text("", encoding="utf-8")
+
+    @staticmethod
+    def _process_meta_path(call: ClaudeCall) -> Path:
+        state_root = call.worktree_dir / ".run-files" / "backend-state" / "codex"
+        meta_dir = state_root / "process"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        return meta_dir / f"{call.session_id or 'session'}.proc.json"
 
     def call(self, call: ClaudeCall) -> ClaudeResponse:
         if call.fork_session:
@@ -89,9 +110,8 @@ class RealCodexClient:
             )
 
         argv, message_path = self._build_argv(call)
-        call.stdout_log_path.parent.mkdir(parents=True, exist_ok=True)
-        call.stderr_log_path.parent.mkdir(parents=True, exist_ok=True)
-        process_meta_path = call.stdout_log_path.with_suffix(".proc.json")
+        self._prepare_log_paths(call)
+        process_meta_path = self._process_meta_path(call)
 
         proc = subprocess.Popen(
             argv,
@@ -100,60 +120,89 @@ class RealCodexClient:
             stderr=subprocess.PIPE,
             text=True,
             encoding="utf-8",
-            cwd=str(call.workspace_dir),
+            bufsize=1,
+            cwd=str(call.worktree_dir),
         )
         write_spawn_metadata(
             process_meta_path,
             kind="backend-call",
             pid=proc.pid,
             argv=argv,
-            cwd=call.workspace_dir,
+            cwd=call.worktree_dir,
         )
-        stdout, stderr = proc.communicate()
-        result = subprocess.CompletedProcess(
-            args=argv,
-            returncode=proc.returncode,
-            stdout=stdout,
-            stderr=stderr,
-        )
-        mark_process_completed(
-            process_meta_path, returncode=result.returncode,
-        )
+        assert proc.stdout is not None and proc.stderr is not None
 
-        call.stdout_log_path.write_text(result.stdout, encoding="utf-8")
-        call.stderr_log_path.write_text(result.stderr, encoding="utf-8")
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+
+        def drain_stdout() -> None:
+            assert proc.stdout is not None
+            with open(call.stdout_log_path, "a", encoding="utf-8") as log:
+                for chunk in proc.stdout:
+                    stdout_chunks.append(chunk)
+                    log.write(chunk)
+                    log.flush()
+                    if self.verbose:
+                        sys.stdout.write(chunk)
+                        sys.stdout.flush()
+
+        def drain_stderr() -> None:
+            assert proc.stderr is not None
+            with open(call.stderr_log_path, "a", encoding="utf-8") as log:
+                for chunk in proc.stderr:
+                    stderr_chunks.append(chunk)
+                    log.write(chunk)
+                    log.flush()
+                    if self.verbose:
+                        sys.stderr.write(chunk)
+                        sys.stderr.flush()
+
+        stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        returncode = proc.wait()
+        stdout_thread.join()
+        stderr_thread.join()
+        mark_process_completed(
+            process_meta_path, returncode=returncode,
+        )
+        stdout = "".join(stdout_chunks)
+        stderr = "".join(stderr_chunks)
 
         last_message = ""
         if message_path.exists():
             last_message = message_path.read_text(encoding="utf-8").strip()
         if not last_message:
-            last_message = _extract_last_agent_message(result.stdout) or result.stdout.strip()
+            last_message = _extract_last_agent_message(stdout) or stdout.strip()
 
         session_id = call.session_id
-        match = _SESSION_RE.search(result.stdout)
+        match = _SESSION_RE.search(stdout)
         if match:
             session_id = match.group(1)
 
         response = ClaudeResponse(
             stdout=last_message,
-            stderr=result.stderr,
-            returncode=result.returncode,
+            stderr=stderr,
+            returncode=returncode,
             session_id=session_id,
         )
-        if result.returncode != 0:
+        if returncode != 0:
             raise ClaudeInvocationError(call, response)
         return response
 
     @staticmethod
     def _build_argv(call: ClaudeCall) -> tuple[list[str], Path]:
-        message_path = call.stdout_log_path.resolve().with_suffix(".last-message.txt")
-        state_root = call.workspace_dir / ".prompt-runner" / "backend-state" / "codex"
+        state_root = call.worktree_dir / ".run-files" / "backend-state" / "codex"
         log_dir = state_root / "log"
         sqlite_home = state_root / "sqlite"
+        message_dir = state_root / "messages"
+        message_dir.mkdir(parents=True, exist_ok=True)
+        message_path = message_dir / f"{call.session_id or 'session'}.last-message.txt"
         log_dir.mkdir(parents=True, exist_ok=True)
         sqlite_home.mkdir(parents=True, exist_ok=True)
         common_overrides = [
-            "-c", f'projects."{call.workspace_dir}".trust_level="trusted"',
+            "-c", f'projects."{call.worktree_dir}".trust_level="trusted"',
             "-c", 'approval_policy="never"',
             "-c", 'history.persistence="none"',
             "-c", 'sandbox_mode="danger-full-access"',
