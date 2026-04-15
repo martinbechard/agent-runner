@@ -47,6 +47,10 @@ def _prompt_slug(index: int, title: str) -> str:
     return f"prompt-{index:02d}-{_slugify(title)}"
 
 
+def _prompt_history_dir(run_dir: Path, title: str, index: int) -> Path:
+    return _module_dir(run_dir, title) / "history" / f"prompt-{index:02d}"
+
+
 def _pair(
     index: int,
     title: str,
@@ -401,6 +405,40 @@ def test_initialise_run_worktree_uses_git_worktree_when_project_is_git_repo(
 
     assert (run_dir / "tracked.txt").exists()
     assert (run_dir / ".git").exists()
+
+
+def test_initialise_run_worktree_copies_only_subdirectory_when_project_dir_is_git_subdir(
+    tmp_path: Path,
+):
+    project_root = tmp_path / "project"
+    fixture = project_root / "fixtures" / "sample"
+    fixture.mkdir(parents=True)
+    (project_root / "tracked-root.txt").write_text("root\n", encoding="utf-8")
+    (project_root / "runs" / "noise.txt").parent.mkdir(parents=True, exist_ok=True)
+    (project_root / "runs" / "noise.txt").write_text("noise\n", encoding="utf-8")
+    (fixture / "wanted.txt").write_text("wanted\n", encoding="utf-8")
+
+    import subprocess as _subprocess
+    _subprocess.run(["git", "init"], cwd=project_root, check=True, capture_output=True, text=True)
+    _subprocess.run(["git", "add", "."], cwd=project_root, check=True, capture_output=True, text=True)
+    _subprocess.run(
+        [
+            "git", "-c", "user.name=test", "-c", "user.email=test@example.com",
+            "commit", "-m", "init", "--no-gpg-sign",
+        ],
+        cwd=project_root,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    run_dir = tmp_path / "run"
+    _initialise_run_worktree(fixture, run_dir)
+
+    assert (run_dir / "wanted.txt").exists()
+    assert not (run_dir / "tracked-root.txt").exists()
+    assert not (run_dir / "runs" / "noise.txt").exists()
+    assert not (run_dir / ".git").exists()
 
 
 def test_git_tracked_prompt_run_does_not_create_snapshot_dir(tmp_path: Path):
@@ -882,7 +920,7 @@ def test_halt_on_claude_failure_writes_partial_md(tmp_path: Path):
             config=RunConfig(), claude_client=client, run_id="myrun",
             worktree_dir=_worktree(tmp_path),
         )
-    judge_md = _module_dir(tmp_path / "run", "Alpha") / "iter-01-judge.md"
+    judge_md = _prompt_history_dir(tmp_path / "run", "Alpha", 1) / "iter-01-validation.md"
     assert judge_md.exists()
     assert judge_md.read_text() == "PARTIAL-JUDGE-OUTPUT"
 
@@ -1419,6 +1457,59 @@ def test_no_validator_skips_judge_and_marks_pass(tmp_path: Path):
     assert len(client.received) == 1  # generator only, no judge
 
 
+def test_judge_only_reruns_judge_from_saved_prompt_state(tmp_path: Path):
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+    from prompt_runner.runner import RunConfig, run_prompt
+
+    pair = PromptPair(
+        index=1,
+        title="Judge target",
+        generation_prompt="generate",
+        validation_prompt="validate",
+        heading_line=1,
+        generation_line=2,
+        validation_line=5,
+        interactive=False,
+    )
+    run_dir = tmp_path / "run"
+    worktree = _worktree(tmp_path)
+    (worktree / "artifact.txt").write_text("real artifact file\n", encoding="utf-8")
+    prompt_dir = _module_dir(run_dir, pair.title)
+    prompt_dir.mkdir(parents=True)
+    prompt_slug = _prompt_slug(pair.index, pair.title)
+    (prompt_dir / f"{prompt_slug}.final-artifact.md").write_text(
+        "SAVED ARTIFACT\n",
+        encoding="utf-8",
+    )
+    (prompt_dir / f"{prompt_slug}.files-created.txt").write_text(
+        "artifact.txt\n",
+        encoding="utf-8",
+    )
+
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="looks fine\n\nVERDICT: pass", stderr="", returncode=0),
+    ])
+
+    result = run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=run_dir,
+        config=RunConfig(max_iterations=3, judge_only=1),
+        claude_client=client,
+        run_id="test-run",
+        worktree_dir=worktree,
+    )
+
+    assert result.final_verdict.value == "pass"
+    assert result.final_artifact == "SAVED ARTIFACT\n"
+    assert result.created_files == [Path("artifact.txt")]
+    assert len(result.iterations) == 1
+    assert len(client.received) == 1  # judge only, no generator call
+    assert "SAVED ARTIFACT" in client.received[0].prompt
+    assert "generate" not in client.received[0].prompt
+    assert (prompt_dir / f"{prompt_slug}.final-verdict.txt").read_text("utf-8").strip() == "pass"
+
+
 # ---------------------------------------------------------------------------
 # Interactive mode
 # ---------------------------------------------------------------------------
@@ -1441,6 +1532,8 @@ def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monke
         captured["kwargs"] = kwargs
         return _Proc()
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    import prompt_runner.runner as _runner
+    monkeypatch.setattr(_runner, "_using_git_change_tracking", lambda *_args, **_kwargs: False)
 
     pair = PromptPair(
         index=1, title="Interactive author",
@@ -1476,6 +1569,7 @@ def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monke
 def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch):
     from prompt_runner.runner import run_prompt
     from prompt_runner.claude_client import FakeClaudeClient
+    import prompt_runner.runner as _runner
     import subprocess
 
     captured: dict = {}
@@ -1487,6 +1581,7 @@ def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch
         captured["argv"] = argv
         return _Proc()
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(_runner, "_using_git_change_tracking", lambda *_args, **_kwargs: False)
 
     pair = PromptPair(
         index=1, title="X", generation_prompt="m", validation_prompt="",
@@ -1507,6 +1602,7 @@ def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch
 def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
     from prompt_runner.runner import run_prompt
     from prompt_runner.claude_client import FakeClaudeClient
+    import prompt_runner.runner as _runner
     import subprocess
 
     worktree = _worktree(tmp_path)
@@ -1519,6 +1615,7 @@ def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
         # Simulate the user creating a file during the interactive session
         return _Proc()
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(_runner, "_using_git_change_tracking", lambda *_args, **_kwargs: False)
 
     pair = PromptPair(
         index=1, title="Author",
@@ -1670,6 +1767,67 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
     assert result.prompt_results[0].iterations == []       # skipped
     assert len(result.prompt_results[1].iterations) == 1   # re-run
     assert len(result.prompt_results[2].iterations) == 1   # re-run (stale pass ignored)
+
+
+def test_judge_only_does_not_resume_skip_selected_prompt(tmp_path: Path):
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+    from prompt_runner.runner import RunConfig, run_pipeline
+
+    run_dir = tmp_path / "run"
+    worktree = _worktree(tmp_path)
+    (worktree / "artifact.txt").write_text("artifact\n", encoding="utf-8")
+    pair = PromptPair(
+        index=1,
+        title="Prompt 1",
+        generation_prompt="gen 1",
+        validation_prompt="val 1",
+        heading_line=1,
+        generation_line=2,
+        validation_line=5,
+    )
+    prompt_dir = _module_dir(run_dir, pair.title)
+    prompt_dir.mkdir(parents=True)
+    slug = _prompt_slug(pair.index, pair.title)
+    (prompt_dir / f"{slug}.final-verdict.txt").write_text("pass\n", encoding="utf-8")
+    (prompt_dir / f"{slug}.final-artifact.md").write_text("saved artifact\n", encoding="utf-8")
+    (prompt_dir / f"{slug}.files-created.txt").write_text("artifact.txt\n", encoding="utf-8")
+
+    import json as _json
+    (_run_files(run_dir) / "manifest.json").write_text(
+        _json.dumps({
+            "source_file": str(tmp_path / "src.md"),
+            "run_id": run_dir.name,
+            "config": {
+                "max_iterations": 3,
+                "model": None,
+                "only": 1,
+                "judge_only": 1,
+                "dry_run": False,
+            },
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="still good\n\nVERDICT: pass", stderr="", returncode=0),
+    ])
+
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(max_iterations=3, only=1, judge_only=1),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        worktree_dir=worktree,
+        resume=True,
+    )
+
+    assert not result.halted_early
+    assert len(client.received) == 1
+    assert len(result.prompt_results) == 1
+    assert len(result.prompt_results[0].iterations) == 1
 
 
 def test_resume_errors_on_missing_run_dir(tmp_path: Path, capsys):

@@ -884,7 +884,7 @@ def verify_phase_cross_references(
     phase: PhaseConfig,
     workspace: Path,
     completed_phases: list[str],
-    backend: str = "claude",
+    backend: str = "codex",
     model: str | None = None,
     *,
     claude_client: AgentClient | None = None,
@@ -926,7 +926,7 @@ def verify_phase_cross_references(
 
 def verify_end_to_end(
     workspace: Path,
-    backend: str = "claude",
+    backend: str = "codex",
     model: str | None = None,
     *,
     claude_client: AgentClient | None = None,

@@ -127,6 +127,12 @@
 - **Filename pattern:** `PR-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the tool or feature the prompts will produce.
 - **Example:** `PR-001-methodology-runner.md`
 
+### .prompt-runner/runs/<run-id>/
+- **Purpose:** Generated, run-scoped prompt-runner artifacts produced during one execution of a prompt sequence. This directory holds per-run YAML or markdown outputs such as inventories, traceability maps, correction files, checklists, and similar intermediate or final artifacts tied to a single run ID.
+- **Signals:** `.prompt-runner/runs/`, timestamped run directory, "requirements-inventory", "traceability", "checklist", "corrections", phase output consumed by a later step in the same run, generated artifact that should remain attached to one concrete prompt-runner execution rather than promoted into `docs/`.
+- **Filename pattern:** descriptive fixed-name artifacts in kebab-case with `.yaml` or `.md` extensions as required by the run protocol (for example `requirements-inventory.yaml`, `requirements-inventory-traceability.yaml`, `requirements-inventory-checklist.yaml`).
+- **Tests location:** n/a — run artifacts are generated outputs, not source files under direct test.
+
 ### docs/superpowers/plans/
 - **Purpose:** TDD-style implementation plans produced by the `superpowers:writing-plans` skill. Each plan is derived from a companion spec in `docs/superpowers/specs/` and decomposes a proposed enhancement into ordered, bite-sized, test-first tasks with exact file paths, code blocks, and commands. These are not design documents, not requirements, not acceptance-criteria files, and not generic `docs/plans/` entries — they live alongside their source spec in the superpowers layer.
 - **Signals:** output of `superpowers:writing-plans` skill, "derived from spec at docs/superpowers/specs/", TDD cadence (failing test → minimal implementation → commit), "task group", "write failing test", "run pytest", references a dated spec file, dated filename with a topic slug, ordered implementation tasks.
@@ -151,6 +157,12 @@
 - **Filename pattern:** `SKILL.md` (fixed name required by the methodology-runner plugin convention).
 - **Tests location:** n/a — skill definition files are declarative specifications, not runnable source code.
 
+### plugins/<plugin-name>/skills/<skill-name>/agents/
+- **Purpose:** Product-facing metadata for an individual skill, such as `agents/openai.yaml`, used by Codex or related tooling to render skill lists, chips, and invocation defaults. This complements the skill's `SKILL.md` but is not itself the skill definition.
+- **Signals:** `agents/openai.yaml`, "display_name", "short_description", "default_prompt", UI skill metadata, product-facing skill manifest, metadata generated from a skill definition.
+- **Filename pattern:** fixed product-specific filenames inside `agents/`, currently `openai.yaml`.
+- **Tests location:** n/a — agent metadata files are declarative configuration, not runnable source code.
+
 ### plugins/<plugin-name>/docs/
 - **Purpose:** Supplementary reference documents scoped to a single plugin — authoring guides, lessons-learned files, pattern catalogues, and any other human- or AI-readable guidance that belongs to the plugin but is not a skill definition, a plugin manifest, or the plugin README. Consumed by subsequent skill-authoring sessions or by AI pipeline agents writing new skills for that plugin.
 - **Signals:** "lessons learned", "authoring guide", "patterns that work well for AI", "skill authoring patterns", "adversarial testing results", "do not repeat these experiments", "best practices for skill writing", scoped to one plugin, not a SKILL.md, not a README, not a plugin.json, not a docs/methodology/ spec.
@@ -163,6 +175,12 @@
 - **Filename pattern:** `README.md` for the human-readable description; companion spec follows the `docs/prompts/` or `docs/methodology/` naming convention for the spec file itself.
 - **Tests location:** n/a — plugin directories are documentation and configuration, not runnable source code.
 
+### work/
+- **Purpose:** Temporary human- or agent-created working directories used for short-lived scratch artifacts, intermediate prompt drafts, and exploratory files that are intentionally not canonical reference material. This is the staging area for transient work before artifacts are either promoted into a canonical home or discarded.
+- **Signals:** "temporary working folder", "scratch space", "draft prompts", "intermediate artifacts", "throwaway workspace", "not reference material", "working area for a specific run or experiment".
+- **Filename pattern:** top-level subdirectory per task or experiment using `kebab-case/`; files inside should use the naming convention appropriate to their eventual artifact type when possible.
+- **Tests location:** n/a — temporary working directories are not canonical test locations.
+
 ### (project root)
 - **Purpose:** Tooling configuration files and agent instruction files that must live at the repository root by ecosystem convention.
 - **Signals:** `package.json`, `tsconfig.json`, `pyproject.toml`, `.gitignore`, `README.md`, `CLAUDE.md`, `AGENTS.md`, `.editorconfig`, `.prettierrc`, lockfiles.
@@ -172,6 +190,9 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-15 — plugins/<plugin-name>/skills/<skill-name>/agents/ added — skill UI metadata such as `agents/openai.yaml` is distinct from the skill definition and needs its own category under each skill folder.
+- 2026-04-14 — .prompt-runner/runs/<run-id>/ added — run-scoped generated prompt-runner artifacts need a canonical home distinct from reference docs and temporary scratch work.
+- 2026-04-14 — work/ added — temporary working directories and scratch artifacts should not live under docs/ because docs/ is reserved for reference material.
 - 2026-04-14 — docs/reviews/ added — structured review outputs are not designs or plans and need a dedicated review-artifacts layer.
 - 2026-04-13 — scripts/ added — repository-local operational scripts and workflow helpers already exist in the repo and need an explicit taxonomy home distinct from shipped src/cli commands.
 - 2026-04-09 — plugins/<plugin-name>/docs/ added — plugin-level supplementary reference documents (authoring guides, lessons-learned, pattern catalogues) are not SKILL.md files, not plugin manifests, and not plugin READMEs; they need a dedicated docs/ layer scoped to the plugin.

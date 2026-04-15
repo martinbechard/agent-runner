@@ -23,7 +23,7 @@ Use these together:
 - Runner-owned temporary and forensic files live under `--run-dir/.run-files/`.
 - Runner-owned files are grouped per module under `--run-dir/.run-files/<module-slug>/`.
 - Each module directory contains one consolidated `module.log` plus the module's prompt-result files.
-- If `--run-dir` points at a fresh directory and `--project-dir` is set, prompt-runner initialises the run worktree as a linked Git worktree when the source project is Git-backed; otherwise it falls back to copying the source project tree into `--run-dir`.
+- If `--run-dir` points at a fresh directory and `--project-dir` is set, prompt-runner initialises the run worktree as a linked Git worktree when `--project-dir` is itself a Git worktree root. If `--project-dir` is a subdirectory inside a larger Git repo, prompt-runner copies only that subtree into `--run-dir` so unrelated repo content does not leak into the run.
 - If `--run-dir` points at the project root, prompt-runner ensures `.run-files/` is listed in `.gitignore`.
 
 ## Required file structure
@@ -157,6 +157,16 @@ Exit code conventions for deterministic validation:
 - `1`: checks failed, but the judge should drive revision
 - `>1`: deterministic validation itself failed, so prompt-runner halts
 
+## Debugging one prompt
+
+- `--only N` runs only prompt `N` normally: generator first, then judge.
+- `--judge-only N` reruns only the judge for prompt `N` using that prompt's
+  saved final artifact and saved created-file list from the run directory.
+- `--judge-only` reruns deterministic validation for that prompt against the
+  current run worktree before calling the judge.
+- `--judge-only` reuses an existing run directory instead of initialising a
+  fresh one.
+
 ## Placeholder rendering
 
 Prompt-runner resolves placeholders inside prompt bodies and metadata sections:
@@ -219,4 +229,10 @@ Resume the latest run for the same source file:
 
 ```bash
 prompt-runner run your-file.md --resume auto
+```
+
+Rerun only the judge for prompt 1 in an existing run:
+
+```bash
+prompt-runner run your-file.md --judge-only 1 --run-dir /tmp/my-run
 ```

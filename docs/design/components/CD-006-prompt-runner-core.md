@@ -54,14 +54,14 @@ This section defines the main generic concepts in prompt-runner.
     - **SYNOPSIS:** Root prompt file executed by the run.
     - **BECAUSE:** The run needs one authoritative workflow definition.
   - **FIELD:** `run_dir`
-    - **SYNOPSIS:** Runner-owned directory holding manifests, summaries, logs, prompt outputs, and snapshots.
-    - **BECAUSE:** The run needs a durable execution record.
+    - **SYNOPSIS:** Editable run worktree that holds project files at their real project-relative paths.
+    - **BECAUSE:** LLM-visible file paths must map directly to real files in one concrete tree.
+  - **FIELD:** `run_files_dir`
+    - **SYNOPSIS:** `run_dir/.run-files`, containing runner-owned temporary and forensic artifacts such as logs, manifests, prompt outputs, snapshots, and backend state.
+    - **BECAUSE:** Temporary run state must be retained for forensics without being treated as mergeable project output.
   - **FIELD:** `project_dir`
-    - **SYNOPSIS:** Intended project tree for the run.
-    - **BECAUSE:** The runner needs to know which repository tree the workflow acts on.
-  - **FIELD:** `workspace_dir`
-    - **SYNOPSIS:** Concrete editable working tree used by backend subprocesses.
-    - **BECAUSE:** The editable tree may be the project itself or a copied workspace.
+    - **SYNOPSIS:** Source project tree used to initialise a new run worktree when the run executes outside the project root.
+    - **BECAUSE:** Some runs start from a copied or isolated tree rather than editing the source tree in place.
   - **FIELD:** `config`
     - **SYNOPSIS:** Backend, model, iteration, and resume settings.
     - **BECAUSE:** One consistent configuration must drive the whole run.
@@ -96,8 +96,8 @@ This section defines the main generic concepts in prompt-runner.
 - **ENTITY: ENTITY-4** `PlaceholderContext`
   - **SYNOPSIS:** Mapping of placeholder names to concrete values used when prompt-runner renders a reusable prompt module for one run.
   - **FIELD:** `built_in_values`
-    - **SYNOPSIS:** Runner-known values such as `run_dir` and `project_dir`.
-    - **BECAUSE:** The runner can derive some placeholder values directly from its own runtime state.
+    - **SYNOPSIS:** Runner-known values such as `run_dir` and `project_dir`, both resolving to the run worktree root.
+    - **BECAUSE:** Prompts should refer to the editable run tree regardless of whether they use the newer or older placeholder name.
   - **FIELD:** `caller_values`
     - **SYNOPSIS:** Extra placeholder values provided by the launcher or other caller.
     - **BECAUSE:** Some workflow-specific placeholders depend on campaign setup outside the generic runner.
@@ -168,10 +168,10 @@ This section maps the generic model onto the implementation modules.
     - **BECAUSE:** Deterministic validation needs one runner-owned execution point between generator completion and judge start.
   - **CONTAINS:** `_emit_progress`
     - **BECAUSE:** Live progress is part of the generic runner experience.
-  - **WRITES:** `manifest.json`
-    - **BECAUSE:** Each run needs a durable execution record.
-  - **WRITES:** `summary.txt`
-    - **BECAUSE:** Each run needs a compact human-readable summary.
+  - **WRITES:** `.run-files/manifest.json`
+    - **BECAUSE:** Each run needs a durable execution record without mixing runner state into mergeable project files.
+  - **WRITES:** `.run-files/summary.txt`
+    - **BECAUSE:** Each run needs a compact human-readable summary in the runner-owned forensic area.
 
 - **MODULE: MODULE-4** `src/cli/prompt_runner/client_factory.py`
   - **SYNOPSIS:** Maps configured backend names to backend client implementations.

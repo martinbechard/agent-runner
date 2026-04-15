@@ -449,6 +449,9 @@ class TestAssembleMetaPrompt:
         )
         assert "deterministic-validation" in prompt
         assert str(helper) in prompt
+        assert "The available typed block names are:" in prompt
+        assert "```deterministic-validation" not in prompt
+        assert "Do not show this block as a fenced example inside a prompt body" in prompt
 
     def test_input_context_embedded(self, tmp_path: Path) -> None:
         workspace, phase = _create_workspace_with_input(tmp_path)
@@ -667,6 +670,34 @@ class TestGeneratePromptFile:
         assert "RETRY FEEDBACK" in retry_prompt
         assert "## Prompt N:" in retry_prompt
 
+    def test_saves_exact_attempt_prompt_before_backend_call(self, tmp_path: Path) -> None:
+        workspace, phase = _create_workspace_with_input(tmp_path)
+        client = FakeClaudeClient(
+            scripted=[
+                ClaudeResponse(
+                    stdout=_valid_prompt_runner_content(),
+                    stderr="",
+                    returncode=0,
+                ),
+            ],
+        )
+        context = PromptGenerationContext(
+            phase_config=phase,
+            workspace_dir=workspace,
+        )
+
+        generate_prompt_file(context, client)
+
+        saved_prompt = (
+            workspace
+            / PROMPT_RUNNER_FILES_DIR
+            / "logs"
+            / phase.phase_id
+            / "attempt-1-input-prompt.md"
+        )
+        assert saved_prompt.exists()
+        assert saved_prompt.read_text(encoding="utf-8") == client.received[0].prompt
+
     def test_raises_after_all_attempts_exhausted(
         self, tmp_path: Path,
     ) -> None:
@@ -843,8 +874,9 @@ class TestMetaPromptTemplate:
     def test_workspace_conventions_present(self) -> None:
         assert "WORKSPACE CONVENTIONS" in META_PROMPT_TEMPLATE
 
-    def test_example_structure_present(self) -> None:
-        assert "## Prompt 1: Extract Requirements Checklist" in META_PROMPT_TEMPLATE
+    def test_example_structure_removed(self) -> None:
+        assert "Example structure:" not in META_PROMPT_TEMPLATE
+        assert "## Prompt 1: Extract Requirements Checklist" not in META_PROMPT_TEMPLATE
 
     def test_verdict_instruction_present(self) -> None:
         assert "VERDICT: pass" in META_PROMPT_TEMPLATE

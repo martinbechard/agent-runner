@@ -124,7 +124,7 @@ def _walk_skills(root: Path) -> list[Path]:
 def build_catalog(
     *,
     workspace: Path,
-    backend: str = "claude",
+    backend: str = "codex",
     user_home: Path | None = None,
     cwd: Path | None = None,
 ) -> dict[str, SkillCatalogEntry]:

@@ -30,7 +30,6 @@ import re
 import fcntl
 import shutil
 import subprocess
-import sys
 import time
 import yaml
 from dataclasses import dataclass
@@ -178,7 +177,7 @@ class PipelineConfig:
 
     requirements_path: Path
     workspace_dir: Path | None = None
-    backend: str = "claude"
+    backend: str = "codex"
     model: str | None = None
     resume: bool = False
     phases_to_run: list[str] | None = None
@@ -418,7 +417,7 @@ def run_selector_and_build_prelude(
 def build_run_skill_context(
     *,
     workspace: Path,
-    backend: str = "claude",
+    backend: str = "codex",
     baseline_path: Path | None = None,
     user_home: Path | None = None,
     cwd: Path | None = None,
@@ -776,59 +775,6 @@ def _invoke_prompt_runner_library(
     return True, total_iterations, None
 
 
-def _invoke_prompt_runner_subprocess(
-    md_file: Path,
-    workspace: Path,
-    config: PipelineConfig,
-    generator_prelude_path: Path | None = None,
-    judge_prelude_path: Path | None = None,
-) -> tuple[bool, int, str | None]:
-    """Invoke prompt-runner via subprocess (fallback).
-
-    Returns ``(success, estimated_iteration_count, error_message_or_none)``.
-    The iteration count is estimated from the number of prompt headings
-    in the .md file (one iteration per prompt assumed).
-    """
-    max_iters = config.max_prompt_runner_iterations or 3
-    content = md_file.read_text(encoding="utf-8")
-    prompt_count = len(_PROMPT_HEADING_RE.findall(content))
-
-    base_args = [
-        "run", str(md_file),
-        "--project-dir", str(workspace),
-        "--max-iterations", str(max_iters),
-        "--backend", config.backend,
-    ]
-    if config.model:
-        base_args.extend(["--model", config.model])
-    if generator_prelude_path is not None:
-        base_args.extend(["--generator-prelude", str(generator_prelude_path)])
-    if judge_prelude_path is not None:
-        base_args.extend(["--judge-prelude", str(judge_prelude_path)])
-
-    # Try the installed entry-point first
-    result = subprocess.run(
-        ["prompt-runner", *base_args],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-
-    if result.returncode == 127:  # command not found
-        result = subprocess.run(
-            [sys.executable, "-m", "prompt_runner", *base_args],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-
-    if result.returncode == 0:
-        return True, prompt_count, None
-
-    error = result.stderr.strip() or result.stdout.strip() or "(no output)"
-    return False, prompt_count, f"Exit code {result.returncode}: {error}"
-
-
 def _invoke_prompt_runner(
     md_file: Path,
     workspace: Path,
@@ -838,22 +784,15 @@ def _invoke_prompt_runner(
     generator_prelude_path: Path | None = None,
     judge_prelude_path: Path | None = None,
 ) -> tuple[bool, int, str | None]:
-    """Invoke prompt-runner, trying library call first then subprocess.
+    """Invoke prompt-runner via the in-process library path.
 
     Returns ``(success, iteration_count, error_message_or_none)``.
     """
-    try:
-        return _invoke_prompt_runner_library(
-            md_file, workspace, run_dir, config, claude_client,
-            generator_prelude_path=generator_prelude_path,
-            judge_prelude_path=judge_prelude_path,
-        )
-    except ImportError:
-        return _invoke_prompt_runner_subprocess(
-            md_file, workspace, config,
-            generator_prelude_path=generator_prelude_path,
-            judge_prelude_path=judge_prelude_path,
-        )
+    return _invoke_prompt_runner_library(
+        md_file, workspace, run_dir, config, claude_client,
+        generator_prelude_path=generator_prelude_path,
+        judge_prelude_path=judge_prelude_path,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1432,13 +1371,9 @@ def run_pipeline(
         )
         save_project_state(state, workspace)
 
-    # ---- claude client ----
+    # ---- backend client ----
     if claude_client is None:
-        try:
-            claude_client = make_client(config.backend)
-        except ImportError:
-            pass  # will use subprocess fallback for prompt-runner;
-                  # prompt generator and cross-ref will create their own
+        claude_client = make_client(config.backend)
 
     # ---- determine phases ----
     phases_to_run: list[PhaseConfig] = list(PHASES)

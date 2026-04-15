@@ -39,6 +39,8 @@ def _mock_subprocess_popen(monkeypatch):
                 break
         return proc
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    import prompt_runner.runner as _runner
+    monkeypatch.setattr(_runner, "_git_is_worktree", lambda *_args, **_kwargs: False)
 
 
 def _worktree(tmp_path: Path) -> Path:
@@ -221,6 +223,7 @@ def test_fork_point_creates_variant_directories(tmp_path: Path):
 
 
 def test_fork_subprocess_propagates_backend(tmp_path: Path, monkeypatch):
+    import prompt_runner.runner as _runner
     items = parse_text(INPUT_WITH_FORK)
     worktree = _worktree(tmp_path)
 
@@ -246,6 +249,7 @@ def test_fork_subprocess_propagates_backend(tmp_path: Path, monkeypatch):
         return proc
 
     monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(_runner, "_git_is_worktree", lambda *_args, **_kwargs: False)
 
     client = FakeClaudeClient(scripted=[
         ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
@@ -322,7 +326,7 @@ def test_model_override_used_in_make_call(tmp_path: Path):
         prompt="test", session_id="sid", new_session=True,
         model=pair.model_override or "default-model",
         effort=pair.effort_override,
-        logs_dir=tmp_path, iteration=1, role="generator",
+        module_log_path=tmp_path / "module.log", iteration=1, role="generator",
         pair=pair, worktree_dir=tmp_path,
     )
     assert call.model == "claude-sonnet-4-6"
@@ -341,7 +345,7 @@ def test_effort_override_in_make_call(tmp_path: Path):
     call = _make_call(
         prompt="test", session_id="sid", new_session=True,
         model=None, effort=pair.effort_override,
-        logs_dir=tmp_path, iteration=1, role="generator",
+        module_log_path=tmp_path / "module.log", iteration=1, role="generator",
         pair=pair, worktree_dir=tmp_path,
     )
     assert call.effort == "low"

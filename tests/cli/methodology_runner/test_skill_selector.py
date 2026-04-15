@@ -71,33 +71,44 @@ def _selector_inputs(tmp_path: Path) -> SelectorInputs:
     )
 
 
-def _valid_yaml_reply() -> str:
+def _valid_json_reply() -> str:
     return """\
-phase_id: PH-006-incremental-implementation
-selector_run_at: 2026-04-09T10:00:00+00:00
-selector_model: test-model
-generator_skills:
-  - id: tdd
-    source: baseline
-    rationale: Baseline for implementation phase
-  - id: traceability-discipline
-    source: baseline
-    rationale: Universal baseline
-  - id: python-backend-impl
-    source: expertise-mapping
-    mapped_from: Python backend development
-    rationale: Stack manifest declared Python backend
-judge_skills:
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-overall_rationale: |
-  Implementation phase for a Python backend component.
+{
+  "phase_id": "PH-006-incremental-implementation",
+  "selector_run_at": "2026-04-09T10:00:00+00:00",
+  "selector_model": "test-model",
+  "generator_skills": [
+    {
+      "id": "tdd",
+      "source": "baseline",
+      "rationale": "Baseline for implementation phase"
+    },
+    {
+      "id": "traceability-discipline",
+      "source": "baseline",
+      "rationale": "Universal baseline"
+    },
+    {
+      "id": "python-backend-impl",
+      "source": "expertise-mapping",
+      "mapped_from": "Python backend development",
+      "rationale": "Stack manifest declared Python backend"
+    }
+  ],
+  "judge_skills": [
+    {
+      "id": "traceability-discipline",
+      "source": "baseline",
+      "rationale": "Baseline"
+    }
+  ],
+  "overall_rationale": "Implementation phase for a Python backend component."
+}
 """
 
 
 def test_invoke_selector_happy_path(tmp_path: Path):
-    client = _StubClient(responses=[_valid_yaml_reply()])
+    client = _StubClient(responses=[_valid_json_reply()])
     manifest = invoke_skill_selector(
         _selector_inputs(tmp_path), claude_client=client, model="test-model",
     )
@@ -112,21 +123,23 @@ def test_invoke_selector_happy_path(tmp_path: Path):
     assert '"role": "skill-selector"' in meta
 
 
-def test_malformed_yaml_raises_selector_error(tmp_path: Path):
-    client = _StubClient(responses=["not: [valid: yaml"])
+def test_malformed_json_raises_selector_error(tmp_path: Path):
+    client = _StubClient(responses=['{"not": "valid"'])
     with pytest.raises(SelectorError) as exc_info:
         invoke_skill_selector(
             _selector_inputs(tmp_path), claude_client=client, model="test-model",
         )
-    assert "yaml" in str(exc_info.value).lower()
+    assert "json" in str(exc_info.value).lower()
 
 
 def test_missing_required_field_raises(tmp_path: Path):
-    reply = """
-phase_id: PH-006-incremental-implementation
-generator_skills: []
-judge_skills: []
-overall_rationale: missing selector_run_at and selector_model
+    reply = """\
+{
+  "phase_id": "PH-006-incremental-implementation",
+  "generator_skills": [],
+  "judge_skills": [],
+  "overall_rationale": "missing selector_run_at and selector_model"
+}
 """
     client = _StubClient(responses=[reply])
     with pytest.raises(SelectorError) as exc_info:
@@ -138,24 +151,20 @@ overall_rationale: missing selector_run_at and selector_model
 
 def test_unknown_skill_id_raises(tmp_path: Path):
     reply = """\
-phase_id: PH-006-incremental-implementation
-selector_run_at: 2026-04-09T10:00:00+00:00
-selector_model: test-model
-generator_skills:
-  - id: tdd
-    source: baseline
-    rationale: Baseline
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-  - id: does-not-exist
-    source: selector-judgment
-    rationale: Invented
-judge_skills:
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-overall_rationale: Test
+{
+  "phase_id": "PH-006-incremental-implementation",
+  "selector_run_at": "2026-04-09T10:00:00+00:00",
+  "selector_model": "test-model",
+  "generator_skills": [
+    {"id": "tdd", "source": "baseline", "rationale": "Baseline"},
+    {"id": "traceability-discipline", "source": "baseline", "rationale": "Baseline"},
+    {"id": "does-not-exist", "source": "selector-judgment", "rationale": "Invented"}
+  ],
+  "judge_skills": [
+    {"id": "traceability-discipline", "source": "baseline", "rationale": "Baseline"}
+  ],
+  "overall_rationale": "Test"
+}
 """
     client = _StubClient(responses=[reply])
     with pytest.raises(SelectorError) as exc_info:
@@ -168,18 +177,18 @@ overall_rationale: Test
 def test_missing_baseline_skill_raises(tmp_path: Path):
     # tdd is a baseline but not in the reply
     reply = """\
-phase_id: PH-006-incremental-implementation
-selector_run_at: 2026-04-09T10:00:00+00:00
-selector_model: test-model
-generator_skills:
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-judge_skills:
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-overall_rationale: Oops, forgot tdd
+{
+  "phase_id": "PH-006-incremental-implementation",
+  "selector_run_at": "2026-04-09T10:00:00+00:00",
+  "selector_model": "test-model",
+  "generator_skills": [
+    {"id": "traceability-discipline", "source": "baseline", "rationale": "Baseline"}
+  ],
+  "judge_skills": [
+    {"id": "traceability-discipline", "source": "baseline", "rationale": "Baseline"}
+  ],
+  "overall_rationale": "Oops, forgot tdd"
+}
 """
     client = _StubClient(responses=[reply])
     with pytest.raises(SelectorError) as exc_info:

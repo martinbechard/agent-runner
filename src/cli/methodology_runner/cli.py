@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import argparse
 import re
-import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -118,16 +117,6 @@ def _format_duration(seconds: float) -> str:
     minutes = int(seconds) // 60
     remaining = seconds - (minutes * 60)
     return f"{minutes}m {remaining:.1f}s"
-
-
-def _check_prompt_runner_cli() -> str | None:
-    """Return an error message if ``prompt-runner`` is not on PATH."""
-    if shutil.which("prompt-runner") is None:
-        return (
-            "The 'prompt-runner' CLI is not on PATH.\n"
-            "Install it with: pip install -e .[dev]"
-        )
-    return None
 
 
 # ---------------------------------------------------------------------------

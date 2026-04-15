@@ -1,4 +1,3 @@
-```yaml
 # ═══════════════════════════════════════════════════════════════════════════════
 # AI-Driven Software Development Methodology — Phase Definitions
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -23,7 +22,6 @@
 #
 # ═══════════════════════════════════════════════════════════════════════════════
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 0: REQUIREMENTS INVENTORY
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -45,9 +43,7 @@
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_0_requirements_inventory:
-
   phase_processing_unit:
-
     phase_id: "PH-000-requirements-inventory"
     phase_name: "Requirements Inventory"
     version: "1.0.0"
@@ -80,7 +76,6 @@ phase_0_requirements_inventory:
     # 2. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -268,7 +263,6 @@ phase_0_requirements_inventory:
     # 3. ARTIFACT GENERATION
     # -----------------------------------------------------------------------
     artifact_generation:
-
       generator_agent: "requirements-inventory-generator"
       output_format: "yaml"
       output_path: "docs/requirements/requirements-inventory.yaml"
@@ -367,7 +361,6 @@ phase_0_requirements_inventory:
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "requirements-inventory-judge"
 
       # --- Judge evaluation guidance ---
@@ -414,7 +407,6 @@ phase_0_requirements_inventory:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -452,7 +444,6 @@ phase_0_requirements_inventory:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/requirements/requirements-inventory.yaml"
         format: "yaml"
@@ -473,7 +464,6 @@ phase_0_requirements_inventory:
         partial_count: 0
         uncovered_concern_count: 0
         escalation_status: "none"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 1: FEATURE SPECIFICATION
@@ -496,9 +486,7 @@ phase_0_requirements_inventory:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_1_feature_specification:
-
   phase_processing_unit:
-
     phase_id: "PH-001-feature-specification"
     phase_name: "Feature Specification"
     version: "1.0.0"
@@ -519,24 +507,106 @@ phase_1_feature_specification:
           content_hash: ""
           version: ""
 
-        - ref: "docs/requirements/raw-requirements.md"
-          role: "validation-reference"
-          format: "markdown"
-          description: >
-            The original raw requirements. Used by the judge to verify
-            that feature descriptions faithfully represent the intent of
-            the original stakeholder statements. Not used for discovering
-            new requirements — that was Phase 0's job.
-          content_hash: ""
-          version: ""
-
       external_references: []
 
     # -----------------------------------------------------------------------
-    # 2. CHECKLIST EXTRACTION
+    # 2. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+      generator_agent: "feature-specification-generator"
+      output_format: "yaml"
+      output_path: "docs/features/feature-specification.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            specification_metadata:
+              source_inventory: string (path to requirements inventory)
+              specification_date: string (ISO 8601 date)
+              total_feature_count: integer
+              total_out_of_scope_count: integer
+
+            features: list of feature objects
+            out_of_scope: list of exclusion objects
+
+          Feature object fields:
+            feature_id: string (FT-{three-digit-sequence}, e.g., FT-001)
+            name: string (short descriptive name, 3-8 words)
+            description: string (one or two paragraphs explaining what
+              the feature does, for whom, and why)
+            source_inventory_refs: list of string (RI-* IDs this feature
+              addresses — at least one required)
+            acceptance_criteria: list of acceptance criterion objects
+            depends_on: list of string (FT-* IDs of features this one
+              requires — empty list if no dependencies)
+            data_assumptions: list of string (assumptions about data
+              formats, volumes, or availability that this feature relies on)
+            interface_assumptions: list of string (assumptions about
+              system boundaries, user interactions, or external service
+              behaviors that this feature relies on)
+            priority: string (must | should | could — MoSCoW without
+              "won't", since won't items go in out_of_scope)
+
+          Acceptance criterion object fields:
+            criterion_id: string (AC-{feature-sequence}-{criterion-sequence},
+              e.g., AC-001-01)
+            description: string (a testable given/when/then or
+              condition/expected-result statement)
+            inventory_refs: list of string (RI-* IDs this criterion
+              specifically addresses)
+
+          Exclusion object fields:
+            inventory_ref: string (RI-* ID)
+            justification: string (why this item is excluded — must
+              reference a concrete reason)
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce a structured feature specification from the requirements
+        inventory. For each group of related inventory items:
+
+        1. Create a feature with a descriptive name and unique FT-* ID.
+        2. Write a description explaining WHAT the feature does (not how
+           it will be implemented — that is Phase 2's job).
+        3. List all RI-* IDs this feature addresses in source_inventory_refs.
+        4. Write acceptance criteria in given/when/then or
+           condition/expected-result format. Each criterion must be
+           specific enough to derive a test case.
+        5. Identify dependencies on other features.
+        6. Document data and interface assumptions explicitly.
+        7. Assign priority using MoSCoW (must/should/could).
+
+        For inventory items that should not become features:
+        1. Add them to the out_of_scope section.
+        2. Provide a specific justification (not "out of scope" — that is
+           circular; explain WHY).
+
+        Grouping principles:
+        - Group by user-facing capability, not by implementation similarity
+        - Keep features at a level where each has 2-8 acceptance criteria
+        - If a feature would have more than 8 criteria, consider splitting
+        - Cross-cutting concerns (performance, security) may be features
+          if they have testable acceptance criteria, or may be noted as
+          constraints on other features
+
+      traceability_mapping:
+        # Artifact side: $.features[n] — each feature object
+        # Input side: $.inventory_items[n] — each inventory item
+        #
+        # The mapping is many-to-many:
+        #   - One feature maps to one or more inventory items
+        #   - One inventory item may map to one or more features
+        #   - Inventory items in out_of_scope map to no features but
+        #     carry explicit justification
+        - artifact_element_ref: "docs/features/feature-specification.yaml#$.features[0]"
+          checklist_item_ids: ["CL-FS-001", "CL-FS-003", "CL-FS-008"]
+          input_source_refs:
+            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[0]"
+            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[1]"
+    # -----------------------------------------------------------------------
+    # 3. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -702,106 +772,9 @@ phase_1_feature_specification:
             failure_action: "return_to_extractor"
 
     # -----------------------------------------------------------------------
-    # 3. ARTIFACT GENERATION
-    # -----------------------------------------------------------------------
-    artifact_generation:
-
-      generator_agent: "feature-specification-generator"
-      output_format: "yaml"
-      output_path: "docs/features/feature-specification.yaml"
-
-      artifact_schema:
-        description: |
-          Top-level keys:
-            specification_metadata:
-              source_inventory: string (path to requirements inventory)
-              specification_date: string (ISO 8601 date)
-              total_feature_count: integer
-              total_out_of_scope_count: integer
-
-            features: list of feature objects
-            out_of_scope: list of exclusion objects
-
-          Feature object fields:
-            feature_id: string (FT-{three-digit-sequence}, e.g., FT-001)
-            name: string (short descriptive name, 3-8 words)
-            description: string (one or two paragraphs explaining what
-              the feature does, for whom, and why)
-            source_inventory_refs: list of string (RI-* IDs this feature
-              addresses — at least one required)
-            acceptance_criteria: list of acceptance criterion objects
-            depends_on: list of string (FT-* IDs of features this one
-              requires — empty list if no dependencies)
-            data_assumptions: list of string (assumptions about data
-              formats, volumes, or availability that this feature relies on)
-            interface_assumptions: list of string (assumptions about
-              system boundaries, user interactions, or external service
-              behaviors that this feature relies on)
-            priority: string (must | should | could — MoSCoW without
-              "won't", since won't items go in out_of_scope)
-
-          Acceptance criterion object fields:
-            criterion_id: string (AC-{feature-sequence}-{criterion-sequence},
-              e.g., AC-001-01)
-            description: string (a testable given/when/then or
-              condition/expected-result statement)
-            inventory_refs: list of string (RI-* IDs this criterion
-              specifically addresses)
-
-          Exclusion object fields:
-            inventory_ref: string (RI-* ID)
-            justification: string (why this item is excluded — must
-              reference a concrete reason)
-        artifact_element_id_format: "$."
-
-      generation_instructions: |
-        Produce a structured feature specification from the requirements
-        inventory. For each group of related inventory items:
-
-        1. Create a feature with a descriptive name and unique FT-* ID.
-        2. Write a description explaining WHAT the feature does (not how
-           it will be implemented — that is Phase 2's job).
-        3. List all RI-* IDs this feature addresses in source_inventory_refs.
-        4. Write acceptance criteria in given/when/then or
-           condition/expected-result format. Each criterion must be
-           specific enough to derive a test case.
-        5. Identify dependencies on other features.
-        6. Document data and interface assumptions explicitly.
-        7. Assign priority using MoSCoW (must/should/could).
-
-        For inventory items that should not become features:
-        1. Add them to the out_of_scope section.
-        2. Provide a specific justification (not "out of scope" — that is
-           circular; explain WHY).
-
-        Grouping principles:
-        - Group by user-facing capability, not by implementation similarity
-        - Keep features at a level where each has 2-8 acceptance criteria
-        - If a feature would have more than 8 criteria, consider splitting
-        - Cross-cutting concerns (performance, security) may be features
-          if they have testable acceptance criteria, or may be noted as
-          constraints on other features
-
-      traceability_mapping:
-        # Artifact side: $.features[n] — each feature object
-        # Input side: $.inventory_items[n] — each inventory item
-        #
-        # The mapping is many-to-many:
-        #   - One feature maps to one or more inventory items
-        #   - One inventory item may map to one or more features
-        #   - Inventory items in out_of_scope map to no features but
-        #     carry explicit justification
-        - artifact_element_ref: "docs/features/feature-specification.yaml#$.features[0]"
-          checklist_item_ids: ["CL-FS-001", "CL-FS-003", "CL-FS-008"]
-          input_source_refs:
-            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[0]"
-            - "docs/requirements/requirements-inventory.yaml#$.inventory_items[1]"
-
-    # -----------------------------------------------------------------------
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "feature-specification-judge"
 
       # --- Judge evaluation guidance ---
@@ -853,7 +826,6 @@ phase_1_feature_specification:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -896,7 +868,6 @@ phase_1_feature_specification:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/features/feature-specification.yaml"
         format: "yaml"
@@ -918,8 +889,6 @@ phase_1_feature_specification:
         uncovered_concern_count: 0
         escalation_status: "none"
 
-
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 2: ARCHITECTURE
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -940,13 +909,14 @@ phase_1_feature_specification:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_2_architecture:
-
   phase_processing_unit:
-
     phase_id: "PH-002-architecture"
     phase_name: "Architecture"
     version: "1.0.0"
 
+    # -----------------------------------------------------------------------
+    # 1. INPUT SOURCES
+    # -----------------------------------------------------------------------
     input_sources:
       artifacts:
         - ref: "{workspace}/docs/features/feature-specification.yaml"
@@ -960,7 +930,7 @@ phase_2_architecture:
           version: ""
 
         - ref: "{workspace}/docs/requirements/requirements-inventory.yaml"
-          role: "upstream_traceability"
+          role: "upstream-traceability"
           format: "yaml"
           description: >
             Requirements inventory for upstream traceability of the
@@ -970,40 +940,10 @@ phase_2_architecture:
 
       external_references: []
 
-    phase_output:
-      primary_artifact:
-        path: "{workspace}/docs/architecture/stack-manifest.yaml"
-        format: "yaml"
-        description: >
-          The stack manifest declares the components, their technology
-          stacks, frameworks, and expected expertise, plus the integration
-          points between them.
-
-      schema: |
-        components:
-          - id: CMP-NNN-<slug>
-            name: ...
-            role: ...
-            technology: python | typescript | go | rust | ...
-            runtime: ...
-            frameworks: [...]
-            persistence: ...
-            expected_expertise:
-              - "Free-text description of required knowledge"
-              - ...
-            features_served: [FT-NNN, ...]
-
-        integration_points:
-          - id: IP-NNN
-            between: [CMP-NNN-a, CMP-NNN-b]
-            protocol: ...
-            contract_source: ...
-
-        rationale: |
-          Prose explanation of the decomposition choices.
-
+    # -----------------------------------------------------------------------
+    # 2. CHECKLIST EXTRACTION
+    # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -1013,10 +953,159 @@ phase_2_architecture:
         two components in the manifest.  The decomposition must be
         traceable to the features and requirements that motivated it.
 
-    generation:
-      generator_agent: "artifact-generator"
+      checklist_items:
+        - id: "CL-AR-001"
+          source_ref: "{workspace}/docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every FT-* feature in the feature specification appears in at
+            least one component's features_served list. No feature is
+            omitted from the stack manifest.
+          verification_method: "coverage_query"
 
-    judging:
+        - id: "CL-AR-002"
+          source_ref: "{workspace}/docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every component has a unique ID and a non-empty role,
+            technology, runtime, and frameworks declaration. No component
+            is structurally incomplete.
+          verification_method: "schema_inspection"
+
+        - id: "CL-AR-003"
+          source_ref: "{workspace}/docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every component declares a non-empty expected_expertise list,
+            and each entry is a free-text capability description rather than
+            a concrete skill identifier or implementation label.
+          verification_method: "content_match"
+
+        - id: "CL-AR-004"
+          source_ref: "{workspace}/docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every integration point references exactly two components that
+            both exist in the components list. No integration point contains
+            dangling component references.
+          verification_method: "schema_inspection"
+
+        - id: "CL-AR-005"
+          source_ref: "{workspace}/docs/requirements/requirements-inventory.yaml#$.inventory_items"
+          criterion: >
+            The rationale explains why the decomposition exists in terms of
+            the features and constraints in the inputs. It does not merely
+            restate component names.
+          verification_method: "content_match"
+
+      validation:
+        validator_agent: "checklist-validator"
+        max_validation_iterations: 3
+        validation_escalation_policy: "halt"
+
+        validation_feedback:
+          failed_check: ""
+          problematic_item_ids: []
+          uncovered_input_refs: []
+          specificity_notes: []
+
+        checks:
+          grounding:
+            order: 1
+            description: >
+              Every checklist item traces to the feature specification or
+              requirements inventory. No checklist item tests for properties
+              unrelated to the declared inputs.
+            failure_action: "remove_ungrounded_items_then_recheck_coverage"
+
+          coverage:
+            order: 2
+            description: >
+              The checklist collectively ensures that every feature is served,
+              every component is structurally complete, and every integration
+              point is grounded in declared components.
+            failure_action: "return_to_extractor"
+
+          specificity:
+            order: 3
+            description: >
+              Each checklist item describes an observable property of the
+              stack manifest rather than a subjective quality judgment.
+            failure_action: "return_to_extractor"
+
+    # -----------------------------------------------------------------------
+    # 3. ARTIFACT GENERATION
+    # -----------------------------------------------------------------------
+    artifact_generation:
+      generator_agent: "artifact-generator"
+      output_format: "yaml"
+      output_path: "{workspace}/docs/architecture/stack-manifest.yaml"
+
+      artifact_schema:
+        description: |
+          Top-level keys:
+            manifest_metadata:
+              source_specification: string (path to feature specification)
+              source_inventory: string (path to requirements inventory)
+              manifest_date: string (ISO 8601 date)
+              total_component_count: integer
+              total_integration_point_count: integer
+
+            components: list of component objects
+            integration_points: list of integration point objects
+            rationale: string
+
+          Component object fields:
+            id: string (CMP-{three-digit-sequence}-{slug})
+            name: string
+            role: string
+            technology: string
+            runtime: string
+            frameworks: list of string
+            persistence: string
+            expected_expertise: list of string
+            features_served: list of string (FT-* IDs)
+
+          Integration point object fields:
+            id: string (IP-{three-digit-sequence})
+            between: list of string (exactly two CMP-* IDs)
+            protocol: string
+            contract_source: string
+        artifact_element_id_format: "$."
+
+      generation_instructions: |
+        Produce a stack manifest that decomposes the Phase 1 feature
+        specification into technology components and integration points.
+
+        For each component:
+        1. Assign a unique CMP-* ID with a stable slug.
+        2. State the component's role in the system.
+        3. Declare its technology, runtime, frameworks, and persistence
+           characteristics.
+        4. Describe the expected expertise as free-text capabilities, not
+           installed-skill names.
+        5. List the FT-* features the component serves.
+
+        For integration points:
+        1. Declare the two components involved.
+        2. State the protocol or boundary type.
+        3. Identify the source from which a downstream contract should be
+           derived.
+
+        The rationale must explain why this decomposition is appropriate for
+        the features and constraints in the inputs.
+
+      traceability_mapping:
+        - artifact_element_ref: "{workspace}/docs/architecture/stack-manifest.yaml#$.components[0]"
+          checklist_item_ids: ["CL-AR-001", "CL-AR-002", "CL-AR-003"]
+          input_source_refs:
+            - "{workspace}/docs/features/feature-specification.yaml#$.features[0]"
+
+        - artifact_element_ref: "{workspace}/docs/architecture/stack-manifest.yaml#$.integration_points[0]"
+          checklist_item_ids: ["CL-AR-004"]
+          input_source_refs:
+            - "{workspace}/docs/features/feature-specification.yaml#$.features[0]"
+
+    # -----------------------------------------------------------------------
+    # 4. JUDGMENT
+    # -----------------------------------------------------------------------
+    judgment:
       judge_agent: "artifact-judge"
 
       judge_guidance: |
@@ -1034,8 +1123,50 @@ phase_2_architecture:
         5. Missing rationale: the rationale field must explain the
            decomposition, not merely restate the component names.
 
-    escalation_policy: "halt"
+      evaluations:
+        - checklist_item_id: "CL-AR-001"
+          result: "pass"
+          evidence: ""
+          reason: ""
+          artifact_location: ""
 
+      uncovered_concerns: []
+
+      verdict: "pass"
+
+    # -----------------------------------------------------------------------
+    # 5. REVISION LOOP
+    # -----------------------------------------------------------------------
+    revision_loop:
+      max_iterations: 3
+      escalation_policy: "halt"
+
+      iteration_log: []
+
+    # -----------------------------------------------------------------------
+    # 6. PHASE OUTPUT
+    # -----------------------------------------------------------------------
+    phase_output:
+      artifact:
+        path: "{workspace}/docs/architecture/stack-manifest.yaml"
+        format: "yaml"
+        status: "approved"
+
+      completed_checklist:
+        path: "{workspace}/docs/architecture/stack-manifest-checklist.yaml"
+
+      traceability_mapping:
+        path: "{workspace}/docs/architecture/stack-manifest-traceability.yaml"
+
+      phase_summary:
+        total_iterations: 0
+        final_verdict: "pass"
+        checklist_item_count: 5
+        passed_count: 0
+        failed_count: 0
+        partial_count: 0
+        uncovered_concern_count: 0
+        escalation_status: "none"
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 3: SOLUTION DESIGN
@@ -1045,22 +1176,21 @@ phase_2_architecture:
 # and the interactions between them — ensuring every feature has a clear path
 # through the architecture.
 #
-# This phase transforms the "what" of the feature specification into the "how"
-# of system structure. It does not define implementation details (code, schemas,
-# API signatures) — that is Phase 3's job. It identifies what components exist,
-# what each one is responsible for, and which components interact with each
-# other to deliver each feature.
+# This phase transforms the technology decomposition from Phase 2 into the
+# concrete system structure that will realize the Phase 1 features. It does not
+# define implementation details (code, schemas, API signatures) — that is
+# Phase 4's job. It identifies what components exist, what each one is
+# responsible for, and which components interact with each other to deliver
+# each feature.
 #
 # The key discipline is bounded responsibility: each component should have a
 # clear, non-overlapping area of concern. If two components share a
 # responsibility, the design is ambiguous and will cause contract conflicts
-# in Phase 3.
+# in Phase 4.
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_3_solution_design:
-
   phase_processing_unit:
-
     phase_id: "PH-003-solution-design"
     phase_name: "Solution Design"
     version: "1.0.0"
@@ -1070,8 +1200,19 @@ phase_3_solution_design:
     # -----------------------------------------------------------------------
     input_sources:
       artifacts:
-        - ref: "docs/features/feature-specification.yaml"
+        - ref: "docs/architecture/stack-manifest.yaml"
           role: "primary"
+          format: "yaml"
+          description: >
+            The stack manifest from Phase 2. Declares the components,
+            technology choices, integration points, and features served.
+            The solution design must refine this decomposition into
+            responsibilities, interactions, and feature realization paths.
+          content_hash: ""
+          version: ""
+
+        - ref: "docs/features/feature-specification.yaml"
+          role: "validation-reference"
           format: "yaml"
           description: >
             The structured feature specification from Phase 1. Contains
@@ -1103,7 +1244,6 @@ phase_3_solution_design:
     # 2. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -1241,7 +1381,7 @@ phase_3_solution_design:
       #   "The architecture is clean" (subjective)
       #   "Components are well-designed" (not verifiable)
       #   "The API contract for authentication uses JWT" (wrong phase —
-      #    Phase 2 defines component interactions, Phase 3 defines contracts)
+      #    Phase 3 defines component interactions, Phase 4 defines contracts)
       #   "The code uses dependency injection" (implementation detail,
       #    not architectural design)
 
@@ -1287,7 +1427,6 @@ phase_3_solution_design:
     # 3. ARTIFACT GENERATION
     # -----------------------------------------------------------------------
     artifact_generation:
-
       generator_agent: "solution-design-generator"
       output_format: "yaml"
       output_path: "docs/design/solution-design.yaml"
@@ -1410,7 +1549,6 @@ phase_3_solution_design:
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "solution-design-judge"
 
       # --- Judge evaluation guidance ---
@@ -1423,8 +1561,8 @@ phase_3_solution_design:
       #
       # 2. GOD COMPONENTS — components with more than seven responsibilities
       #    or that participate in more than 70% of features. These indicate
-      #    insufficient decomposition and will create bottlenecks in Phase 3
-      #    (too many contracts) and Phase 5 (too much to implement at once).
+      #    insufficient decomposition and will create bottlenecks in Phase 4
+      #    (too many contracts) and Phase 6 (too much to implement at once).
       #
       # 3. MISSING INTERACTIONS — features whose realization maps list
       #    multiple components but the declared interactions do not connect
@@ -1436,7 +1574,7 @@ phase_3_solution_design:
       #    implies shared mutable state (e.g., "both components read and
       #    write to the user session") without the communication_style
       #    being explicitly "shared-state". Implicit sharing causes
-      #    contract ambiguity in Phase 3.
+      #    contract ambiguity in Phase 4.
       #
       # 5. ASSUMPTION DRIFT — feature assumptions that the design addresses
       #    differently than the feature specification intended. For example,
@@ -1463,7 +1601,6 @@ phase_3_solution_design:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -1507,7 +1644,6 @@ phase_3_solution_design:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/design/solution-design.yaml"
         format: "yaml"
@@ -1529,7 +1665,6 @@ phase_3_solution_design:
         uncovered_concern_count: 0
         escalation_status: "none"
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 4: CONTRACT-FIRST INTERFACE DEFINITIONS
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1540,11 +1675,11 @@ phase_3_solution_design:
 # contracts.
 #
 # This is where the design becomes executable. Every interaction declared in
-# Phase 2 becomes a concrete contract with input types, output types, error
+# Phase 3 becomes a concrete contract with input types, output types, error
 # types, preconditions, postconditions, and invariants. The contracts are
 # detailed enough that:
-#   - A simulation can validate inputs and outputs (Phase 4)
-#   - An implementation can be checked for conformance (Phase 5)
+#   - A simulation can validate inputs and outputs (Phase 5)
+#   - An implementation can be checked for conformance (Phase 6)
 #   - A test can be generated from the contract alone
 #
 # The key discipline is precision. "any" types, unspecified error handling,
@@ -1552,9 +1687,7 @@ phase_3_solution_design:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_4_contract_first_interfaces:
-
   phase_processing_unit:
-
     phase_id: "PH-004-contract-first-interfaces"
     phase_name: "Contract-First Interface Definitions"
     version: "1.0.0"
@@ -1568,7 +1701,7 @@ phase_4_contract_first_interfaces:
           role: "primary"
           format: "yaml"
           description: >
-            The solution design from Phase 2. Contains components,
+            The solution design from Phase 3. Contains components,
             interactions, and feature realization maps. Every declared
             interaction becomes a contract in this phase.
           content_hash: ""
@@ -1581,7 +1714,7 @@ phase_4_contract_first_interfaces:
             The feature specification from Phase 1. Used to verify that
             contracts carry enough information to support the acceptance
             criteria. Not used for discovering new interactions — that
-            was Phase 2's job.
+            was Phase 3's job.
           content_hash: ""
           version: ""
 
@@ -1606,7 +1739,6 @@ phase_4_contract_first_interfaces:
     # 2. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -1782,7 +1914,6 @@ phase_4_contract_first_interfaces:
     # 3. ARTIFACT GENERATION
     # -----------------------------------------------------------------------
     artifact_generation:
-
       generator_agent: "contract-definition-generator"
       output_format: "yaml"
       output_path: "docs/design/interface-contracts.yaml"
@@ -1902,7 +2033,8 @@ phase_4_contract_first_interfaces:
         #   design interaction → contract (one-to-one)
         #   feature acceptance criteria → contracts that must support them
         - artifact_element_ref: "docs/design/interface-contracts.yaml#$.contracts[0]"
-          checklist_item_ids: ["CL-CI-001", "CL-CI-003", "CL-CI-004", "CL-CI-006"]
+          checklist_item_ids:
+            ["CL-CI-001", "CL-CI-003", "CL-CI-004", "CL-CI-006"]
           input_source_refs:
             - "docs/design/solution-design.yaml#$.interactions[0]"
 
@@ -1910,7 +2042,6 @@ phase_4_contract_first_interfaces:
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "contract-definition-judge"
 
       # --- Judge evaluation guidance ---
@@ -1962,7 +2093,6 @@ phase_4_contract_first_interfaces:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -2006,7 +2136,6 @@ phase_4_contract_first_interfaces:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/design/interface-contracts.yaml"
         format: "yaml"
@@ -2027,7 +2156,6 @@ phase_4_contract_first_interfaces:
         partial_count: 0
         uncovered_concern_count: 0
         escalation_status: "none"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 5: INTELLIGENT SIMULATIONS
@@ -2053,9 +2181,7 @@ phase_4_contract_first_interfaces:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_5_intelligent_simulations:
-
   phase_processing_unit:
-
     phase_id: "PH-005-intelligent-simulations"
     phase_name: "Intelligent Simulations"
     version: "1.0.0"
@@ -2069,7 +2195,7 @@ phase_5_intelligent_simulations:
           role: "primary"
           format: "yaml"
           description: >
-            The interface contracts from Phase 3. Every contract defines the
+            The interface contracts from Phase 4. Every contract defines the
             input types, output types, error types, preconditions,
             postconditions, and edge cases that the simulation must enforce.
             Each contract gets exactly one simulation.
@@ -2080,7 +2206,7 @@ phase_5_intelligent_simulations:
           role: "validation-reference"
           format: "yaml"
           description: >
-            The solution design from Phase 2. Used to understand the
+            The solution design from Phase 3. Used to understand the
             interaction topology so simulations can model realistic
             multi-step scenarios and state dependencies between contracts.
           content_hash: ""
@@ -2103,7 +2229,6 @@ phase_5_intelligent_simulations:
     # 2. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -2236,7 +2361,7 @@ phase_5_intelligent_simulations:
       #   "Simulations are realistic" (subjective)
       #   "Edge cases are handled" (not specific about which cases)
       #   "The LLM produces good outputs" (not verifiable)
-      #   "The implementation passes all tests" (wrong phase — Phase 4
+      #   "The implementation passes all tests" (wrong phase — Phase 5
       #    creates simulations, not implementations)
 
       validation:
@@ -2279,7 +2404,6 @@ phase_5_intelligent_simulations:
     # 3. ARTIFACT GENERATION
     # -----------------------------------------------------------------------
     artifact_generation:
-
       generator_agent: "simulation-generator"
       output_format: "yaml"
       output_path: "docs/simulations/simulation-definitions.yaml"
@@ -2401,7 +2525,6 @@ phase_5_intelligent_simulations:
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "simulation-judge"
 
       # --- Judge evaluation guidance ---
@@ -2451,7 +2574,6 @@ phase_5_intelligent_simulations:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -2489,7 +2611,6 @@ phase_5_intelligent_simulations:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/simulations/simulation-definitions.yaml"
         format: "yaml"
@@ -2510,7 +2631,6 @@ phase_5_intelligent_simulations:
         partial_count: 0
         uncovered_concern_count: 0
         escalation_status: "none"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 6: INCREMENTAL IMPLEMENTATION
@@ -2542,9 +2662,7 @@ phase_5_intelligent_simulations:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_6_incremental_implementation:
-
   phase_processing_unit:
-
     phase_id: "PH-006-incremental-implementation"
     phase_name: "Incremental Implementation"
     version: "1.0.0"
@@ -2558,7 +2676,7 @@ phase_6_incremental_implementation:
           role: "primary"
           format: "yaml"
           description: >
-            The interface contracts from Phase 3. Each contract defines
+            The interface contracts from Phase 4. Each contract defines
             the interface a component must implement. The contracts are
             the source of truth for what each component does.
           content_hash: ""
@@ -2568,7 +2686,7 @@ phase_6_incremental_implementation:
           role: "primary"
           format: "yaml"
           description: >
-            The simulation definitions from Phase 4. Each simulation
+            The simulation definitions from Phase 5. Each simulation
             provides a test double that components integrate against
             before real dependencies are available. The scenario banks
             provide integration test cases.
@@ -2590,7 +2708,7 @@ phase_6_incremental_implementation:
           role: "validation-reference"
           format: "yaml"
           description: >
-            The solution design from Phase 2. Provides the component
+            The solution design from Phase 3. Provides the component
             dependency graph that determines implementation order and
             the feature realization map that determines which components
             participate in which features.
@@ -2609,7 +2727,6 @@ phase_6_incremental_implementation:
     # 2. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -2753,8 +2870,8 @@ phase_6_incremental_implementation:
       #   "The code is well-written" (subjective, and this phase judges
       #    the plan, not the code)
       #   "Tests pass" (untestable at plan time — tests don't exist yet)
-      #   "The architecture is correct" (wrong phase — architecture is
-      #    Phase 2's output)
+      #   "The architecture is correct" (wrong phase — solution design is
+      #    Phase 3's output)
       #   "Components are implemented" (this phase produces the plan,
       #    not the implementation)
 
@@ -2800,7 +2917,6 @@ phase_6_incremental_implementation:
     # 3. ARTIFACT GENERATION
     # -----------------------------------------------------------------------
     artifact_generation:
-
       generator_agent: "implementation-plan-generator"
       output_format: "yaml"
       output_path: "docs/implementation/implementation-plan.yaml"
@@ -2947,7 +3063,6 @@ phase_6_incremental_implementation:
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "implementation-plan-judge"
 
       # --- Judge evaluation guidance ---
@@ -3002,7 +3117,6 @@ phase_6_incremental_implementation:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -3014,7 +3128,7 @@ phase_6_incremental_implementation:
       #    A component appears before its dependencies. Fix: re-derive
       #    the dependency graph from interactions and re-sort
       #    topologically. If there is a cycle (which should not exist
-      #    per Phase 2 validation), escalate — the solution design
+      #    per Phase 3 validation), escalate — the solution design
       #    has an unresolved issue.
       #
       # 2. MISSING CONTRACT COVERAGE (CL-II-003/CL-II-004 failure)
@@ -3049,7 +3163,6 @@ phase_6_incremental_implementation:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/implementation/implementation-plan.yaml"
         format: "yaml"
@@ -3071,7 +3184,6 @@ phase_6_incremental_implementation:
         uncovered_concern_count: 0
         escalation_status: "none"
 
-
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 7: VERIFICATION SWEEP
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -3083,7 +3195,7 @@ phase_6_incremental_implementation:
 # This phase closes the traceability loop. Every chain from requirement
 # inventory item (RI-*) through feature (FT-*) through acceptance criterion
 # (AC-*) must terminate in a passing end-to-end test. The verification sweep
-# does not re-test individual components (that was Phase 5) — it tests the
+# does not re-test individual components (that was Phase 6) — it tests the
 # integrated system as a whole, exercising the full interaction paths defined
 # in the feature realization maps.
 #
@@ -3093,9 +3205,7 @@ phase_6_incremental_implementation:
 # ═══════════════════════════════════════════════════════════════════════════════
 
 phase_7_verification_sweep:
-
   phase_processing_unit:
-
     phase_id: "PH-007-verification-sweep"
     phase_name: "Verification Sweep"
     version: "1.0.0"
@@ -3131,7 +3241,7 @@ phase_7_verification_sweep:
           role: "validation-reference"
           format: "yaml"
           description: >
-            The solution design from Phase 2. Provides feature
+            The solution design from Phase 3. Provides feature
             realization maps that define the interaction paths to test.
             End-to-end tests should exercise these paths.
           content_hash: ""
@@ -3141,7 +3251,7 @@ phase_7_verification_sweep:
           role: "upstream-traceability"
           format: "yaml"
           description: >
-            The implementation plan from Phase 5. Provides the component
+            The implementation plan from Phase 6. Provides the component
             and test inventory for cross-referencing with end-to-end
             test coverage.
           content_hash: ""
@@ -3153,7 +3263,6 @@ phase_7_verification_sweep:
     # 2. CHECKLIST EXTRACTION
     # -----------------------------------------------------------------------
     checklist_extraction:
-
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
@@ -3286,8 +3395,8 @@ phase_7_verification_sweep:
       #    but the checklist verifies the plan, not the execution)
       #   "The system works" (too vague)
       #   "Requirements are met" (by what measure? which requirements?)
-      #   "Code coverage is above 80%" (code coverage is a Phase 5
-      #    concern; Phase 6 is about requirement coverage)
+      #   "Code coverage is above 80%" (code coverage is a Phase 6
+      #    concern; Phase 7 is about requirement coverage)
 
       validation:
         validator_agent: "checklist-validator"
@@ -3331,7 +3440,6 @@ phase_7_verification_sweep:
     # 3. ARTIFACT GENERATION
     # -----------------------------------------------------------------------
     artifact_generation:
-
       generator_agent: "verification-sweep-generator"
       output_format: "yaml"
       output_path: "docs/verification/verification-report.yaml"
@@ -3481,7 +3589,6 @@ phase_7_verification_sweep:
     # 4. JUDGMENT
     # -----------------------------------------------------------------------
     judgment:
-
       judge_agent: "verification-sweep-judge"
 
       # --- Judge evaluation guidance ---
@@ -3535,7 +3642,6 @@ phase_7_verification_sweep:
     # 5. REVISION LOOP
     # -----------------------------------------------------------------------
     revision_loop:
-
       max_iterations: 3
       escalation_policy: "halt"
 
@@ -3583,7 +3689,6 @@ phase_7_verification_sweep:
     # 6. PHASE OUTPUT
     # -----------------------------------------------------------------------
     phase_output:
-
       artifact:
         path: "docs/verification/verification-report.yaml"
         format: "yaml"
@@ -3604,7 +3709,6 @@ phase_7_verification_sweep:
         partial_count: 0
         uncovered_concern_count: 0
         escalation_status: "none"
-
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PIPELINE SUMMARY
@@ -3634,4 +3738,3 @@ phase_7_verification_sweep:
 # At any point in the chain, "why does X exist?" can be answered by following
 # the traceability links backward to the original raw requirement text.
 # ═══════════════════════════════════════════════════════════════════════════════
-```

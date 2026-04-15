@@ -225,7 +225,7 @@ def build_prelude(
     catalog: dict[str, SkillCatalogEntry],
     *,
     mode: str | None = None,
-    backend: str = "claude",
+    backend: str = "codex",
 ) -> PreludeSpec:
     """Construct generator and judge prelude text for a phase.
 

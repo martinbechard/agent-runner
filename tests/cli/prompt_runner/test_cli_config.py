@@ -164,6 +164,43 @@ def test_cli_var_flags_populate_placeholder_values(tmp_path: Path, monkeypatch):
     }
 
 
+def test_cli_judge_only_populates_config_and_forces_resume_run_dir(tmp_path: Path, monkeypatch):
+    from prompt_runner import __main__ as m
+
+    pfile = _prompt_file(tmp_path / "pr.md")
+    run_dir = tmp_path / "out"
+    run_dir.mkdir()
+    captured: dict = {}
+
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
+        class DummyClient:
+            pass
+        return DummyClient()
+
+    def fake_run_pipeline(**kwargs):
+        captured["config"] = kwargs["config"]
+        captured["run_dir"] = kwargs["run_dir"]
+        captured["resume"] = kwargs["resume"]
+        from prompt_runner.runner import PipelineResult
+        return PipelineResult(prompt_results=[], halted_early=False, halt_reason=None)
+
+    monkeypatch.setattr(m, "make_client", fake_make_client)
+    monkeypatch.setattr(m, "run_pipeline", fake_run_pipeline)
+
+    rc = m.main([
+        "run", str(pfile),
+        "--dry-run",
+        "--run-dir", str(run_dir),
+        "--judge-only", "1",
+    ])
+
+    assert rc == 0
+    assert captured["config"].judge_only == 1
+    assert captured["config"].only == 1
+    assert captured["run_dir"] == run_dir
+    assert captured["resume"] is True
+
+
 def test_cmd_run_required_files_support_project_dir_placeholder(tmp_path: Path):
     from prompt_runner import __main__ as m
 

@@ -8,9 +8,6 @@ See docs/design/components/CD-002-methodology-runner.md Section 7.
 
 Public API
 ----------
-generate_phase_prompts(phase, workspace, model)
-    Simple API that creates a backend client internally.
-
 generate_prompt_file(context, claude_client, output_path, model)
     Testable API accepting an AgentClient protocol.
 
@@ -359,36 +356,15 @@ Your output must be a valid prompt-runner input file.  The format is:
 5. Prose, notes, and explanations may appear between the heading
    and first fence, between the fences, and after the second fence
    -- but they are ignored by prompt-runner.
-6. Optional typed blocks may appear before the generation prompt:
-   - ```required-files
-   - ```checks-files
-   - ```deterministic-validation
+6. Optional typed blocks may appear before the generation prompt.
+   The available typed block names are:
+   - required-files
+   - checks-files
+   - deterministic-validation
    The deterministic-validation block is a Python argv list. prompt-runner
    executes that script after the generator writes files and before the judge
    runs, then injects the script's stdout, stderr, and return code into the
    judge prompt.
-
-Example structure:
-
-## Prompt 1: Extract Requirements Checklist
-
-Generation prompt -- instructs the generator what to produce.
-
-```
-Read docs/requirements/raw-requirements.md and extract a structured
-inventory of all requirements.  Write the result to
-docs/requirements/requirements-inventory.yaml using the Write tool.
-```
-
-Validation prompt -- tells the judge what to verify.
-
-```
-Read docs/requirements/requirements-inventory.yaml.
-Evaluate the requirements inventory against these criteria:
-1. Every section of raw-requirements.md has at least one item.
-2. Each item has a valid RI-NNN id.
-End with VERDICT: pass, VERDICT: revise, or VERDICT: escalate.
-```
 
 ---
 
@@ -559,14 +535,19 @@ def _format_deterministic_validation_block(helper_path: Path | None) -> str:
     return "\n".join(
         [
             f"  - Script path: {helper_path}",
-            "  - Preferred typed block:",
-            "    ```deterministic-validation",
-            f"    {helper_path}",
-            "    --feature-spec",
-            "    docs/features/feature-specification.yaml",
-            "    --requirements-inventory",
-            "    docs/requirements/requirements-inventory.yaml",
-            "    ```",
+            "  - If you use deterministic validation, add one top-level",
+            "    typed block named `deterministic-validation` before the",
+            "    generator prompt for the prompt pair that writes",
+            "    `docs/features/feature-specification.yaml`.",
+            "  - The block's argv lines should be, in order:",
+            f"    1. {helper_path}",
+            "    2. --feature-spec",
+            "    3. docs/features/feature-specification.yaml",
+            "    4. --requirements-inventory",
+            "    5. docs/requirements/requirements-inventory.yaml",
+            "  - Do not show this block as a fenced example inside a prompt body;",
+            "    place it directly as a top-level typed block in the generated",
+            "    prompt-runner file.",
             "  - Use this helper for deterministic schema, RI-coverage, dependency-target,",
             "    and cross-cutting-concern cardinality checks so the judge can focus on",
             "    semantic issues and unsupported scope.",
@@ -850,6 +831,9 @@ def generate_prompt_file(
                 + "\n\nPlease produce a corrected version."
             )
 
+        prompt_input_path = log_dir / f"attempt-{attempt + 1}-input-prompt.md"
+        prompt_input_path.write_text(prompt, encoding="utf-8")
+
         session_id = str(uuid.uuid4())
         call = AgentCall(
             prompt=prompt,
@@ -896,31 +880,3 @@ def generate_prompt_file(
         f"{MAX_GENERATION_ATTEMPTS} attempts.  Last issues:\n"
         f"{issue_text}",
     )
-
-
-def generate_phase_prompts(
-    phase: PhaseConfig,
-    workspace: Path,
-    backend: str = "claude",
-    model: str | None = None,
-) -> Path:
-    """Call the configured backend to produce a prompt-runner .md file for this phase.
-
-    Simple API that creates a backend client internally.  For testable
-    code, use generate_prompt_file with an AgentClient protocol object.
-
-    Reads the input source files from the workspace, assembles them
-    with the phase configuration into a meta-prompt, calls the backend,
-    writes the resulting .md file to:
-        {workspace}/prompt-runner-files/{phase.phase_id}.md
-
-    Returns the path to the written .md file.
-    """
-    from prompt_runner.client_factory import make_client
-
-    client = make_client(backend)
-    context = PromptGenerationContext(
-        phase_config=phase,
-        workspace_dir=workspace,
-    )
-    return generate_prompt_file(context, client, model=model)

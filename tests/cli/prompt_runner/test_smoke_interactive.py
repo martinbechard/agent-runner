@@ -5,6 +5,7 @@ spawn, validator-less skip-judge), and --resume (skip completed, identify
 incomplete) in one end-to-end flow.
 """
 from pathlib import Path
+import re
 
 import pytest
 
@@ -21,6 +22,16 @@ def _worktree(tmp_path: Path) -> Path:
 
 def _run_files(run_dir: Path) -> Path:
     return run_dir / RUN_FILES_DIRNAME
+
+
+def _module_dir(run_dir: Path, title: str) -> Path:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "untitled"
+    return _run_files(run_dir) / slug
+
+
+def _prompt_slug(index: int, title: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", title.lower()).strip("-") or "untitled"
+    return f"prompt-{index:02d}-{slug}"
 
 
 INPUT = """# Smoke test
@@ -76,6 +87,7 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     # Stub subprocess.Popen so the interactive prompt doesn't actually
     # spawn claude. Record the invocation for later assertions.
     import subprocess
+    import prompt_runner.runner as _runner
     interactive_calls: list[list] = []
 
     class _FakeInteractiveProc:
@@ -96,6 +108,7 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
         return _FakeInteractiveProc(argv, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", fake_subprocess_popen)
+    monkeypatch.setattr(_runner, "_git_is_worktree", lambda *_args, **_kwargs: False)
 
     # Scripted claude responses for the non-interactive prompts:
     # - Prompt 1: generator + judge = 2 calls
@@ -132,11 +145,16 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     assert "interactive mission text" in interactive_calls[0][-1]
 
     # Each prompt dir has a final-verdict.txt == pass
+    titles = {
+        1: "Normal headed prompt",
+        2: "Validator-less mode",
+        3: "Interactive mode",
+        4: "Back to normal",
+    }
     for i in range(1, 5):
-        # Slug matches what _prompt_dir_name produces
-        slug_candidates = list(_run_files(run_dir).glob(f"prompt-0{i}-*"))
-        assert len(slug_candidates) == 1, f"prompt {i} dir missing"
-        verdict = (slug_candidates[0] / "final-verdict.txt").read_text("utf-8").strip()
+        prompt_dir = _module_dir(run_dir, titles[i])
+        prompt_slug = _prompt_slug(i, titles[i])
+        verdict = (prompt_dir / f"{prompt_slug}.final-verdict.txt").read_text("utf-8").strip()
         assert verdict == "pass", f"prompt {i} verdict is {verdict!r}"
 
     # --- act: second pass (fresh --resume, everything should skip) ---------
@@ -154,9 +172,9 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
 
     # --- act: third pass (simulate crash right before prompt 4) ------------
     # Delete prompt 4's verdict file to mark it incomplete
-    prompt_4_dirs = list(_run_files(run_dir).glob("prompt-04-*"))
-    assert len(prompt_4_dirs) == 1
-    (prompt_4_dirs[0] / "final-verdict.txt").unlink()
+    prompt_4_dir = _module_dir(run_dir, "Back to normal")
+    prompt_4_slug = _prompt_slug(4, "Back to normal")
+    (prompt_4_dir / f"{prompt_4_slug}.final-verdict.txt").unlink()
 
     client3 = FakeClaudeClient(scripted=[
         ClaudeResponse(stdout="artifact 4 re-run", stderr="", returncode=0),
@@ -173,9 +191,9 @@ def test_end_to_end_mixed_modes_then_resume(tmp_path: Path, monkeypatch):
     assert len(client3.received) == 2, "only prompt 4 should have re-run"
     assert len(interactive_calls) == 0, "prompt 3 (interactive) should stay skipped"
     # Prompt 4's re-run produced the new artifact
-    verdict = (prompt_4_dirs[0] / "final-verdict.txt").read_text("utf-8").strip()
+    verdict = (prompt_4_dir / f"{prompt_4_slug}.final-verdict.txt").read_text("utf-8").strip()
     assert verdict == "pass"
-    artifact = (prompt_4_dirs[0] / "final-artifact.md").read_text("utf-8")
+    artifact = (prompt_4_dir / f"{prompt_4_slug}.final-artifact.md").read_text("utf-8")
     assert "artifact 4 re-run" in artifact
 
 
@@ -190,6 +208,7 @@ def test_interactive_codex_uses_local_state_overrides(tmp_path: Path, monkeypatc
     worktree = _worktree(tmp_path)
 
     import subprocess
+    import prompt_runner.runner as _runner
     captured: dict = {}
 
     class _FakeInteractiveProc:
@@ -205,6 +224,7 @@ def test_interactive_codex_uses_local_state_overrides(tmp_path: Path, monkeypatc
         return _FakeInteractiveProc(argv, **kwargs)
 
     monkeypatch.setattr(subprocess, "Popen", fake_subprocess_popen)
+    monkeypatch.setattr(_runner, "_git_is_worktree", lambda *_args, **_kwargs: False)
 
     result = run_pipeline(
         pairs=pairs,

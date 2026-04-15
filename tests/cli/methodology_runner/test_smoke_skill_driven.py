@@ -80,26 +80,22 @@ phases:
     req.write_text("# Req\n\n- the system shall do the thing\n", encoding="utf-8")
 
     # ---- scripted claude responses ----
-    # 1) Skill-Selector reply (YAML)
+    # 1) Skill-Selector reply (JSON)
     selector_reply = """\
-phase_id: PH-000-requirements-inventory
-selector_run_at: 2026-04-09T10:00:00+00:00
-selector_model: test
-generator_skills:
-  - id: requirements-extraction
-    source: baseline
-    rationale: Baseline
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-judge_skills:
-  - id: requirements-quality-review
-    source: baseline
-    rationale: Baseline
-  - id: traceability-discipline
-    source: baseline
-    rationale: Baseline
-overall_rationale: Requirements extraction phase; baseline only.
+{
+  "phase_id": "PH-000-requirements-inventory",
+  "selector_run_at": "2026-04-09T10:00:00+00:00",
+  "selector_model": "test",
+  "generator_skills": [
+    {"id": "requirements-extraction", "source": "baseline", "rationale": "Baseline"},
+    {"id": "traceability-discipline", "source": "baseline", "rationale": "Baseline"}
+  ],
+  "judge_skills": [
+    {"id": "requirements-quality-review", "source": "baseline", "rationale": "Baseline"},
+    {"id": "traceability-discipline", "source": "baseline", "rationale": "Baseline"}
+  ],
+  "overall_rationale": "Requirements extraction phase; baseline only."
+}
 """
     # 2) Prompt generator meta-prompt reply (a valid prompt-runner .md file)
     meta_reply = """\

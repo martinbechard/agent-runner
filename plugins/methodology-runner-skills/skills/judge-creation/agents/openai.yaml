@@ -1,0 +1,4 @@
+interface:
+  display_name: "Judge Creation"
+  short_description: "Refine methodology judge prompts"
+  default_prompt: "Use $judge-creation to revise this phase judge prompt so it catches material defects without looping on wording."

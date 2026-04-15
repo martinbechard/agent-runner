@@ -123,6 +123,7 @@ class RunConfig:
     max_iterations: int = MAX_ITERATIONS_DEFAULT
     model: str | None = None
     only: int | None = None
+    judge_only: int | None = None
     dry_run: bool = False
     generator_prelude: str | None = None
     """Optional text prepended to every generator Claude message in this
@@ -449,6 +450,24 @@ def _prompt_file_stem(pair: PromptPair) -> str:
 
 def _prompt_artifact_dir(run_dir: Path, pair: PromptPair) -> Path:
     return _module_dir(run_dir, pair)
+
+
+def _prompt_history_dir(run_dir: Path, pair: PromptPair) -> Path:
+    return _module_dir(run_dir, pair) / "history" / _prompt_file_stem(pair)
+
+
+def _iteration_history_path(
+    run_dir: Path,
+    pair: PromptPair,
+    iteration_number: int,
+    *,
+    validation: bool = False,
+) -> Path:
+    suffix = "-validation" if validation else ""
+    return (
+        _prompt_history_dir(run_dir, pair)
+        / f"iter-{iteration_number:02d}{suffix}.md"
+    )
 
 
 def _append_log(path: Path, content: str) -> None:
@@ -802,7 +821,14 @@ def _initialise_run_worktree(project_dir: Path, run_dir: Path) -> None:
         _ensure_run_files_gitignored(run_dir)
         return
 
-    if _git_is_worktree(project_dir):
+    git_root = _git_worktree_root(project_dir) if _git_is_worktree(project_dir) else None
+
+    # Only use a linked git worktree when project_dir is itself the repository
+    # root. If project_dir is a fixture subdirectory inside a larger repo, a
+    # linked worktree would pull the whole repo into the run dir, including
+    # unrelated baggage like old runs and docs. In that case, copy only the
+    # requested subtree instead.
+    if git_root is not None and git_root.resolve() == project_dir:
         run_dir.parent.mkdir(parents=True, exist_ok=True)
         _git(["worktree", "prune"], cwd=project_dir, check=False)
         _git(["worktree", "add", "--detach", str(run_dir), "HEAD"], cwd=project_dir)
@@ -1009,6 +1035,16 @@ def run_prompt(
         return _run_interactive_prompt(
             pair, prior_artifacts, run_dir, config, worktree_dir,
         )
+    if config.judge_only == pair.index:
+        return _run_judge_only_prompt(
+            pair=pair,
+            run_dir=run_dir,
+            config=config,
+            claude_client=claude_client,
+            run_id=run_id,
+            worktree_dir=worktree_dir,
+            pipeline_started_at=pipeline_started_at,
+        )
     if config.max_iterations < 1:
         raise ValueError(
             f"max_iterations must be >= 1, got {config.max_iterations}"
@@ -1094,7 +1130,9 @@ def run_prompt(
             fork_from_session_id=config.fork_from_session if use_fork else "",
         )
         gen_response = _call_or_persist_partial(
-            claude_client, gen_call, prompt_dir / f"iter-{iteration_number:02d}-generator.md"
+            claude_client,
+            gen_call,
+            _iteration_history_path(run_dir, pair, iteration_number),
         )
         _emit_progress(
             f"{_progress_prefix(progress_started_at)} "
@@ -1193,7 +1231,11 @@ def run_prompt(
             worktree_dir=worktree_dir,
         )
         jud_response = _call_or_persist_partial(
-            claude_client, jud_call, prompt_dir / f"iter-{iteration_number:02d}-judge.md"
+            claude_client,
+            jud_call,
+            _iteration_history_path(
+                run_dir, pair, iteration_number, validation=True,
+            ),
         )
         _emit_progress(
             f"{_progress_prefix(progress_started_at)} "
@@ -1266,6 +1308,152 @@ def run_prompt(
         final_artifact=final.generator_output,
         created_files=created_files,
         last_session_id=last_sid,
+    )
+
+
+def _next_judge_only_iteration_number(run_dir: Path, pair: PromptPair) -> int:
+    history_dir = _prompt_artifact_dir(run_dir, pair) / "history" / f"prompt-{pair.index:02d}"
+    if not history_dir.exists():
+        return 1
+    numbers: list[int] = []
+    for path in history_dir.glob("iter-*-validation.md"):
+        match = re.match(r"iter-(\d+)-validation\.md$", path.name)
+        if match:
+            numbers.append(int(match.group(1)))
+    if not numbers:
+        return 1
+    return max(numbers) + 1
+
+
+def _load_saved_prompt_state(
+    pair: PromptPair,
+    run_dir: Path,
+) -> tuple[str, list[Path]]:
+    prompt_slug = _prompt_dir_name(pair)
+    prompt_dir = _prompt_artifact_dir(run_dir, pair)
+    artifact_path = prompt_dir / f"{prompt_slug}.final-artifact.md"
+    files_path = prompt_dir / f"{prompt_slug}.files-created.txt"
+    if not artifact_path.exists() or not files_path.exists():
+        raise FileNotFoundError(
+            f"prompt {pair.index} judge-only requires existing saved prompt state: "
+            f"{artifact_path} and {files_path}"
+        )
+    artifact_text = artifact_path.read_text(encoding="utf-8")
+    files = [Path(line) for line in files_path.read_text(encoding="utf-8").splitlines() if line.strip()]
+    return artifact_text, files
+
+
+def _run_judge_only_prompt(
+    *,
+    pair: PromptPair,
+    run_dir: Path,
+    config: RunConfig,
+    claude_client: ClaudeClient,
+    run_id: str,
+    worktree_dir: Path,
+    pipeline_started_at: datetime | None = None,
+) -> PromptResult:
+    if not pair.validation_prompt:
+        raise ValueError(
+            f"judge-only requires a validation prompt, but prompt {pair.index} has none"
+        )
+    jud_session = _session_id(f"jud-prompt-{pair.index}-{run_id}")
+    prompt_slug = _prompt_dir_name(pair)
+    prompt_dir = _prompt_artifact_dir(run_dir, pair)
+    module_log_path = _module_log_path(run_dir, pair)
+    prompt_dir.mkdir(parents=True, exist_ok=True)
+    artifact_text, created_files = _load_saved_prompt_state(pair, run_dir)
+    iteration_number = _next_judge_only_iteration_number(run_dir, pair)
+    progress_started_at = pipeline_started_at or datetime.now(timezone.utc)
+
+    _emit_progress(
+        f"{_progress_prefix(progress_started_at)} "
+        f"prompt {pair.index}/{pair.title} judge-only start"
+    )
+
+    deterministic_validation = _run_deterministic_validation(
+        pair=pair,
+        prompt_dir=prompt_dir,
+        module_log_path=module_log_path,
+        worktree_dir=worktree_dir,
+        iteration_number=iteration_number,
+    )
+    if (
+        deterministic_validation is not None
+        and deterministic_validation.returncode not in (0, 1)
+    ):
+        raise DeterministicValidationError(
+            "R-DETERMINISTIC-VALIDATION-FAILED: "
+            f"prompt {pair.index} \"{pair.title}\" deterministic "
+            f"validation returned {deterministic_validation.returncode}. "
+            f"See {deterministic_validation.stdout_log_path} and "
+            f"{deterministic_validation.stderr_log_path}."
+        )
+
+    _emit_progress(
+        f"{_progress_prefix(progress_started_at)} "
+        f"prompt {pair.index} iter {iteration_number} judge start"
+    )
+    _append_log(
+        module_log_path,
+        f"\n=== validation prompt {pair.index} iter {iteration_number} judge-only start ===\n",
+    )
+    jud_msg = build_initial_judge_message(
+        pair,
+        artifact_text,
+        created_files,
+        deterministic_validation=deterministic_validation,
+        judge_prelude=config.judge_prelude,
+    )
+    jud_call = _make_call(
+        prompt=jud_msg,
+        session_id=jud_session,
+        new_session=True,
+        model=pair.model_override or config.model,
+        effort=pair.effort_override,
+        module_log_path=module_log_path,
+        iteration=iteration_number,
+        role="judge",
+        pair=pair,
+        worktree_dir=worktree_dir,
+    )
+    jud_response = _call_or_persist_partial(
+        claude_client,
+        jud_call,
+        _iteration_history_path(run_dir, pair, iteration_number, validation=True),
+    )
+    _emit_progress(
+        f"{_progress_prefix(progress_started_at)} "
+        f"prompt {pair.index} iter {iteration_number} judge done"
+    )
+    _append_log(
+        module_log_path,
+        f"\n=== validation prompt {pair.index} iter {iteration_number} judge-only end ===\n",
+    )
+    verdict = parse_verdict(jud_response.stdout)
+    _emit_progress(
+        f"{_progress_prefix(progress_started_at)} "
+        f"prompt {pair.index} iter {iteration_number} verdict {verdict.value}"
+    )
+    _write(prompt_dir / f"{prompt_slug}.final-artifact.md", artifact_text)
+    _write(prompt_dir / f"{prompt_slug}.final-verdict.txt", verdict.value + "\n")
+    _write(
+        prompt_dir / f"{prompt_slug}.files-created.txt",
+        "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
+    )
+    return PromptResult(
+        pair=pair,
+        iterations=[
+            IterationResult(
+                iteration=iteration_number,
+                generator_output=artifact_text,
+                judge_output=jud_response.stdout,
+                verdict=verdict,
+            )
+        ],
+        final_verdict=verdict,
+        final_artifact=artifact_text,
+        created_files=created_files,
     )
 
 
@@ -1860,38 +2048,41 @@ def run_pipeline(
             )
 
         if still_skipping:
-            prompt_slug = _prompt_dir_name(rendered_pair)
-            prompt_dir = _prompt_artifact_dir(run_dir, rendered_pair)
-            verdict_path = prompt_dir / f"{prompt_slug}.final-verdict.txt"
-            if verdict_path.exists() and verdict_path.read_text(encoding="utf-8").splitlines()[0] == "pass":
-                # This prompt already completed with pass — skip it.
-                prior_artifact = _load_prior_artifact_from_disk(rendered_pair, run_dir)
-                text_body = (prompt_dir / f"{prompt_slug}.final-artifact.md").read_text(encoding="utf-8")
-                files_txt = (prompt_dir / f"{prompt_slug}.files-created.txt").read_text(encoding="utf-8")
-                created_files = [
-                    Path(line) for line in files_txt.splitlines() if line.strip()
-                ]
-                synthetic_result = PromptResult(
-                    pair=rendered_pair,
-                    iterations=[],
-                    final_verdict=Verdict.PASS,
-                    final_artifact=text_body,
-                    created_files=created_files,
-                )
-                prompt_results.append(synthetic_result)
-                prior_artifacts.append(prior_artifact)
-                print(
-                    f"[resume] skipping prompt {rendered_pair.index} '{rendered_pair.title}' — already pass",
-                    flush=True,
-                )
-                _emit_progress(
-                    f"{_progress_prefix(started_at)} "
-                    f"prompt {rendered_pair.index} resume-skip pass"
-                )
-                continue
-            else:
-                # First incomplete prompt — stop skipping from here on.
+            if config.judge_only == rendered_pair.index:
                 still_skipping = False
+            else:
+                prompt_slug = _prompt_dir_name(rendered_pair)
+                prompt_dir = _prompt_artifact_dir(run_dir, rendered_pair)
+                verdict_path = prompt_dir / f"{prompt_slug}.final-verdict.txt"
+                if verdict_path.exists() and verdict_path.read_text(encoding="utf-8").splitlines()[0] == "pass":
+                    # This prompt already completed with pass — skip it.
+                    prior_artifact = _load_prior_artifact_from_disk(rendered_pair, run_dir)
+                    text_body = (prompt_dir / f"{prompt_slug}.final-artifact.md").read_text(encoding="utf-8")
+                    files_txt = (prompt_dir / f"{prompt_slug}.files-created.txt").read_text(encoding="utf-8")
+                    created_files = [
+                        Path(line) for line in files_txt.splitlines() if line.strip()
+                    ]
+                    synthetic_result = PromptResult(
+                        pair=rendered_pair,
+                        iterations=[],
+                        final_verdict=Verdict.PASS,
+                        final_artifact=text_body,
+                        created_files=created_files,
+                    )
+                    prompt_results.append(synthetic_result)
+                    prior_artifacts.append(prior_artifact)
+                    print(
+                        f"[resume] skipping prompt {rendered_pair.index} '{rendered_pair.title}' — already pass",
+                        flush=True,
+                    )
+                    _emit_progress(
+                        f"{_progress_prefix(started_at)} "
+                        f"prompt {rendered_pair.index} resume-skip pass"
+                    )
+                    continue
+                else:
+                    # First incomplete prompt — stop skipping from here on.
+                    still_skipping = False
 
         prompt_dir = _prompt_artifact_dir(run_dir, rendered_pair)
         prompt_dir.mkdir(parents=True, exist_ok=True)
@@ -2043,10 +2234,7 @@ def _format_claude_failed_halt_reason(
     pair: PromptPair, err: ClaudeInvocationError, run_dir: Path,
 ) -> str:
     """Build a multi-line R-CLAUDE-FAILED halt reason per CD-001 §11.2."""
-    prompt_slug = _prompt_dir_name(pair)
-    partial_md_path = _prompt_artifact_dir(run_dir, pair) / (
-        f"{prompt_slug}.iter-01-generator.md"
-    )
+    partial_md_path = _iteration_history_path(run_dir, pair, 1)
     module_log_path = _module_log_path(run_dir, pair)
     stderr_tail = _tail_lines(err.response.stderr, STDERR_TAIL_LINES)
     return (
@@ -2084,6 +2272,7 @@ def _write_manifest(
             "max_iterations": config.max_iterations,
             "model": config.model,
             "only": config.only,
+            "judge_only": config.judge_only,
             "dry_run": config.dry_run,
         },
         "started_at": started_at,

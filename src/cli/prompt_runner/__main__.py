@@ -165,11 +165,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
         name, value = item.split("=", 1)
         placeholder_values[name] = value
 
+    selected_prompt = args.only if args.only is not None else args.judge_only
+
     config = RunConfig(
         backend=backend,
         max_iterations=args.max_iterations,
         model=model,
-        only=args.only,
+        only=selected_prompt,
+        judge_only=args.judge_only,
         dry_run=args.dry_run,
         verbose=args.verbose,
         generator_prelude=generator_prelude,
@@ -189,7 +192,14 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     project_dir = Path(args.project_dir).resolve() if args.project_dir else None
 
-    if args.resume is not None:
+    if args.judge_only is not None and args.only is not None and args.judge_only != args.only:
+        _print_error_banner(
+            "R-INVALID-FLAGS",
+            "--judge-only and --only must target the same prompt number when both are set.",
+        )
+        return 2
+
+    if args.resume is not None or args.judge_only is not None:
         if args.resume == "auto":
             resume_path = _find_latest_run_dir(source, project_dir)
             if resume_path is None:
@@ -199,8 +209,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
                     f"under {_runs_root(project_dir)}. Run without --resume first.",
                 )
                 return 2
-        else:
+        elif args.resume is not None:
             resume_path = Path(args.resume)
+        elif args.run_dir:
+            resume_path = Path(args.run_dir)
+        else:
+            resume_path = _find_latest_run_dir(source, project_dir)
+            if resume_path is None:
+                _print_error_banner(
+                    "R-RESUME-NOT-FOUND",
+                    f"No existing run directory found for {source.name} "
+                    f"under {_runs_root(project_dir)}. Run without --judge-only first.",
+                )
+                return 2
         if not resume_path.exists() or not resume_path.is_dir():
             _print_error_banner(
                 "R-RESUME-NOT-FOUND",
@@ -332,6 +353,15 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Run only prompt number N (debug).",
+    )
+    run_cmd.add_argument(
+        "--judge-only",
+        type=int,
+        default=None,
+        help=(
+            "Rerun only the judge for prompt number N using that prompt's existing "
+            "saved artifact/files in the run directory."
+        ),
     )
     run_cmd.add_argument(
         "--dry-run",

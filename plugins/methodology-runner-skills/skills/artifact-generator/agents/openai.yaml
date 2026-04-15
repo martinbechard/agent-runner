@@ -1,0 +1,4 @@
+interface:
+  display_name: "Artifact Generator"
+  short_description: "Refine methodology generator prompts"
+  default_prompt: "Use $artifact-generator to revise this phase generator prompt so it produces the exact artifact schema with the right invention boundary."

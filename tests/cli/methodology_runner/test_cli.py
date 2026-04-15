@@ -20,7 +20,6 @@ from methodology_runner.cli import (
     _any_escalated,
     _auto_workspace,
     _build_parser,
-    _check_prompt_runner_cli,
     _downstream_phase_ids,
     _format_duration,
     _load_state,
@@ -232,7 +231,7 @@ class TestLoadState:
 
 
 # ---------------------------------------------------------------------------
-# Tests: backend CLI checks / _check_prompt_runner_cli
+# Tests: backend CLI checks
 # ---------------------------------------------------------------------------
 
 class TestPreflightChecks:
@@ -256,17 +255,6 @@ class TestPreflightChecks:
             result = check_backend_cli("codex")
             assert result is not None
             assert "codex" in result.lower()
-
-    def test_prompt_runner_found(self) -> None:
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/prompt-runner"):
-            assert _check_prompt_runner_cli() is None
-
-    def test_prompt_runner_missing(self) -> None:
-        with patch("methodology_runner.cli.shutil.which", return_value=None):
-            result = _check_prompt_runner_cli()
-            assert result is not None
-            assert "prompt-runner" in result.lower()
-
 
 # ---------------------------------------------------------------------------
 # Tests: _downstream_phase_ids

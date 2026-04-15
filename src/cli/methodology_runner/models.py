@@ -577,7 +577,7 @@ class ProjectState:
     # -- optional fields -----------------------------------------------------
     project_name: str = ""
     model: str | None = None
-    backend: str = "claude"
+    backend: str = "codex"
     execution_scope: str = "all-phases"
     selected_phase_ids: list[str] | None = None
     finished_at: str | None = None

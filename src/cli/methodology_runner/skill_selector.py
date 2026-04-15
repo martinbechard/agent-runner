@@ -3,8 +3,8 @@
 Runs once per phase before the phase's meta-prompt.  Assembles a
 selector prompt from the phase definition, the compact skill catalog,
 prior phase artifacts, and the stack manifest (if any), invokes
-the configured backend, parses the YAML reply, and validates it against the catalog
-and the baseline config.
+the configured backend, parses the JSON reply, and validates it against the
+catalog and the baseline config.
 
 On success, returns a :class:`PhaseSkillManifest` ready to be written
 to the workspace as ``phase-NNN-skills.yaml`` and used to build
@@ -17,12 +17,11 @@ See spec section 6 for the selector design.
 from __future__ import annotations
 
 import uuid
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TYPE_CHECKING
-
-import yaml
 
 from .artifact_summarizer import ArtifactSummaryProvider
 from .constants import MAX_SKILLS_PER_PHASE
@@ -82,25 +81,25 @@ you do not modify any prior work.  You only pick skills.
 
 ## Output contract
 
-Your entire response MUST be a single valid YAML document with
+Your entire response MUST be a single valid JSON object with
 EXACTLY these top-level keys (no extras, no prose before or after):
 
-    phase_id:          the phase ID (string)
-    selector_run_at:   ISO 8601 timestamp
-    selector_model:    the model you are running as (string)
-    generator_skills:  list of skill choices for the generator
-    judge_skills:      list of skill choices for the judge
-    overall_rationale: free text explaining the selection as a whole
+    "phase_id":          the phase ID (string)
+    "selector_run_at":   ISO 8601 timestamp
+    "selector_model":    the model you are running as (string)
+    "generator_skills":  list of skill choices for the generator
+    "judge_skills":      list of skill choices for the judge
+    "overall_rationale": free text explaining the selection as a whole
 
 Every entry in generator_skills and judge_skills must have:
 
-    id:         a skill ID that exists in the catalog
-    source:     one of "baseline", "expertise-mapping", "selector-judgment"
-    rationale:  why you picked it (non-empty)
+    "id":         a skill ID that exists in the catalog
+    "source":     one of "baseline", "expertise-mapping", "selector-judgment"
+    "rationale":  why you picked it (non-empty)
 
 Entries with source "expertise-mapping" MUST include:
 
-    mapped_from: the exact expertise string from the stack manifest
+    "mapped_from": the exact expertise string from the stack manifest
 
 ## Rules you must follow
 
@@ -113,8 +112,8 @@ Entries with source "expertise-mapping" MUST include:
   exceed {max_skills}.  If you want more, prioritize and explain the
   trade-off in overall_rationale.
 
-Do not wrap your YAML in a code fence.  Do not prepend or append
-any prose.  Your entire response is the YAML document.
+Do not wrap your JSON in a code fence.  Do not prepend or append
+any prose.  Your entire response is the JSON object.
 """
 
 
@@ -211,8 +210,8 @@ Judge baseline:     {', '.join(jud_base) or '(none)'}
 
 ---
 
-Produce the phase-skills YAML for phase {inputs.phase_config.phase_id}.
-Remember: your entire response is a single YAML document; no code fence,
+Produce the phase-skills JSON for phase {inputs.phase_config.phase_id}.
+Remember: your entire response is a single JSON object; no code fence,
 no commentary.
 
 Use {selector_model or 'the current model'} as the selector_model value.
@@ -221,20 +220,20 @@ Use {datetime.now(timezone.utc).isoformat()} as the selector_run_at value.
 
 
 def _parse_and_validate(
-    yaml_text: str,
+    json_text: str,
     inputs: SelectorInputs,
 ) -> PhaseSkillManifest:
     try:
-        raw = yaml.safe_load(yaml_text)
-    except yaml.YAMLError as exc:
+        raw = json.loads(json_text)
+    except json.JSONDecodeError as exc:
         raise SelectorError(
-            f"selector output is not parseable YAML: {exc}\n\n"
-            f"Raw output:\n{yaml_text}"
+            f"selector output is not parseable JSON: {exc}\n\n"
+            f"Raw output:\n{json_text}"
         ) from exc
 
     if not isinstance(raw, dict):
         raise SelectorError(
-            f"selector output must be a YAML mapping, got {type(raw).__name__}"
+            f"selector output must be a JSON object, got {type(raw).__name__}"
         )
 
     required_top = {
@@ -332,7 +331,7 @@ def invoke_skill_selector(
     """Run the Skill-Selector for *inputs.phase_config*.
 
     Assembles the selector prompt, invokes the configured backend, parses and
-    validates the YAML reply, and returns a ``PhaseSkillManifest``.
+    validates the JSON reply, and returns a ``PhaseSkillManifest``.
     """
     cache_dir = inputs.workspace_dir / ".methodology-runner" / "artifact-summaries"
     summarizer = ArtifactSummaryProvider(
