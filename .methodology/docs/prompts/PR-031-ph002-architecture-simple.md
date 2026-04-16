@@ -486,6 +486,16 @@ docs/features/feature-specification.yaml
 
 docs/architecture/architecture-design.yaml
 
+#### Deterministic Validation
+
+scripts/phase-2-deterministic-validation.py
+--stack-manifest
+docs/architecture/architecture-design.yaml
+--feature-spec
+docs/features/feature-specification.yaml
+--requirements-inventory
+docs/requirements/requirements-inventory.yaml
+
 #### Generation Prompt
 
 You are producing an architecture design variant for PH-002-architecture.

@@ -1,0 +1,63 @@
+features:
+  - id: "FT-001"
+    name: "Command-Line Hello World Application"
+    description: "Provide a Python 3 application whose required user-visible behavior is printing `Hello, world!` to standard output when run from the command line."
+    source_inventory_refs: ["RI-001", "RI-002", "RI-003", "RI-004", "RI-010", "RI-012", "RI-013"]
+    acceptance_criteria:
+      - id: "AC-001-01"
+        description: "The feature specification defines one Python 3 application as a required deliverable."
+      - id: "AC-001-02"
+        description: "The feature specification states that running the application from the command line results in `Hello, world!` being printed to standard output."
+      - id: "AC-001-03"
+        description: "The feature specification constrains the solution so that no framework is required unless its inclusion is necessary to satisfy the cited inventory requirements."
+      - id: "AC-001-04"
+        description: "The feature specification defines the command-line run outcome in user-observable terms so that a reviewer can confirm a human can run the application and see `Hello, world!`."
+    dependencies: []
+
+  - id: "FT-002"
+    name: "README Run Instructions"
+    description: "Provide a README artifact that tells a human how to run the application from the command line."
+    source_inventory_refs: ["RI-006", "RI-007"]
+    acceptance_criteria:
+      - id: "AC-002-01"
+        description: "The feature specification requires a README as a project deliverable."
+      - id: "AC-002-02"
+        description: "The feature specification requires the README to include run instructions for the command-line application."
+      - id: "AC-002-03"
+        description: "The run instructions are specified in terms of enabling a human to execute the application defined by FT-001."
+    dependencies: ["FT-001"]
+
+  - id: "FT-003"
+    name: "Automated Output Verification"
+    description: "Provide one automated test and a runnable test suite outcome that verifies the program prints the expected output."
+    source_inventory_refs: ["RI-008", "RI-009", "RI-014", "RI-015"]
+    acceptance_criteria:
+      - id: "AC-003-01"
+        description: "The feature specification requires exactly one automated test as a deliverable."
+      - id: "AC-003-02"
+        description: "The feature specification states that the automated test verifies that the program prints the expected output."
+      - id: "AC-003-03"
+        description: "The expected output referenced by the automated test is the same application output defined by FT-001."
+      - id: "AC-003-04"
+        description: "The feature specification defines completion in terms of a human being able to run the test suite and observe that it passes."
+    dependencies: ["FT-001"]
+
+out_of_scope:
+  - inventory_ref: "RI-005"
+    reason: "The phrase `intentionally minimal` is qualitative and the source inventory does not supply an objective threshold that can be turned into a binary acceptance criterion without inventing a new standard."
+  - inventory_ref: "RI-011"
+    reason: "The preference for a file layout that is `easy to understand` is underspecified and cannot be reviewed as pass/fail at the feature-specification level without adding non-source evaluation rules."
+  - inventory_ref: "RI-016"
+    reason: "The statement that the application is `very small` does not define a measurable size boundary in the source inventory, so converting it into acceptance criteria would require inventing a size standard."
+  - inventory_ref: "RI-017"
+    reason: "The statement that the README is `short` does not define an objective length or bounded measure in the source inventory, so it is deferred rather than rewritten into an invented threshold."
+
+cross_cutting_concerns:
+  - id: "CC-001"
+    name: "Minimal Scope Preservation"
+    description: "The specification must stay limited to deliverables and behaviors that are directly supported by the inventory, including avoiding any framework mandate and avoiding unsupported expansion of application, documentation, or test scope."
+    affected_features: ["FT-001", "FT-002", "FT-003"]
+  - id: "CC-002"
+    name: "Human-Reviewable Operability"
+    description: "Application behavior, README guidance, and automated verification must align so a reviewer can determine from the specification that a human can run the application, follow the documented instructions, and run the test suite to observe the required outcomes."
+    affected_features: ["FT-001", "FT-002", "FT-003"]
