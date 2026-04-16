@@ -543,7 +543,7 @@ Read:
 
 Use the `structured-review` skill and `traceability-discipline`.
 
-Decide whether the YAML architecture is phase-ready for this variant.
+Decide whether the architecture is phase-ready for this variant.
 
 Focus on material defects only:
 - missing feature coverage
@@ -623,6 +623,8 @@ Keep it as small as the feature set allows.
   or tool IDs.
 - Let the `structured-design` skill define the structure and item model for
   this artifact.
+- Follow the `structured-design` skill's companion guidance and preserve the
+  real architecture section structure.
 - Start the artifact with one short structured section that summarizes how you
   are applying the `structured-design` skill to this architecture artifact.
 
@@ -656,16 +658,21 @@ Focus on material defects only:
 - fake or missing integration boundaries
 - weak expertise descriptions
 - structure that does not clearly express the architecture
+- structure that distorts the `structured-design` architecture shape
 
 Review rules:
 - Accept a simple architecture if it is coherent and sufficient.
 - Do not force extra components or integration points.
 - Treat this phase as allowed elaboration, but reject unsupported scope creep.
 - Cite exact component, FT-*, and RI-* references when you ask for changes.
-- Check that the artifact actually follows the `structured-design` skill.
+- Check that the artifact actually follows the `structured-design` skill rather
+  than just flattening everything into generic.
 - Check that the artifact follows the skill's architecture-doc guidance.
 - Check that the artifact starts with a short structured summary of how the
   `structured-design` skill is being applied.
+- Check that the preserves the real architecture section structure
+  rather than converting section names into item names or generic type
+  entries.
 - For each material correction, include:
   - RULE: the generator MUST / MUST NOT / SHOULD / SHOULD NOT make a specific change
     - BECAUSE: why that correction is necessary
