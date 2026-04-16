@@ -5,7 +5,7 @@
 This section links the main design and implementation inputs that
 justify this plan.
 
-- **FILE: FILE-1** `docs/design/components/CD-003-methodology-run.md`
+- **FILE: FILE-1** `.methodology/docs/design/components/CD-003-methodology-run.md`
   - **SYNOPSIS:** Primary design authority for one methodology run,
     including selected-phase execution, per-phase prompt generation, and
     phase-run artifact paths.
@@ -18,7 +18,7 @@ justify this plan.
   - **BECAUSE:** This file captures PH-000-specific observations and
     review notes, but it is not the primary design authority.
 
-- **FILE: FILE-3** `docs/design/components/CD-006-prompt-runner-core.md`
+- **FILE: FILE-3** `.prompt-runner/docs/design/components/CD-006-prompt-runner-core.md`
   - **SYNOPSIS:** Generic `prompt_runner` design.
   - **BECAUSE:** PH-000 prompt parsing and revise-loop behavior depend on
     the generic prompt-runner component.
@@ -28,7 +28,7 @@ justify this plan.
   - **BECAUSE:** This file shows where PH-000 testing fits relative to the
     other active methodology designs.
 
-- **FILE: FILE-5** `src/cli/methodology_runner/prompt_generator.py`
+- **FILE: FILE-5** `.methodology/src/cli/methodology_runner/prompt_generator.py`
   - **SYNOPSIS:** Current PH-000 prompt generation implementation,
     including the deterministic Codex PH-000 template.
   - **BECAUSE:** The current PH-000 prompt contract is implemented here,
@@ -42,7 +42,7 @@ This section breaks PH-000 testing into the smallest useful checkpoints and ties
 - **GOAL: GOAL-1** Prove that `PH-000-requirements-inventory` works correctly before running later methodology steps.
   - **CHAIN-OF-THOUGHT:** `PH-000` is the first native methodology phase and produces the first structured artifact. If step 1 is unclear or unstable, later methodology phases inherit that uncertainty.
   - **BECAUSE:** Step 1 is the entry artifact for the rest of the methodology.
-  - **SUPPORTS:** `REQ-6` and `PROCESS-3` in `docs/design/components/CD-003-methodology-run.md`
+  - **SUPPORTS:** `REQ-6` and `PROCESS-3` in `.methodology/docs/design/components/CD-003-methodology-run.md`
     - **BECAUSE:** The active design authority defines selected-phase execution and per-phase prompt generation for PH-000.
 
 - **SUBGOAL: SUBG-1** Prove the deterministic setup path.
@@ -52,7 +52,7 @@ This section breaks PH-000 testing into the smallest useful checkpoints and ties
     - **BECAUSE:** Those process items define the deterministic PH-000 setup and execution path.
   - **SUPPORTS:** `REQ-3` and `REQ-4` in `CD-003-methodology-run.md`
     - **BECAUSE:** The generic methodology-run design requires stable run-local artifacts and resumable state.
-  - **TASK: TASK-1** Review the PH-000 phase definition in `src/cli/methodology_runner/phases.py`.
+  - **TASK: TASK-1** Review the PH-000 phase definition in `.methodology/src/cli/methodology_runner/phases.py`.
     - **STATUS:** `done`
     - **BECAUSE:** The phase config defines the intended inputs, outputs, and predecessor model.
     - **SUPPORTS:** `GOAL-1` and `PROCESS-1` in `CD-007-ph000-step-1-review.md`

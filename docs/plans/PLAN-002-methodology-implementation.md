@@ -10,13 +10,13 @@ ending at the previously captured web app request.
 
 This plan implements the current active design stack:
 
-- `docs/design/high-level/HLD-002-methodology-execution-architecture.md`
-- `docs/design/high-level/HLD-003-methodology-workflow.md`
-- `docs/design/components/CD-005-methodology-supervision.md`
-- `docs/design/components/CD-003-methodology-run.md`
-- `docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
-- `docs/design/components/CD-004-methodology-standalone-step-harness.md`
-- `docs/design/components/CD-006-prompt-runner-core.md`
+- `.methodology/docs/design/high-level/HLD-002-methodology-execution-architecture.md`
+- `.methodology/docs/design/high-level/HLD-003-methodology-workflow.md`
+- `.methodology/docs/design/components/CD-005-methodology-supervision.md`
+- `.methodology/docs/design/components/CD-003-methodology-run.md`
+- `.methodology/docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
+- `.methodology/docs/design/components/CD-004-methodology-standalone-step-harness.md`
+- `.prompt-runner/docs/design/components/CD-006-prompt-runner-core.md`
 
 Retired chronological execution log:
 
@@ -61,9 +61,9 @@ Tasks:
 
 Current likely code touchpoints:
 
-- `src/cli/prompt_runner/parser.py`
-- `src/cli/prompt_runner/runner.py`
-- `src/cli/prompt_runner/__main__.py`
+- `.prompt-runner/src/cli/prompt_runner/parser.py`
+- `.prompt-runner/src/cli/prompt_runner/runner.py`
+- `.prompt-runner/src/cli/prompt_runner/__main__.py`
 - prompt-runner parser and runner tests
 
 Readiness gate:
@@ -138,8 +138,8 @@ Tasks:
 
 Current likely code touchpoints:
 
-- `docs/prompts/PR-015-methodology-baseline-run.md`
-- `docs/prompts/PR-019-methodology-optimization-workflow.md`
+- `.methodology/docs/prompts/PR-015-methodology-baseline-run.md`
+- `.methodology/docs/prompts/PR-019-methodology-optimization-workflow.md`
 - `scripts/run_methodology_baseline.py`
 
 Readiness gate:
@@ -171,7 +171,7 @@ Tasks:
 
 Current likely code touchpoints:
 
-- `docs/prompts/PR-016-methodology-planning-preparation.md`
+- `.methodology/docs/prompts/PR-016-methodology-planning-preparation.md`
 
 Readiness gate:
 
@@ -200,7 +200,7 @@ Tasks:
 
 Current likely code touchpoints:
 
-- `docs/prompts/PR-017-methodology-standalone-step-harness.md`
+- `.methodology/docs/prompts/PR-017-methodology-standalone-step-harness.md`
 - `scripts/run_methodology_step_harness.py`
 
 Readiness gate:
@@ -227,7 +227,7 @@ Tasks:
 
 Current likely code touchpoints:
 
-- `docs/prompts/PR-018-methodology-step-lab-planning.md`
+- `.methodology/docs/prompts/PR-018-methodology-step-lab-planning.md`
 
 Readiness gate:
 
@@ -258,7 +258,7 @@ Tasks:
 
 Current likely code touchpoints:
 
-- `docs/prompts/PR-020-methodology-optimization-supervisor.md`
+- `.methodology/docs/prompts/PR-020-methodology-optimization-supervisor.md`
 - `scripts/run_methodology_optimization_supervisor.py`
 
 Readiness gate:

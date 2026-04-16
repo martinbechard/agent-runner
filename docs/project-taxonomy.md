@@ -17,6 +17,20 @@
   - Test files: `test_<module>.py` (Python), `<module>.test.ts(x)` (TS / React)
 - **Tests mirror source:** a test for `src/<area>/path/to/file.ext` lives at `tests/<area>/path/to/<test-file>` using the conventions above.
 
+## Top-Level Folder Principles
+
+- **Project files** live in the normal project tree such as `docs/`, `src/`,
+  `tests/`, and other product-facing paths.
+- **Prompt-runner files** live under `.prompt-runner/`.
+- **Methodology files** live under `.methodology/`.
+- **Rule:** When a file exists only to support prompt-runner execution, keep it
+  under `.prompt-runner/` rather than mixing it with project files.
+- **Rule:** When a file exists only to support methodology-runner execution,
+  keep it under `.methodology/` rather than mixing it with project
+  files.
+- **Rule:** Project outputs produced by a phase stay in the project tree unless
+  the file is runner-owned state or tooling support data.
+
 ## Categories
 
 ### docs/requirements/functional/
@@ -40,8 +54,94 @@
 ### docs/design/components/
 - **Purpose:** Detailed design of a single component — its internal data model, exposed API, and invariants.
 - **Signals:** "this module exposes", single-component internals, "the X component", scoped data model, internal class/function decomposition.
-- **Filename pattern:** `CD-NNN-<slug>.md`
+- **Filename pattern:** `CD-NNN-<slug>.md` for canonical markdown component designs; `CD-NNN-<slug>.yaml` for explicit YAML structured-design companions when the task specifically calls for the same component design in YAML form.
 - **Example:** `CD-001-cli-runner.md`
+
+### .prompt-runner/docs/design/components/
+- **Purpose:** Canonical design documents for prompt-runner itself. Use this mirrored design path when a component design belongs to prompt-runner rather than to the main project tree or to methodology-runner.
+- **Signals:** prompt-runner parser model, prompt-runner runtime contract, prompt-runner agent model, prompt-runner CLI execution design, design authority for prompt-runner internals rather than for the main project or the methodology layer.
+- **Filename pattern:** preserve the existing component-design filename such as `CD-NNN-<slug>.md`.
+- **Example:** `.prompt-runner/docs/design/components/CD-001-prompt-runner.md`
+
+### .prompt-runner/README.md
+- **Purpose:** Human- and agent-facing guide for prompt-runner itself. Use this path for prompt-runner-specific usage, authoring, and file-format guidance that belongs to prompt-runner rather than to the main project or to methodology-runner.
+- **Signals:** "prompt-runner input format", authoring guide for prompt modules, prompt-runner usage notes, prompt-runner-specific examples, references for prompt-runner users.
+- **Filename pattern:** `README.md`.
+- **Example:** `.prompt-runner/README.md`
+
+### .prompt-runner/docs/testing/
+- **Purpose:** Acceptance criteria and verification specs for prompt-runner itself.
+- **Signals:** prompt-runner implementation acceptance criteria, verification targets for prompt-runner behavior, checks tied to prompt-runner design docs.
+- **Filename pattern:** preserve the existing acceptance-criteria filename such as `AC-NNN-<slug>.md`.
+- **Example:** `.prompt-runner/docs/testing/AC-001-prompt-runner.md`
+
+### .prompt-runner/docs/plans/
+- **Purpose:** Prompt-runner-specific implementation plans and historical planning artifacts. Use this mirrored plan path when the plan belongs to prompt-runner rather than to the main project or to methodology-runner.
+- **Signals:** prompt-runner implementation plan, prompt-runner historical plan, prompt-runner-specific task breakdown, retired prompt-runner plan.
+- **Filename pattern:** preserve the existing plan filename under the matching subpath, such as `PLAN-NNN-<slug>.md` or dated retired plan names.
+- **Example:** `.prompt-runner/docs/plans/retired/PLAN-001-prompt-runner.md`
+
+### .prompt-runner/src/cli/
+- **Purpose:** Prompt-runner Python source code. Use this mirrored source path when the code belongs to prompt-runner rather than to the main project tree or to methodology-runner.
+- **Signals:** prompt-runner CLI entry point, parser, runner loop, agent clients, prompt-runner config, prompt-runner package code imported as `prompt_runner`.
+- **Filename pattern:** `snake_case.py` for modules and fixed Python package files such as `__init__.py` and `__main__.py`.
+- **Tests location:** `.prompt-runner/tests/cli/` — mirror path, `test_<module>.py`.
+- **Example:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+
+### .prompt-runner/tests/cli/
+- **Purpose:** Prompt-runner Python tests and fixtures. Use this mirrored test path when the tests exercise prompt-runner code rather than the main project tree or methodology-runner.
+- **Signals:** prompt-runner parser tests, runner tests, prompt-runner CLI tests, fixtures imported only by prompt-runner tests.
+- **Filename pattern:** `test_<module>.py`; fixtures keep descriptive filenames in subfolders such as `fixtures/`.
+- **Mirrors:** `.prompt-runner/src/cli/`
+
+### .methodology/docs/design/high-level/
+- **Purpose:** High-level design documents for the methodology layer itself. Use this mirrored design path when the document describes methodology-wide structure, workflow, or execution architecture rather than the main project or prompt-runner.
+- **Signals:** methodology-wide architecture, methodology workflow, phase-to-phase flow, optimization workflow, execution architecture for the methodology layer.
+- **Filename pattern:** preserve the existing high-level-design filename such as `HLD-NNN-<slug>.md`.
+- **Example:** `.methodology/docs/design/high-level/HLD-002-methodology-execution-architecture.md`
+
+### .methodology/docs/design/components/
+- **Purpose:** Canonical component designs for methodology-runner and phase-specific methodology components. Use this mirrored design path when the document describes methodology-runner internals, a methodology support component, or a phase design.
+- **Signals:** methodology-runner component internals, phase design authority, methodology supervision design, standalone phase harness design, per-phase methodology component design.
+- **Filename pattern:** preserve the existing component-design filename such as `CD-NNN-<slug>.md`.
+- **Example:** `.methodology/docs/design/components/CD-009-ph000-requirements-inventory-design.md`
+
+### .methodology/docs/prompts/
+- **Purpose:** Canonical prompt modules and related prompt-runner input files owned by the methodology layer. Use this mirrored prompt path when the prompt exists to run a methodology phase, methodology workflow, or methodology experiment rather than to document prompt-runner itself.
+- **Signals:** phase prompt module, methodology workflow prompt, hello-world methodology prompt, integration-agent prompt for methodology phases, methodology prompt README, retired methodology prompt.
+- **Filename pattern:** preserve the existing prompt filename such as `PR-NNN-<slug>.md`, `integration-agent-PH-NNN-<slug>.md`, or `README.md`.
+- **Example:** `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`
+
+### .methodology/src/cli/
+- **Purpose:** Methodology-runner Python source code. Use this mirrored source path when the code belongs to methodology-runner rather than to the main project tree or to prompt-runner.
+- **Signals:** methodology-runner CLI entry point, orchestrator, phase registry, prompt generator, skill discovery, cross-reference logic, package code imported as `methodology_runner`.
+- **Filename pattern:** `snake_case.py` for modules and fixed Python package files such as `__init__.py` and `__main__.py`.
+- **Tests location:** `.methodology/tests/cli/` — mirror path, `test_<module>.py`.
+- **Example:** `.methodology/.methodology/src/cli/methodology_runner/orchestrator.py`
+
+### .methodology/tests/cli/
+- **Purpose:** Methodology-runner Python tests. Use this mirrored test path when the tests exercise methodology-runner code rather than the main project tree or prompt-runner.
+- **Signals:** methodology-runner CLI tests, orchestrator tests, phase tests, skill catalog tests, cross-reference tests, imports from `methodology_runner`.
+- **Filename pattern:** `test_<module>.py`.
+- **Mirrors:** `.methodology/src/cli/`
+
+### .methodology/skills/
+- **Purpose:** Methodology-owned skill-pack files that support methodology-runner execution and skill authoring. Use this path for methodology skill pack overview files and shared authoring guidance that belong to the methodology layer rather than to a generic plugin package.
+- **Signals:** methodology skill pack README, methodology skill authoring context, methodology skill authoring prelude, shared guidance for the methodology skill set.
+- **Filename pattern:** fixed support filenames such as `README.md`, `AUTHORING-CONTEXT.md`, or `authoring-prelude.txt`.
+- **Example:** `.methodology/skills/README.md`
+
+### .methodology/skills/<skill-name>/
+- **Purpose:** Canonical methodology skill definitions used by methodology-runner. Each skill lives in its own directory with a `SKILL.md` file and belongs to the methodology layer rather than to a repo-local plugin wrapper.
+- **Signals:** methodology skill definition, `SKILL.md`, phase-local or shared methodology discipline, skill loaded by methodology-runner, audience is methodology generator or judge agents.
+- **Filename pattern:** `SKILL.md` inside `.methodology/skills/<skill-name>/`.
+- **Example:** `.methodology/skills/traceability-discipline/SKILL.md`
+
+### .codex/agents/
+- **Purpose:** Repository-local Codex custom agent definitions. Use this path for TOML agent files that define reusable Codex agents for this repository and are meant to be registered into the user's Codex agent directory.
+- **Signals:** Codex custom agent, `name =`, `description =`, `developer_instructions =`, `.toml` agent definition, reusable repo-local agent role, file meant to be linked or copied into `~/.codex/agents/`.
+- **Filename pattern:** `kebab-case.toml`.
+- **Example:** `.codex/agents/prompt-runner-generator.toml`
 
 ### src/cli/
 - **Purpose:** Python command-line process source code.
@@ -77,7 +177,7 @@
 - **Purpose:** Transient, TDD-style implementation plans — sequential task groups that decompose a finished design into bite-sized, test-first steps. Not a design document (no decisions), not a requirements document, and not acceptance criteria. Historical value once implementation is complete.
 - **Signals:** "task group", "write failing test", "run pytest", "step-N deliverable", references a companion `CD-NNN` or `HLD-NNN` doc, implementation order section, TDD cadence (failing test → minimal implementation → commit).
 - **Filename pattern:** `PLAN-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature being implemented.
-- **Example:** `docs/plans/retired/PLAN-001-prompt-runner.md`
+- **Example:** `docs/plans/PLAN-005-ph000-granular-test.md`
 
 ### docs/reviews/
 - **Purpose:** Structured review outputs such as completed review checklists, findings documents, and other review artifacts derived from an explicit review process. These are not design authorities, not implementation plans, and not acceptance-criteria specs; they record the result of reviewing another artifact.
@@ -93,7 +193,7 @@
 
 ### tests/fixtures/
 - **Purpose:** Static input files used by interactive or automated methodology-runner sessions during skill authoring and verification. These are not unit-test source files and do not mirror any `src/` module; they are realistic-but-minimal data files consumed as `--input` or equivalent arguments to CLI tools under development.
-- **Signals:** "test fixture", "used by methodology-runner run", "skill-authoring session", "tiny requirements", "sample input", not a `def test_` file, not a `describe(` block, referenced from a `docs/prompts/PR-NNN-*.md` file as the concrete input to a runner session.
+- **Signals:** "test fixture", "used by methodology-runner run", "skill-authoring session", "tiny requirements", "sample input", not a `def test_` file, not a `describe(` block, referenced from a `.methodology/docs/prompts/PR-NNN-*.md` file as the concrete input to a runner session.
 - **Filename pattern:** `<topic-slug>.<ext>` in kebab-case, where ext matches the fixture format (e.g. `tiny-requirements.md`, `sample-config.yaml`).
 - **Tests location:** n/a — these files are themselves fixtures, not code under test.
 
@@ -115,17 +215,11 @@
 - **Filename pattern:** `<module>.test.tsx`
 - **Mirrors:** `src/web/`
 
-### docs/methodology/
-- **Purpose:** Canonical reference specifications for the AI-driven software development methodology — the standing corpus that AI pipeline agents (generators, judges, orchestrators) consult when executing the methodology on real projects. These documents define phases, agent roles, data models, and control flow for the methodology itself, not for any specific codebase that uses it. They are produced by prompt-runner runs and evolve as the methodology evolves.
+### .methodology/docs/
+- **Purpose:** Canonical reference specifications for the AI-driven software development methodology. This is the standing corpus that methodology-runner and related AI pipeline agents consult when executing the methodology on real projects. These documents define phases, agent roles, data models, and control flow for the methodology itself, not for any specific codebase that uses it.
 - **Signals:** "AI-Driven Development Pipeline", "Phase Processing Unit", "agent role", "checklist extractor", "judge", "orchestrator", "simulation framework", "traceability infrastructure", "phase sequencing", YAML spec of pipeline phases or agent system prompts, audience is AI agents not human developers of a specific tool, not a design of agent-runner components.
-- **Filename pattern:** `M-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the methodology element (e.g. `phase-definitions`, `agent-role-specifications`, `orchestration`).
-- **Example:** `M-001-phase-processing-unit-schema.md`
-
-### docs/prompts/
-- **Purpose:** Hand-authored prompt-runner input files — sequences of LLM generation prompts paired with validator prompts, consumed by the prompt-runner CLI tool to produce design docs, acceptance criteria, plans, or source code. These files drive downstream artifact generation but are not themselves design documents, requirements, acceptance criteria, or plans.
-- **Signals:** `## Prompt N:` section headings, paired fenced code blocks (generation prompt + validation prompt), "max_iterations", "sent to Claude", "judge", intended to be passed as `--input` to the prompt-runner CLI, subject line references a tool or feature being built via the runner.
-- **Filename pattern:** `PR-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the tool or feature the prompts will produce.
-- **Example:** `PR-001-methodology-runner.md`
+- **Filename pattern:** `M-NNN-<slug>.md` or fixed supporting filenames such as `skills-baselines.yaml`.
+- **Example:** `.methodology/docs/M-001-phase-processing-unit-schema.md`
 
 ### .prompt-runner/runs/<run-id>/
 - **Purpose:** Generated, run-scoped prompt-runner artifacts produced during one execution of a prompt sequence. This directory holds per-run YAML or markdown outputs such as inventories, traceability maps, correction files, checklists, and similar intermediate or final artifacts tied to a single run ID.
@@ -165,14 +259,14 @@
 
 ### plugins/<plugin-name>/docs/
 - **Purpose:** Supplementary reference documents scoped to a single plugin — authoring guides, lessons-learned files, pattern catalogues, and any other human- or AI-readable guidance that belongs to the plugin but is not a skill definition, a plugin manifest, or the plugin README. Consumed by subsequent skill-authoring sessions or by AI pipeline agents writing new skills for that plugin.
-- **Signals:** "lessons learned", "authoring guide", "patterns that work well for AI", "skill authoring patterns", "adversarial testing results", "do not repeat these experiments", "best practices for skill writing", scoped to one plugin, not a SKILL.md, not a README, not a plugin.json, not a docs/methodology/ spec.
+- **Signals:** "lessons learned", "authoring guide", "patterns that work well for AI", "skill authoring patterns", "adversarial testing results", "do not repeat these experiments", "best practices for skill writing", scoped to one plugin, not a SKILL.md, not a README, not a plugin.json, not a .methodology/docs/ spec.
 - **Filename pattern:** `kebab-case.md` — descriptive slug matching the document's subject (e.g. `skill-authoring-lessons-learned.md`, `ai-consumption-patterns.md`).
 - **Tests location:** n/a — these are reference documents, not runnable source code.
 
 ### plugins/<plugin-name>/
 - **Purpose:** Self-contained Claude Code sub-agent plugin packages. Each subdirectory is a single named plugin that bundles a README, a companion spec or prompt file, and any supporting assets the plugin needs. The README is the human-facing entry point; the spec or prompt file is the machine-facing definition consumed by the methodology-runner or prompt-runner.
 - **Signals:** "Claude Code plugin", "skill pack", "methodology-runner-skills", "sub-agent plugin", `plugins/` directory, companion spec reference, list of skills with one-line roles, "point at a companion spec", fixed plugin directory name determined by the plugin's identity.
-- **Filename pattern:** `README.md` for the human-readable description; companion spec follows the `docs/prompts/` or `docs/methodology/` naming convention for the spec file itself.
+- **Filename pattern:** `README.md` for the human-readable description; companion spec follows the `.methodology/docs/` naming convention for the spec file itself.
 - **Tests location:** n/a — plugin directories are documentation and configuration, not runnable source code.
 
 ### work/
@@ -180,6 +274,12 @@
 - **Signals:** "temporary working folder", "scratch space", "draft prompts", "intermediate artifacts", "throwaway workspace", "not reference material", "working area for a specific run or experiment".
 - **Filename pattern:** top-level subdirectory per task or experiment using `kebab-case/`; files inside should use the naming convention appropriate to their eventual artifact type when possible.
 - **Tests location:** n/a — temporary working directories are not canonical test locations.
+
+### .archive/
+- **Purpose:** Git-ignored archive storage for superseded or intentionally retained historical documents that should not remain in the active project tree. Archive paths mirror the live project path beneath `.archive/` so the original location stays obvious.
+- **Signals:** "archived version", "superseded doc", "retained old copy", "historical variant to keep but not keep active", explicit instruction to archive a file instead of deleting it.
+- **Filename pattern:** preserve the original filename and relative path under `.archive/`; for example `docs/design/components/CD-009-...md` becomes `.archive/docs/design/components/CD-009-...md`.
+- **Tests location:** n/a — archived files are retained history, not active artifacts.
 
 ### (project root)
 - **Purpose:** Tooling configuration files and agent instruction files that must live at the repository root by ecosystem convention.
@@ -190,6 +290,9 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-15 — .codex/agents/ added — repository-local Codex custom agents need a canonical home separate from the older Claude-specific agent folder.
+- 2026-04-15 — .archive/ added — archived documents should leave the active tree and move into a git-ignored mirrored archive path under `.archive/`.
+- 2026-04-15 — docs/design/components/ extended — YAML structured-design companions for existing component designs need a canonical home alongside the markdown authority when explicitly requested.
 - 2026-04-15 — plugins/<plugin-name>/skills/<skill-name>/agents/ added — skill UI metadata such as `agents/openai.yaml` is distinct from the skill definition and needs its own category under each skill folder.
 - 2026-04-14 — .prompt-runner/runs/<run-id>/ added — run-scoped generated prompt-runner artifacts need a canonical home distinct from reference docs and temporary scratch work.
 - 2026-04-14 — work/ added — temporary working directories and scratch artifacts should not live under docs/ because docs/ is reserved for reference material.
@@ -202,7 +305,7 @@
 - 2026-04-09 — tests/fixtures/ added — static input fixtures for methodology-runner skill-authoring sessions are not unit-test source files and do not mirror any src/ module; they need a dedicated fixtures layer inside tests/.
 - 2026-04-09 — docs/superpowers/plans/ added — TDD implementation plans produced by the superpowers:writing-plans skill are derived from superpowers/specs/ companions and belong in the same superpowers layer, distinct from docs/plans/ which holds generic component plans.
 - 2026-04-09 — docs/superpowers/specs/ added — pre-implementation design specs produced by brainstorming skill runs are not yet approved into the component design canon and need a dedicated staging layer distinct from docs/design/, docs/requirements/, docs/plans/, and docs/prompts/.
-- 2026-04-08 — docs/methodology/ added — AI-driven development methodology reference corpus (phase specs, agent role prompts, traceability model, simulation framework, orchestration) is not a design of agent-runner components, not a requirement, not a plan, and not a prompt file; a dedicated methodology corpus layer is needed.
+- 2026-04-08 — .methodology/docs/ added — AI-driven development methodology reference corpus (phase specs, agent role prompts, traceability model, simulation framework, orchestration) is not a design of agent-runner components, not a requirement, not a plan, and not a prompt file; a dedicated methodology corpus layer is needed.
 - 2026-04-08 — docs/prompts/ added — prompt-runner input files (hand-authored LLM prompt sequences with paired validators) are inputs to a tool, not design docs, requirements, plans, or test code; a dedicated prompt-files layer is needed.
 - 2026-04-08 — docs/plans/ added — TDD implementation plans (sequential task groups decomposing a design into test-first steps) are transient work documents that are neither design, requirements, nor acceptance criteria; a dedicated plan layer is needed.
 - 2026-04-08 — docs/testing/ added — implementation acceptance criteria (runnable checks that the finished code matches a design) have no home in docs/design/, docs/requirements/, or tests/; a dedicated verification-spec layer is needed.

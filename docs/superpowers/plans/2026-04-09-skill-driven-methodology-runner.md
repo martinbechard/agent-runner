@@ -25,50 +25,50 @@ This plan covers the **Python code, data files, and documentation updates** for 
 
 | File | Responsibility |
 |---|---|
-| `src/cli/methodology_runner/constants.py` | Numeric thresholds and mode switches (MAX_SKILLS_PER_PHASE, ARTIFACT_FULL_CONTENT_THRESHOLD, MAX_CATALOG_SIZE_WARNING, SKILL_LOADING_MODE, MAX_CROSS_REF_RETRIES). |
-| `src/cli/methodology_runner/skill_catalog.py` | Walk three discovery paths, parse SKILL.md frontmatter, build in-memory catalog keyed by skill ID. |
-| `src/cli/methodology_runner/baseline_config.py` | Load and validate `docs/methodology/skills-baselines.yaml` at run start. |
-| `src/cli/methodology_runner/artifact_summarizer.py` | Size-threshold-gated summarization of prior phase artifacts, with on-disk caching. |
-| `src/cli/methodology_runner/skill_selector.py` | Assemble Skill-Selector Claude prompt, invoke, parse YAML output, validate against catalog and baselines. |
-| `src/cli/methodology_runner/prelude.py` | Build generator and judge prelude text files from a PhaseSkillManifest, with dual skill-tool/inline modes. |
-| `src/cli/methodology_runner/phase_0_validation.py` | Standalone Phase 0 experiment: create a test skill, invoke claude --print, check whether the Skill tool worked. |
+| `.methodology/src/cli/methodology_runner/constants.py` | Numeric thresholds and mode switches (MAX_SKILLS_PER_PHASE, ARTIFACT_FULL_CONTENT_THRESHOLD, MAX_CATALOG_SIZE_WARNING, SKILL_LOADING_MODE, MAX_CROSS_REF_RETRIES). |
+| `.methodology/src/cli/methodology_runner/skill_catalog.py` | Walk three discovery paths, parse SKILL.md frontmatter, build in-memory catalog keyed by skill ID. |
+| `.methodology/src/cli/methodology_runner/baseline_config.py` | Load and validate `.methodology/docs/skills-baselines.yaml` at run start. |
+| `.methodology/src/cli/methodology_runner/artifact_summarizer.py` | Size-threshold-gated summarization of prior phase artifacts, with on-disk caching. |
+| `.methodology/src/cli/methodology_runner/skill_selector.py` | Assemble Skill-Selector Claude prompt, invoke, parse YAML output, validate against catalog and baselines. |
+| `.methodology/src/cli/methodology_runner/prelude.py` | Build generator and judge prelude text files from a PhaseSkillManifest, with dual skill-tool/inline modes. |
+| `.methodology/src/cli/methodology_runner/phase_0_validation.py` | Standalone Phase 0 experiment: create a test skill, invoke claude --print, check whether the Skill tool worked. |
 
 ### New files (tests)
 
 | File | What it tests |
 |---|---|
-| `tests/cli/methodology_runner/test_constants.py` | Constants exist with expected values. |
-| `tests/cli/methodology_runner/test_skill_catalog.py` | Discovery walking, frontmatter parsing, duplicate resolution, invalid entry handling, empty-catalog halt. |
-| `tests/cli/methodology_runner/test_baseline_config.py` | Parsing, schema validation, missing baseline IDs, phase-coverage check. |
-| `tests/cli/methodology_runner/test_artifact_summarizer.py` | Size threshold, cache hit/miss, cache invalidation, REQUEST_FULL_ARTIFACT escape hatch. |
-| `tests/cli/methodology_runner/test_skill_selector.py` | Prompt assembly, YAML output parsing, failure modes 1-5 (selector error, malformed YAML, missing fields, unknown skill ID, missing baseline). |
-| `tests/cli/methodology_runner/test_prelude.py` | Dual-mode prelude construction, MAX_SKILLS_PER_PHASE cap, empty prelude fallback. |
-| `tests/cli/methodology_runner/test_orchestrator_skills.py` | End-to-end orchestrator integration with mocked claude client and mock catalog; verifies the retry loop keeps the skill manifest locked. |
+| `.methodology/tests/cli/methodology_runner/test_constants.py` | Constants exist with expected values. |
+| `.methodology/tests/cli/methodology_runner/test_skill_catalog.py` | Discovery walking, frontmatter parsing, duplicate resolution, invalid entry handling, empty-catalog halt. |
+| `.methodology/tests/cli/methodology_runner/test_baseline_config.py` | Parsing, schema validation, missing baseline IDs, phase-coverage check. |
+| `.methodology/tests/cli/methodology_runner/test_artifact_summarizer.py` | Size threshold, cache hit/miss, cache invalidation, REQUEST_FULL_ARTIFACT escape hatch. |
+| `.methodology/tests/cli/methodology_runner/test_skill_selector.py` | Prompt assembly, YAML output parsing, failure modes 1-5 (selector error, malformed YAML, missing fields, unknown skill ID, missing baseline). |
+| `.methodology/tests/cli/methodology_runner/test_prelude.py` | Dual-mode prelude construction, MAX_SKILLS_PER_PHASE cap, empty prelude fallback. |
+| `.methodology/tests/cli/methodology_runner/test_orchestrator_skills.py` | End-to-end orchestrator integration with mocked claude client and mock catalog; verifies the retry loop keeps the skill manifest locked. |
 
 ### New files (data)
 
 | File | Purpose |
 |---|---|
-| `docs/methodology/skills-baselines.yaml` | Per-phase baseline skill configuration; the non-negotiable floor. |
+| `.methodology/docs/skills-baselines.yaml` | Per-phase baseline skill configuration; the non-negotiable floor. |
 
 ### Modified files
 
 | File | What changes |
 |---|---|
-| `src/cli/methodology_runner/models.py` | Add `SkillCatalogEntry`, `PhaseSkillManifest`, `SkillChoice`, `BaselineSkillConfig`, `PreludeSpec` dataclasses. |
-| `src/cli/methodology_runner/phases.py` | Insert new `_PHASE_2_ARCHITECTURE`; renumber existing `_PHASE_2`..`_PHASE_6` to `_PHASE_3`..`_PHASE_7`; add new output path constant for the stack manifest; update phase IDs and predecessor links. |
-| `src/cli/methodology_runner/orchestrator.py` | Call catalog discovery + baseline validation at run start; invoke Skill-Selector once per phase; build prelude files; pass prelude paths to prompt-runner; keep skill manifest locked across cross-ref retries. |
-| `src/cli/methodology_runner/prompt_generator.py` | Accept optional `phase_skill_manifest` in `PromptGenerationContext`; include a brief skill-manifest section in the meta-prompt so the prompt architect knows which skills are available. |
-| `src/cli/methodology_runner/cli.py` | Add `--rerun-selector` flag to `resume` subcommand. |
-| `src/cli/prompt_runner/runner.py` | Accept optional `generator_prelude` and `judge_prelude` strings in `RunConfig`; prepend them to generator and judge messages in `build_initial_generator_message`, `build_initial_judge_message`, `build_revision_generator_message`, `build_revision_judge_message`. |
-| `src/cli/prompt_runner/__main__.py` | Add `--generator-prelude PATH` and `--judge-prelude PATH` flags to the `run` subcommand; read prelude files at startup and populate `RunConfig`. |
-| `docs/methodology/M-002-phase-definitions.md` | Insert new PH-002 Architecture phase YAML; renumber existing PH-002..PH-006 to PH-003..PH-007 throughout; update dependency graph diagram and cross-references in the end-of-file summary table. |
-| `docs/design/components/CD-002-methodology-runner.md` | Add a new subsection on skill-driven per-phase selection; update the per-phase flow diagram; document dual prelude modes; document the SKILL_LOADING_MODE switch and Phase 0 validation gate. |
+| `.methodology/src/cli/methodology_runner/models.py` | Add `SkillCatalogEntry`, `PhaseSkillManifest`, `SkillChoice`, `BaselineSkillConfig`, `PreludeSpec` dataclasses. |
+| `.methodology/src/cli/methodology_runner/phases.py` | Insert new `_PHASE_2_ARCHITECTURE`; renumber existing `_PHASE_2`..`_PHASE_6` to `_PHASE_3`..`_PHASE_7`; add new output path constant for the stack manifest; update phase IDs and predecessor links. |
+| `.methodology/src/cli/methodology_runner/orchestrator.py` | Call catalog discovery + baseline validation at run start; invoke Skill-Selector once per phase; build prelude files; pass prelude paths to prompt-runner; keep skill manifest locked across cross-ref retries. |
+| `.methodology/src/cli/methodology_runner/prompt_generator.py` | Accept optional `phase_skill_manifest` in `PromptGenerationContext`; include a brief skill-manifest section in the meta-prompt so the prompt architect knows which skills are available. |
+| `.methodology/src/cli/methodology_runner/cli.py` | Add `--rerun-selector` flag to `resume` subcommand. |
+| `.prompt-runner/src/cli/prompt_runner/runner.py` | Accept optional `generator_prelude` and `judge_prelude` strings in `RunConfig`; prepend them to generator and judge messages in `build_initial_generator_message`, `build_initial_judge_message`, `build_revision_generator_message`, `build_revision_judge_message`. |
+| `.prompt-runner/src/cli/prompt_runner/__main__.py` | Add `--generator-prelude PATH` and `--judge-prelude PATH` flags to the `run` subcommand; read prelude files at startup and populate `RunConfig`. |
+| `.methodology/docs/M-002-phase-definitions.md` | Insert new PH-002 Architecture phase YAML; renumber existing PH-002..PH-006 to PH-003..PH-007 throughout; update dependency graph diagram and cross-references in the end-of-file summary table. |
+| `.methodology/docs/design/components/CD-002-methodology-runner.md` | Add a new subsection on skill-driven per-phase selection; update the per-phase flow diagram; document dual prelude modes; document the SKILL_LOADING_MODE switch and Phase 0 validation gate. |
 
 ### Files NOT touched
 
-- `src/cli/methodology_runner/cross_reference.py` — cross-reference module is skill-unaware by design.
-- `src/cli/prompt_runner/parser.py` / `claude_client.py` / `verdict.py` — prelude feature only touches `runner.py` and `__main__.py`.
+- `.methodology/src/cli/methodology_runner/cross_reference.py` — cross-reference module is skill-unaware by design.
+- `.prompt-runner/src/cli/prompt_runner/parser.py` / `claude_client.py` / `verdict.py` — prelude feature only touches `runner.py` and `__main__.py`.
 - Existing workspace `state.json` files — discarded per greenfield policy.
 
 ---
@@ -78,10 +78,10 @@ This plan covers the **Python code, data files, and documentation updates** for 
 Determines whether the Skill tool is available inside nested `claude --print` subprocesses. The result decides the default value of `SKILL_LOADING_MODE`.
 
 **Files:**
-- Create: `src/cli/methodology_runner/phase_0_validation.py`
+- Create: `.methodology/src/cli/methodology_runner/phase_0_validation.py`
 - Create: `runs/phase-0-validation/validation-report.md` (generated artifact, committed)
 
-- [ ] **Step 1: Create `src/cli/methodology_runner/phase_0_validation.py`**
+- [ ] **Step 1: Create `.methodology/src/cli/methodology_runner/phase_0_validation.py`**
 
 ```python
 """Phase 0 validation experiment.
@@ -311,7 +311,7 @@ If `claude` is not on PATH, the script will raise `FileNotFoundError`. In that c
 - [ ] **Step 3: Commit Phase 0 script and report**
 
 ```bash
-git add src/cli/methodology_runner/phase_0_validation.py runs/phase-0-validation/validation-report.md
+git add .methodology/src/cli/methodology_runner/phase_0_validation.py runs/phase-0-validation/validation-report.md
 git commit -m "feat(methodology-runner): phase 0 skill tool availability validation"
 ```
 
@@ -322,12 +322,12 @@ git commit -m "feat(methodology-runner): phase 0 skill tool availability validat
 Central manifest-constants file per CLAUDE.md rule against literal constants scattered through code.
 
 **Files:**
-- Create: `src/cli/methodology_runner/constants.py`
-- Create: `tests/cli/methodology_runner/test_constants.py`
+- Create: `.methodology/src/cli/methodology_runner/constants.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_constants.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/cli/methodology_runner/test_constants.py`:
+Create `.methodology/tests/cli/methodology_runner/test_constants.py`:
 
 ```python
 """Tests for methodology_runner.constants."""
@@ -360,10 +360,10 @@ def test_max_cross_ref_retries_is_non_negative():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pytest tests/cli/methodology_runner/test_constants.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_constants.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'methodology_runner.constants'`
 
-- [ ] **Step 3: Create `src/cli/methodology_runner/constants.py`**
+- [ ] **Step 3: Create `.methodology/src/cli/methodology_runner/constants.py`**
 
 ```python
 """Tunable constants for the methodology-runner pipeline.
@@ -416,13 +416,13 @@ re-exported here for consistency."""
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `pytest tests/cli/methodology_runner/test_constants.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_constants.py -v`
 Expected: PASS, 5 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/methodology_runner/constants.py tests/cli/methodology_runner/test_constants.py
+git add .methodology/src/cli/methodology_runner/constants.py .methodology/tests/cli/methodology_runner/test_constants.py
 git commit -m "feat(methodology-runner): add constants module for tunable thresholds"
 ```
 
@@ -433,12 +433,12 @@ git commit -m "feat(methodology-runner): add constants module for tunable thresh
 Introduces dataclasses the rest of the implementation needs: skill catalog entry, phase skill manifest, baseline config, and prelude spec.
 
 **Files:**
-- Modify: `src/cli/methodology_runner/models.py`
-- Create: `tests/cli/methodology_runner/test_models_skills.py`
+- Modify: `.methodology/src/cli/methodology_runner/models.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_models_skills.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/cli/methodology_runner/test_models_skills.py`:
+Create `.methodology/tests/cli/methodology_runner/test_models_skills.py`:
 
 ```python
 """Tests for the skill-related dataclasses added to models.py."""
@@ -556,10 +556,10 @@ def test_prelude_spec_has_text_fields():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pytest tests/cli/methodology_runner/test_models_skills.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_models_skills.py -v`
 Expected: FAIL — import errors for the new dataclasses.
 
-- [ ] **Step 3: Add the new dataclasses to `src/cli/methodology_runner/models.py`**
+- [ ] **Step 3: Add the new dataclasses to `.methodology/src/cli/methodology_runner/models.py`**
 
 Append the following after the existing `ProjectState` class (at the end of the file, before any trailing blank lines):
 
@@ -734,18 +734,18 @@ class PreludeSpec:
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `pytest tests/cli/methodology_runner/test_models_skills.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_models_skills.py -v`
 Expected: PASS, 7 tests
 
 - [ ] **Step 5: Verify existing model tests still pass**
 
-Run: `pytest tests/cli/methodology_runner/ -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/ -v`
 Expected: all tests PASS (previously passing tests must not regress)
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/methodology_runner/models.py tests/cli/methodology_runner/test_models_skills.py
+git add .methodology/src/cli/methodology_runner/models.py .methodology/tests/cli/methodology_runner/test_models_skills.py
 git commit -m "feat(methodology-runner): add skill-routing dataclasses to models"
 ```
 
@@ -756,12 +756,12 @@ git commit -m "feat(methodology-runner): add skill-routing dataclasses to models
 Walks three locations (`workspace/.claude/skills/`, `~/.claude/skills/`, `~/.claude/plugins/*/skills/`) and builds an in-memory catalog from SKILL.md frontmatter.
 
 **Files:**
-- Create: `src/cli/methodology_runner/skill_catalog.py`
-- Create: `tests/cli/methodology_runner/test_skill_catalog.py`
+- Create: `.methodology/src/cli/methodology_runner/skill_catalog.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_skill_catalog.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/cli/methodology_runner/test_skill_catalog.py`:
+Create `.methodology/tests/cli/methodology_runner/test_skill_catalog.py`:
 
 ```python
 """Tests for skill catalog discovery."""
@@ -897,10 +897,10 @@ def test_build_catalog_skips_invalid_entries_but_keeps_valid_ones(tmp_path: Path
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/methodology_runner/test_skill_catalog.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_skill_catalog.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'methodology_runner.skill_catalog'`
 
-- [ ] **Step 3: Create `src/cli/methodology_runner/skill_catalog.py`**
+- [ ] **Step 3: Create `.methodology/src/cli/methodology_runner/skill_catalog.py`**
 
 ```python
 """Auto-discovery of Claude Code skills from the local filesystem.
@@ -1099,13 +1099,13 @@ def build_catalog(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pytest tests/cli/methodology_runner/test_skill_catalog.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_skill_catalog.py -v`
 Expected: PASS, 8 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/methodology_runner/skill_catalog.py tests/cli/methodology_runner/test_skill_catalog.py
+git add .methodology/src/cli/methodology_runner/skill_catalog.py .methodology/tests/cli/methodology_runner/test_skill_catalog.py
 git commit -m "feat(methodology-runner): auto-discover skill catalog from filesystem"
 ```
 
@@ -1113,16 +1113,16 @@ git commit -m "feat(methodology-runner): auto-discover skill catalog from filesy
 
 ## Task 4: Baseline skills configuration
 
-Loads and validates `docs/methodology/skills-baselines.yaml` at run start.
+Loads and validates `.methodology/docs/skills-baselines.yaml` at run start.
 
 **Files:**
-- Create: `src/cli/methodology_runner/baseline_config.py`
-- Create: `docs/methodology/skills-baselines.yaml`
-- Create: `tests/cli/methodology_runner/test_baseline_config.py`
+- Create: `.methodology/src/cli/methodology_runner/baseline_config.py`
+- Create: `.methodology/docs/skills-baselines.yaml`
+- Create: `.methodology/tests/cli/methodology_runner/test_baseline_config.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/cli/methodology_runner/test_baseline_config.py`:
+Create `.methodology/tests/cli/methodology_runner/test_baseline_config.py`:
 
 ```python
 """Tests for baseline skill configuration loading."""
@@ -1207,13 +1207,13 @@ def test_validate_against_catalog_missing_skill_raises():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/methodology_runner/test_baseline_config.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_baseline_config.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'methodology_runner.baseline_config'`
 
-- [ ] **Step 3: Create `src/cli/methodology_runner/baseline_config.py`**
+- [ ] **Step 3: Create `.methodology/src/cli/methodology_runner/baseline_config.py`**
 
 ```python
-"""Load and validate ``docs/methodology/skills-baselines.yaml``.
+"""Load and validate ``.methodology/docs/skills-baselines.yaml``.
 
 The baseline config declares the non-negotiable skills per phase.
 It is read at the start of every run; changes take effect on the
@@ -1250,7 +1250,7 @@ def load_baseline_config(path: Path) -> BaselineSkillConfig:
     if not path.exists():
         raise BaselineConfigError(
             f"baseline skills config not found: {path}\n\n"
-            f"Expected file at docs/methodology/skills-baselines.yaml.\n"
+            f"Expected file at .methodology/docs/skills-baselines.yaml.\n"
             f"Create it or install methodology-runner-skills."
         )
     try:
@@ -1328,7 +1328,7 @@ def validate_against_catalog(
     raise BaselineConfigError("\n".join(lines))
 ```
 
-- [ ] **Step 4: Create `docs/methodology/skills-baselines.yaml`**
+- [ ] **Step 4: Create `.methodology/docs/skills-baselines.yaml`**
 
 ```yaml
 # Non-negotiable baseline skills per methodology phase.
@@ -1415,13 +1415,13 @@ phases:
 
 - [ ] **Step 5: Run the tests to verify they pass**
 
-Run: `pytest tests/cli/methodology_runner/test_baseline_config.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_baseline_config.py -v`
 Expected: PASS, 6 tests
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/methodology_runner/baseline_config.py tests/cli/methodology_runner/test_baseline_config.py docs/methodology/skills-baselines.yaml
+git add .methodology/src/cli/methodology_runner/baseline_config.py .methodology/tests/cli/methodology_runner/test_baseline_config.py .methodology/docs/skills-baselines.yaml
 git commit -m "feat(methodology-runner): baseline skills config loader and data file"
 ```
 
@@ -1432,12 +1432,12 @@ git commit -m "feat(methodology-runner): baseline skills config loader and data 
 Produces a short AI-generated summary of prior phase artifacts that exceed the size threshold, caches the summary on disk, and returns it on subsequent calls.
 
 **Files:**
-- Create: `src/cli/methodology_runner/artifact_summarizer.py`
-- Create: `tests/cli/methodology_runner/test_artifact_summarizer.py`
+- Create: `.methodology/src/cli/methodology_runner/artifact_summarizer.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_artifact_summarizer.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/cli/methodology_runner/test_artifact_summarizer.py`:
+Create `.methodology/tests/cli/methodology_runner/test_artifact_summarizer.py`:
 
 ```python
 """Tests for artifact summarization with caching."""
@@ -1557,10 +1557,10 @@ def test_get_returns_error_when_file_missing(tmp_path: Path):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/methodology_runner/test_artifact_summarizer.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_artifact_summarizer.py -v`
 Expected: FAIL — `ModuleNotFoundError`
 
-- [ ] **Step 3: Create `src/cli/methodology_runner/artifact_summarizer.py`**
+- [ ] **Step 3: Create `.methodology/src/cli/methodology_runner/artifact_summarizer.py`**
 
 ```python
 """Size-threshold-gated summarization of prior phase artifacts.
@@ -1740,13 +1740,13 @@ class ArtifactSummaryProvider:
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pytest tests/cli/methodology_runner/test_artifact_summarizer.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_artifact_summarizer.py -v`
 Expected: PASS, 5 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/methodology_runner/artifact_summarizer.py tests/cli/methodology_runner/test_artifact_summarizer.py
+git add .methodology/src/cli/methodology_runner/artifact_summarizer.py .methodology/tests/cli/methodology_runner/test_artifact_summarizer.py
 git commit -m "feat(methodology-runner): artifact summarizer with disk cache"
 ```
 
@@ -1757,12 +1757,12 @@ git commit -m "feat(methodology-runner): artifact summarizer with disk cache"
 The Skill-Selector assembles a Claude prompt that includes the phase definition, compact skill catalog, prior artifacts (full or summarized), and stack manifest. It parses the YAML reply, validates it, and returns a PhaseSkillManifest.
 
 **Files:**
-- Create: `src/cli/methodology_runner/skill_selector.py`
-- Create: `tests/cli/methodology_runner/test_skill_selector.py`
+- Create: `.methodology/src/cli/methodology_runner/skill_selector.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_skill_selector.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/cli/methodology_runner/test_skill_selector.py`:
+Create `.methodology/tests/cli/methodology_runner/test_skill_selector.py`:
 
 ```python
 """Tests for the Skill-Selector agent."""
@@ -1956,10 +1956,10 @@ Note: these tests depend on `get_phase("PH-006-incremental-implementation")` whi
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/methodology_runner/test_skill_selector.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_skill_selector.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'methodology_runner.skill_selector'`
 
-- [ ] **Step 3: Create `src/cli/methodology_runner/skill_selector.py`**
+- [ ] **Step 3: Create `.methodology/src/cli/methodology_runner/skill_selector.py`**
 
 ```python
 """Skill-Selector agent.
@@ -2332,14 +2332,14 @@ def invoke_skill_selector(
 
 - [ ] **Step 4: Run the tests**
 
-Run: `pytest tests/cli/methodology_runner/test_skill_selector.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_skill_selector.py -v`
 
 Expected: 5 tests fail with `ValueError: Unknown phase_id 'PH-006-incremental-implementation'` — because the phase renumbering in Task 7 hasn't happened yet. **This is expected**; defer running these tests until after Task 7 is complete. Skip this step for now.
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/methodology_runner/skill_selector.py tests/cli/methodology_runner/test_skill_selector.py
+git add .methodology/src/cli/methodology_runner/skill_selector.py .methodology/tests/cli/methodology_runner/test_skill_selector.py
 git commit -m "feat(methodology-runner): skill-selector agent with output validation"
 ```
 
@@ -2350,12 +2350,12 @@ git commit -m "feat(methodology-runner): skill-selector agent with output valida
 Inserts a new `_PHASE_2_ARCHITECTURE` between Feature Specification and Solution Design; renumbers existing `_PHASE_2`..`_PHASE_6` to `_PHASE_3`..`_PHASE_7`; adds the `stack-manifest.yaml` output path; updates the `PHASES` list.
 
 **Files:**
-- Modify: `src/cli/methodology_runner/phases.py`
-- Create: `tests/cli/methodology_runner/test_phases_renumbered.py`
+- Modify: `.methodology/src/cli/methodology_runner/phases.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_phases_renumbered.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/cli/methodology_runner/test_phases_renumbered.py`:
+Create `.methodology/tests/cli/methodology_runner/test_phases_renumbered.py`:
 
 ```python
 """Tests for the new PH-002 Architecture phase and renumbering."""
@@ -2419,10 +2419,10 @@ def test_phase_map_round_trip():
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pytest tests/cli/methodology_runner/test_phases_renumbered.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_phases_renumbered.py -v`
 Expected: FAIL — phase count is 7, new PH-002 Architecture does not exist, phase IDs still use old numbering.
 
-- [ ] **Step 3: Modify `src/cli/methodology_runner/phases.py`**
+- [ ] **Step 3: Modify `.methodology/src/cli/methodology_runner/phases.py`**
 
 Edit the file as follows. These are targeted edits — do not rewrite the whole file.
 
@@ -2943,7 +2943,7 @@ Output paths align with CD-002 Section 4.5 workspace layout::
     docs/verification/verification-report.yaml      # Phase 7
 ```
 
-**Edit 3j:** Also update the orchestrator's workspace initialization, which currently creates only the 7 original docs subdirectories. Open `src/cli/methodology_runner/orchestrator.py`, find `initialize_workspace`, and find:
+**Edit 3j:** Also update the orchestrator's workspace initialization, which currently creates only the 7 original docs subdirectories. Open `.methodology/src/cli/methodology_runner/orchestrator.py`, find `initialize_workspace`, and find:
 
 ```python
     for subdir in (
@@ -2974,12 +2974,12 @@ Replace with:
 
 - [ ] **Step 4: Run the renumbering test**
 
-Run: `pytest tests/cli/methodology_runner/test_phases_renumbered.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_phases_renumbered.py -v`
 Expected: PASS, 7 tests.
 
 - [ ] **Step 5: Run all methodology-runner tests and fix regressions**
 
-Run: `pytest tests/cli/methodology_runner/ -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/ -v`
 
 Expected: several pre-existing tests in `test_cli.py` and `test_prompt_generator.py` will fail because they hardcode old phase IDs (`PH-002-solution-design`, `PH-003-interface-contracts`, `PH-004-intelligent-simulations`, `PH-005-implementation-plan`, `PH-006-verification-sweep`).
 
@@ -2997,15 +2997,15 @@ Use Grep to find all occurrences:
 grep -rn "PH-002-solution-design\|PH-003-interface-contracts\|PH-004-intelligent-simulations\|PH-005-implementation-plan\|PH-006-verification-sweep" tests/ src/
 ```
 
-Update each to the new ID. Also search for `PH-006` in contexts that expect 7 phases and need updating to `PH-007` (e.g., "last phase", "phase 6 is final", counts of 7 phases becoming 8). Look especially at `tests/cli/methodology_runner/test_cli.py::_downstream_phase_ids` tests and any test that iterates `PHASES` and hardcodes phase counts.
+Update each to the new ID. Also search for `PH-006` in contexts that expect 7 phases and need updating to `PH-007` (e.g., "last phase", "phase 6 is final", counts of 7 phases becoming 8). Look especially at `.methodology/tests/cli/methodology_runner/test_cli.py::_downstream_phase_ids` tests and any test that iterates `PHASES` and hardcodes phase counts.
 
-Re-run `pytest tests/cli/methodology_runner/ -v` after each batch of fixes until all tests pass.
+Re-run `pytest .methodology/tests/cli/methodology_runner/ -v` after each batch of fixes until all tests pass.
 
 - [ ] **Step 6: Run skill-selector tests (deferred from Task 6)**
 
 Now that `PH-006-incremental-implementation` exists, run:
 
-Run: `pytest tests/cli/methodology_runner/test_skill_selector.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_skill_selector.py -v`
 Expected: PASS, 5 tests.
 
 - [ ] **Step 7: Run the full test suite**
@@ -3016,7 +3016,7 @@ Expected: all methodology-runner and prompt-runner tests pass.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add src/cli/methodology_runner/phases.py src/cli/methodology_runner/orchestrator.py tests/cli/methodology_runner/test_phases_renumbered.py tests/cli/methodology_runner/test_cli.py tests/cli/methodology_runner/test_prompt_generator.py tests/cli/methodology_runner/test_cross_reference.py
+git add .methodology/src/cli/methodology_runner/phases.py .methodology/src/cli/methodology_runner/orchestrator.py .methodology/tests/cli/methodology_runner/test_phases_renumbered.py .methodology/tests/cli/methodology_runner/test_cli.py .methodology/tests/cli/methodology_runner/test_prompt_generator.py .methodology/tests/cli/methodology_runner/test_cross_reference.py
 git commit -m "feat(methodology-runner): insert PH-002 Architecture phase and renumber downstream phases"
 ```
 
@@ -3027,12 +3027,12 @@ git commit -m "feat(methodology-runner): insert PH-002 Architecture phase and re
 Builds generator and judge prelude text files from a `PhaseSkillManifest`, with two designs: primary (Skill tool invocation) and fallback (inline SKILL.md content).
 
 **Files:**
-- Create: `src/cli/methodology_runner/prelude.py`
-- Create: `tests/cli/methodology_runner/test_prelude.py`
+- Create: `.methodology/src/cli/methodology_runner/prelude.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_prelude.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Create `tests/cli/methodology_runner/test_prelude.py`:
+Create `.methodology/tests/cli/methodology_runner/test_prelude.py`:
 
 ```python
 """Tests for prelude construction."""
@@ -3164,10 +3164,10 @@ def test_build_prelude_empty_skill_list_produces_empty_body(tmp_path: Path):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/methodology_runner/test_prelude.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_prelude.py -v`
 Expected: FAIL — `ModuleNotFoundError: No module named 'methodology_runner.prelude'`
 
-- [ ] **Step 3: Create `src/cli/methodology_runner/prelude.py`**
+- [ ] **Step 3: Create `.methodology/src/cli/methodology_runner/prelude.py`**
 
 ```python
 """Build generator and judge prelude text from a PhaseSkillManifest.
@@ -3379,13 +3379,13 @@ def build_prelude(
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pytest tests/cli/methodology_runner/test_prelude.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_prelude.py -v`
 Expected: PASS, 6 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/methodology_runner/prelude.py tests/cli/methodology_runner/test_prelude.py
+git add .methodology/src/cli/methodology_runner/prelude.py .methodology/tests/cli/methodology_runner/test_prelude.py
 git commit -m "feat(methodology-runner): prelude builder with skill-tool and inline modes"
 ```
 
@@ -3396,12 +3396,12 @@ git commit -m "feat(methodology-runner): prelude builder with skill-tool and inl
 Modifies `prompt_runner/runner.py` to accept optional generator and judge prelude strings in `RunConfig` and prepend them to every generator and judge message (initial and revise-loop variants).
 
 **Files:**
-- Modify: `src/cli/prompt_runner/runner.py`
-- Modify: `tests/cli/prompt_runner/test_runner.py`
+- Modify: `.prompt-runner/src/cli/prompt_runner/runner.py`
+- Modify: `.prompt-runner/tests/cli/prompt_runner/test_runner.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/cli/prompt_runner/test_runner.py`:
+Append to `.prompt-runner/tests/cli/prompt_runner/test_runner.py`:
 
 ```python
 # ---------------------------------------------------------------------------
@@ -3460,10 +3460,10 @@ def test_build_revision_judge_message_prepends_prelude():
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/prompt_runner/test_runner.py -v -k "prelude or run_config_defaults"`
+Run: `pytest .prompt-runner/tests/cli/prompt_runner/test_runner.py -v -k "prelude or run_config_defaults"`
 Expected: FAIL — `TypeError: build_initial_generator_message() got an unexpected keyword argument 'generator_prelude'` and `AttributeError: 'RunConfig' object has no attribute 'generator_prelude'`.
 
-- [ ] **Step 3: Modify `src/cli/prompt_runner/runner.py`**
+- [ ] **Step 3: Modify `.prompt-runner/src/cli/prompt_runner/runner.py`**
 
 Find the `RunConfig` dataclass and add the two fields:
 
@@ -3666,18 +3666,18 @@ Replace with:
 
 - [ ] **Step 4: Run the prelude tests**
 
-Run: `pytest tests/cli/prompt_runner/test_runner.py -v -k "prelude or run_config_defaults"`
+Run: `pytest .prompt-runner/tests/cli/prompt_runner/test_runner.py -v -k "prelude or run_config_defaults"`
 Expected: PASS, 6 tests
 
 - [ ] **Step 5: Run the full prompt-runner test suite to verify no regressions**
 
-Run: `pytest tests/cli/prompt_runner/ -v`
+Run: `pytest .prompt-runner/tests/cli/prompt_runner/ -v`
 Expected: all existing tests still PASS.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/prompt_runner/runner.py tests/cli/prompt_runner/test_runner.py
+git add .prompt-runner/src/cli/prompt_runner/runner.py .prompt-runner/tests/cli/prompt_runner/test_runner.py
 git commit -m "feat(prompt-runner): prepend generator and judge preludes to every claude call"
 ```
 
@@ -3688,14 +3688,14 @@ git commit -m "feat(prompt-runner): prepend generator and judge preludes to ever
 Adds `--generator-prelude PATH` and `--judge-prelude PATH` flags to `prompt-runner run`. Reads files at startup, populates `RunConfig` with contents.
 
 **Files:**
-- Modify: `src/cli/prompt_runner/__main__.py`
-- Modify: `tests/cli/prompt_runner/test_claude_client.py` (or create a new CLI integration test file)
+- Modify: `.prompt-runner/src/cli/prompt_runner/__main__.py`
+- Modify: `.prompt-runner/tests/cli/prompt_runner/test_claude_client.py` (or create a new CLI integration test file)
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/cli/prompt_runner/test_claude_client.py` (or preferably create a new `tests/cli/prompt_runner/test_cli_prelude.py`):
+Append to `.prompt-runner/tests/cli/prompt_runner/test_claude_client.py` (or preferably create a new `.prompt-runner/tests/cli/prompt_runner/test_cli_prelude.py`):
 
-Create `tests/cli/prompt_runner/test_cli_prelude.py`:
+Create `.prompt-runner/tests/cli/prompt_runner/test_cli_prelude.py`:
 
 ```python
 """CLI-level tests for the --generator-prelude and --judge-prelude flags."""
@@ -3779,10 +3779,10 @@ def test_cmd_run_missing_prelude_file_errors(tmp_path: Path, capsys):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/prompt_runner/test_cli_prelude.py -v`
+Run: `pytest .prompt-runner/tests/cli/prompt_runner/test_cli_prelude.py -v`
 Expected: FAIL — parser does not know the new flags.
 
-- [ ] **Step 3: Modify `src/cli/prompt_runner/__main__.py`**
+- [ ] **Step 3: Modify `.prompt-runner/src/cli/prompt_runner/__main__.py`**
 
 Find the `_cmd_run` function. Just after the existing `config = RunConfig(...)` block, read the prelude files. Find:
 
@@ -3871,13 +3871,13 @@ Find the `_build_parser` function's `run_cmd.add_argument` block (around line 14
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
-Run: `pytest tests/cli/prompt_runner/test_cli_prelude.py -v`
+Run: `pytest .prompt-runner/tests/cli/prompt_runner/test_cli_prelude.py -v`
 Expected: PASS, 4 tests
 
 - [ ] **Step 5: Commit**
 
 ```bash
-git add src/cli/prompt_runner/__main__.py tests/cli/prompt_runner/test_cli_prelude.py
+git add .prompt-runner/src/cli/prompt_runner/__main__.py .prompt-runner/tests/cli/prompt_runner/test_cli_prelude.py
 git commit -m "feat(prompt-runner): add --generator-prelude and --judge-prelude CLI flags"
 ```
 
@@ -3888,12 +3888,12 @@ git commit -m "feat(prompt-runner): add --generator-prelude and --judge-prelude 
 Calls `build_catalog()` and `load_baseline_config() + validate_against_catalog()` once at the start of every run. Halts with a clear error if either fails.
 
 **Files:**
-- Modify: `src/cli/methodology_runner/orchestrator.py`
-- Create: `tests/cli/methodology_runner/test_orchestrator_skills.py`
+- Modify: `.methodology/src/cli/methodology_runner/orchestrator.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_orchestrator_skills.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/cli/methodology_runner/test_orchestrator_skills.py`:
+Create `.methodology/tests/cli/methodology_runner/test_orchestrator_skills.py`:
 
 ```python
 """Tests for orchestrator skill-catalog and baseline integration."""
@@ -3998,10 +3998,10 @@ def test_build_run_skill_context_baseline_missing_from_catalog_raises(tmp_path: 
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pytest tests/cli/methodology_runner/test_orchestrator_skills.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_orchestrator_skills.py -v`
 Expected: FAIL — `build_run_skill_context` does not yet exist in orchestrator.
 
-- [ ] **Step 3: Add `build_run_skill_context` to `src/cli/methodology_runner/orchestrator.py`**
+- [ ] **Step 3: Add `build_run_skill_context` to `.methodology/src/cli/methodology_runner/orchestrator.py`**
 
 Near the top of the file, after the existing imports, add:
 
@@ -4035,7 +4035,7 @@ class RunSkillContext:
     baseline_config: BaselineSkillConfig
 
 
-BASELINE_SKILLS_PATH = "docs/methodology/skills-baselines.yaml"
+BASELINE_SKILLS_PATH = ".methodology/docs/skills-baselines.yaml"
 """Path (relative to repo root or workspace) to the baseline skill config."""
 
 
@@ -4157,18 +4157,18 @@ def _run_single_phase(
 
 - [ ] **Step 4: Run the integration test**
 
-Run: `pytest tests/cli/methodology_runner/test_orchestrator_skills.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_orchestrator_skills.py -v`
 Expected: PASS, 3 tests
 
 - [ ] **Step 5: Run all methodology-runner tests**
 
-Run: `pytest tests/cli/methodology_runner/ -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/methodology_runner/orchestrator.py tests/cli/methodology_runner/test_orchestrator_skills.py
+git add .methodology/src/cli/methodology_runner/orchestrator.py .methodology/tests/cli/methodology_runner/test_orchestrator_skills.py
 git commit -m "feat(methodology-runner): load skill catalog and baseline config at run start"
 ```
 
@@ -4179,12 +4179,12 @@ git commit -m "feat(methodology-runner): load skill catalog and baseline config 
 Wires the Skill-Selector into `_run_single_phase`: runs the selector once per phase, writes `phase-NNN-skills.yaml`, builds preludes via `prelude.py`, writes them to disk, and passes their paths to the prompt-runner invocation. The skill manifest is locked across cross-ref retries by default.
 
 **Files:**
-- Modify: `src/cli/methodology_runner/orchestrator.py`
-- Modify: `tests/cli/methodology_runner/test_orchestrator_skills.py`
+- Modify: `.methodology/src/cli/methodology_runner/orchestrator.py`
+- Modify: `.methodology/tests/cli/methodology_runner/test_orchestrator_skills.py`
 
 - [ ] **Step 1: Write the failing tests**
 
-Append to `tests/cli/methodology_runner/test_orchestrator_skills.py`:
+Append to `.methodology/tests/cli/methodology_runner/test_orchestrator_skills.py`:
 
 ```python
 # ---------------------------------------------------------------------------
@@ -4307,10 +4307,10 @@ def test_orchestrator_runs_selector_once_per_phase_and_writes_manifest(tmp_path:
 
 - [ ] **Step 2: Run the test to verify it fails**
 
-Run: `pytest tests/cli/methodology_runner/test_orchestrator_skills.py::test_orchestrator_runs_selector_once_per_phase_and_writes_manifest -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_orchestrator_skills.py::test_orchestrator_runs_selector_once_per_phase_and_writes_manifest -v`
 Expected: FAIL — `run_selector_and_build_prelude` does not exist.
 
-- [ ] **Step 3: Add `run_selector_and_build_prelude` to `src/cli/methodology_runner/orchestrator.py`**
+- [ ] **Step 3: Add `run_selector_and_build_prelude` to `.methodology/src/cli/methodology_runner/orchestrator.py`**
 
 Add the import at the top of the file:
 
@@ -4725,7 +4725,7 @@ Replace with:
 
 - [ ] **Step 5: Run the new orchestrator integration test**
 
-Run: `pytest tests/cli/methodology_runner/test_orchestrator_skills.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_orchestrator_skills.py -v`
 Expected: all 4 tests pass.
 
 - [ ] **Step 6: Run the full test suite and fix any regressions**
@@ -4736,7 +4736,7 @@ Expected: all tests pass. If any test in `test_cli.py` or `test_cross_reference.
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/cli/methodology_runner/orchestrator.py tests/cli/methodology_runner/test_orchestrator_skills.py
+git add .methodology/src/cli/methodology_runner/orchestrator.py .methodology/tests/cli/methodology_runner/test_orchestrator_skills.py
 git commit -m "feat(methodology-runner): invoke skill selector per phase and wire preludes"
 ```
 
@@ -4747,13 +4747,13 @@ git commit -m "feat(methodology-runner): invoke skill selector per phase and wir
 Verifies that when a cross-reference retry loop re-generates the prompt file, the skill manifest (and thus the prelude) is reused unchanged. Adds a dedicated test and a `--rerun-selector` CLI flag to `resume` that lets the user override the lock.
 
 **Files:**
-- Modify: `src/cli/methodology_runner/cli.py`
-- Modify: `src/cli/methodology_runner/orchestrator.py` (add `rerun_selector` to `PipelineConfig`)
-- Create: `tests/cli/methodology_runner/test_cross_ref_retry_skills.py`
+- Modify: `.methodology/src/cli/methodology_runner/cli.py`
+- Modify: `.methodology/src/cli/methodology_runner/orchestrator.py` (add `rerun_selector` to `PipelineConfig`)
+- Create: `.methodology/tests/cli/methodology_runner/test_cross_ref_retry_skills.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Create `tests/cli/methodology_runner/test_cross_ref_retry_skills.py`:
+Create `.methodology/tests/cli/methodology_runner/test_cross_ref_retry_skills.py`:
 
 ```python
 """Tests that cross-ref retry preserves the locked skill manifest."""
@@ -4857,12 +4857,12 @@ overall_rationale: Previous manifest
 
 Since Task 12 already implemented the `existing_manifest_path` skip behavior, this test should pass immediately:
 
-Run: `pytest tests/cli/methodology_runner/test_cross_ref_retry_skills.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_cross_ref_retry_skills.py -v`
 Expected: PASS.
 
 - [ ] **Step 3: Add `rerun_selector` field to `PipelineConfig`**
 
-In `src/cli/methodology_runner/orchestrator.py`, find:
+In `.methodology/src/cli/methodology_runner/orchestrator.py`, find:
 
 ```python
 @dataclass
@@ -4945,7 +4945,7 @@ Replace with:
 
 - [ ] **Step 4: Add `--rerun-selector` flag to `cli.py resume` subcommand**
 
-In `src/cli/methodology_runner/cli.py`, find the `resume_cmd` block in `_build_parser`:
+In `.methodology/src/cli/methodology_runner/cli.py`, find the `resume_cmd` block in `_build_parser`:
 
 ```python
     resume_cmd.add_argument(
@@ -5012,13 +5012,13 @@ Replace with:
 
 - [ ] **Step 5: Run the test again plus full suite**
 
-Run: `pytest tests/cli/methodology_runner/ -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add src/cli/methodology_runner/cli.py src/cli/methodology_runner/orchestrator.py tests/cli/methodology_runner/test_cross_ref_retry_skills.py
+git add .methodology/src/cli/methodology_runner/cli.py .methodology/src/cli/methodology_runner/orchestrator.py .methodology/tests/cli/methodology_runner/test_cross_ref_retry_skills.py
 git commit -m "feat(methodology-runner): cross-ref retry locks skill manifest; add --rerun-selector"
 ```
 
@@ -5029,13 +5029,13 @@ git commit -m "feat(methodology-runner): cross-ref retry locks skill manifest; a
 Adds an optional `phase_skill_manifest` field to `PromptGenerationContext` and mentions the selected skills in the meta-prompt so the prompt architect knows which skills will be active. This is a lightweight awareness hook — the real skill loading happens via the prelude.
 
 **Files:**
-- Modify: `src/cli/methodology_runner/prompt_generator.py`
-- Modify: `src/cli/methodology_runner/orchestrator.py`
-- Modify: `tests/cli/methodology_runner/test_prompt_generator.py`
+- Modify: `.methodology/src/cli/methodology_runner/prompt_generator.py`
+- Modify: `.methodology/src/cli/methodology_runner/orchestrator.py`
+- Modify: `.methodology/tests/cli/methodology_runner/test_prompt_generator.py`
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/cli/methodology_runner/test_prompt_generator.py`:
+Append to `.methodology/tests/cli/methodology_runner/test_prompt_generator.py`:
 
 ```python
 def test_meta_prompt_includes_skill_manifest_section_when_provided(tmp_path):
@@ -5086,12 +5086,12 @@ def test_meta_prompt_without_skill_manifest_omits_section(tmp_path):
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
-Run: `pytest tests/cli/methodology_runner/test_prompt_generator.py::test_meta_prompt_includes_skill_manifest_section_when_provided tests/cli/methodology_runner/test_prompt_generator.py::test_meta_prompt_without_skill_manifest_omits_section -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_prompt_generator.py::test_meta_prompt_includes_skill_manifest_section_when_provided .methodology/tests/cli/methodology_runner/test_prompt_generator.py::test_meta_prompt_without_skill_manifest_omits_section -v`
 Expected: FAIL — `PromptGenerationContext` has no `phase_skill_manifest` field.
 
 - [ ] **Step 3: Update `PromptGenerationContext`**
 
-In `src/cli/methodology_runner/prompt_generator.py`, find:
+In `.methodology/src/cli/methodology_runner/prompt_generator.py`, find:
 
 ```python
 @dataclass(frozen=True)
@@ -5193,7 +5193,7 @@ def _format_skill_manifest_block(manifest: PhaseSkillManifest) -> str:
 
 - [ ] **Step 5: Thread the manifest from orchestrator into `PromptGenerationContext`**
 
-In `src/cli/methodology_runner/orchestrator.py`, find the two places where `PromptGenerationContext` is constructed inside `_run_single_phase` — once for the initial generation and once for the cross-ref retry re-generation. Both look like:
+In `.methodology/src/cli/methodology_runner/orchestrator.py`, find the two places where `PromptGenerationContext` is constructed inside `_run_single_phase` — once for the initial generation and once for the cross-ref retry re-generation. Both look like:
 
 ```python
         completed_states = _get_completed_phase_states(state)
@@ -5262,27 +5262,27 @@ And the retry version:
 
 - [ ] **Step 6: Run the tests**
 
-Run: `pytest tests/cli/methodology_runner/test_prompt_generator.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_prompt_generator.py -v`
 Expected: PASS.
 
-Run: `pytest tests/cli/methodology_runner/ -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/ -v`
 Expected: all tests pass.
 
 - [ ] **Step 7: Commit**
 
 ```bash
-git add src/cli/methodology_runner/prompt_generator.py src/cli/methodology_runner/orchestrator.py tests/cli/methodology_runner/test_prompt_generator.py
+git add .methodology/src/cli/methodology_runner/prompt_generator.py .methodology/src/cli/methodology_runner/orchestrator.py .methodology/tests/cli/methodology_runner/test_prompt_generator.py
 git commit -m "feat(methodology-runner): inject phase skill manifest into meta-prompt context"
 ```
 
 ---
 
-## Task 15: Update `docs/methodology/M-002-phase-definitions.md`
+## Task 15: Update `.methodology/docs/M-002-phase-definitions.md`
 
 Inserts the new PH-002 Architecture phase as a YAML block and renumbers the existing PH-002..PH-006 to PH-003..PH-007 throughout the file. Updates the dependency-graph diagram at the top of the file and the summary table at the end.
 
 **Files:**
-- Modify: `docs/methodology/M-002-phase-definitions.md`
+- Modify: `.methodology/docs/M-002-phase-definitions.md`
 
 This is a large content edit, not code. No automated test; the verification is manual review plus a grep for any remaining stale phase IDs.
 
@@ -5451,7 +5451,7 @@ phase_2_architecture:
 
 - [ ] **Step 3: Renumber all downstream phase banners and phase_id values**
 
-Use the Edit tool with `replace_all: true` for each of the following substitutions in `docs/methodology/M-002-phase-definitions.md`. Run them one at a time in this order:
+Use the Edit tool with `replace_all: true` for each of the following substitutions in `.methodology/docs/M-002-phase-definitions.md`. Run them one at a time in this order:
 
 1. `"PH-002-solution-design"` → `"PH-003-solution-design"` (replace_all)
 2. `"PH-003-contract-first-interfaces"` → `"PH-004-contract-first-interfaces"` (replace_all)
@@ -5517,7 +5517,7 @@ Replace with:
 Run:
 
 ```bash
-grep -nE 'PH-00[0-7]' docs/methodology/M-002-phase-definitions.md
+grep -nE 'PH-00[0-7]' .methodology/docs/M-002-phase-definitions.md
 ```
 
 Expected: only the new IDs `PH-000` through `PH-007` appear; no `PH-006-incremental-implementation` paired with number 5, no `PH-002-solution-design`, etc. Visually scan the output to confirm the IDs and surrounding phase numbers are internally consistent.
@@ -5525,18 +5525,18 @@ Expected: only the new IDs `PH-000` through `PH-007` appear; no `PH-006-incremen
 - [ ] **Step 7: Commit**
 
 ```bash
-git add docs/methodology/M-002-phase-definitions.md
+git add .methodology/docs/M-002-phase-definitions.md
 git commit -m "docs(methodology): insert PH-002 Architecture phase and renumber downstream phases"
 ```
 
 ---
 
-## Task 16: Update `docs/design/components/CD-002-methodology-runner.md`
+## Task 16: Update `.methodology/docs/design/components/CD-002-methodology-runner.md`
 
 Adds a new section on skill-driven per-phase selection and updates the per-phase flow diagram to include the Skill-Selector step and cross-ref retry loop. Documents the dual prelude modes and the SKILL_LOADING_MODE switch.
 
 **Files:**
-- Modify: `docs/design/components/CD-002-methodology-runner.md`
+- Modify: `.methodology/docs/design/components/CD-002-methodology-runner.md`
 
 - [ ] **Step 1: Add a new section 11 on skill-driven selection**
 
@@ -5572,7 +5572,7 @@ actionable error before any phase runs (failure mode 7).
 
 ### 11.2 Baseline skills configuration
 
-The file `docs/methodology/skills-baselines.yaml` declares the
+The file `.methodology/docs/skills-baselines.yaml` declares the
 non-negotiable skills per phase.  It is read at run start by
 `baseline_config.load_baseline_config()` and validated against the
 catalog by `baseline_config.validate_against_catalog()`.  Any baseline
@@ -5705,7 +5705,7 @@ records a successful outcome.
 - [ ] **Step 2: Commit**
 
 ```bash
-git add docs/design/components/CD-002-methodology-runner.md
+git add .methodology/docs/design/components/CD-002-methodology-runner.md
 git commit -m "docs(design): document skill-driven per-phase selection in CD-002"
 ```
 
@@ -5716,11 +5716,11 @@ git commit -m "docs(design): document skill-driven per-phase selection in CD-002
 End-to-end test that drives the orchestrator through a minimal pipeline run using a scripted `ClaudeClient` and a mock catalog. Verifies that all the pieces wire together.
 
 **Files:**
-- Create: `tests/cli/methodology_runner/test_smoke_skill_driven.py`
+- Create: `.methodology/tests/cli/methodology_runner/test_smoke_skill_driven.py`
 
 - [ ] **Step 1: Write the smoke test**
 
-Create `tests/cli/methodology_runner/test_smoke_skill_driven.py`:
+Create `.methodology/tests/cli/methodology_runner/test_smoke_skill_driven.py`:
 
 ```python
 """Smoke test: single-phase pipeline end-to-end with mocked catalog.
@@ -5894,7 +5894,7 @@ integration:
 
 - [ ] **Step 2: Run the smoke test**
 
-Run: `pytest tests/cli/methodology_runner/test_smoke_skill_driven.py -v`
+Run: `pytest .methodology/tests/cli/methodology_runner/test_smoke_skill_driven.py -v`
 Expected: PASS.
 
 If the test fails because of scripted-response count mismatches (the orchestrator may call Claude more or fewer times than the test expects), add diagnostic print of `client.received` and adjust the scripted responses list until the test passes. The goal is not perfect response counting; the goal is that the phase completes without a halt and writes the expected files.
@@ -5907,7 +5907,7 @@ Expected: all tests across methodology-runner and prompt-runner pass.
 - [ ] **Step 4: Commit**
 
 ```bash
-git add tests/cli/methodology_runner/test_smoke_skill_driven.py
+git add .methodology/tests/cli/methodology_runner/test_smoke_skill_driven.py
 git commit -m "test(methodology-runner): end-to-end smoke test with mocked catalog"
 ```
 

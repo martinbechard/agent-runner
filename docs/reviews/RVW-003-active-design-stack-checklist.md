@@ -4,7 +4,7 @@
 
 - **TARGET:** Active design authorities under `docs/plans/`:
   - `README.md`
-  - `CD-006-prompt-runner-core.md`
+  - `.prompt-runner/docs/design/components/CD-006-prompt-runner-core.md`
   - `CD-003-methodology-run.md`
   - `HLD-001-methodology-prompt-optimization.md`
   - `CD-004-methodology-standalone-step-harness.md`

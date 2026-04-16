@@ -1,0 +1,63 @@
+# Non-negotiable baseline skills per methodology phase.
+#
+# The Skill-Selector treats these as a required floor and may add
+# additional skills on top based on stack-manifest expertise hints
+# and judgments about prior phase artifacts.
+#
+# Changing this file does not require a code change.  methodology-runner
+# reads it fresh at the start of every run.
+#
+# Every skill ID referenced here must exist in the discovered skill
+# catalog at run start, or methodology-runner halts before any phase
+# executes (spec failure mode 9).
+
+version: 1
+
+phases:
+  PH-000-requirements-inventory:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-001-feature-specification:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-002-architecture:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-003-solution-design:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-004-interface-contracts:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-005-intelligent-simulations:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-006-incremental-implementation:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline
+
+  PH-007-verification-sweep:
+    generator_baseline:
+      - traceability-discipline
+    judge_baseline:
+      - traceability-discipline

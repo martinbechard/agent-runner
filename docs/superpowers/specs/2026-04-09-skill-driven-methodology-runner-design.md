@@ -9,7 +9,7 @@
 
 ## 1. Context
 
-The methodology-runner component (designed in CD-002, implemented under src/cli/methodology_runner/) orchestrates an AI-driven software development pipeline across the phases defined in M-002. Each phase produces artifacts that feed downstream phases; each generator call runs inside a generate-judge-revise loop handled by prompt-runner.
+The methodology-runner component (designed in CD-002, implemented under .methodology/src/cli/methodology_runner/) orchestrates an AI-driven software development pipeline across the phases defined in M-002. Each phase produces artifacts that feed downstream phases; each generator call runs inside a generate-judge-revise loop handled by prompt-runner.
 
 The current implementation has no explicit awareness of technology-specific knowledge. When the methodology generates prompts for the implementation phase, it cannot load specialized knowledge about Python backend conventions, TypeScript frontend patterns, pytest discipline, or any other language- or framework-specific best practices. Every prompt is written from scratch in the PR-NNN input files, which produces four concrete problems:
 
@@ -67,7 +67,7 @@ The design introduces four coordinated changes across three layers of the system
 
 - A new **Skill-Selector agent** runs once at the start of every phase, reading the phase definition, baseline skill configuration, discovered skill catalog, and all prior phase artifacts, and emitting a phase-NNN-skills.yaml file that declares the generator and judge skill sets for that phase with a rationale.
 - A new **skill catalog discovery** mechanism walks the standard Claude Code skill locations at the start of every run and builds an in-memory catalog from SKILL.md frontmatter.
-- A new **baseline skills configuration** file (docs/methodology/skills-baselines.yaml) declares the non-negotiable skills per phase and is read at run time so baselines can be evolved without code changes.
+- A new **baseline skills configuration** file (.methodology/docs/skills-baselines.yaml) declares the non-negotiable skills per phase and is read at run time so baselines can be evolved without code changes.
 - The orchestrator composes the generator and judge preludes from the selector's output and passes them to prompt-runner via new flags.
 
 ### At the prompt-runner layer
@@ -372,7 +372,7 @@ Invalid entries are skipped with a loud warning. If zero valid entries are disco
 ### File location and schema
 
 ```yaml
-# docs/methodology/skills-baselines.yaml
+# .methodology/docs/skills-baselines.yaml
 #
 # Non-negotiable skills per methodology phase. The Skill-Selector treats
 # these as required floor and may add more skills on top based on stack
@@ -514,7 +514,7 @@ The primary design (see section 9) assumes Claude Code's Skill tool loads skill 
 All three thresholds live as named constants in the methodology-runner Python code (per CLAUDE.md guidance against literal constants):
 
 ```python
-# src/cli/methodology_runner/constants.py (new file)
+# .methodology/src/cli/methodology_runner/constants.py (new file)
 
 ARTIFACT_FULL_CONTENT_THRESHOLD = 5000   # bytes
 MAX_SKILLS_PER_PHASE = 8
@@ -599,14 +599,14 @@ every section before beginning the task below.
 
 ═══════════════════════════════════════════════════════════
 Skill: tdd
-Source: ~/.claude/plugins/methodology-runner-skills/skills/tdd/SKILL.md
+Source: ~/.claude/.methodology/skills/tdd/SKILL.md
 ═══════════════════════════════════════════════════════════
 
 [full SKILL.md content here, minus the YAML frontmatter]
 
 ═══════════════════════════════════════════════════════════
 Skill: python-backend-impl
-Source: ~/.claude/plugins/methodology-runner-skills/skills/python-backend-impl/SKILL.md
+Source: ~/.claude/.methodology/skills/python-backend-impl/SKILL.md
 ═══════════════════════════════════════════════════════════
 
 [full SKILL.md content here, minus the YAML frontmatter]
@@ -661,7 +661,7 @@ The key property this preserves: when someone reads M-003 to understand the meth
 - Published to the Claude Code plugin library.
 - Installed via /plugin install methodology-runner-skills from any Claude Code session.
 - Each skill is a full SKILL.md file with YAML frontmatter, body content, and optionally reference files under a skill-local folder.
-- Installs to ~/.claude/plugins/methodology-runner-skills/skills/** where methodology-runner's auto-discovery finds it.
+- Installs to ~/.claude/.methodology/skills/** where methodology-runner's auto-discovery finds it.
 - Independently versioned from methodology-runner — skills evolve faster than the tool itself.
 
 Because every baseline skill declared in skills-baselines.yaml is validated at run start against the discovered catalog (failure mode 9 in section 12), the plugin MUST ship with a full SKILL.md file for every baseline skill referenced by the default baseline config. Missing one is a critical halt at run start.
@@ -788,7 +788,7 @@ All schemas shown inline in the sections above. Centralized list for implementat
 
 - **stack-manifest.yaml** (section 5) — produced by PH-002, consumed by PH-003 onward and by the Skill-Selector.
 - **phase-NNN-skills.yaml** (section 6) — produced by the Skill-Selector once per phase, consumed by the orchestrator to build preludes.
-- **skills-baselines.yaml** (section 8) — authored by hand, checked into docs/methodology/, read by the orchestrator at run start.
+- **skills-baselines.yaml** (section 8) — authored by hand, checked into .methodology/docs/, read by the orchestrator at run start.
 - **generator-prelude.txt / judge-prelude.txt** (section 9) — produced by the orchestrator per phase, consumed by prompt-runner via CLI flags.
 
 Catalog entries (built in memory, not persisted) have shape: id, description, source_path, source_location.
@@ -806,36 +806,36 @@ A single experiment that determines which prelude design (primary or fallback) t
 
 ### New Python source files
 
-- docs/methodology/skills-baselines.yaml — baseline configuration (new data file).
-- src/cli/methodology_runner/constants.py — MAX_SKILLS_PER_PHASE, ARTIFACT_FULL_CONTENT_THRESHOLD, MAX_CATALOG_SIZE_WARNING, SKILL_LOADING_MODE, MAX_CROSS_REF_RETRIES.
-- src/cli/methodology_runner/skill_catalog.py — catalog discovery and validation (walks three discovery paths, parses SKILL.md frontmatter, returns list of SkillCatalogEntry).
-- src/cli/methodology_runner/skill_selector.py — Skill-Selector agent invocation (assembles selector prompt, invokes claude CLI, parses YAML output, validates, returns PhaseSkillManifest).
-- src/cli/methodology_runner/artifact_summarizer.py — on-demand summarization of large prior artifacts with caching.
-- src/cli/methodology_runner/prelude.py — prelude text construction from selector output (both primary and fallback modes).
-- src/cli/methodology_runner/phase_0_validation.py — the Phase 0 validation script mentioned above.
+- .methodology/docs/skills-baselines.yaml — baseline configuration (new data file).
+- .methodology/src/cli/methodology_runner/constants.py — MAX_SKILLS_PER_PHASE, ARTIFACT_FULL_CONTENT_THRESHOLD, MAX_CATALOG_SIZE_WARNING, SKILL_LOADING_MODE, MAX_CROSS_REF_RETRIES.
+- .methodology/src/cli/methodology_runner/skill_catalog.py — catalog discovery and validation (walks three discovery paths, parses SKILL.md frontmatter, returns list of SkillCatalogEntry).
+- .methodology/src/cli/methodology_runner/skill_selector.py — Skill-Selector agent invocation (assembles selector prompt, invokes claude CLI, parses YAML output, validates, returns PhaseSkillManifest).
+- .methodology/src/cli/methodology_runner/artifact_summarizer.py — on-demand summarization of large prior artifacts with caching.
+- .methodology/src/cli/methodology_runner/prelude.py — prelude text construction from selector output (both primary and fallback modes).
+- .methodology/src/cli/methodology_runner/phase_0_validation.py — the Phase 0 validation script mentioned above.
 
 ### New test files
 
-- tests/cli/methodology_runner/test_skill_catalog.py — discovery walking, frontmatter parsing, duplicate resolution, validation errors.
-- tests/cli/methodology_runner/test_skill_selector.py — selector invocation (mocked claude client), output parsing, output validation, failure modes 1-5.
-- tests/cli/methodology_runner/test_artifact_summarizer.py — size threshold, summary caching, REQUEST_FULL_ARTIFACT escape hatch.
-- tests/cli/methodology_runner/test_prelude.py — prelude construction in both modes, skill count cap.
-- tests/cli/methodology_runner/test_cross_ref_retry.py — retry loop, max retries, locked skill manifest across retries.
+- .methodology/tests/cli/methodology_runner/test_skill_catalog.py — discovery walking, frontmatter parsing, duplicate resolution, validation errors.
+- .methodology/tests/cli/methodology_runner/test_skill_selector.py — selector invocation (mocked claude client), output parsing, output validation, failure modes 1-5.
+- .methodology/tests/cli/methodology_runner/test_artifact_summarizer.py — size threshold, summary caching, REQUEST_FULL_ARTIFACT escape hatch.
+- .methodology/tests/cli/methodology_runner/test_prelude.py — prelude construction in both modes, skill count cap.
+- .methodology/tests/cli/methodology_runner/test_cross_ref_retry.py — retry loop, max retries, locked skill manifest across retries.
 
 ### Modified source files
 
-- docs/methodology/M-002-phase-definitions.md — insert PH-002 Architecture phase definition, renumber downstream phases PH-002..PH-006 to PH-003..PH-007, update the dependency graph, update all cross-references.
-- docs/design/components/CD-002-methodology-runner.md — add skill-selection flow to the design, document the new per-phase loop including cross-ref retry, document the two prelude modes.
-- src/cli/methodology_runner/orchestrator.py — integrate catalog discovery, selector invocation, prelude construction, cross-reference retry loop, and the per-phase state transitions they imply.
-- src/cli/methodology_runner/phases.py — update phase enumeration with new PH-002 and renumbered successors; no longer hardcode phase names.
-- src/cli/methodology_runner/models.py — add SkillCatalogEntry, PhaseSkillManifest, BaselineSkillConfig, PreludeSpec dataclasses.
-- src/cli/methodology_runner/cli.py — add --rerun-selector flag to the resume command.
-- src/cli/methodology_runner/prompt_generator.py — update to consume the phase skill manifest when building the meta-prompt.
-- src/cli/prompt_runner/__main__.py — add --generator-prelude and --judge-prelude flags to the run subcommand (verified in _build_parser() at line 128).
-- src/cli/prompt_runner/runner.py — accept prelude file paths, read once at startup, prepend content to generator and judge messages.
-- tests/cli/prompt_runner/ — extend existing tests for the prelude feature (empty prelude backward compat, both preludes set, prelude content preserved across revise loop).
-- tests/cli/methodology_runner/test_orchestrator.py — update for new per-phase flow including retry loop.
-- tests/cli/methodology_runner/test_cli.py — update for --rerun-selector flag.
+- .methodology/docs/M-002-phase-definitions.md — insert PH-002 Architecture phase definition, renumber downstream phases PH-002..PH-006 to PH-003..PH-007, update the dependency graph, update all cross-references.
+- .methodology/docs/design/components/CD-002-methodology-runner.md — add skill-selection flow to the design, document the new per-phase loop including cross-ref retry, document the two prelude modes.
+- .methodology/src/cli/methodology_runner/orchestrator.py — integrate catalog discovery, selector invocation, prelude construction, cross-reference retry loop, and the per-phase state transitions they imply.
+- .methodology/src/cli/methodology_runner/phases.py — update phase enumeration with new PH-002 and renumbered successors; no longer hardcode phase names.
+- .methodology/src/cli/methodology_runner/models.py — add SkillCatalogEntry, PhaseSkillManifest, BaselineSkillConfig, PreludeSpec dataclasses.
+- .methodology/src/cli/methodology_runner/cli.py — add --rerun-selector flag to the resume command.
+- .methodology/src/cli/methodology_runner/prompt_generator.py — update to consume the phase skill manifest when building the meta-prompt.
+- .prompt-runner/src/cli/prompt_runner/__main__.py — add --generator-prelude and --judge-prelude flags to the run subcommand (verified in _build_parser() at line 128).
+- .prompt-runner/src/cli/prompt_runner/runner.py — accept prelude file paths, read once at startup, prepend content to generator and judge messages.
+- .prompt-runner/tests/cli/prompt_runner/ — extend existing tests for the prelude feature (empty prelude backward compat, both preludes set, prelude content preserved across revise loop).
+- .methodology/tests/cli/methodology_runner/test_orchestrator.py — update for new per-phase flow including retry loop.
+- .methodology/tests/cli/methodology_runner/test_cli.py — update for --rerun-selector flag.
 
 ### SKILL.md authoring (companion plugin methodology-runner-skills)
 

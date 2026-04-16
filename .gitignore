@@ -23,6 +23,8 @@ project/
 .codex/
 tmp/
 relative/
+.archive/
+*.log
 
 # macOS
 .DS_Store

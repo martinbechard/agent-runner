@@ -33,7 +33,7 @@
   - **STATUS:** `completed`
 
 - **TASK: TASK-1**
-  - **SYNOPSIS:** Compare the real `PH-000` schema in `src/cli/methodology_runner/phases.py` with the rebuilt local `PH-000` schema in `work/`.
+  - **SYNOPSIS:** Compare the real `PH-000` schema in `.methodology/src/cli/methodology_runner/phases.py` with the rebuilt local `PH-000` schema in `work/`.
   - **BECAUSE:** We need one authoritative upstream contract for `PH-001`.
   - **STATUS:** `completed`
 
@@ -100,7 +100,7 @@
 
 - **FILE: FILE-3**
   - **SYNOPSIS:** Deterministic validator:
-    - `src/cli/methodology_runner/phase_1_validation.py`
+    - `.methodology/src/cli/methodology_runner/phase_1_validation.py`
   - **BECAUSE:** This script already checks top-level keys, required fields, RI coverage, dependency sanity, and cross-cutting-concern breadth.
   - **STATUS:** `confirmed`
 

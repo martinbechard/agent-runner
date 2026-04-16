@@ -23,19 +23,19 @@ happened, what state each run reached, and what comes next.
 
 1. Implemented active workflow scaffolding and supporting designs.
    - Active design stack:
-     - `docs/design/high-level/HLD-002-methodology-execution-architecture.md`
-     - `docs/design/high-level/HLD-003-methodology-workflow.md`
-     - `docs/design/components/CD-005-methodology-supervision.md`
-     - `docs/design/components/CD-003-methodology-run.md`
-     - `docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
-     - `docs/design/components/CD-004-methodology-standalone-step-harness.md`
+     - `.methodology/docs/design/high-level/HLD-002-methodology-execution-architecture.md`
+     - `.methodology/docs/design/high-level/HLD-003-methodology-workflow.md`
+     - `.methodology/docs/design/components/CD-005-methodology-supervision.md`
+     - `.methodology/docs/design/components/CD-003-methodology-run.md`
+     - `.methodology/docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
+     - `.methodology/docs/design/components/CD-004-methodology-standalone-step-harness.md`
    - Active prompt chain:
-     - `docs/prompts/PR-015-methodology-baseline-run.md`
-     - `docs/prompts/PR-016-methodology-planning-preparation.md`
-     - `docs/prompts/PR-017-methodology-standalone-step-harness.md`
-     - `docs/prompts/PR-018-methodology-step-lab-planning.md`
-     - `docs/prompts/PR-019-methodology-optimization-workflow.md`
-     - `docs/prompts/PR-020-methodology-optimization-supervisor.md`
+     - `.methodology/docs/prompts/PR-015-methodology-baseline-run.md`
+     - `.methodology/docs/prompts/PR-016-methodology-planning-preparation.md`
+     - `.methodology/docs/prompts/PR-017-methodology-standalone-step-harness.md`
+     - `.methodology/docs/prompts/PR-018-methodology-step-lab-planning.md`
+     - `.methodology/docs/prompts/PR-019-methodology-optimization-workflow.md`
+     - `.methodology/docs/prompts/PR-020-methodology-optimization-supervisor.md`
 
 ### 2026-04-13
 
@@ -48,9 +48,9 @@ happened, what state each run reached, and what comes next.
      and runner-level preconditions.
    - Verified targeted tests:
      - `tests/cli/test_run_methodology_baseline.py`
-     - `tests/cli/prompt_runner/test_parser.py`
-     - `tests/cli/prompt_runner/test_runner.py`
-     - `tests/cli/prompt_runner/test_readme.py`
+     - `.prompt-runner/tests/cli/prompt_runner/test_parser.py`
+     - `.prompt-runner/tests/cli/prompt_runner/test_runner.py`
+     - `.prompt-runner/tests/cli/prompt_runner/test_readme.py`
 
 3. Ran the first tiny baseline on the original hello-world request.
    - Request:
@@ -98,7 +98,7 @@ happened, what state each run reached, and what comes next.
 6. Ran the planning-preparation module on the synthetic downstream
    fixture.
    - Prompt module:
-     - `docs/prompts/PR-016-methodology-planning-preparation.md`
+     - `.methodology/docs/prompts/PR-016-methodology-planning-preparation.md`
    - Run dir:
      - `.prompt-runner/workflows/methodology-opt/downstream-smoke-hello-atomic/prompt-runs/planning`
    - Result:

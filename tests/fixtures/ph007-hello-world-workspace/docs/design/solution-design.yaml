@@ -1,0 +1,35 @@
+components:
+  - id: "CMP-001"
+    name: "CLI Runtime"
+    responsibility: "Own the command-line application behavior and emit the required standard-output result."
+    technology: "python"
+    feature_realization_map:
+      FT-001: "Implements the runnable Python 3 command-line application and emits `Hello, world!`."
+    dependencies: []
+  - id: "CMP-002"
+    name: "README Documentation"
+    responsibility: "Own the developer-facing run instructions for operating the CLI runtime."
+    technology: "markdown"
+    feature_realization_map:
+      FT-002: "Documents how to run the CLI runtime so a human can execute FT-001."
+    dependencies: ["CMP-001"]
+  - id: "CMP-003"
+    name: "Output Verification Harness"
+    responsibility: "Own the automated verification flow that executes the CLI runtime and checks its output."
+    technology: "pytest"
+    feature_realization_map:
+      FT-003: "Invokes the CLI runtime and verifies the output behavior required by FT-001."
+    dependencies: ["CMP-001"]
+interactions:
+  - id: "INT-001"
+    source: "CMP-002"
+    target: "CMP-001"
+    protocol: "shared-store"
+    data_exchanged: "CLI invocation details and expected observable output referenced by the README instructions."
+    triggered_by: "A maintainer updates README instructions after CLI behavior is defined."
+  - id: "INT-002"
+    source: "CMP-003"
+    target: "CMP-001"
+    protocol: "sync-call"
+    data_exchanged: "CLI invocation arguments and captured standard output used by automated verification."
+    triggered_by: "The automated test suite executes the CLI runtime."

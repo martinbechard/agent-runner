@@ -102,7 +102,7 @@ and may need to modify `prompt-runner`.
 To avoid conflict:
 
 - keep the first changes isolated to `scripts/run-timeline.py`
-- make the logging change in `src/cli/prompt_runner/codex_client.py` as narrow
+- make the logging change in `.prompt-runner/src/cli/prompt_runner/codex_client.py` as narrow
   as possible
 - avoid broader prompt-runner refactors until the Codex event shape is known
 
@@ -140,7 +140,7 @@ model.
 
 ### C. Make Codex emit JSON logs
 
-Update `src/cli/prompt_runner/codex_client.py` to:
+Update `.prompt-runner/src/cli/prompt_runner/codex_client.py` to:
 
 - invoke `codex exec --json`
 - keep writing the full JSONL stream to `.stdout.log`
@@ -162,7 +162,7 @@ The renderer should:
 
 Scope:
 
-- narrow update to `src/cli/prompt_runner/codex_client.py`
+- narrow update to `.prompt-runner/src/cli/prompt_runner/codex_client.py`
 - no report parser changes yet
 
 Tasks:
@@ -174,7 +174,7 @@ Tasks:
    - one generator + judge run
    - one tool-using run with file reads/writes
 4. Save sanitized fixtures under `tests/fixtures/` or
-   `tests/cli/prompt_runner/fixtures/`.
+   `.prompt-runner/tests/cli/prompt_runner/fixtures/`.
 
 Exit criteria:
 
@@ -256,7 +256,7 @@ Exit criteria:
 
 ### Phase 1 likely files
 
-- `src/cli/prompt_runner/codex_client.py`
+- `.prompt-runner/src/cli/prompt_runner/codex_client.py`
 - new test fixtures
 - new parser tests if needed
 

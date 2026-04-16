@@ -1,0 +1,174 @@
+contracts:
+  - id: "CTR-001"
+    name: "README CLI Usage Contract"
+    interaction_ref: "INT-001"
+    source_component: "CMP-002"
+    target_component: "CMP-001"
+    operations:
+      - name: "describe_cli_invocation"
+        description: "Defines the command-line invocation and expected observable output that the README presents for the CLI runtime."
+        request_schema:
+          fields:
+            - name: "invocation_command"
+              type: "string"
+              required: true
+              constraints: "Must be a complete shell command a maintainer can copy to invoke the Python 3 application from the repository context."
+            - name: "working_directory"
+              type: "string"
+              required: true
+              constraints: "Must identify the repository-relative directory from which the documented command is valid; use '.' for the project root."
+            - name: "expected_stdout"
+              type: "string"
+              required: true
+              constraints: "Must equal the exact single-line standard-output content produced by the CLI runtime, including punctuation and letter case."
+            - name: "stdout_terminator"
+              type: "string"
+              required: true
+              constraints: "Must describe the line terminator emitted after expected_stdout; use '\\n' for a trailing newline."
+            - name: "python_version_requirement"
+              type: "string"
+              required: true
+              constraints: "Must specify Python 3 compatibility and must not require an unnecessary framework."
+        response_schema:
+          fields:
+            - name: "documentation_status"
+              type: "string"
+              required: true
+              constraints: "Must be either 'accepted' or 'rejected'."
+            - name: "published_command"
+              type: "string"
+              required: true
+              constraints: "Echoes the accepted invocation_command when documentation_status is 'accepted'; otherwise is an empty string."
+            - name: "published_expected_stdout"
+              type: "string"
+              required: true
+              constraints: "Echoes the accepted expected_stdout when documentation_status is 'accepted'; otherwise is an empty string."
+            - name: "notes"
+              type: "string"
+              required: true
+              constraints: "Contains either an empty string or a concise maintainer-facing explanation of why the documentation payload was rejected."
+        error_types:
+          - name: "invalid_command_reference"
+            condition: "The documented command does not reference the implemented CLI entrypoint or cannot be executed from the declared working directory."
+            http_status: 400
+          - name: "output_mismatch"
+            condition: "The documented expected_stdout or stdout_terminator does not match the CLI runtime behavior defined for FT-001."
+            http_status: 409
+          - name: "unsupported_runtime_requirement"
+            condition: "The documented runtime requirement omits Python 3 support or introduces a framework dependency that is not justified by the feature specification."
+            http_status: 422
+    behavioral_specs:
+      - precondition: "CMP-001 has a defined runnable command-line entrypoint and a stable expected standard-output result for the hello-world behavior."
+        postcondition: "CMP-002 records one human-usable command invocation and the exact expected output string for that invocation."
+        invariant: "The README contract must never describe output text, punctuation, casing, or runtime prerequisites that contradict the CLI runtime behavior required by FT-001."
+
+  - id: "CTR-002"
+    name: "Automated CLI Execution Contract"
+    interaction_ref: "INT-002"
+    source_component: "CMP-003"
+    target_component: "CMP-001"
+    operations:
+      - name: "execute_cli_and_capture_output"
+        description: "Invokes the CLI runtime synchronously, captures the process result, and returns the observable output for verification."
+        request_schema:
+          fields:
+            - name: "argv"
+              type: "array[string]"
+              required: true
+              constraints: "Must contain the executable and argument vector used to launch the CLI; at least one element is required."
+            - name: "working_directory"
+              type: "string"
+              required: true
+              constraints: "Must identify an existing directory from which the CLI process is launched."
+            - name: "environment_overrides"
+              type: "array[string]"
+              required: true
+              constraints: "Each entry must be formatted as KEY=VALUE; use an empty list when no environment overrides are required."
+            - name: "stdin_text"
+              type: "string"
+              required: true
+              constraints: "Must be an empty string when the hello-world CLI does not require standard-input data."
+            - name: "timeout_seconds"
+              type: "integer"
+              required: true
+              constraints: "Must be greater than 0 and no greater than 30."
+        response_schema:
+          fields:
+            - name: "exit_code"
+              type: "integer"
+              required: true
+              constraints: "Process exit status returned by the CLI runtime."
+            - name: "stdout"
+              type: "string"
+              required: true
+              constraints: "Exact captured standard output emitted by the CLI runtime."
+            - name: "stderr"
+              type: "string"
+              required: true
+              constraints: "Exact captured standard error emitted by the CLI runtime; use an empty string when no error text is produced."
+            - name: "completed_within_timeout"
+              type: "boolean"
+              required: true
+              constraints: "Must be true when the process exits before timeout_seconds elapses."
+        error_types:
+          - name: "process_launch_failed"
+            condition: "The executable or working directory in argv cannot be resolved into a runnable process."
+            http_status: 500
+          - name: "execution_timed_out"
+            condition: "The CLI runtime does not terminate before timeout_seconds elapses."
+            http_status: 504
+          - name: "unexpected_process_result"
+            condition: "The CLI runtime exits unsuccessfully or produces stdout or stderr that prevents verification of the required hello-world behavior."
+            http_status: 409
+      - name: "assert_expected_stdout"
+        description: "Compares the captured CLI process result against the expected hello-world output required by the feature specification."
+        request_schema:
+          fields:
+            - name: "captured_stdout"
+              type: "string"
+              required: true
+              constraints: "Must be the exact stdout value returned by execute_cli_and_capture_output."
+            - name: "captured_stderr"
+              type: "string"
+              required: true
+              constraints: "Must be the exact stderr value returned by execute_cli_and_capture_output."
+            - name: "exit_code"
+              type: "integer"
+              required: true
+              constraints: "Must be the exit code returned by execute_cli_and_capture_output."
+            - name: "expected_stdout"
+              type: "string"
+              required: true
+              constraints: "Must equal 'Hello, world!' without the trailing line terminator."
+            - name: "expected_stdout_terminator"
+              type: "string"
+              required: true
+              constraints: "Must be '\\n' for the required single-line CLI output."
+        response_schema:
+          fields:
+            - name: "assertion_result"
+              type: "string"
+              required: true
+              constraints: "Must be either 'pass' or 'fail'."
+            - name: "observed_stdout"
+              type: "string"
+              required: true
+              constraints: "Echoes captured_stdout exactly."
+            - name: "mismatch_details"
+              type: "string"
+              required: true
+              constraints: "Empty when assertion_result is 'pass'; otherwise describes the first observable mismatch."
+        error_types:
+          - name: "stdout_assertion_failed"
+            condition: "captured_stdout does not equal expected_stdout followed by expected_stdout_terminator."
+            http_status: 409
+          - name: "unexpected_stderr_output"
+            condition: "captured_stderr is not empty for the successful hello-world execution path."
+            http_status: 409
+          - name: "nonzero_exit_code"
+            condition: "exit_code is not 0 for the expected successful hello-world execution path."
+            http_status: 409
+    behavioral_specs:
+      - precondition: "CMP-001 is present as a runnable Python 3 CLI application and CMP-003 can invoke local processes in the repository workspace."
+        postcondition: "CMP-003 obtains a deterministic pass or fail result based on the exact CLI process output and exit status."
+        invariant: "Successful verification for INT-002 requires the same hello-world output string defined by FT-001 and must not accept alternative text, alternate casing, or additional stderr output."

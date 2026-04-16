@@ -1,0 +1,130 @@
+source_document: "docs/requirements/raw-requirements.md"
+items:
+  - id: "RI-001"
+    category: "functional"
+    verbatim_quote: "Build a Python application."
+    source_location: "Goal > paragraph 1"
+    tags: ["python", "application"]
+    rationale: {rule: "Atomic decomposition", because: "Application existence is distinct."}
+    open_assumptions: []
+  - id: "RI-016"
+    category: "non_functional"
+    verbatim_quote: "The application is very small."
+    source_location: "Goal > paragraph 1"
+    tags: ["size", "small"]
+    rationale: {rule: "Atomic decomposition", because: "Size qualifier is separate."}
+    open_assumptions: []
+  - id: "RI-002"
+    category: "functional"
+    verbatim_quote: "The application prints `Hello, world!` to standard output."
+    source_location: "Goal > paragraph 1"
+    tags: ["stdout"]
+    rationale: {rule: "Direct extraction", because: "Observable output behavior."}
+    open_assumptions: []
+  - id: "RI-003"
+    category: "constraint"
+    verbatim_quote: "Use Python 3."
+    source_location: "Requirements > bullet 1"
+    tags: ["python3"]
+    rationale: {rule: "Constraint extraction", because: "Fixed runtime."}
+    open_assumptions: []
+  - id: "RI-004"
+    category: "functional"
+    verbatim_quote: "The app should be runnable from the command line."
+    source_location: "Requirements > bullet 2"
+    tags: ["cli"]
+    rationale: {rule: "Direct extraction", because: "Execution capability."}
+    open_assumptions: []
+  - id: "RI-005"
+    category: "non_functional"
+    verbatim_quote: "Keep the implementation intentionally minimal."
+    source_location: "Requirements > bullet 3"
+    tags: ["minimal"]
+    rationale: {rule: "Non-functional extraction", because: "Solution style constraint."}
+    open_assumptions: []
+  - id: "RI-006"
+    category: "functional"
+    verbatim_quote: "Include a README."
+    source_location: "Requirements > bullet 4"
+    tags: ["readme"]
+    rationale: {rule: "Atomic decomposition", because: "README deliverable."}
+    open_assumptions: []
+  - id: "RI-017"
+    category: "non_functional"
+    verbatim_quote: "The README is short."
+    source_location: "Requirements > bullet 4"
+    tags: ["readme", "short"]
+    rationale: {rule: "Atomic decomposition", because: "Length qualifier."}
+    open_assumptions: []
+  - id: "RI-007"
+    category: "functional"
+    verbatim_quote: "The README includes run instructions."
+    source_location: "Requirements > bullet 4"
+    tags: ["instructions"]
+    rationale: {rule: "Atomic decomposition", because: "README content."}
+    open_assumptions: []
+  - id: "RI-008"
+    category: "functional"
+    verbatim_quote: "Include one automated test."
+    source_location: "Requirements > bullet 5"
+    tags: ["test"]
+    rationale: {rule: "Atomic decomposition", because: "Test deliverable."}
+    open_assumptions: []
+  - id: "RI-009"
+    category: "functional"
+    verbatim_quote: "The automated test verifies that the program prints the expected output."
+    source_location: "Requirements > bullet 5"
+    tags: ["verification"]
+    rationale: {rule: "Atomic decomposition", because: "Test behavior."}
+    open_assumptions: []
+  - id: "RI-010"
+    category: "constraint"
+    verbatim_quote: "Do not introduce unnecessary frameworks."
+    source_location: "Constraints > bullet 1"
+    tags: ["frameworks"]
+    rationale: {rule: "Constraint extraction", because: "Limits solution space."}
+    open_assumptions: []
+  - id: "RI-011"
+    category: "non_functional"
+    verbatim_quote: "Prefer a simple file layout that is easy to understand."
+    source_location: "Constraints > bullet 2"
+    tags: ["layout"]
+    rationale: {rule: "Preference extraction", because: "Quality preference."}
+    open_assumptions: []
+  - id: "RI-012"
+    category: "functional"
+    verbatim_quote: "A human can run the app from the command line."
+    source_location: "Definition of done > bullet 1"
+    tags: ["manual-run"]
+    rationale: {rule: "Direct extraction", because: "Manual success condition."}
+    open_assumptions: []
+  - id: "RI-013"
+    category: "functional"
+    verbatim_quote: "The human sees `Hello, world!`."
+    source_location: "Definition of done > bullet 1"
+    tags: ["manual-output"]
+    rationale: {rule: "Atomic decomposition", because: "Manual observed output."}
+    open_assumptions: []
+  - id: "RI-014"
+    category: "functional"
+    verbatim_quote: "A human can run the test suite."
+    source_location: "Definition of done > bullet 2"
+    tags: ["test-run"]
+    rationale: {rule: "Direct extraction", because: "Manual test condition."}
+    open_assumptions: []
+  - id: "RI-015"
+    category: "functional"
+    verbatim_quote: "The test suite passes."
+    source_location: "Definition of done > bullet 2"
+    tags: ["test-pass"]
+    rationale: {rule: "Atomic decomposition", because: "Manual pass condition."}
+    open_assumptions: []
+out_of_scope: []
+coverage_check: {}
+coverage_verdict:
+  total_upstream_phrases: 17
+  covered: 17
+  orphaned: 0
+  out_of_scope: 0
+  open_assumptions: 0
+  verdict: "PASS"

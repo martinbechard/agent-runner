@@ -19,9 +19,9 @@ prompt-runner = "prompt_runner.__main__:main"
 methodology-runner = "methodology_runner.cli:main"
 
 [tool.setuptools.packages.find]
-where = ["src/cli"]
+where = [".prompt-runner/src/cli", ".methodology/src/cli"]
 include = ["prompt_runner*", "methodology_runner*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
-pythonpath = ["src/cli"]
+testpaths = [".prompt-runner/tests", ".methodology/tests"]
+pythonpath = [".prompt-runner/src/cli", ".methodology/src/cli"]

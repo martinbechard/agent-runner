@@ -5,12 +5,31 @@
 This document identifies the active design authorities, the scope each
 one owns, and the dependency order between them.
 
+- **RULE: RULE-0** `CD-*` files are design specifications, not implementation artifacts.
+  - **SYNOPSIS:** Component design documents define how component parts need to
+    be built and which workflow, responsibilities, and acceptance boundaries
+    the implementation must satisfy.
+  - **BECAUSE:** The methodology needs a clear distinction between design
+    authority and the code or prompt artifacts that realize that design.
+
+- **RULE: RULE-0A** Supporting prompts, skills, and Python files are implementation/code artifacts.
+  - **SYNOPSIS:** Prompt-runner input files, skill files, and Python modules are
+    code-like operational artifacts that implement or execute the behavior
+    described by the design specs.
+  - **BECAUSE:** They are the mechanisms used to realize the design, not the
+    design authority itself.
+
+- **RULE: RULE-0B** Additional spec types may exist beyond `CD-*`, but this document starts by distinguishing component design specs from their supporting code artifacts.
+  - **BECAUSE:** The design stack will likely grow more spec layers over time,
+    but the first necessary boundary is between component design authority and
+    implementation artifacts.
+
 ## 2. Active Design Stack
 
 This section lists the active design documents in the order they should
 usually be read.
 
-- **FILE: FILE-1** `CD-006-prompt-runner-core.md`
+- **FILE: FILE-1** `.prompt-runner/docs/design/components/CD-006-prompt-runner-core.md`
   - **SYNOPSIS:** Generic `prompt_runner` design.
   - **BECAUSE:** Every methodology-specific design depends on the
     generic runner capabilities and concepts first.
@@ -84,7 +103,7 @@ usually be read.
 This section clarifies which document should answer which kind of
 question.
 
-- **RULE: RULE-1** Read `CD-006-prompt-runner-core.md` for generic runner questions.
+- **RULE: RULE-1** Read `.prompt-runner/docs/design/components/CD-006-prompt-runner-core.md` for generic runner questions.
   - **BECAUSE:** Generic runner behavior should not be redefined in the
     methodology-specific documents.
 

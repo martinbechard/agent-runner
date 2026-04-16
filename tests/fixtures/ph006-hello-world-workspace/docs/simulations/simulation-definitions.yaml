@@ -1,0 +1,96 @@
+simulations:
+  - id: "SIM-001"
+    contract_ref: "CTR-001"
+    description: "Verify that README instructions stay aligned with the CLI invocation contract."
+    scenario_bank:
+      - name: "documented-cli-happy-path"
+        type: "happy_path"
+        input:
+          command_name: "python3 app.py"
+          expected_stdout: "Hello, world!"
+        expected_output:
+          instructions_present: true
+          command_reference: "python3 app.py"
+          output_reference: "Hello, world!"
+        assertions:
+          - field: "instructions_present"
+            operator: "equals"
+            value: true
+          - field: "command_reference"
+            operator: "equals"
+            value: "python3 app.py"
+      - name: "runtime-shape-unknown"
+        type: "error_path"
+        input:
+          command_name: ""
+          expected_stdout: "Hello, world!"
+        expected_output:
+          error_name: "runtime_shape_unknown"
+        assertions:
+          - field: "error_name"
+            operator: "equals"
+            value: "runtime_shape_unknown"
+      - name: "minimal-command-example"
+        type: "edge_case"
+        input:
+          command_name: "python app.py"
+          expected_stdout: "Hello, world!"
+        expected_output:
+          instructions_present: true
+          command_reference: "python app.py"
+        assertions:
+          - field: "instructions_present"
+            operator: "equals"
+            value: true
+    llm_adjuster:
+      temperature: 0.0
+      system_prompt_addendum: "Prefer deterministic README-content checks over stylistic judgments."
+      forbidden_patterns: ["internal database id", "wall-clock timestamp"]
+    validation_rules:
+      - rule: "The simulation must verify that the README references the same invocation and output contract as FT-001."
+        severity: "blocking"
+  - id: "SIM-002"
+    contract_ref: "CTR-002"
+    description: "Verify that the automated harness can invoke the CLI runtime and assess its observable output."
+    scenario_bank:
+      - name: "cli-output-happy-path"
+        type: "happy_path"
+        input:
+          argv: ["python3", "app.py"]
+        expected_output:
+          exit_code: 0
+          stdout: "Hello, world!"
+        assertions:
+          - field: "exit_code"
+            operator: "equals"
+            value: 0
+          - field: "stdout"
+            operator: "equals"
+            value: "Hello, world!"
+      - name: "invalid-invocation"
+        type: "error_path"
+        input:
+          argv: []
+        expected_output:
+          error_name: "invalid_invocation"
+        assertions:
+          - field: "error_name"
+            operator: "equals"
+            value: "invalid_invocation"
+      - name: "repeat-invocation-boundary"
+        type: "edge_case"
+        input:
+          argv: ["python3", "app.py", "--repeat", "2"]
+        expected_output:
+          error_name: "execution_failed"
+        assertions:
+          - field: "error_name"
+            operator: "equals"
+            value: "execution_failed"
+    llm_adjuster:
+      temperature: 0.0
+      system_prompt_addendum: "Only use outputs derivable from the contract and do not invent hidden runtime state."
+      forbidden_patterns: ["database row id", "opaque internal timestamp"]
+    validation_rules:
+      - rule: "The simulation must verify the observable output contract of the CLI runtime."
+        severity: "blocking"

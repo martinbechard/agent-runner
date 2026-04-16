@@ -3,7 +3,7 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 WORK_ROOT="${WORK_ROOT:-/tmp/ar-supervisor-work}"
-PROMPT_FILE="${1:-docs/prompts/PR-014-methodology-autopilot-supervisor.md}"
+PROMPT_FILE="${1:-.methodology/docs/prompts/PR-014-methodology-autopilot-supervisor.md}"
 if [[ $# -gt 0 ]]; then
   shift
 fi
@@ -20,4 +20,4 @@ rsync -a --delete \
   "$REPO_ROOT/" "$WORK_ROOT/"
 
 cd "$WORK_ROOT"
-PYTHONPATH=src/cli python -m prompt_runner run "$PROMPT_FILE" "$@"
+PYTHONPATH=src/cli:.prompt-runner/src/cli python -m prompt_runner run "$PROMPT_FILE" "$@"

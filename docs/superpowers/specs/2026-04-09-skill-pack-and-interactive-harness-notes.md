@@ -28,7 +28,7 @@ PH-002..PH-006 to PH-003..PH-007), `orchestrator.py`, `prompt_generator.py`,
 `cli.py`, `cross_reference.py`, `prompt_runner/runner.py`, `prompt_runner/__main__.py`,
 `pyproject.toml`, `M-002-phase-definitions.md`, `CD-002-methodology-runner.md`
 
-**New data:** `docs/methodology/skills-baselines.yaml` (non-negotiable baseline
+**New data:** `.methodology/docs/skills-baselines.yaml` (non-negotiable baseline
 skills per phase)
 
 ## 2. What is NOT yet done (intentionally deferred)
@@ -177,8 +177,8 @@ validator (no judge step):
 Per-phase critic prompt files:
 
 ```
-docs/prompts/integration-agent-PH-001-feature-specification.md
-docs/prompts/integration-agent-PH-002-architecture.md
+.methodology/docs/prompts/integration-agent-PH-001-feature-specification.md
+.methodology/docs/prompts/integration-agent-PH-002-architecture.md
 ...
 ```
 
@@ -186,7 +186,7 @@ Development cycle:
 
 1. Build real skills + prompts for PH-001
 2. Run `methodology-runner run <tiny-reqs.md> --phases PH-001-feature-specification` for real
-3. Run `prompt-runner run docs/prompts/integration-agent-PH-001.md` against the same workspace — critique produced as workspace artifact
+3. Run `prompt-runner run .methodology/docs/prompts/integration-agent-PH-001.md` against the same workspace — critique produced as workspace artifact
 4. Read critique, iterate on PH-001's skills/prompts/judge, repeat
 5. When PH-001 is solid, move to PH-002, repeat
 
@@ -380,32 +380,32 @@ lose or misconfigure.
 
 `skill_catalog.build_catalog` now accepts an optional `cwd` parameter
 (defaults to `Path.cwd()`). During catalog construction, it walks
-`<cwd>/plugins/*/skills/**/SKILL.md` as an additional discovery source,
+`<cwd>/.methodology/skills/**/SKILL.md` as an additional discovery source,
 placed between project-local and user-global in the priority chain.
 
 Priority order (highest first):
 
 1. `<workspace>/.claude/skills/` — project-local overrides
-2. `<cwd>/plugins/*/skills/` — cwd-plugin (dev repo skills)
+2. `<cwd>/.methodology/skills/` — repo-methodology (dev repo skills)
 3. `~/.claude/skills/` — user-global skills
 4. `~/.claude/plugins/*/skills/` — user-installed plugins
 
 ### Dev workflow
 
-1. Keep `plugins/methodology-runner-skills/` in the repo root.
+1. Keep `.methodology/skills/` in the repo root.
 2. Run `methodology-runner run` from the repo root.
 3. Discovery walks `plugins/*/skills/` automatically — no symlinks,
    no env vars, no CLI flags.
 
-The cwd-plugin slot is second-highest priority so dev versions in the
+The repo-methodology slot is second-highest priority so dev versions in the
 repo shadow any system-installed version of the same skill.
 
 ### Code change
 
 One new `cwd: Path | None = None` parameter in
-`src/cli/methodology_runner/skill_catalog.py::build_catalog`, plus a
+`.methodology/src/cli/methodology_runner/skill_catalog.py::build_catalog`, plus a
 ~10-line loop that walks `cwd/plugins/*/skills/` when `cwd/plugins/`
-exists. Six new tests in `tests/cli/methodology_runner/test_skill_catalog.py`
+exists. Six new tests in `.methodology/tests/cli/methodology_runner/test_skill_catalog.py`
 cover discovery, priority shadowing, and the default-to-cwd behavior.
 
 ---
@@ -414,7 +414,7 @@ cover discovery, priority shadowing, and the default-to-cwd behavior.
 
 - Does `claude "<mission>"` actually enter interactive mode? (Section 5 — untested)
 - Where should the `methodology-runner-skills` plugin directory live during
-  development? **Resolved:** under `./plugins/methodology-runner-skills/`
+  development? **Resolved:** under `./.methodology/skills/`
   in this repo — cwd-based discovery picks it up when running from the
   repo root (see §10).
 - Should the interactive harness extension be in prompt-runner proper, or
@@ -435,14 +435,14 @@ cover discovery, priority shadowing, and the default-to-cwd behavior.
 
 ### What was built
 
-- **18 v1 skills** are now present under `plugins/methodology-runner-skills/skills/`,
+- **18 v1 skills** are now present under `.methodology/skills/`,
   covering every generator/judge baseline across PH-000 through PH-007.
 - **7 integration agents** were authored to simulate downstream consumers
   during single-phase development:
   `integration-agent-PH-000-requirements-inventory.md` through
   `integration-agent-PH-006-incremental-implementation.md`.
 - The **plugin scaffold** exists in-repo under
-  `plugins/methodology-runner-skills/`, including plugin metadata,
+  `.methodology/skills/`, including plugin metadata,
   authoring context, and README/discovery documentation.
 - **prompt-runner extensions** for this workflow were added during the
   authoring cycle, including interactive-prompt support, optional-validator

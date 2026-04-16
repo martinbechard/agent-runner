@@ -5,10 +5,11 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
-prompt_file="docs/prompts/PR-023-ph001-feature-specification.md"
+prompt_file=".methodology/docs/prompts/PR-023-ph001-feature-specification.md"
 project_dir="tests/fixtures/ph001-hello-world-workspace"
 run_dir="work/ph001-feature-specification-run"
-prompt_runner_bin=".venv/bin/prompt-runner"
+export PYTHONPATH=".prompt-runner/src/cli${PYTHONPATH:+:$PYTHONPATH}"
+prompt_runner=(python -m prompt_runner)
 
 preserve_run_dir=false
 for arg in "$@"; do
@@ -22,8 +23,8 @@ if [[ "$preserve_run_dir" == false ]]; then
   git worktree prune >/dev/null 2>&1 || true
 fi
 
-"$prompt_runner_bin" parse "$prompt_file"
-"$prompt_runner_bin" run "$prompt_file" \
+"${prompt_runner[@]}" parse "$prompt_file"
+"${prompt_runner[@]}" run "$prompt_file" \
   --verbose \
   --project-dir "$project_dir" \
   --run-dir "$run_dir" \

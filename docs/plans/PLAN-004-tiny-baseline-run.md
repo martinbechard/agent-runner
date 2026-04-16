@@ -39,14 +39,14 @@ of the methodology workflow can continue.
   - **BECAUSE:** This script owns fresh-run vs resume and the
     workflow-level baseline artifacts.
 
-- **INPUT:** `docs/design/components/CD-003-methodology-run.md`
+- **INPUT:** `.methodology/docs/design/components/CD-003-methodology-run.md`
   - **CHAIN-OF-THOUGHT:** The tiny baseline run is not a one-off local
     experiment. It is supposed to prove the generic methodology-run
     structure and artifacts under a real request.
   - **BECAUSE:** The tiny baseline run should satisfy the active
     methodology-run design, not an ad hoc local convention.
 
-- **INPUT:** `docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
+- **INPUT:** `.methodology/docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
   - **CHAIN-OF-THOUGHT:** The tiny baseline run is the first designated
     `baseline` run in a later set of baseline-plus-variant runs, so its
     directory and artifacts should fit that larger organization.

@@ -1,0 +1,68 @@
+contracts:
+  - id: "CTR-001"
+    name: "README Invocation Documentation Contract"
+    interaction_ref: "INT-001"
+    source_component: "CMP-002"
+    target_component: "CMP-001"
+    operations:
+      - name: "document_cli_invocation"
+        description: "Capture the CLI command shape and expected output that the README must document."
+        request_schema:
+          fields:
+            - name: "command_name"
+              type: "string"
+              required: true
+              constraints: "Must identify the local command used to run the application."
+            - name: "expected_stdout"
+              type: "string"
+              required: true
+              constraints: "Must equal the user-visible output of the application."
+        response_schema:
+          fields:
+            - name: "instructions_present"
+              type: "bool"
+              required: true
+              constraints: "Indicates whether the README includes the command and output guidance."
+        error_types:
+          - name: "runtime_shape_unknown"
+            condition: "The CLI invocation shape is not yet stable enough to document."
+            http_status: 409
+    behavioral_specs:
+      - precondition: "The CLI runtime entrypoint and observable output are known."
+        postcondition: "README instructions reflect the current invocation method and expected output."
+        invariant: "The documented command and output remain aligned with FT-001."
+  - id: "CTR-002"
+    name: "CLI Output Verification Contract"
+    interaction_ref: "INT-002"
+    source_component: "CMP-003"
+    target_component: "CMP-001"
+    operations:
+      - name: "invoke_cli_and_capture_output"
+        description: "Run the CLI application and capture its observable process result for automated verification."
+        request_schema:
+          fields:
+            - name: "argv"
+              type: "list[string]"
+              required: true
+              constraints: "Must represent a local command-line invocation for the application."
+        response_schema:
+          fields:
+            - name: "exit_code"
+              type: "int"
+              required: true
+              constraints: "Zero indicates successful execution."
+            - name: "stdout"
+              type: "string"
+              required: true
+              constraints: "Contains the standard-output text emitted by the CLI application."
+        error_types:
+          - name: "invalid_invocation"
+            condition: "The provided argv does not represent a valid CLI invocation."
+            http_status: 400
+          - name: "execution_failed"
+            condition: "The CLI application exits non-zero while handling the invocation."
+            http_status: 500
+    behavioral_specs:
+      - precondition: "The CLI runtime is present and callable from the local workspace."
+        postcondition: "A successful invocation returns exit_code 0 and the user-visible stdout emitted by the application."
+        invariant: "The verification harness does not mutate the CLI application's user-visible behavior."
