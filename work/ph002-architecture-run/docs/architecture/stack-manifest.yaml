@@ -1,0 +1,37 @@
+components:
+  - id: "CMP-001-cli-app"
+    name: "Python command-line application"
+    role: "Implements the hello-world CLI behavior, carries the run instructions, and includes the automated verification path for the small single-purpose project."
+    technology: "python"
+    runtime: "python3"
+    frameworks: []
+    persistence: "none"
+    expected_expertise:
+      - "Python 3 command-line application development"
+      - "Basic project documentation for local command-line usage"
+      - "Automated testing of standard-output behavior in Python"
+    features_served: ["FT-001", "FT-002", "FT-003"]
+integration_points: []
+rationale: |
+  The feature set describes one intentionally small Python 3 command-line
+  project, not a distributed system. FT-001 defines the core runtime behavior:
+  a human runs a Python application from the command line and sees
+  `Hello, world!` on standard output. FT-002 adds a README with run
+  instructions, and FT-003 adds exactly one automated test plus a test-suite
+  invocation path. Those artifacts support the same local workflow and do not
+  require separate deployable services, background jobs, APIs, or persistence.
+
+  A single component is therefore the smallest architecture that fully covers
+  the source features while respecting the requirements to keep the
+  implementation intentionally minimal, avoid unnecessary frameworks, and keep
+  the file layout easy to understand. The technology is Python on a Python 3
+  runtime because that constraint is explicit upstream. No framework is needed
+  for a simple CLI program and one automated output-verification test, so the
+  frameworks list is empty rather than introducing tooling that would not add a
+  real architectural boundary. Persistence is `none` because the specified
+  behavior is transient command execution with no stored state.
+
+  Integration points are empty because there is no real cross-component
+  boundary in this decomposition. The application code, README, and automated
+  test all belong to the same coherent component that serves one human-run
+  command-line workflow.

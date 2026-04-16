@@ -13,7 +13,6 @@ build/
 
 # Prompt-runner outputs
 runs/
-work/
 .prompt-runner/
 
 # Generated documentation workspace
@@ -25,6 +24,9 @@ tmp/
 relative/
 .archive/
 *.log
+.claude/
+work/**/.git
+work/pr-021-run/
 
 # macOS
 .DS_Store

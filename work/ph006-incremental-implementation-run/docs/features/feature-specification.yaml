@@ -1,0 +1,47 @@
+features:
+  - id: "FT-001"
+    name: "Command-line hello world application"
+    description: "Provide a Python 3 application that a human can run from the command line to print `Hello, world!` to standard output."
+    source_inventory_refs: ["RI-001", "RI-002", "RI-003", "RI-009"]
+    acceptance_criteria:
+      - id: "AC-001-01"
+        description: "The project includes an application written for Python 3."
+      - id: "AC-001-02"
+        description: "A human can invoke the application from the command line."
+      - id: "AC-001-03"
+        description: "When invoked from the command line, the application prints `Hello, world!` to standard output."
+    dependencies: []
+  - id: "FT-002"
+    name: "Run instructions documentation"
+    description: "Provide a short README artifact that tells a human how to run the application from the command line."
+    source_inventory_refs: ["RI-005"]
+    acceptance_criteria:
+      - id: "AC-002-01"
+        description: "The project includes a README artifact."
+      - id: "AC-002-02"
+        description: "The README includes run instructions for invoking the application from the command line."
+    dependencies: ["FT-001"]
+  - id: "FT-003"
+    name: "Automated output verification"
+    description: "Provide one automated test and a test-suite invocation path so a human can verify that the program prints the expected output."
+    source_inventory_refs: ["RI-006", "RI-010"]
+    acceptance_criteria:
+      - id: "AC-003-01"
+        description: "The project includes exactly one automated test."
+      - id: "AC-003-02"
+        description: "The automated test verifies that the program prints `Hello, world!` as the expected output."
+      - id: "AC-003-03"
+        description: "A human can run the test suite and observe that the automated test passes."
+    dependencies: ["FT-001"]
+out_of_scope:
+  - inventory_ref: "RI-004"
+    reason: "The requirement to keep the implementation intentionally minimal is qualitative and does not supply an objective feature-level completion threshold."
+  - inventory_ref: "RI-007"
+    reason: "The requirement to avoid unnecessary frameworks is qualitative because necessity is not defined by an objective source standard."
+  - inventory_ref: "RI-008"
+    reason: "The preference for a simple file layout that is easy to understand is qualitative and does not define a binary review criterion."
+cross_cutting_concerns:
+  - id: "CC-001"
+    name: "Human-verifiable command-line workflow"
+    description: "The application behavior, run instructions, and automated verification must align so a human can run the app and the test suite from the command line and observe the expected results."
+    affected_features: ["FT-001", "FT-002", "FT-003"]
