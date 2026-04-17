@@ -114,7 +114,7 @@
 
 ### .methodology/src/cli/
 - **Purpose:** Methodology-runner Python source code. Use this mirrored source path when the code belongs to methodology-runner rather than to the main project tree or to prompt-runner.
-- **Signals:** methodology-runner CLI entry point, orchestrator, phase registry, prompt generator, skill discovery, cross-reference logic, package code imported as `methodology_runner`.
+- **Signals:** methodology-runner CLI entry point, orchestrator, phase registry, prompt-module selection, skill discovery, cross-reference logic, package code imported as `methodology_runner`.
 - **Filename pattern:** `snake_case.py` for modules and fixed Python package files such as `__init__.py` and `__main__.py`.
 - **Tests location:** `.methodology/tests/cli/` — mirror path, `test_<module>.py`.
 - **Example:** `.methodology/.methodology/src/cli/methodology_runner/orchestrator.py`
@@ -177,7 +177,7 @@
 - **Purpose:** Transient, TDD-style implementation plans — sequential task groups that decompose a finished design into bite-sized, test-first steps. Not a design document (no decisions), not a requirements document, and not acceptance criteria. Historical value once implementation is complete.
 - **Signals:** "task group", "write failing test", "run pytest", "step-N deliverable", references a companion `CD-NNN` or `HLD-NNN` doc, implementation order section, TDD cadence (failing test → minimal implementation → commit).
 - **Filename pattern:** `PLAN-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature being implemented.
-- **Example:** `docs/plans/PLAN-005-ph000-granular-test.md`
+- **Example:** `docs/plans/PLAN-004-tiny-baseline-run.md`
 
 ### docs/reviews/
 - **Purpose:** Structured review outputs such as completed review checklists, findings documents, and other review artifacts derived from an explicit review process. These are not design authorities, not implementation plans, and not acceptance-criteria specs; they record the result of reviewing another artifact.

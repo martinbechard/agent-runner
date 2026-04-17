@@ -73,8 +73,6 @@ This section describes the phase steps.
 - **PROCESS: PROCESS-2** Execute the prompts with prompt-runner
   - **SYNOPSIS:** The methodology runner fills in the request placeholders in
     the predefined PH-000 module, then runs that module with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/prompt_generator.py`
-    - **BECAUSE:** That module fills in the placeholders for the run.
   - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle and
       prompt-runner invocation.
@@ -83,8 +81,7 @@ This section describes the phase steps.
   - **PROMPT-MODULE: PMOD-1** PH-000 prompt-runner input file
     - **SYNOPSIS:** The PH-000 prompt-runner input file is
       `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`,
-      instantiated for the specific request. The current Codex implementation
-      materializes that module shape from `_PH000_CODEX_TEMPLATE`.
+      executed as a checked-in prompt module with run-time placeholder values.
     - **BECAUSE:** The phase should keep one fixed module shape and only fill
       in request values.
     - **READS:** `{{raw_requirements_path}}`

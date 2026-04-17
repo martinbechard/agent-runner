@@ -177,6 +177,7 @@ class PhaseConfig:
     # -- checklist examples --------------------------------------------------
     checklist_examples_good: list[str]
     checklist_examples_bad: list[str]
+    prompt_module_path: str | None = None
 
     # -- tunables (defaults) -------------------------------------------------
     max_prompt_runner_iterations: int = DEFAULT_MAX_PROMPT_RUNNER_ITERATIONS
@@ -211,6 +212,7 @@ class PhaseConfig:
             ],
             "output_artifact_path": self.output_artifact_path,
             "output_format": self.output_format,
+            "prompt_module_path": self.prompt_module_path,
             "expected_output_files": list(self.expected_output_files),
             "extraction_focus": self.extraction_focus,
             "generation_instructions": self.generation_instructions,
@@ -237,6 +239,7 @@ class PhaseConfig:
             ],
             output_artifact_path=d["output_artifact_path"],
             output_format=d["output_format"],
+            prompt_module_path=d.get("prompt_module_path"),
             expected_output_files=list(d["expected_output_files"]),
             extraction_focus=d["extraction_focus"],
             generation_instructions=d["generation_instructions"],

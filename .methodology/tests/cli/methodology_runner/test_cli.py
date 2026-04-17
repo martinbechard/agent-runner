@@ -419,7 +419,7 @@ class TestCmdRun:
             captured_config.append(config)
             return mock_result
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = capturing_run
@@ -449,9 +449,9 @@ class TestCmdRun:
         )
 
         with (
-            patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"),
+            patch("methodology_runner.cli.check_backend_cli", return_value=None),
             patch("methodology_runner.cli.cmd_run.__module__", "methodology_runner.cli"),
-            patch("methodology_runner.orchestrator.run_pipeline", return_value=mock_result) as mock_rp,
+            patch("methodology_runner.orchestrator.run_pipeline", return_value=mock_result),
         ):
             # Patch the late import inside cmd_run
             import methodology_runner.orchestrator as orch_mod
@@ -482,7 +482,7 @@ class TestCmdRun:
             wall_time_seconds=5.0,
         )
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = lambda config: mock_result
@@ -513,7 +513,7 @@ class TestCmdRun:
             wall_time_seconds=5.0,
         )
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = lambda config: mock_result
@@ -551,7 +551,7 @@ class TestCmdRun:
             captured_config.append(config)
             return mock_result
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = capturing_run
@@ -590,7 +590,7 @@ class TestCmdRun:
             captured_config.append(config)
             return mock_result
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = capturing_run
@@ -627,7 +627,7 @@ class TestCmdRun:
             wall_time_seconds=1.0,
         )
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = lambda config: mock_result
@@ -778,7 +778,7 @@ class TestCmdResume:
             captured_config.append(config)
             return mock_result
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = capturing_run
@@ -814,7 +814,7 @@ class TestCmdResume:
             wall_time_seconds=1.0,
         )
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = lambda config: mock_result
@@ -853,7 +853,7 @@ class TestCmdResume:
             captured_config.append(config)
             return mock_result
 
-        with patch("methodology_runner.cli.shutil.which", return_value="/usr/bin/mock"):
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
             import methodology_runner.orchestrator as orch_mod
             original_run = orch_mod.run_pipeline
             orch_mod.run_pipeline = capturing_run

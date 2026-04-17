@@ -841,7 +841,7 @@ def _call_backend_for_verification(
             f"[methodology-runner] Cross-reference verification "
             f"for {phase_id}"
         ),
-        workspace_dir=workspace,
+        worktree_dir=workspace,
     )
     write_call_metadata(
         call.stdout_log_path,

@@ -148,10 +148,6 @@ execution rather than defining the design authorities above.
   - **SYNOPSIS:** Focused execution plan for proving the tiny baseline
     run and its handoff artifacts.
 
-- **FILE: FILE-11** `docs/plans/PLAN-005-ph000-granular-test.md`
-  - **SYNOPSIS:** Granular PH-000 test plan that ties each step-1 test task
-    to the design items that justify it.
-
 ## 5. Retired Material
 
 This section explains where superseded material lives.

@@ -354,7 +354,7 @@ def invoke_skill_selector(
         stdout_log_path=logs_dir / f"{stem}.stdout.log",
         stderr_log_path=logs_dir / f"{stem}.stderr.log",
         stream_header=f"── skill-selector / {inputs.phase_config.phase_id} ──",
-        workspace_dir=inputs.workspace_dir,
+        worktree_dir=inputs.workspace_dir,
     )
     write_call_metadata(
         call.stdout_log_path,

@@ -1,7 +1,7 @@
 """Pipeline orchestrator for methodology-runner.
 
-Sequences the 7 methodology phases, manages the workspace and git,
-invokes the prompt generator and prompt-runner for each phase, runs
+Sequences the methodology phases, manages the workspace and git,
+invokes prompt-runner with the checked-in phase prompt modules, runs
 cross-reference verification, and handles escalation and resumption.
 
 See .methodology/docs/design/components/CD-002-methodology-runner.md Sections 5-9.
@@ -38,10 +38,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from .models import (
-    CrossRefCheckResult,
-    CrossRefIssue,
     CrossRefResult,
-    CrossReferenceResult,
     EscalationPolicy,
     PhaseResult,
     PhaseState,
@@ -54,11 +51,6 @@ from .phases import (
     get_phase,
     normalize_phase_selection,
     resolve_input_sources,
-)
-from .prompt_generator import (
-    PromptGenerationContext,
-    PromptGenerationError,
-    generate_prompt_file,
 )
 from .cross_reference import (
     CrossReferenceError,
@@ -153,9 +145,6 @@ class _WorkspaceLock:
             self._fd = None
             self._lock_path.unlink(missing_ok=True)
 
-
-_ISSUE_RE = re.compile(r"^\[(\w+)/(\w+)\] (.+)$")
-"""Parses formatted issue strings from CrossRefResult.issues."""
 
 _PROMPT_HEADING_RE = re.compile(r"^## Prompt \d+:", re.MULTILINE)
 """Counts prompt sections in a prompt-runner .md file."""
@@ -659,61 +648,6 @@ def _load_phase_skill_manifest(
 
 
 # ---------------------------------------------------------------------------
-# Cross-ref feedback reconstruction
-# ---------------------------------------------------------------------------
-
-def _reconstruct_cross_ref_feedback(
-    result: CrossRefResult,
-) -> CrossReferenceResult:
-    """Rebuild a structured CrossReferenceResult from a flat CrossRefResult.
-
-    The cross-reference module's public API returns CrossRefResult (flat).
-    The prompt generator's PromptGenerationContext.cross_ref_feedback needs
-    CrossReferenceResult (structured).  This helper parses the formatted
-    issue strings back into structured objects.
-    """
-    category_issues: dict[str, list[CrossRefIssue]] = {
-        cat: [] for cat in ("traceability", "coverage", "consistency", "integration")
-    }
-
-    for issue_str in result.issues:
-        match = _ISSUE_RE.match(issue_str)
-        if not match:
-            continue
-        cat, sev, desc = match.groups()
-        affected: list[str] = []
-        if cat == "traceability":
-            affected = list(result.traceability_gaps)
-        elif cat == "integration":
-            affected = list(result.orphaned_elements)
-        if cat in category_issues:
-            category_issues[cat].append(
-                CrossRefIssue(
-                    category=cat,
-                    description=desc,
-                    affected_elements=affected,
-                    severity=sev,
-                )
-            )
-
-    def _to_check(cat: str) -> CrossRefCheckResult:
-        issues = category_issues[cat]
-        has_blocking = any(i.severity == "blocking" for i in issues)
-        return CrossRefCheckResult(
-            status="fail" if has_blocking else "pass",
-            issues=issues,
-        )
-
-    return CrossReferenceResult(
-        verdict="pass" if result.passed else "fail",
-        traceability=_to_check("traceability"),
-        coverage=_to_check("coverage"),
-        consistency=_to_check("consistency"),
-        integration=_to_check("integration"),
-    )
-
-
-# ---------------------------------------------------------------------------
 # Prompt-runner invocation (CD-002 Section 6)
 # ---------------------------------------------------------------------------
 
@@ -725,6 +659,7 @@ def _invoke_prompt_runner_library(
     claude_client: AgentClient | None = None,
     generator_prelude_path: Path | None = None,
     judge_prelude_path: Path | None = None,
+    placeholder_values: dict[str, str] | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner via direct library call (preferred).
 
@@ -754,6 +689,7 @@ def _invoke_prompt_runner_library(
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
         include_project_organiser=False,
+        placeholder_values=placeholder_values or {},
     )
 
     pr_result = pr_run_pipeline(
@@ -762,7 +698,7 @@ def _invoke_prompt_runner_library(
         config=pr_config,
         claude_client=claude_client,
         source_file=md_file,
-        workspace_dir=workspace,
+        source_project_dir=workspace,
     )
 
     total_iterations = sum(
@@ -783,6 +719,7 @@ def _invoke_prompt_runner(
     claude_client: AgentClient | None = None,
     generator_prelude_path: Path | None = None,
     judge_prelude_path: Path | None = None,
+    placeholder_values: dict[str, str] | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner via the in-process library path.
 
@@ -792,6 +729,7 @@ def _invoke_prompt_runner(
         md_file, workspace, run_dir, config, claude_client,
         generator_prelude_path=generator_prelude_path,
         judge_prelude_path=judge_prelude_path,
+        placeholder_values=placeholder_values,
     )
 
 
@@ -823,6 +761,56 @@ def _phase_run_dir(workspace: Path, phase_config: PhaseConfig) -> Path:
         / RUNS_SUBDIR
         / f"phase-{phase_config.phase_number}"
     )
+
+
+def _resolve_phase_prompt_module_path(phase_config: PhaseConfig) -> Path:
+    """Return the checked-in prompt module path for a phase."""
+    if not phase_config.prompt_module_path:
+        raise RuntimeError(
+            f"No prompt module is registered for {phase_config.phase_id}"
+        )
+    path = Path(phase_config.prompt_module_path).resolve()
+    if not path.exists():
+        raise RuntimeError(
+            f"Prompt module for {phase_config.phase_id} does not exist: {path}"
+        )
+    return path
+
+
+def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
+    """Return prompt-runner placeholder bindings for a phase."""
+    values: dict[str, str] = {}
+    if phase_config.phase_id == "PH-000-requirements-inventory":
+        values["raw_requirements_path"] = (
+            f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}"
+        )
+    return values
+
+
+def _cross_ref_retry_guidance(result: CrossRefResult) -> str:
+    """Render cross-reference findings as retry guidance text."""
+    lines = [
+        "Cross-reference retry guidance:",
+        "The previous phase output failed cross-reference verification.",
+        "Address the following issues in this retry execution:",
+    ]
+    if result.issues:
+        for issue in result.issues:
+            lines.append(f"- {issue}")
+    else:
+        lines.append("- Cross-reference failed without a specific issue list.")
+    return "\n".join(lines) + "\n"
+
+
+def _write_retry_prelude(
+    destination: Path,
+    base_text: str | None,
+    guidance: str,
+) -> Path:
+    """Write a retry prelude that augments an existing prelude with guidance."""
+    text = ((base_text or "").rstrip() + "\n\n" + guidance).lstrip()
+    destination.write_text(text, encoding="utf-8")
+    return destination
 
 
 def _effective_escalation_policy(
@@ -884,8 +872,8 @@ def _run_single_phase(
 ) -> PhaseResult:
     """Execute one methodology phase end-to-end.
 
-    Handles prompt generation, prompt-runner invocation, cross-reference
-    verification with re-generation retries, state updates, and git
+    Handles prompt-module selection, prompt-runner invocation, cross-reference
+    verification with retry guidance, state updates, and git
     commits.
 
     When *cross_ref_only* is True (resume of a phase that already passed
@@ -898,11 +886,23 @@ def _run_single_phase(
     run_dir = _phase_run_dir(workspace, phase_config)
     run_dir.mkdir(parents=True, exist_ok=True)
 
-    prompt_file = run_dir / "prompt-file.md"
+    try:
+        prompt_file = _resolve_phase_prompt_module_path(phase_config)
+    except RuntimeError as exc:
+        ps.status = PhaseStatus.FAILED
+        save_project_state(state, workspace)
+        return _make_failed_result(
+            phase_id,
+            run_dir / "prompt-file.md",
+            0,
+            time.monotonic() - t0,
+            str(exc),
+        )
     cross_ref_path = run_dir / "cross-ref-result.json"
     policy = _effective_escalation_policy(config, phase_config)
     max_retries = config.max_cross_ref_retries
     iteration_count = 0
+    placeholder_values = _phase_placeholder_values(phase_config)
 
     # Skill-Selector: run once per phase; reuse across cross-ref retries.
     # On resume with --rerun-selector, overwrite an existing manifest.
@@ -931,7 +931,8 @@ def _run_single_phase(
             )
 
     # ------------------------------------------------------------------
-    # Steps 1-6: prompt generation + prompt-runner  (skip if cross_ref_only)
+    # Steps 1-6: prompt-runner against the checked-in prompt module
+    # (skip if cross_ref_only)
     # ------------------------------------------------------------------
     if not cross_ref_only:
         # Step 1-2: mark running
@@ -940,29 +941,10 @@ def _run_single_phase(
         state.current_phase = phase_id
         save_project_state(state, workspace)
 
-        # Step 3: generate prompt-runner .md file
-        completed_states = _get_completed_phase_states(state)
-        ctx = PromptGenerationContext(
-            phase_config=phase_config,
-            workspace_dir=workspace,
-            completed_phases=completed_states,
-            phase_skill_manifest=_load_phase_skill_manifest(run_dir, phase_config),
-            input_context_mode="file-reference" if config.backend == "codex" else "embed",
-        )
-        try:
-            generate_prompt_file(ctx, claude_client, prompt_file, config.model)
-        except PromptGenerationError as exc:
-            ps.status = PhaseStatus.FAILED
-            save_project_state(state, workspace)
-            return _make_failed_result(
-                phase_id, prompt_file, 0,
-                time.monotonic() - t0, str(exc),
-            )
-
         ps.prompt_file = str(prompt_file)
         save_project_state(state, workspace)
 
-        # Step 4-5: invoke prompt-runner.
+        # Step 3-4: invoke prompt-runner.
         # The directory basename becomes prompt-runner's `run_id`, which
         # feeds uuid5-derived claude session IDs. Including the phase
         # number keeps those session IDs unique across phases — without
@@ -982,6 +964,7 @@ def _run_single_phase(
             prompt_file, workspace, pr_run_dir, config, claude_client,
             generator_prelude_path=gen_prelude_path,
             judge_prelude_path=jud_prelude_path,
+            placeholder_values=placeholder_values,
         )
 
         if not success:
@@ -997,7 +980,7 @@ def _run_single_phase(
                 status=fail_status,
             )
 
-        # Step 6: mark prompt-runner passed (only reached when success)
+        # Step 5: mark prompt-runner passed (only reached when success)
         ps.status = PhaseStatus.PROMPT_RUNNER_PASSED
         save_project_state(state, workspace)
     else:
@@ -1059,37 +1042,34 @@ def _run_single_phase(
         if cross_ref_result.passed:
             break
 
-        # Retry: re-generate with feedback, re-run prompt-runner
+        # Retry: reuse the same checked-in prompt module with augmented prelude
+        # guidance derived from cross-reference feedback.
         if attempt >= max_retries:
             break
 
-        # Discard the failed phase output before re-generation
+        # Discard the failed phase output before retry
         _git_discard_file(workspace, phase_config.output_artifact_path)
-
-        # Re-generate the prompt file with cross-ref feedback
-        feedback = _reconstruct_cross_ref_feedback(cross_ref_result)
-        completed_states = _get_completed_phase_states(state)
-        ctx = PromptGenerationContext(
-            phase_config=phase_config,
-            workspace_dir=workspace,
-            completed_phases=completed_states,
-            cross_ref_feedback=feedback,
-            phase_skill_manifest=_load_phase_skill_manifest(run_dir, phase_config),
+        guidance = _cross_ref_retry_guidance(cross_ref_result)
+        retry_gen_prelude_path = _write_retry_prelude(
+            run_dir / f"generator-prelude-retry-{attempt + 1}.txt",
+            (
+                gen_prelude_path.read_text(encoding="utf-8")
+                if gen_prelude_path is not None and gen_prelude_path.exists()
+                else None
+            ),
+            guidance,
         )
-        try:
-            generate_prompt_file(ctx, claude_client, prompt_file, config.model)
-        except PromptGenerationError as exc:
-            ps.status = PhaseStatus.FAILED
-            save_project_state(state, workspace)
-            return _make_failed_result(
-                phase_id, prompt_file, iteration_count,
-                time.monotonic() - t0,
-                f"Re-generation after cross-ref failure failed: {exc}",
-                cross_ref=cross_ref_result,
-                pr_success=True,
-            )
+        retry_jud_prelude_path = _write_retry_prelude(
+            run_dir / f"judge-prelude-retry-{attempt + 1}.txt",
+            (
+                jud_prelude_path.read_text(encoding="utf-8")
+                if jud_prelude_path is not None and jud_prelude_path.exists()
+                else None
+            ),
+            guidance,
+        )
 
-        # Re-run prompt-runner on the revised file — reuse locked prelude paths.
+        # Re-run prompt-runner on the same prompt module with retry guidance.
         # Phase number included so the retry run_id differs from other phases'
         # retries (same session-collision concern as the main invocation above).
         retry_run_dir = (
@@ -1098,8 +1078,9 @@ def _run_single_phase(
         )
         success, extra_iters, pr_error = _invoke_prompt_runner(
             prompt_file, workspace, retry_run_dir, config, claude_client,
-            generator_prelude_path=gen_prelude_path,
-            judge_prelude_path=jud_prelude_path,
+            generator_prelude_path=retry_gen_prelude_path,
+            judge_prelude_path=retry_jud_prelude_path,
+            placeholder_values=placeholder_values,
         )
         iteration_count += extra_iters
 

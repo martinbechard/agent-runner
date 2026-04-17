@@ -52,6 +52,15 @@ _OUTPUT_PHASE_5 = "docs/simulations/simulation-definitions.yaml"
 _OUTPUT_PHASE_6 = "docs/implementation/implementation-plan.yaml"
 _OUTPUT_PHASE_7 = "docs/verification/verification-report.yaml"
 
+_PROMPT_PHASE_0 = ".methodology/docs/prompts/PR-025-ph000-requirements-inventory.md"
+_PROMPT_PHASE_1 = ".methodology/docs/prompts/PR-023-ph001-feature-specification.md"
+_PROMPT_PHASE_2 = ".methodology/docs/prompts/PR-024-ph002-architecture.md"
+_PROMPT_PHASE_3 = ".methodology/docs/prompts/PR-026-ph003-solution-design.md"
+_PROMPT_PHASE_4 = ".methodology/docs/prompts/PR-027-ph004-interface-contracts.md"
+_PROMPT_PHASE_5 = ".methodology/docs/prompts/PR-028-ph005-intelligent-simulations.md"
+_PROMPT_PHASE_6 = ".methodology/docs/prompts/PR-029-ph006-incremental-implementation.md"
+_PROMPT_PHASE_7 = ".methodology/docs/prompts/PR-030-ph007-verification-sweep.md"
+
 
 def _tpl(relative_path: str) -> str:
     """Build a ``{workspace}/...`` template from a workspace-relative path."""
@@ -193,6 +202,7 @@ _PHASE_0 = PhaseConfig(
         "Requirements are captured",
         "The inventory is complete",
     ],
+    prompt_module_path=_PROMPT_PHASE_0,
 )
 
 # ---------------------------------------------------------------------------
@@ -317,6 +327,7 @@ _PHASE_1 = PhaseConfig(
         "Features cover the requirements",
         "Acceptance criteria are defined",
     ],
+    prompt_module_path=_PROMPT_PHASE_1,
 )
 
 # ---------------------------------------------------------------------------
@@ -448,6 +459,7 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
         "The architecture is reasonable",
         "Technologies are chosen",
     ],
+    prompt_module_path=_PROMPT_PHASE_2,
 )
 
 # ---------------------------------------------------------------------------
@@ -563,6 +575,7 @@ _PHASE_3 = PhaseConfig(
         "Components are well-designed",
         "The architecture is sound",
     ],
+    prompt_module_path=_PROMPT_PHASE_3,
 )
 
 # ---------------------------------------------------------------------------
@@ -696,6 +709,7 @@ _PHASE_4 = PhaseConfig(
         "Contracts are defined for all interfaces",
         "Error handling is present",
     ],
+    prompt_module_path=_PROMPT_PHASE_4,
 )
 
 # ---------------------------------------------------------------------------
@@ -824,6 +838,7 @@ _PHASE_5 = PhaseConfig(
         "Simulations exist for the contracts",
         "Test scenarios are realistic",
     ],
+    prompt_module_path=_PROMPT_PHASE_5,
 )
 
 # ---------------------------------------------------------------------------
@@ -981,6 +996,7 @@ _PHASE_6 = PhaseConfig(
         "The implementation plan covers all components",
         "Tests are planned",
     ],
+    prompt_module_path=_PROMPT_PHASE_6,
 )
 
 # ---------------------------------------------------------------------------
@@ -1144,6 +1160,7 @@ _PHASE_7 = PhaseConfig(
         "Verification covers the requirements",
         "E2E tests exist",
     ],
+    prompt_module_path=_PROMPT_PHASE_7,
 )
 
 

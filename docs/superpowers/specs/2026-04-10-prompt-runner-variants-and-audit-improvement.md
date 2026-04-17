@@ -3,9 +3,8 @@
 **Status:** Working spec — evolving during the design session
 **Date:** 2026-04-10
 **Related:**
-- `docs/superpowers/specs/2026-04-09-skill-driven-methodology-runner-design.md`
-- `docs/superpowers/specs/2026-04-09-skill-pack-and-interactive-harness-notes.md`
-- `.prompt-runner/src/cli/prompt_runner/runner.py`, `.prompt-runner/src/cli/prompt_runner/parser.py`
+- `.prompt-runner/src/cli/prompt_runner/runner.py`
+- `.prompt-runner/src/cli/prompt_runner/parser.py`
 
 ---
 

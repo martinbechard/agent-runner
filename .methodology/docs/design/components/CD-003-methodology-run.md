@@ -146,21 +146,21 @@ methodology run.
       evidence.
 
 - **ENTITY: ENTITY-6** `PhaseRunArtifacts`
-  - **SYNOPSIS:** The generated prompt and support files for one
-    selected methodology phase inside one methodology run.
+  - **SYNOPSIS:** The checked-in prompt module reference and run-local support
+    files for one selected methodology phase inside one methodology run.
   - **FIELD:** `phase_run_dir`
     - **SYNOPSIS:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N`
       for the concrete phase number.
-    - **CHAIN-OF-THOUGHT:** Each selected phase generates its own
-      prompt-runner input and support files. Those artifacts should live
+    - **CHAIN-OF-THOUGHT:** Each selected phase uses one canonical checked-in
+      prompt module plus run-local support files. Those artifacts should live
       under one stable per-phase directory rather than being scattered
       across the worktree.
     - **BECAUSE:** Each selected phase needs one stable directory for
-      its generated prompt and support artifacts.
-  - **FIELD:** `prompt_file`
-    - **SYNOPSIS:** `{{phase_run_dir}}/prompt-file.md`
-    - **BECAUSE:** `prompt_runner` executes a generated prompt file for
-      each selected phase.
+      its support artifacts and execution evidence.
+  - **FIELD:** `prompt_module`
+    - **SYNOPSIS:** Checked-in phase prompt module such as `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`
+    - **BECAUSE:** `prompt_runner` executes the canonical checked-in prompt
+      module for each selected phase.
   - **FIELD:** `generator_prelude`
     - **SYNOPSIS:** `{{phase_run_dir}}/generator-prelude.txt`
     - **BECAUSE:** The generator prompt is preceded by phase-selected
@@ -174,7 +174,7 @@ methodology run.
     - **BECAUSE:** The phase should preserve the concrete generator and
       judge skill selection it executed.
   - **FIELD:** `deterministic_validation_helper`
-    - **SYNOPSIS:** Optional helper script such as `{{phase_run_dir}}/phase-1-deterministic-validation.py`
+    - **SYNOPSIS:** Optional canonical validator module such as `.methodology/src/cli/methodology_runner/phase_1_validation.py`
     - **BECAUSE:** Some phases can supply deterministic validation logic that prompt-runner should execute once per iteration instead of forcing the model to recreate the same checks with ad hoc Bash and Python calls.
 
 - **ENTITY: ENTITY-3** `MethodologyRunStatus`
@@ -409,48 +409,44 @@ methodology run.
     - **BECAUSE:** Resume may continue the whole methodology or only the
       caller-selected phase subset.
 
-### Step 4: Generate per-phase prompt artifacts inside methodology_runner
+### Step 4: Prepare per-phase prompt-runner inputs inside methodology_runner
 
-- **PROCESS: PROCESS-3** `Generate per-phase prompt artifacts`
+- **PROCESS: PROCESS-3** `Prepare per-phase prompt-runner inputs`
   - **SYNOPSIS:** While executing the selected phase sequence, the
     methodology run should select the phase skills, write the phase
-    skill manifest and prelude files, then generate the concrete
-    `prompt-file.md` that `prompt_runner` will execute for that phase.
-  - **CHAIN-OF-THOUGHT:** The methodology run does not execute
-    hand-authored prompt files directly for its phases. Instead, after
-    the top-level `run` or `resume` command starts, it derives a
-    concrete prompt from the phase config, the selected skills, the
-    current worktree, and completed predecessor artifacts. That
-    generation step is therefore an internal first-class part of the
-    methodology-run component.
+    skill manifest and prelude files, resolve the checked-in prompt
+    module for the phase, and then execute that module with prompt-runner.
+  - **CHAIN-OF-THOUGHT:** The methodology run now treats the prompt module as a
+    checked-in design artifact. The run-local work is limited to skill
+    selection, prelude creation, placeholder binding, and execution evidence.
   - **READS:** selected `PhaseConfig`
-    - **BECAUSE:** Prompt generation depends on the chosen phase's
+    - **BECAUSE:** Prompt-module selection depends on the chosen phase's
       input, output, and validation contract.
   - **READS:** completed predecessor artifacts in `worktree`
-    - **BECAUSE:** Later phases generate prompts using the artifacts
-      produced by their completed predecessors.
+    - **BECAUSE:** Later phases execute against the artifacts produced by their
+      completed predecessors.
   - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/phase-NNN-skills.yaml`
     - **BECAUSE:** The run should preserve the concrete skill selection
       for the phase.
   - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/generator-prelude.txt`
-    - **BECAUSE:** The generated prompt contract is paired with
+    - **BECAUSE:** The phase prompt module is paired with
       generator-side skill instructions.
   - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/judge-prelude.txt`
-    - **BECAUSE:** The generated prompt contract is paired with
+    - **BECAUSE:** The phase prompt module is paired with
       judge-side skill instructions.
-  - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/prompt-file.md`
-    - **BECAUSE:** `prompt_runner` executes one generated prompt file
-      per selected phase.
   - **WRITES:** optional `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/phase-*-deterministic-validation.py`
-    - **BECAUSE:** A phase-local deterministic validator should live beside the generated prompt so prompt-runner can execute it with a stable path inside the run.
+    - **BECAUSE:** A phase-local deterministic validator should live beside the
+      run-local support files so prompt-runner can execute it with a stable
+      path inside the run.
   - **USES:** `src/cli/methodology_runner/skill_selector.py`
     - **BECAUSE:** The phase skill manifest and prelude files are built
       from the selector's output.
-  - **USES:** `src/cli/methodology_runner/prompt_generator.py`
-    - **BECAUSE:** The generated `prompt-file.md` is owned by the prompt
-      generator.
-  - **USES:** optional phase validator modules such as `src/cli/methodology_runner/phase_1_validation.py`
-    - **BECAUSE:** The prompt generator may stage a reusable deterministic validator for phases whose structural checks do not require an LLM.
+  - **USES:** checked-in prompt modules under `.methodology/docs/prompts/`
+    - **BECAUSE:** The canonical prompt contract is authored and maintained as
+      checked-in prompt modules.
+  - **USES:** optional phase validator modules such as `.methodology/src/cli/methodology_runner/phase_1_validation.py`
+    - **BECAUSE:** The run may stage a reusable deterministic validator for
+      phases whose structural checks do not require an LLM.
 
 ### Step 5: Generate the run timeline
 

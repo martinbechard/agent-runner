@@ -169,7 +169,7 @@ class ArtifactSummaryProvider:
             stdout_log_path=logs_dir / f"{stem}.stdout.log",
             stderr_log_path=logs_dir / f"{stem}.stderr.log",
             stream_header=f"-- artifact summary / {path.name} --",
-            workspace_dir=path.parent,
+            worktree_dir=path.parent,
         )
         write_call_metadata(
             call.stdout_log_path,
