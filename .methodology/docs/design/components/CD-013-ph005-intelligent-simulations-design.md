@@ -158,7 +158,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/simulations/simulation-definitions.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `scripts/phase-5-deterministic-validation.py`
+  - **USES:** `.methodology/src/cli/methodology_runner/phase_5_validation.py`
     - **BECAUSE:** `PH-005` uses deterministic checks for schema, contract
       coverage, scenario type coverage, and top-level shape.
   - **BECAUSE:** `PH-005` passes only when both the deterministic checks and

@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import re
+import shutil
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -119,6 +120,63 @@ def _format_duration(seconds: float) -> str:
     return f"{minutes}m {remaining:.1f}s"
 
 
+def _phase_run_artifact_dir(workspace: Path, phase_number: int) -> Path:
+    """Return the methodology-runner run-artifact directory for one phase."""
+    return workspace / ".methodology-runner" / "runs" / f"phase-{phase_number}"
+
+
+def _reset_phase_selection(
+    workspace: Path,
+    phase_id: str,
+    *,
+    cleanup_files: bool,
+) -> list[str]:
+    """Reset one phase plus downstream phases, optionally deleting artifacts."""
+    from .phases import PHASE_MAP
+    from .orchestrator import save_project_state
+
+    ids_to_reset = _downstream_phase_ids(phase_id)
+    state = _load_state(workspace)
+
+    if state is not None:
+        for ps in state.phases:
+            if ps.phase_id in ids_to_reset:
+                ps.status = PhaseStatus.PENDING
+                ps.started_at = None
+                ps.completed_at = None
+                ps.cross_ref_retries = 0
+                ps.git_commit = None
+                ps.prompt_file = None
+                ps.cross_ref_result_path = None
+        for rid in ids_to_reset:
+            state.phase_results.pop(rid, None)
+        state.finished_at = None
+        save_project_state(state, workspace)
+
+    if cleanup_files:
+        for rid in ids_to_reset:
+            phase = PHASE_MAP[rid]
+            (workspace / phase.output_artifact_path).unlink(missing_ok=True)
+            shutil.rmtree(
+                _phase_run_artifact_dir(workspace, phase.phase_number),
+                ignore_errors=True,
+            )
+
+    return ids_to_reset
+
+
+def _validate_resettable_phase_subset(
+    reset_requested: bool,
+    phases_to_run: list[str] | None,
+) -> str | None:
+    """Return the single selected phase ID if --reset is allowed."""
+    if not reset_requested:
+        return None
+    if phases_to_run is None or len(phases_to_run) != 1:
+        raise ValueError("--reset requires exactly one phase selected via --phases")
+    return phases_to_run[0]
+
+
 # ---------------------------------------------------------------------------
 # Subcommand: run
 # ---------------------------------------------------------------------------
@@ -162,6 +220,14 @@ def cmd_run(args: argparse.Namespace) -> int:
         phases_to_run = normalize_phase_selection(
             [p.strip() for p in args.phases.split(",") if p.strip()]
         )
+    try:
+        reset_phase_id = _validate_resettable_phase_subset(args.reset, phases_to_run)
+    except ValueError as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+
+    if reset_phase_id is not None:
+        _reset_phase_selection(workspace, reset_phase_id, cleanup_files=True)
 
     config = PipelineConfig(
         requirements_path=requirements_path,
@@ -356,6 +422,14 @@ def cmd_resume(args: argparse.Namespace) -> int:
         phases_to_run = normalize_phase_selection(
             [p.strip() for p in args.phases.split(",") if p.strip()]
         )
+    try:
+        reset_phase_id = _validate_resettable_phase_subset(args.reset, phases_to_run)
+    except ValueError as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
+
+    if reset_phase_id is not None:
+        _reset_phase_selection(workspace, reset_phase_id, cleanup_files=True)
 
     config = PipelineConfig(
         requirements_path=state.requirements_path,
@@ -367,7 +441,6 @@ def cmd_resume(args: argparse.Namespace) -> int:
         max_prompt_runner_iterations=args.max_iterations,
         escalation_policy=escalation_policy,
         max_cross_ref_retries=args.max_cross_ref_retries,
-        rerun_selector=args.rerun_selector,
     )
 
     _print_banner("Methodology Runner -- Resuming pipeline")
@@ -450,29 +523,8 @@ def cmd_reset(args: argparse.Namespace) -> int:
         _print_error(f"Unknown phase ID: {phase_id}\nValid IDs: {valid}")
         return EXIT_USAGE_ERROR
 
-    # Find all phases to reset (target + downstream)
-    ids_to_reset = _downstream_phase_ids(phase_id)
-
-    reset_count = 0
-    for ps in state.phases:
-        if ps.phase_id in ids_to_reset:
-            ps.status = PhaseStatus.PENDING
-            ps.started_at = None
-            ps.completed_at = None
-            ps.cross_ref_retries = 0
-            ps.git_commit = None
-            reset_count += 1
-
-    # Remove corresponding phase results
-    for rid in ids_to_reset:
-        state.phase_results.pop(rid, None)
-
-    # Clear finished_at since the project is no longer complete
-    state.finished_at = None
-
-    # Persist
-    from .orchestrator import save_project_state
-    save_project_state(state, workspace)
+    ids_to_reset = _reset_phase_selection(workspace, phase_id, cleanup_files=False)
+    reset_count = len(ids_to_reset)
 
     _print_banner("Methodology Runner -- Phase Reset")
     sys.stdout.write(f"Workspace: {workspace}\n")
@@ -551,6 +603,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_cmd.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Before running, reset and clean the selected phase and downstream "
+            "artifacts. Requires exactly one phase via --phases."
+        ),
+    )
+    run_cmd.add_argument(
         "--escalation-policy",
         default=None,
         choices=["halt", "flag-and-continue", "human-review"],
@@ -611,6 +671,14 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     resume_cmd.add_argument(
+        "--reset",
+        action="store_true",
+        help=(
+            "Before resuming, reset and clean the selected phase and downstream "
+            "artifacts. Requires exactly one phase via --phases."
+        ),
+    )
+    resume_cmd.add_argument(
         "--escalation-policy",
         default=None,
         choices=["halt", "flag-and-continue", "human-review"],
@@ -621,16 +689,6 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=2,
         help="Max retries for cross-reference verification failures (default: 2).",
-    )
-    resume_cmd.add_argument(
-        "--rerun-selector",
-        action="store_true",
-        help=(
-            "On resume, force the Skill-Selector to re-run for the "
-            "halted phase even if a phase-NNN-skills.yaml already "
-            "exists.  Default: reuse the existing manifest to preserve "
-            "deterministic semantics within a run."
-        ),
     )
     resume_cmd.set_defaults(func=cmd_resume)
 

@@ -24,7 +24,7 @@ docs/verification/verification-report.yaml
 
 ### Deterministic Validation
 
-scripts/phase-7-deterministic-validation.py
+.methodology/src/cli/methodology_runner/phase_7_validation.py
 --feature-spec
 docs/features/feature-specification.yaml
 --implementation-plan
@@ -40,7 +40,7 @@ docs/verification/verification-report.yaml
 
 You are producing the phase artifact for PH-007-verification-sweep.
 
-Read:
+Use the included upstream file contents as the primary source input:
 - docs/features/feature-specification.yaml
 - docs/implementation/implementation-plan.yaml
 - docs/design/solution-design.yaml
@@ -55,8 +55,8 @@ Use this prompt pair's built-in revise loop to correct any issues the judge
 finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `traceability-discipline` to keep every verification claim tied to real
-  upstream artifacts.
+Embedded directives for this step:
+
 - Build an honest chain from `RI-*` through `FT-*` and `AC-*` to `E2E-*`.
 - Write end-to-end tests that are concrete enough to review: real setup,
   actions, and feature-specific assertions.
@@ -134,19 +134,20 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Read:
+Use the included upstream file contents as the primary review input:
 - docs/features/feature-specification.yaml
 - docs/implementation/implementation-plan.yaml
 - docs/design/solution-design.yaml
 - docs/requirements/requirements-inventory.yaml
+
+Read:
 - docs/verification/verification-report.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `traceability-discipline` to keep the review grounded in the upstream
-  artifacts.
+
 - Review for broken chains, superficial tests, missing negative or boundary
   coverage, phantom references, and misleading coverage claims.
 

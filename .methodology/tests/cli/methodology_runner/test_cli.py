@@ -366,6 +366,28 @@ class TestBuildParser:
         assert args.workspace_dir == "/tmp/ws"
         assert args.phase == "PH-004-interface-contracts"
 
+    def test_run_with_reset_flag(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run",
+            "req.md",
+            "--phases",
+            "PH-004-interface-contracts",
+            "--reset",
+        ])
+        assert args.reset is True
+
+    def test_resume_with_reset_flag(self) -> None:
+        parser = _build_parser()
+        args = parser.parse_args([
+            "resume",
+            "/tmp/ws",
+            "--phases",
+            "PH-004-interface-contracts",
+            "--reset",
+        ])
+        assert args.reset is True
+
     def test_escalation_policy_choices(self) -> None:
         parser = _build_parser()
         with pytest.raises(SystemExit):
@@ -643,6 +665,94 @@ class TestCmdRun:
             "PH-001-feature-specification"
         ) in captured.out
 
+    def test_reset_requires_exactly_one_phase(self, tmp_path: Path) -> None:
+        req = tmp_path / "req.md"
+        req.write_text("# Requirements\n")
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", str(req), "--workspace", str(tmp_path / "ws"), "--reset",
+        ])
+        rc = cmd_run(args)
+        assert rc == EXIT_USAGE_ERROR
+
+    def test_reset_cleans_selected_phase_and_downstream_before_run(
+        self, tmp_path: Path,
+    ) -> None:
+        req = tmp_path / "req.md"
+        req.write_text("# Requirements\n")
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        state = _make_project_state(
+            workspace,
+            phase_statuses={
+                "PH-000-requirements-inventory": PhaseStatus.COMPLETED,
+                "PH-004-interface-contracts": PhaseStatus.COMPLETED,
+                "PH-007-verification-sweep": PhaseStatus.COMPLETED,
+            },
+        )
+        state.phase_results["PH-000-requirements-inventory"] = _make_phase_result(
+            "PH-000-requirements-inventory"
+        )
+        state.phase_results["PH-004-interface-contracts"] = _make_phase_result(
+            "PH-004-interface-contracts"
+        )
+        state.phase_results["PH-007-verification-sweep"] = _make_phase_result(
+            "PH-007-verification-sweep"
+        )
+        state.save(workspace / ".methodology-runner" / "state.json")
+
+        artifact_4 = workspace / "docs" / "design" / "interface-contracts.yaml"
+        artifact_4.parent.mkdir(parents=True, exist_ok=True)
+        artifact_4.write_text("old\n", encoding="utf-8")
+        artifact_7 = workspace / "docs" / "verification" / "verification-report.yaml"
+        artifact_7.parent.mkdir(parents=True, exist_ok=True)
+        artifact_7.write_text("old\n", encoding="utf-8")
+        run_dir_4 = workspace / ".methodology-runner" / "runs" / "phase-4"
+        run_dir_4.mkdir(parents=True, exist_ok=True)
+        (run_dir_4 / "marker.txt").write_text("x\n", encoding="utf-8")
+
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run",
+            str(req),
+            "--workspace",
+            str(workspace),
+            "--phases",
+            "PH-004-interface-contracts",
+            "--reset",
+        ])
+
+        from methodology_runner.orchestrator import PipelineResult
+        mock_result = PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = lambda config: mock_result
+            try:
+                rc = cmd_run(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert rc == EXIT_SUCCESS
+        reloaded = ProjectState.load(workspace / ".methodology-runner" / "state.json")
+        phase0 = next(ps for ps in reloaded.phases if ps.phase_id == "PH-000-requirements-inventory")
+        phase4 = next(ps for ps in reloaded.phases if ps.phase_id == "PH-004-interface-contracts")
+        phase7 = next(ps for ps in reloaded.phases if ps.phase_id == "PH-007-verification-sweep")
+        assert phase0.status == PhaseStatus.COMPLETED
+        assert phase4.status == PhaseStatus.PENDING
+        assert phase7.status == PhaseStatus.PENDING
+        assert not artifact_4.exists()
+        assert not artifact_7.exists()
+        assert not run_dir_4.exists()
+
 
 # ---------------------------------------------------------------------------
 # Tests: cmd_status
@@ -863,6 +973,21 @@ class TestCmdResume:
                 orch_mod.run_pipeline = original_run
 
         assert captured_config[0].model == "override-model"
+
+    def test_reset_requires_exactly_one_phase(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _make_project_state(workspace)
+        parser = _build_parser()
+        args = parser.parse_args([
+            "resume",
+            str(workspace),
+            "--reset",
+            "--phases",
+            "PH-000-requirements-inventory,PH-001-feature-specification",
+        ])
+        rc = cmd_resume(args)
+        assert rc == EXIT_USAGE_ERROR
 
 
 # ---------------------------------------------------------------------------

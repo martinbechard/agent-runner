@@ -31,7 +31,6 @@ import fcntl
 import shutil
 import subprocess
 import time
-import yaml
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -57,15 +56,6 @@ from .cross_reference import (
     verify_end_to_end,
     verify_phase_cross_references,
 )
-from .baseline_config import (
-    BaselineConfigError,
-    load_baseline_config,
-    validate_against_catalog,
-)
-from .models import BaselineSkillConfig, SkillCatalogEntry
-from .skill_catalog import CatalogBuildError, build_catalog
-from .prelude import PreludeBuildError, build_prelude
-from .skill_selector import SelectorError, SelectorInputs, invoke_skill_selector
 from prompt_runner.client_factory import make_client
 
 if TYPE_CHECKING:
@@ -173,11 +163,6 @@ class PipelineConfig:
     max_prompt_runner_iterations: int | None = None
     escalation_policy: EscalationPolicy | None = None
     max_cross_ref_retries: int = MAX_CROSS_REF_RETRIES
-    rerun_selector: bool = False
-    """On resume, force the Skill-Selector to re-run even if a
-    phase-NNN-skills.yaml already exists in the run directory.  By
-    default the existing manifest is reused to preserve determinism
-    within a single enhancement run."""
 
 
 @dataclass
@@ -243,200 +228,6 @@ def _git_commit(workspace: Path, message: str) -> str:
 def _git_diff(workspace: Path) -> str:
     """Return the diff of uncommitted changes in *workspace*."""
     return _git(workspace, "diff")
-
-
-def _git_discard_file(workspace: Path, rel_path: str) -> None:
-    """Discard uncommitted changes to a single file, or delete it if untracked."""
-    abs_path = workspace / rel_path
-    try:
-        _git(workspace, "checkout", "--", rel_path)
-    except RuntimeError:
-        if abs_path.exists():
-            abs_path.unlink()
-
-
-# ---------------------------------------------------------------------------
-# Run-scoped skill context (CD-002 Section 11 — skill-driven selection)
-# ---------------------------------------------------------------------------
-
-@dataclass
-class RunSkillContext:
-    """Catalog and baseline config loaded once per run.
-
-    Built by ``build_run_skill_context`` before any phase executes.
-    Used by the orchestrator to invoke the Skill-Selector and build
-    prelude files for each phase.
-    """
-
-    catalog: dict[str, SkillCatalogEntry]
-    baseline_config: BaselineSkillConfig
-
-
-BASELINE_SKILLS_PATH = ".methodology/docs/skills-baselines.yaml"
-"""Path (relative to repo root or workspace) to the baseline skill config."""
-
-
-@dataclass
-class PhaseSkillArtifacts:
-    """Paths and mode returned by ``run_selector_and_build_prelude``.
-
-    The orchestrator uses these to pass prelude file paths into the
-    prompt-runner invocation for a phase.
-    """
-
-    manifest_path: Path
-    generator_prelude_path: Path
-    judge_prelude_path: Path
-    mode: str
-
-
-def _phase_skills_filename(phase_config: "PhaseConfig") -> str:
-    """Return ``phase-NNN-skills.yaml`` for *phase_config*."""
-    return f"phase-{phase_config.phase_number:03d}-skills.yaml"
-
-
-def _prior_artifact_paths(
-    phase_config: "PhaseConfig",
-    state: ProjectState,
-    workspace: Path,
-) -> list[Path]:
-    """Return paths to every completed predecessor phase's output artifact."""
-    out: list[Path] = []
-    for ps in state.phases:
-        if ps.status not in _COMPLETED_STATUSES:
-            continue
-        cfg = PHASE_MAP.get(ps.phase_id)
-        if cfg is None:
-            continue
-        artifact = workspace / cfg.output_artifact_path
-        if artifact.exists():
-            out.append(artifact)
-    return out
-
-
-def _stack_manifest_path(workspace: Path) -> Path | None:
-    """Return path to stack-manifest.yaml if it exists, else None."""
-    p = workspace / "docs" / "architecture" / "stack-manifest.yaml"
-    return p if p.exists() else None
-
-
-def run_selector_and_build_prelude(
-    *,
-    phase_config: "PhaseConfig",
-    skill_ctx: RunSkillContext,
-    workspace: Path,
-    run_dir: Path,
-    claude_client: "AgentClient",
-    backend: str,
-    model: str | None,
-    state: ProjectState | None = None,
-    existing_manifest_path: Path | None = None,
-) -> PhaseSkillArtifacts:
-    """Run the Skill-Selector for one phase and write preludes.
-
-    On success, writes three files to *run_dir*:
-    - ``phase-NNN-skills.yaml`` (the selector's locked output)
-    - ``generator-prelude.txt``
-    - ``judge-prelude.txt``
-
-    If *existing_manifest_path* points at a readable manifest, the
-    selector is skipped and that manifest is used as-is.  This is how
-    cross-ref retries preserve the locked skill manifest across
-    iterations.
-    """
-    from .models import PhaseSkillManifest
-
-    run_dir.mkdir(parents=True, exist_ok=True)
-    manifest_path = run_dir / _phase_skills_filename(phase_config)
-
-    if existing_manifest_path is not None and existing_manifest_path.exists():
-        raw = existing_manifest_path.read_text(encoding="utf-8")
-        manifest = PhaseSkillManifest.from_dict(yaml.safe_load(raw))
-    else:
-        if state is None:
-            prior_paths: list[Path] = []
-        else:
-            prior_paths = _prior_artifact_paths(phase_config, state, workspace)
-        inputs = SelectorInputs(
-            phase_config=phase_config,
-            catalog=skill_ctx.catalog,
-            baseline_config=skill_ctx.baseline_config,
-            workspace_dir=workspace,
-            prior_artifact_paths=prior_paths,
-            stack_manifest_path=_stack_manifest_path(workspace),
-        )
-        try:
-            manifest = invoke_skill_selector(
-                inputs, claude_client=claude_client, model=model,
-            )
-        except SelectorError as exc:
-            raise RuntimeError(
-                f"Skill-Selector halted for {phase_config.phase_id}: {exc}"
-            ) from exc
-        manifest_path.write_text(
-            yaml.safe_dump(manifest.to_dict(), sort_keys=False),
-            encoding="utf-8",
-        )
-
-    try:
-        prelude_spec = build_prelude(
-            manifest,
-            skill_ctx.catalog,
-            mode="file-reference" if backend == "codex" else None,
-            backend=backend,
-        )
-    except PreludeBuildError as exc:
-        raise RuntimeError(
-            f"Prelude build failed for {phase_config.phase_id}: {exc}"
-        ) from exc
-
-    gen_path = run_dir / "generator-prelude.txt"
-    jud_path = run_dir / "judge-prelude.txt"
-    gen_path.write_text(prelude_spec.generator_text, encoding="utf-8")
-    jud_path.write_text(prelude_spec.judge_text, encoding="utf-8")
-
-    return PhaseSkillArtifacts(
-        manifest_path=manifest_path,
-        generator_prelude_path=gen_path,
-        judge_prelude_path=jud_path,
-        mode=prelude_spec.mode,
-    )
-
-
-def build_run_skill_context(
-    *,
-    workspace: Path,
-    backend: str = "codex",
-    baseline_path: Path | None = None,
-    user_home: Path | None = None,
-    cwd: Path | None = None,
-) -> RunSkillContext:
-    """Load the skill catalog and baseline config for a run.
-
-    Runs once at the start of every invocation of ``run_pipeline``
-    (before any phase executes).  Raises on any failure so the
-    orchestrator halts immediately — per spec failure modes 7 and 9.
-    """
-    catalog = build_catalog(
-        workspace=workspace,
-        backend=backend,
-        user_home=user_home,
-        cwd=cwd,
-    )
-
-    if baseline_path is None:
-        # Prefer a workspace-local copy if one exists, otherwise fall back
-        # to the repo-level copy next to the CLI install.
-        ws_copy = workspace / BASELINE_SKILLS_PATH
-        if ws_copy.exists():
-            baseline_path = ws_copy
-        else:
-            # Repo-root path: same working directory as the CLI invocation.
-            baseline_path = Path(BASELINE_SKILLS_PATH)
-
-    baseline_config = load_baseline_config(baseline_path)
-    validate_against_catalog(baseline_config, catalog)
-    return RunSkillContext(catalog=catalog, baseline_config=baseline_config)
 
 
 # ---------------------------------------------------------------------------
@@ -632,22 +423,6 @@ def _verify_phase_output_exists(
 
 
 # ---------------------------------------------------------------------------
-# Phase skill manifest loader
-# ---------------------------------------------------------------------------
-
-def _load_phase_skill_manifest(
-    run_dir: Path, phase_config: "PhaseConfig",
-) -> "PhaseSkillManifest | None":
-    """Load ``phase-NNN-skills.yaml`` from *run_dir* if present."""
-    from .models import PhaseSkillManifest
-    path = run_dir / _phase_skills_filename(phase_config)
-    if not path.exists():
-        return None
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
-    return PhaseSkillManifest.from_dict(raw)
-
-
-# ---------------------------------------------------------------------------
 # Prompt-runner invocation (CD-002 Section 6)
 # ---------------------------------------------------------------------------
 
@@ -657,8 +432,8 @@ def _invoke_prompt_runner_library(
     run_dir: Path,
     config: PipelineConfig,
     claude_client: AgentClient | None = None,
-    generator_prelude_path: Path | None = None,
-    judge_prelude_path: Path | None = None,
+    generator_prelude: str | None = None,
+    judge_prelude: str | None = None,
     placeholder_values: dict[str, str] | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner via direct library call (preferred).
@@ -674,13 +449,6 @@ def _invoke_prompt_runner_library(
 
     pairs = parse_file(md_file)
     max_iters = config.max_prompt_runner_iterations or 3
-
-    generator_prelude: str | None = None
-    judge_prelude: str | None = None
-    if generator_prelude_path is not None:
-        generator_prelude = generator_prelude_path.read_text(encoding="utf-8")
-    if judge_prelude_path is not None:
-        judge_prelude = judge_prelude_path.read_text(encoding="utf-8")
 
     pr_config = RunConfig(
         backend=config.backend,
@@ -699,6 +467,7 @@ def _invoke_prompt_runner_library(
         claude_client=claude_client,
         source_file=md_file,
         source_project_dir=workspace,
+        worktree_dir=workspace,
     )
 
     total_iterations = sum(
@@ -717,8 +486,8 @@ def _invoke_prompt_runner(
     run_dir: Path,
     config: PipelineConfig,
     claude_client: AgentClient | None = None,
-    generator_prelude_path: Path | None = None,
-    judge_prelude_path: Path | None = None,
+    generator_prelude: str | None = None,
+    judge_prelude: str | None = None,
     placeholder_values: dict[str, str] | None = None,
 ) -> tuple[bool, int, str | None]:
     """Invoke prompt-runner via the in-process library path.
@@ -727,8 +496,8 @@ def _invoke_prompt_runner(
     """
     return _invoke_prompt_runner_library(
         md_file, workspace, run_dir, config, claude_client,
-        generator_prelude_path=generator_prelude_path,
-        judge_prelude_path=judge_prelude_path,
+        generator_prelude=generator_prelude,
+        judge_prelude=judge_prelude,
         placeholder_values=placeholder_values,
     )
 
@@ -802,14 +571,12 @@ def _cross_ref_retry_guidance(result: CrossRefResult) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _write_retry_prelude(
+def _write_retry_guidance_artifact(
     destination: Path,
-    base_text: str | None,
     guidance: str,
 ) -> Path:
-    """Write a retry prelude that augments an existing prelude with guidance."""
-    text = ((base_text or "").rstrip() + "\n\n" + guidance).lstrip()
-    destination.write_text(text, encoding="utf-8")
+    """Write retry guidance to a run-local artifact for traceability."""
+    destination.write_text(guidance, encoding="utf-8")
     return destination
 
 
@@ -868,7 +635,6 @@ def _run_single_phase(
     config: PipelineConfig,
     claude_client: AgentClient | None = None,
     cross_ref_only: bool = False,
-    skill_ctx: RunSkillContext | None = None,
 ) -> PhaseResult:
     """Execute one methodology phase end-to-end.
 
@@ -904,32 +670,6 @@ def _run_single_phase(
     iteration_count = 0
     placeholder_values = _phase_placeholder_values(phase_config)
 
-    # Skill-Selector: run once per phase; reuse across cross-ref retries.
-    # On resume with --rerun-selector, overwrite an existing manifest.
-    skill_artifacts: PhaseSkillArtifacts | None = None
-    if skill_ctx is not None and not cross_ref_only:
-        existing = run_dir / _phase_skills_filename(phase_config)
-        reuse_existing = existing.exists() and not config.rerun_selector
-        try:
-            skill_artifacts = run_selector_and_build_prelude(
-                phase_config=phase_config,
-                skill_ctx=skill_ctx,
-                workspace=workspace,
-                run_dir=run_dir,
-                claude_client=claude_client,
-                backend=config.backend,
-                model=config.model,
-                state=state,
-                existing_manifest_path=existing if reuse_existing else None,
-            )
-        except RuntimeError as exc:
-            ps.status = PhaseStatus.FAILED
-            save_project_state(state, workspace)
-            return _make_failed_result(
-                phase_id, prompt_file, 0,
-                time.monotonic() - t0, str(exc),
-            )
-
     # ------------------------------------------------------------------
     # Steps 1-6: prompt-runner against the checked-in prompt module
     # (skip if cross_ref_only)
@@ -954,16 +694,8 @@ def _run_single_phase(
         pr_run_dir = (
             run_dir / f"prompt-runner-output-phase-{phase_config.phase_number}"
         )
-        gen_prelude_path = (
-            skill_artifacts.generator_prelude_path if skill_artifacts else None
-        )
-        jud_prelude_path = (
-            skill_artifacts.judge_prelude_path if skill_artifacts else None
-        )
         success, iteration_count, pr_error = _invoke_prompt_runner(
             prompt_file, workspace, pr_run_dir, config, claude_client,
-            generator_prelude_path=gen_prelude_path,
-            judge_prelude_path=jud_prelude_path,
             placeholder_values=placeholder_values,
         )
 
@@ -1042,30 +774,14 @@ def _run_single_phase(
         if cross_ref_result.passed:
             break
 
-        # Retry: reuse the same checked-in prompt module with augmented prelude
-        # guidance derived from cross-reference feedback.
+        # Retry: reuse the same checked-in prompt module with runtime guidance
+        # derived from cross-reference feedback.
         if attempt >= max_retries:
             break
 
-        # Discard the failed phase output before retry
-        _git_discard_file(workspace, phase_config.output_artifact_path)
         guidance = _cross_ref_retry_guidance(cross_ref_result)
-        retry_gen_prelude_path = _write_retry_prelude(
-            run_dir / f"generator-prelude-retry-{attempt + 1}.txt",
-            (
-                gen_prelude_path.read_text(encoding="utf-8")
-                if gen_prelude_path is not None and gen_prelude_path.exists()
-                else None
-            ),
-            guidance,
-        )
-        retry_jud_prelude_path = _write_retry_prelude(
-            run_dir / f"judge-prelude-retry-{attempt + 1}.txt",
-            (
-                jud_prelude_path.read_text(encoding="utf-8")
-                if jud_prelude_path is not None and jud_prelude_path.exists()
-                else None
-            ),
+        _write_retry_guidance_artifact(
+            run_dir / f"retry-guidance-{attempt + 1}.txt",
             guidance,
         )
 
@@ -1078,8 +794,8 @@ def _run_single_phase(
         )
         success, extra_iters, pr_error = _invoke_prompt_runner(
             prompt_file, workspace, retry_run_dir, config, claude_client,
-            generator_prelude_path=retry_gen_prelude_path,
-            judge_prelude_path=retry_jud_prelude_path,
+            generator_prelude=guidance,
+            judge_prelude=guidance,
             placeholder_values=placeholder_values,
         )
         iteration_count += extra_iters
@@ -1306,32 +1022,6 @@ def run_pipeline(
             ),
         )
 
-    # ---- skill catalog + baseline config (run-scoped) ----
-    try:
-        skill_ctx = build_run_skill_context(
-            workspace=workspace,
-            backend=config.backend,
-        )
-    except (CatalogBuildError, BaselineConfigError) as exc:
-        return PipelineResult(
-            workspace_dir=workspace,
-            phase_results=[],
-            halted_early=True,
-            halt_reason=f"skill context build failed: {exc}",
-            end_to_end_result=None,
-            wall_time_seconds=time.monotonic() - t0,
-            execution_scope=(
-                "selected-phases"
-                if config.phases_to_run is not None
-                else "all-phases"
-            ),
-            selected_phase_ids=(
-                list(config.phases_to_run)
-                if config.phases_to_run is not None
-                else None
-            ),
-        )
-
     state: ProjectState | None = None
     if config.resume:
         state = load_project_state(workspace)
@@ -1397,7 +1087,6 @@ def run_pipeline(
             phase, state, workspace, config,
             claude_client=claude_client,
             cross_ref_only=cross_ref_only,
-            skill_ctx=skill_ctx,
         )
         phase_results.append(result)
 

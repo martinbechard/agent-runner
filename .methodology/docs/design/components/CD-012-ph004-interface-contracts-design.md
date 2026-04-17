@@ -160,7 +160,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/design/interface-contracts.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `scripts/phase-4-deterministic-validation.py`
+  - **USES:** `.methodology/src/cli/methodology_runner/phase_4_validation.py`
     - **BECAUSE:** `PH-004` uses deterministic checks for schema, interaction
       coverage, and top-level shape.
   - **BECAUSE:** `PH-004` passes only when both the deterministic checks and

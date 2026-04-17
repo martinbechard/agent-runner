@@ -24,7 +24,7 @@ docs/implementation/implementation-plan.yaml
 
 ### Deterministic Validation
 
-scripts/phase-6-deterministic-validation.py
+.methodology/src/cli/methodology_runner/phase_6_validation.py
 --contracts
 docs/design/interface-contracts.yaml
 --simulations
@@ -40,7 +40,7 @@ docs/implementation/implementation-plan.yaml
 
 You are producing the phase artifact for PH-006-incremental-implementation.
 
-Read:
+Use the included upstream file contents as the primary source input:
 - docs/design/interface-contracts.yaml
 - docs/simulations/simulation-definitions.yaml
 - docs/features/feature-specification.yaml
@@ -55,8 +55,8 @@ file. Use this prompt pair's built-in revise loop to correct any issues the
 judge finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `traceability-discipline` to keep the plan grounded in contracts,
-  simulations, features, and the solution design.
+Embedded directives for this step:
+
 - Build in dependency-respecting order unless a declared simulation bridges
   the gap temporarily.
 - Plan tests so each unit or integration test materially verifies linked
@@ -116,19 +116,20 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Read:
+Use the included upstream file contents as the primary review input:
 - docs/design/interface-contracts.yaml
 - docs/simulations/simulation-definitions.yaml
 - docs/features/feature-specification.yaml
 - docs/design/solution-design.yaml
+
+Read:
 - docs/implementation/implementation-plan.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `traceability-discipline` to keep the review grounded in the upstream
-  artifacts.
+
 - Review for ordering violations, thin test plans, completion gaps,
   simulation-retirement gaps, and unsupported sequencing detail.
 

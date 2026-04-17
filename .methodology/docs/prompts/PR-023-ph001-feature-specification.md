@@ -20,7 +20,7 @@ docs/features/feature-specification.yaml
 
 ### Deterministic Validation
 
-scripts/phase-1-deterministic-validation.py
+.methodology/src/cli/methodology_runner/phase_1_validation.py
 --feature-spec
 docs/features/feature-specification.yaml
 --requirements-inventory
@@ -44,9 +44,6 @@ finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
 Embedded directives for this step:
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Walk the inventory in ID order and group `RI-*` items by shared domain
   entity, actor, and end-to-end user flow.
@@ -188,9 +185,6 @@ mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
 Embedded directives for this step:
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Review in three passes:
   1. coverage: every `RI-*` is in a feature or `out_of_scope`

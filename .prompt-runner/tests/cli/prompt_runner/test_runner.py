@@ -617,8 +617,8 @@ def test_restore_from_project_tree_excludes_nested_run_dir(tmp_path: Path):
     assert not (target / "work" / "pr-run" / "nested.txt").exists()
 
 
-def test_escalation_restores_worktree(tmp_path: Path):
-    """When a prompt escalates, files the generator created are removed."""
+def test_escalation_preserves_worktree(tmp_path: Path):
+    """When a prompt escalates, generated files stay in place for inspection."""
     worktree = _worktree(tmp_path)
     # Put a pre-existing file in the worktree.
     (worktree / "existing.py").write_text("stable\n")
@@ -649,8 +649,7 @@ def test_escalation_restores_worktree(tmp_path: Path):
         run_id="testrun", worktree_dir=worktree,
     )
 
-    # The garbage file must be gone.
-    assert not (worktree / "garbage.py").exists(), "escalation did not clean up"
+    assert (worktree / "garbage.py").read_text() == "temporary\n"
     # The pre-existing file is still there.
     assert (worktree / "existing.py").read_text() == "stable\n"
 
@@ -991,6 +990,37 @@ def test_codex_prefers_single_written_file_contents_as_artifact(tmp_path: Path):
     )
     assert result.iterations[-1].generator_output == "artifact from file\n"
     assert "artifact from file" in client.received[1].prompt
+
+
+def test_run_pipeline_honours_explicit_worktree_dir(tmp_path: Path):
+    pair = _pair(1, "Alpha", gen="Write docs/out.txt", val="Check docs/out.txt")
+    run_dir = tmp_path / "run"
+    worktree = _worktree(tmp_path)
+
+    class WritingClient:
+        def call(self, call):
+            if "generator" in call.stream_header:
+                out = call.worktree_dir / "docs" / "out.txt"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text("artifact in shared worktree\n", encoding="utf-8")
+                return ClaudeResponse(stdout="PASS", stderr="", returncode=0)
+            return _judge_pass()
+
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(backend="codex"),
+        claude_client=WritingClient(),
+        source_file=tmp_path / "source.md",
+        source_project_dir=worktree,
+        worktree_dir=worktree,
+    )
+
+    assert not result.halted_early
+    assert (worktree / "docs" / "out.txt").read_text(encoding="utf-8") == (
+        "artifact in shared worktree\n"
+    )
+    assert not (run_dir / "docs" / "out.txt").exists()
 
 
 def test_log_paths_passed_to_every_call(tmp_path: Path):
@@ -1899,7 +1929,7 @@ def test_judge_only_does_not_resume_skip_selected_prompt(tmp_path: Path):
     run_dir = tmp_path / "run"
     worktree = _worktree(tmp_path)
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "artifact.txt").write_text("artifact\n", encoding="utf-8")
+    (worktree / "artifact.txt").write_text("artifact\n", encoding="utf-8")
     pair = PromptPair(
         index=1,
         title="Prompt 1",

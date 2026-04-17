@@ -43,9 +43,6 @@ finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
 Embedded directives for this step:
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Walk the source in document order. Read the whole document once, then
   process each section, paragraph, bullet, and table row in order.
@@ -173,9 +170,6 @@ mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
 Embedded directives for this step:
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Review in two passes:
   1. Source to inventory: walk the source section by section and check that

@@ -39,9 +39,6 @@ Keep it as small as the feature set allows.
 </Structured design directives>
 
 Requirements:
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Cover every FT-* feature at least once.
 - Prefer `FT-*` and `RI-*` traceability for architecture claims.
@@ -80,9 +77,6 @@ Review rules:
 {{INCLUDE:../../../../agent-assets/skills/structured-review/SKILL.md}}
 </Structured review directives>
 
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Accept a simple architecture if it is coherent and sufficient.
 - Do not force extra components or integration points.

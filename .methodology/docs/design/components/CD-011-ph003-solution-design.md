@@ -101,7 +101,7 @@ This design explains how `PH-003` works from start to finish.
     passes and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/design/solution-design.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `scripts/phase-3-deterministic-validation.py`
+  - **USES:** `.methodology/src/cli/methodology_runner/phase_3_validation.py`
     - **BECAUSE:** `PH-003` uses deterministic checks for schema, feature
       coverage, dependency references, and interaction shape.
   - **BECAUSE:** `PH-003` passes only when both the deterministic checks and

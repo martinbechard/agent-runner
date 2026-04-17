@@ -176,7 +176,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/implementation/implementation-plan.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `scripts/phase-6-deterministic-validation.py`
+  - **USES:** `.methodology/src/cli/methodology_runner/phase_6_validation.py`
     - **BECAUSE:** `PH-006` uses deterministic checks for schema, dependency
       order, coverage counts, and top-level shape.
   - **BECAUSE:** `PH-006` passes only when both the deterministic checks and

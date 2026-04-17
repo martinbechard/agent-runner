@@ -27,8 +27,8 @@ modules that phase-level testing already uses.
 
 - **REQUIREMENT: REQ-3** Preserve run-local phase artifacts
   - **SYNOPSIS:** Each phase must still keep run-local selector outputs,
-    preludes, cross-reference results, and prompt-runner run directories under
-    `.methodology-runner/runs/phase-N/`.
+    cross-reference results, retry-guidance artifacts, and prompt-runner run
+    directories under `.methodology-runner/runs/phase-N/`.
   - **BECAUSE:** Integrated runs still need stable per-phase evidence and
     resumption state.
 
@@ -39,11 +39,11 @@ modules that phase-level testing already uses.
   - **BECAUSE:** The checked-in prompt modules already rely on placeholders for
     some phase-specific file paths.
 
-- **REQUIREMENT: REQ-5** Keep selector-driven prelude support
-  - **SYNOPSIS:** The migration must continue to support skill selection and
-    per-phase generator and judge prelude files.
-  - **BECAUSE:** Skill selection is a separate methodology-run concern from
-    prompt-file authorship and should not be removed by this migration.
+- **REQUIREMENT: REQ-5** Remove methodology-owned stable prelude support
+  - **SYNOPSIS:** The migration must stop depending on selector-driven stable
+    generator and judge prelude files in the normal phase path.
+  - **BECAUSE:** Stable phase guidance belongs in the checked-in prompt module,
+    not in a second runtime-authored instruction layer.
 
 - **REQUIREMENT: REQ-6** Replace prompt regeneration with prompt-module reuse
   - **SYNOPSIS:** Cross-reference retries should re-run the same checked-in
@@ -74,17 +74,16 @@ modules that phase-level testing already uses.
   - **SYNOPSIS:** The run-local files for one phase under
     `.methodology-runner/runs/phase-N/`.
   - **FIELD:** `skill_manifest`
-    - **SYNOPSIS:** `phase-NNN-skills.yaml`.
-    - **BECAUSE:** Skill selection remains run-local.
-  - **FIELD:** `generator_prelude`
-    - **SYNOPSIS:** `generator-prelude.txt`.
-    - **BECAUSE:** Generator-side skill loading remains run-local.
-  - **FIELD:** `judge_prelude`
-    - **SYNOPSIS:** `judge-prelude.txt`.
-    - **BECAUSE:** Judge-side skill loading remains run-local.
+    - **SYNOPSIS:** Optional audit metadata only if skill selection is kept as
+      tooling support outside the normal execution path.
+    - **BECAUSE:** It is no longer part of the active prompt contract.
   - **FIELD:** `cross_ref_result`
     - **SYNOPSIS:** `cross-ref-result.json`.
     - **BECAUSE:** Cross-reference verification remains run-local evidence.
+  - **FIELD:** `retry_guidance`
+    - **SYNOPSIS:** `retry-guidance-N.txt`.
+    - **BECAUSE:** Cross-reference retries still need explicit run-local
+      evidence for the injected runtime delta.
   - **FIELD:** `prompt_module_reference`
     - **SYNOPSIS:** The checked-in prompt module path recorded in phase state
       and phase results.
@@ -101,8 +100,7 @@ modules that phase-level testing already uses.
 
 - **MODULE: MODULE-2** `orchestrator.py`
   - **SYNOPSIS:** Select the checked-in prompt module for a phase, build
-    run-time placeholder bindings, run skill selection, invoke prompt-runner,
-    and manage retries.
+    run-time placeholder bindings, invoke prompt-runner, and manage retries.
   - **BECAUSE:** The orchestrator owns the phase lifecycle and the prompt-runner
     invocation path.
 
@@ -127,20 +125,14 @@ modules that phase-level testing already uses.
       error.
 
 - **PROCESS: PROCESS-2** Build run-time execution context
-  - **SYNOPSIS:** The orchestrator should continue to build selector outputs,
-    generator prelude, judge prelude, and placeholder values before invoking
-    prompt-runner.
-  - **WRITES:** `.methodology-runner/runs/phase-N/phase-NNN-skills.yaml`
-    - **BECAUSE:** Skill selection remains part of methodology-runner.
-  - **WRITES:** `.methodology-runner/runs/phase-N/generator-prelude.txt`
-    - **BECAUSE:** Prompt-runner still loads generator-side guidance from a
-      prelude.
-  - **WRITES:** `.methodology-runner/runs/phase-N/judge-prelude.txt`
-    - **BECAUSE:** Prompt-runner still loads judge-side guidance from a
-      prelude.
+  - **SYNOPSIS:** The orchestrator should build placeholder values and any
+    retry-specific runtime guidance before invoking prompt-runner.
   - **DECIDES:** placeholder map
     - **BECAUSE:** Prompt modules may require run-time values such as the raw
       requirements path.
+  - **WRITES:** `.methodology-runner/runs/phase-N/retry-guidance-N.txt`
+    - **BECAUSE:** Retry feedback is a run-local execution artifact rather than
+      part of the checked-in phase contract.
 
 - **PROCESS: PROCESS-3** Invoke prompt-runner with the checked-in source file
   - **SYNOPSIS:** The orchestrator should parse and execute the checked-in
@@ -166,10 +158,10 @@ modules that phase-level testing already uses.
     checked-in prompt module, so retry logic should adapt execution context
     rather than synthesize a replacement prompt file.
   - **BECAUSE:** Retries should preserve the same prompt source of truth.
-  - **USES:** retry-specific prelude augmentation or equivalent run-time
-    guidance
+  - **USES:** retry-specific run-time guidance injection
     - **BECAUSE:** Cross-reference findings still need a way to influence the
-      next execution attempt.
+      next execution attempt without reintroducing methodology-authored stable
+      preludes.
 
 ## 6. Rules
 

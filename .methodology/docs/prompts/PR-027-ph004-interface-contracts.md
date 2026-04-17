@@ -20,7 +20,7 @@ docs/design/interface-contracts.yaml
 
 ### Deterministic Validation
 
-scripts/phase-4-deterministic-validation.py
+.methodology/src/cli/methodology_runner/phase_4_validation.py
 --solution-design
 docs/design/solution-design.yaml
 --feature-spec
@@ -32,7 +32,7 @@ docs/design/interface-contracts.yaml
 
 You are producing the phase artifact for PH-004-interface-contracts.
 
-Read:
+Use the included upstream file contents as the primary source input:
 - docs/design/solution-design.yaml
 - docs/features/feature-specification.yaml
 
@@ -45,8 +45,8 @@ Use this prompt pair's built-in revise loop to correct any issues the judge
 finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `traceability-discipline` to keep contract detail grounded in the
-  solution design and feature spec.
+Embedded directives for this step:
+
 - Write one or more concrete contracts for every real upstream interaction.
 - Define request, response, and error schemas tightly enough that simulation
   and implementation can proceed without filling obvious type holes.
@@ -128,17 +128,18 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Read:
+Use the included upstream file contents as the primary review input:
 - docs/design/solution-design.yaml
 - docs/features/feature-specification.yaml
+
+Read:
 - docs/design/interface-contracts.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `traceability-discipline` to keep the review grounded in the upstream
-  artifacts.
+
 - Review for missing contracts, type holes, weak or missing error models,
   cross-contract inconsistency, and behavioral specs too weak to drive
   simulation.

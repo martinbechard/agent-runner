@@ -20,7 +20,7 @@ docs/simulations/simulation-definitions.yaml
 
 ### Deterministic Validation
 
-scripts/phase-5-deterministic-validation.py
+.methodology/src/cli/methodology_runner/phase_5_validation.py
 --contracts
 docs/design/interface-contracts.yaml
 --feature-spec
@@ -32,7 +32,7 @@ docs/simulations/simulation-definitions.yaml
 
 You are producing the phase artifact for PH-005-intelligent-simulations.
 
-Read:
+Use the included upstream file contents as the primary source input:
 - docs/design/interface-contracts.yaml
 - docs/features/feature-specification.yaml
 
@@ -45,8 +45,8 @@ file. Use this prompt pair's built-in revise loop to correct any issues the
 judge finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `traceability-discipline` to keep simulations grounded in the contracts
-  and feature specification.
+Embedded directives for this step:
+
 - Create at least one meaningful simulation per contract and include happy,
   error, and edge coverage.
 - Derive scenarios, expected outputs, and assertions from the contract
@@ -146,17 +146,18 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Read:
+Use the included upstream file contents as the primary review input:
 - docs/design/interface-contracts.yaml
 - docs/features/feature-specification.yaml
+
+Read:
 - docs/simulations/simulation-definitions.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `traceability-discipline` to keep the review grounded in the upstream
-  artifacts.
+
 - Review for weak assertions, unrealistic scenarios, implementation leakage,
   missing error coverage, contract underuse, and unsupported synthetic setup.
 

@@ -1250,9 +1250,10 @@ def run_prompt(
     snapshot_dir = prompt_dir / "snapshot-pre"
     use_git_tracking = _using_git_change_tracking(worktree_dir, run_dir)
 
-    # Snapshot the worktree before the prompt runs so we can roll back to
-    # this state if the prompt escalates. Also lets us diff at the end to
-    # find out which files the prompt's generator created.
+    # Snapshot the worktree before the prompt runs so we can diff at the end
+    # to find out which files the prompt's generator created. Artifacts stay
+    # in place across revise and escalate outcomes; cleanup is an explicit
+    # caller concern rather than an implicit prompt-runner side effect.
     if not use_git_tracking:
         _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
 
@@ -1465,27 +1466,17 @@ def run_prompt(
     if final_verdict == Verdict.REVISE:
         final_verdict = Verdict.ESCALATE
 
-    if final_verdict == Verdict.PASS:
-        # Compute the list of files this prompt created so they can be
-        # injected into subsequent prompts' prior-artifact context, and
-        # preserve the worktree state (do not restore).
-        created_files = (
-            _git_status_paths(worktree_dir, excluded_roots)
-            if use_git_tracking else
-            _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
-        )
-        if use_git_tracking and _git_has_changes(worktree_dir, excluded_roots):
-            _git_commit_prompt_changes(worktree_dir, pair)
-    else:
-        # Escalation — roll back the worktree so a half-done prompt does
-        # not pollute later prompts or leave garbage in the tree.
-        if use_git_tracking:
-            _git_restore_prompt_baseline(worktree_dir)
-        else:
-            _restore_worktree_from_snapshot(
-                worktree_dir, snapshot_dir, excluded_roots,
-            )
-        created_files = []
+    created_files = (
+        _git_status_paths(worktree_dir, excluded_roots)
+        if use_git_tracking else
+        _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
+    )
+    if (
+        final_verdict == Verdict.PASS
+        and use_git_tracking
+        and _git_has_changes(worktree_dir, excluded_roots)
+    ):
+        _git_commit_prompt_changes(worktree_dir, pair)
 
     _write(prompt_dir / f"{prompt_slug}.final-verdict.txt", final_verdict.value + "\n")
     _write(
@@ -2290,14 +2281,18 @@ def run_pipeline(
     debug_trace = _debug_trace(run_dir, config.debug)
     debug_trace.__enter__()
     try:
+        explicit_worktree = worktree_dir is not None
         if source_project_dir is None and worktree_dir is not None:
             source_project_dir = worktree_dir
         if source_project_dir is None:
             source_project_dir = run_dir
         else:
             source_project_dir = Path(source_project_dir).resolve()
-        worktree_dir = run_dir
-        if not resume:
+        if explicit_worktree:
+            worktree_dir = Path(worktree_dir).resolve()
+        else:
+            worktree_dir = run_dir
+        if not resume and not explicit_worktree:
             _initialise_run_worktree(source_project_dir, run_dir)
         started_at = datetime.now(timezone.utc)
         if not resume:

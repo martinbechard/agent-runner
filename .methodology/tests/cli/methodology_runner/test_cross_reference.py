@@ -902,7 +902,7 @@ class TestVerifyPhaseCrossReferences:
         )
         assert client.received[0].model == "claude-sonnet-4-6"
 
-    def test_workspace_dir_set_on_call(self, tmp_path: Path) -> None:
+    def test_worktree_dir_set_on_call(self, tmp_path: Path) -> None:
         workspace = tmp_path / "project"
         workspace.mkdir()
         phase = PHASE_MAP["PH-000-requirements-inventory"]
@@ -919,7 +919,7 @@ class TestVerifyPhaseCrossReferences:
             completed_phases=[],
             claude_client=client,
         )
-        assert client.received[0].workspace_dir == workspace
+        assert client.received[0].worktree_dir == workspace
 
     def test_system_prompt_sent_to_claude(self, tmp_path: Path) -> None:
         workspace = tmp_path / "project"

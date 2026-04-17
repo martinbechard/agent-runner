@@ -9,7 +9,6 @@ It owns:
 
 - phase sequencing
 - workspace initialization and resume
-- per-phase skill selection and prelude creation
 - prompt-runner invocation
 - cross-reference verification
 - state persistence and summaries
@@ -28,10 +27,10 @@ uses.
 - Initializing and locking a shared workspace
 - Persisting run state in `.methodology-runner/state.json`
 - Writing phase-local execution artifacts under `.methodology-runner/runs/`
-- Invoking prompt-runner with checked-in prompt modules, preludes, validators,
-  and placeholder values
+- Invoking prompt-runner with checked-in prompt modules, validators, runtime
+  guidance, and placeholder values
 - Running phase and end-to-end cross-reference verification
-- Supporting retry after cross-reference failure by augmenting phase preludes
+- Supporting retry after cross-reference failure by injecting retry guidance
 
 ### Out of scope
 
@@ -51,19 +50,11 @@ component set is:
   Defines the phase registry, predecessor relationships, artifact paths, and
   canonical `prompt_module_path` for each phase.
 - `orchestrator.py`
-  Drives the phase lifecycle: workspace setup, selector/prelude generation,
+  Drives the phase lifecycle: workspace setup, prompt-module execution,
   prompt-runner invocation, cross-reference verification, retry handling, and
   state updates.
-- `skill_selector.py`
-  Chooses generator and judge skills for a phase and materializes the per-phase
-  skill manifest.
-- `prelude.py`
-  Builds generator and judge prelude text from the selected skills.
 - `cross_reference.py`
   Verifies phase outputs and end-to-end traceability.
-- `artifact_summarizer.py`
-  Produces backend-assisted artifact summaries where needed by the selector and
-  verification flows.
 - `cli.py`
   Provides `run`, `resume`, `status`, and `reset`.
 
@@ -73,13 +64,11 @@ For each phase, the orchestrator:
 
 1. validates predecessor completion and required input artifacts
 2. resolves the checked-in prompt module from `PhaseConfig.prompt_module_path`
-3. builds or reuses `phase-NNN-skills.yaml`
-4. writes `generator-prelude.txt` and `judge-prelude.txt`
-5. invokes prompt-runner against the checked-in prompt module
-6. runs cross-reference verification against the phase output
-7. if verification fails and retries remain, writes retry preludes with
-   guidance and re-runs the same prompt module
-8. persists updated phase state and writes summary information
+3. invokes prompt-runner against the checked-in prompt module
+4. runs cross-reference verification against the phase output
+5. if verification fails and retries remain, writes a retry-guidance artifact
+   and re-runs the same prompt module with runtime guidance injected
+6. persists updated phase state and writes summary information
 
 The prompt contract is stable and versioned in the repository, while the
 run-local artifacts remain execution-specific.
@@ -106,10 +95,8 @@ A methodology run uses one shared workspace for all phases:
     run.lock
     runs/
       phase-0/
-        phase-000-skills.yaml
-        generator-prelude.txt
-        judge-prelude.txt
         cross-ref-result.json
+        retry-guidance-1.txt
         prompt-runner-output-phase-0/
       ...
 ```
@@ -122,13 +109,15 @@ run-local prompt copy.
 
 If prompt-runner succeeds but cross-reference verification fails:
 
-1. the phase output is discarded
-2. the orchestrator writes retry-specific prelude files containing the
+1. the phase output remains in place at its canonical workspace path
+2. the orchestrator writes a retry-guidance artifact containing the
    verification guidance
-3. prompt-runner is re-invoked on the same checked-in prompt module
+3. prompt-runner is re-invoked on the same checked-in prompt module with that
+   guidance injected as runtime delta
 
 This keeps the prompt contract fixed while making the retry reason explicit in
-the run artifacts.
+the run artifacts and lets the next iteration revise the same artifact rather
+than restarting from a cleaned workspace.
 
 ## 7. Design Rules
 
@@ -136,5 +125,8 @@ the run artifacts.
 - `PhaseConfig.prompt_module_path` must be populated for every runnable phase.
 - Run-local artifacts should capture execution evidence, not duplicate prompt
   authorship.
+- Cleanup is opt-in. Normal run and resume preserve artifacts even on
+  escalation or retry; explicit cleanup is requested only through isolated
+  phase execution with `--reset`.
 - Tests should assert public runner behavior, not obsolete internal prompt
   generation details.

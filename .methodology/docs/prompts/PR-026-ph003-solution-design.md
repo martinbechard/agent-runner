@@ -20,7 +20,7 @@ docs/design/solution-design.yaml
 
 ### Deterministic Validation
 
-scripts/phase-3-deterministic-validation.py
+.methodology/src/cli/methodology_runner/phase_3_validation.py
 --solution-design
 docs/design/solution-design.yaml
 --architecture-design
@@ -50,9 +50,6 @@ Embedded directives for this step:
 {{INCLUDE:../../../../agent-assets/skills/structured-design/SKILL.md}}
 </Structured design directives>
 
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Preserve the phase-2 architecture component boundaries. Do not invent, split,
   merge, or rename architecture components in this phase.
@@ -153,9 +150,6 @@ Embedded directives for this step:
 {{INCLUDE:../../../../agent-assets/skills/structured-review/SKILL.md}}
 </Structured review directives>
 
-<Traceability directives>
-{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
-</Traceability directives>
 
 - Review for responsibility overlap, weak or missing feature realization,
   invented interactions, inconsistent dependencies, and implementation-detail

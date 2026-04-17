@@ -161,7 +161,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/features/feature-specification.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `scripts/phase-1-deterministic-validation.py`
+  - **USES:** `.methodology/src/cli/methodology_runner/phase_1_validation.py`
     - **BECAUSE:** `PH-001` uses deterministic checks for schema, feature
       coverage, dependency references, and top-level shape.
   - **BECAUSE:** `PH-001` passes only when both the deterministic checks and

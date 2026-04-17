@@ -161,18 +161,11 @@ methodology run.
     - **SYNOPSIS:** Checked-in phase prompt module such as `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`
     - **BECAUSE:** `prompt_runner` executes the canonical checked-in prompt
       module for each selected phase.
-  - **FIELD:** `generator_prelude`
-    - **SYNOPSIS:** `{{phase_run_dir}}/generator-prelude.txt`
-    - **BECAUSE:** The generator prompt is preceded by phase-selected
-      skill instructions.
-  - **FIELD:** `judge_prelude`
-    - **SYNOPSIS:** `{{phase_run_dir}}/judge-prelude.txt`
-    - **BECAUSE:** The judge prompt is preceded by phase-selected skill
-      instructions.
-  - **FIELD:** `skill_manifest`
-    - **SYNOPSIS:** `{{phase_run_dir}}/phase-NNN-skills.yaml`
-    - **BECAUSE:** The phase should preserve the concrete generator and
-      judge skill selection it executed.
+  - **FIELD:** `retry_guidance`
+    - **SYNOPSIS:** Optional `{{phase_run_dir}}/retry-guidance-N.txt`
+    - **BECAUSE:** Cross-reference retries may inject run-specific guidance
+      while preserving the checked-in prompt module as the stable phase
+      contract.
   - **FIELD:** `deterministic_validation_helper`
     - **SYNOPSIS:** Optional canonical validator module such as `.methodology/src/cli/methodology_runner/phase_1_validation.py`
     - **BECAUSE:** Some phases can supply deterministic validation logic that prompt-runner should execute once per iteration instead of forcing the model to recreate the same checks with ad hoc Bash and Python calls.
@@ -417,30 +410,21 @@ methodology run.
     skill manifest and prelude files, resolve the checked-in prompt
     module for the phase, and then execute that module with prompt-runner.
   - **CHAIN-OF-THOUGHT:** The methodology run now treats the prompt module as a
-    checked-in design artifact. The run-local work is limited to skill
-    selection, prelude creation, placeholder binding, and execution evidence.
+    checked-in design artifact. The run-local work is limited to placeholder
+    binding, retry guidance, and execution evidence.
   - **READS:** selected `PhaseConfig`
     - **BECAUSE:** Prompt-module selection depends on the chosen phase's
       input, output, and validation contract.
   - **READS:** completed predecessor artifacts in `worktree`
     - **BECAUSE:** Later phases execute against the artifacts produced by their
       completed predecessors.
-  - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/phase-NNN-skills.yaml`
-    - **BECAUSE:** The run should preserve the concrete skill selection
-      for the phase.
-  - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/generator-prelude.txt`
-    - **BECAUSE:** The phase prompt module is paired with
-      generator-side skill instructions.
-  - **WRITES:** `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/judge-prelude.txt`
-    - **BECAUSE:** The phase prompt module is paired with
-      judge-side skill instructions.
+  - **WRITES:** optional `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/retry-guidance-N.txt`
+    - **BECAUSE:** Retry-specific guidance is a run-local delta, not part of
+      the checked-in prompt module.
   - **WRITES:** optional `{{run_dir}}/worktree/.methodology-runner/runs/phase-N/phase-*-deterministic-validation.py`
     - **BECAUSE:** A phase-local deterministic validator should live beside the
       run-local support files so prompt-runner can execute it with a stable
       path inside the run.
-  - **USES:** `src/cli/methodology_runner/skill_selector.py`
-    - **BECAUSE:** The phase skill manifest and prelude files are built
-      from the selector's output.
   - **USES:** checked-in prompt modules under `.methodology/docs/prompts/`
     - **BECAUSE:** The canonical prompt contract is authored and maintained as
       checked-in prompt modules.
