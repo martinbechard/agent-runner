@@ -9,6 +9,11 @@ feature-specification
 docs/requirements/raw-requirements.md
 docs/requirements/requirements-inventory.yaml
 
+### Include Files
+
+docs/requirements/raw-requirements.md
+docs/requirements/requirements-inventory.yaml
+
 ### Checks Files
 
 docs/features/feature-specification.yaml
@@ -25,7 +30,7 @@ docs/requirements/requirements-inventory.yaml
 
 You are producing the phase artifact for PH-001-feature-specification.
 
-Read:
+Use the included upstream file contents as the primary source input:
 - docs/requirements/requirements-inventory.yaml
 - docs/requirements/raw-requirements.md
 
@@ -38,8 +43,11 @@ Use this prompt pair's built-in revise loop to correct any issues the judge
 finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `traceability-discipline` to keep features grounded in the inventory and
-  raw requirements.
+Embedded directives for this step:
+<Traceability directives>
+{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
+</Traceability directives>
+
 - Walk the inventory in ID order and group `RI-*` items by shared domain
   entity, actor, and end-to-end user flow.
 - Keep constraints and non-functional items attached to the feature they
@@ -168,17 +176,22 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Read:
+Use the included upstream file contents as the primary review input:
 - docs/requirements/raw-requirements.md
 - docs/requirements/requirements-inventory.yaml
+
+Read:
 - docs/features/feature-specification.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `traceability-discipline` to keep the review grounded in the inventory
-  and raw requirements.
+Embedded directives for this step:
+<Traceability directives>
+{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
+</Traceability directives>
+
 - Review in three passes:
   1. coverage: every `RI-*` is in a feature or `out_of_scope`
   2. scope: every feature and `AC-*` stays supported by cited `RI-*`

@@ -8,6 +8,10 @@ requirements-inventory
 
 {{raw_requirements_path}}
 
+### Include Files
+
+{{raw_requirements_path}}
+
 ### Checks Files
 
 docs/requirements/requirements-inventory.yaml
@@ -24,8 +28,10 @@ docs/requirements/requirements-inventory.yaml
 
 You are producing the phase artifact for PH-000-requirements-inventory.
 
-Read:
-- {{raw_requirements_path}}
+Use the following as the primary source input:
+<Source input>
+{{INCLUDE:raw_requirements_path}}
+</Source input>
 
 Write:
 - docs/requirements/requirements-inventory.yaml
@@ -36,8 +42,11 @@ Use this prompt pair's built-in revise loop to correct any issues the judge
 finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `traceability-discipline` for exact quotes, source locations, and
-  coverage accounting.
+Embedded directives for this step:
+<Traceability directives>
+{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
+</Traceability directives>
+
 - Walk the source in document order. Read the whole document once, then
   process each section, paragraph, bullet, and table row in order.
 - Extract every requirement-bearing statement, constraint, assumption, and
@@ -151,16 +160,23 @@ Acceptance requirements:
 
 ### Validation Prompt
 
+Use the following as the primary review input:
+<Source input>
+{{INCLUDE:raw_requirements_path}}
+</Source input>
+
 Read:
-- {{raw_requirements_path}}
 - docs/requirements/requirements-inventory.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `traceability-discipline` for exact quotes, source locations, and
-  coverage review.
+Embedded directives for this step:
+<Traceability directives>
+{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
+</Traceability directives>
+
 - Review in two passes:
   1. Source to inventory: walk the source section by section and check that
      every requirement-bearing section or bullet is represented.

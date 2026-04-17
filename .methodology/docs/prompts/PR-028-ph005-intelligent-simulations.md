@@ -9,6 +9,11 @@ intelligent-simulations
 docs/design/interface-contracts.yaml
 docs/features/feature-specification.yaml
 
+### Include Files
+
+docs/design/interface-contracts.yaml
+docs/features/feature-specification.yaml
+
 ### Checks Files
 
 docs/simulations/simulation-definitions.yaml

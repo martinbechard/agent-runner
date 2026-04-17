@@ -33,8 +33,8 @@ This section names the files that the phase uses.
 - **FILE: FILE-4** Prompt-runner module
   - **SYNOPSIS:** `.methodology/docs/prompts/PR-027-ph004-interface-contracts.md`
     with:
-    - embedded generator agent definition
-    - embedded judge agent definition
+    - embedded directive blocks for traceability and contract review discipline
+    - fixed generic prompt-runner generator and judge roles
     - fixed phase input and output paths
   - **BECAUSE:** `PH-004` uses one predefined prompt-runner module.
 
@@ -54,10 +54,10 @@ implementation.
     `.methodology/docs/prompts/PR-027-ph004-interface-contracts.md`.
   - **BECAUSE:** `PH-004` should not build a new prompt module for each run.
 
-- **RULE: RULE-3** Keep the generator and judge setup inside the module
-  - **SYNOPSIS:** The prompt module must contain the `Generator Agent` and
-    `Judge Agent` definitions, the shared traceability skill reference, and
-    the PH-004-specific contract rules.
+- **RULE: RULE-3** Keep the phase directives inside the module
+  - **SYNOPSIS:** The prompt module must contain the PH-004 contract
+    directives and embedded traceability/review guidance that the generic
+    prompt-runner roles consume.
   - **BECAUSE:** The module should be self-contained.
 
 - **RULE: RULE-4** Write one interface contracts file
@@ -96,10 +96,10 @@ This section describes the phase steps.
     - **AGENT:** `Generator Agent`
       - **SYNOPSIS:** Embedded generator definition in the PH-004 module.
       - **BECAUSE:** The generator setup is fixed for this phase.
-      - **SKILLS:** `traceability-discipline`
+      - **RULE:** Embedded PH-004 generation directives
         - **SYNOPSIS:** Keep contract detail grounded in the solution design
-          and feature spec.
-        - **BECAUSE:** `PH-004` must stay traceable.
+          and feature spec through prompt-embedded traceability guidance.
+        - **BECAUSE:** `PH-004` must stay traceable without runtime skill discovery.
       - **RULE:** Prompt-local contract directives
         - **SYNOPSIS:** The module itself defines contract coverage, schema
           shape, error-model rules, and behavioral-spec rules.
@@ -108,8 +108,9 @@ This section describes the phase steps.
     - **AGENT:** `Judge Agent`
       - **SYNOPSIS:** Embedded judge definition in the PH-004 module.
       - **BECAUSE:** The judge setup is fixed for this phase.
-      - **SKILLS:** `traceability-discipline`
-        - **BECAUSE:** The judge also needs the same traceability rules.
+      - **RULE:** Embedded PH-004 review directives
+        - **BECAUSE:** The judge uses prompt-embedded traceability and review
+          guidance instead of separate runtime skill loading.
       - **RULE:** Prompt-local contract review directives
         - **SYNOPSIS:** The module itself defines the PH-004 review checks for
           missing coverage, type holes, error gaps, inconsistency, and weak behavioral specs.
@@ -123,9 +124,9 @@ This section describes the phase steps.
         - **USES:** `Generator Agent`
           - **BECAUSE:** The prompt pair should use the embedded generator
             definition already declared in the prompt module.
-        - **USES:** `traceability-discipline`
-          - **BECAUSE:** The generator needs the traceability discipline
-            already defined under the generator agent definition.
+        - **USES:** embedded PH-004 contract directives
+          - **BECAUSE:** The generator's specialized guidance is embedded in
+            the prompt body.
         - **USES:** prompt-local PH-004 contract directives
           - **BECAUSE:** The generator's phase-specific behavior is embedded
             in the module.
@@ -137,15 +138,14 @@ This section describes the phase steps.
         - **USES:** `Judge Agent`
           - **BECAUSE:** The prompt pair should use the embedded judge
             definition already declared in the prompt module.
-        - **USES:** `traceability-discipline`
-          - **BECAUSE:** The judge needs the traceability discipline already
-            defined under the judge agent definition.
+        - **USES:** embedded PH-004 review directives
+          - **BECAUSE:** The judge's specialized guidance is embedded in the
+            prompt body.
         - **USES:** prompt-local PH-004 review directives
           - **BECAUSE:** The judge's phase-specific behavior is embedded in
             the module.
-  - **READS:** embedded prompt-file agent definitions
-    - **BECAUSE:** `PH-004` keeps its fixed generator and judge setup in the
-      module.
+  - **READS:** embedded prompt-body directive blocks
+    - **BECAUSE:** `PH-004` keeps its fixed specialized guidance in the module.
   - **LAUNCHES:** generator session
     - **BECAUSE:** The artifact must be produced before it can be judged.
   - **LAUNCHES:** judge session
@@ -246,9 +246,9 @@ This section lists the tests the phase design expects.
     contract.
   - **BECAUSE:** The design depends on full interaction coverage.
 
-- **TEST CASE: TC-2** Embedded agent definitions
-  - **SYNOPSIS:** Confirm the PH-004 module contains both `Generator Agent`
-    and `Judge Agent` with their fixed `SKILLS`.
+- **TEST CASE: TC-2** Embedded directive blocks
+  - **SYNOPSIS:** Confirm the PH-004 module embeds the required traceability
+    and review directives directly in the prompt body.
   - **BECAUSE:** The module is supposed to be self-contained.
 
 - **TEST CASE: TC-3** Output file path

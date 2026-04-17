@@ -9,6 +9,11 @@ interface-contracts
 docs/design/solution-design.yaml
 docs/features/feature-specification.yaml
 
+### Include Files
+
+docs/design/solution-design.yaml
+docs/features/feature-specification.yaml
+
 ### Checks Files
 
 docs/design/interface-contracts.yaml

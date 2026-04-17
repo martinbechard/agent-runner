@@ -11,6 +11,13 @@ docs/implementation/implementation-plan.yaml
 docs/design/solution-design.yaml
 docs/requirements/requirements-inventory.yaml
 
+### Include Files
+
+docs/features/feature-specification.yaml
+docs/implementation/implementation-plan.yaml
+docs/design/solution-design.yaml
+docs/requirements/requirements-inventory.yaml
+
 ### Checks Files
 
 docs/verification/verification-report.yaml

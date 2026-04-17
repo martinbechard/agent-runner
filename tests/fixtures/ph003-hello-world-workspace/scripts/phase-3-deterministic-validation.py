@@ -31,9 +31,9 @@ def _load_yaml(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def build_report(solution_design_path: Path, stack_manifest_path: Path, feature_spec_path: Path) -> dict:
+def build_report(solution_design_path: Path, architecture_design_path: Path, feature_spec_path: Path) -> dict:
     design = _load_yaml(solution_design_path)
-    stack = _load_yaml(stack_manifest_path)
+    architecture = _load_yaml(architecture_design_path)
     feature_spec = _load_yaml(feature_spec_path)
 
     checks = []
@@ -89,7 +89,17 @@ def build_report(solution_design_path: Path, stack_manifest_path: Path, feature_
     checks.append({"id": "interaction_validity", "status": "pass" if not bad_interactions else "fail", "details": bad_interactions})
     checks.append({"id": "dependency_interactions", "status": "pass" if not dependency_gaps else "fail", "details": dependency_gaps})
 
-    stack_features = {feature for component in stack.get("components", []) for feature in component.get("features_served", [])}
+    stack_features = {
+        feature
+        for component in architecture.get("system_shape", {}).get("modules", [])
+        for feature in component.get("supports", [])
+    }
+    if not stack_features:
+        stack_features = {
+            feature
+            for component in architecture.get("components", [])
+            for feature in component.get("features_served", [])
+        }
     stack_alignment_failures = sorted(feature_ids - stack_features)
     checks.append({"id": "stack_alignment", "status": "pass" if not stack_alignment_failures else "fail", "details": stack_alignment_failures})
 
@@ -105,11 +115,15 @@ def build_report(solution_design_path: Path, stack_manifest_path: Path, feature_
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--solution-design", default="docs/design/solution-design.yaml")
-    parser.add_argument("--stack-manifest", default="docs/architecture/stack-manifest.yaml")
+    parser.add_argument("--architecture-design", default="docs/architecture/architecture-design.yaml")
     parser.add_argument("--feature-spec", default="docs/features/feature-specification.yaml")
     args = parser.parse_args(argv)
     try:
-        report = build_report(Path(args.solution_design), Path(args.stack_manifest), Path(args.feature_spec))
+        report = build_report(
+            Path(args.solution_design),
+            Path(args.architecture_design),
+            Path(args.feature_spec),
+        )
     except Exception as exc:
         print(json.dumps({"validator": "phase_3_validation", "overall_status": "error", "error": str(exc)}, indent=2))
         return 2

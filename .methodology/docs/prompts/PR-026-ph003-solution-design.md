@@ -6,7 +6,12 @@ solution-design
 
 ### Required Files
 
-docs/architecture/stack-manifest.yaml
+docs/architecture/architecture-design.yaml
+docs/features/feature-specification.yaml
+
+### Include Files
+
+docs/architecture/architecture-design.yaml
 docs/features/feature-specification.yaml
 
 ### Checks Files
@@ -18,8 +23,8 @@ docs/design/solution-design.yaml
 scripts/phase-3-deterministic-validation.py
 --solution-design
 docs/design/solution-design.yaml
---stack-manifest
-docs/architecture/stack-manifest.yaml
+--architecture-design
+docs/architecture/architecture-design.yaml
 --feature-spec
 docs/features/feature-specification.yaml
 
@@ -27,8 +32,8 @@ docs/features/feature-specification.yaml
 
 You are producing the phase artifact for PH-003-solution-design.
 
-Read:
-- docs/architecture/stack-manifest.yaml
+Use the included upstream file contents as the primary source input:
+- docs/architecture/architecture-design.yaml
 - docs/features/feature-specification.yaml
 
 Write:
@@ -40,14 +45,18 @@ Use this prompt pair's built-in revise loop to correct any issues the judge
 finds. Do not create draft-only or partial versions on purpose.
 
 Module-local generator context:
-- Use `structured-design` to shape the reasoning and output discipline for the
-  solution design work, even though the final artifact is YAML rather than
-  markdown.
-- Use `traceability-discipline` to keep the design grounded in the stack
-  manifest and feature specification.
-- Preserve the stack-manifest component boundaries. Do not invent, split,
+Embedded directives for this step:
+<Structured design directives>
+{{INCLUDE:../../../../agent-assets/skills/structured-design/SKILL.md}}
+</Structured design directives>
+
+<Traceability directives>
+{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
+</Traceability directives>
+
+- Preserve the phase-2 architecture component boundaries. Do not invent, split,
   merge, or rename architecture components in this phase.
-- If the stack manifest has one component, the solution design should keep one
+- If the architecture has one component, the solution design should keep one
   component.
 - Give each component one clear ownership statement. Avoid overlapping or
   mixed responsibilities.
@@ -69,7 +78,7 @@ Phase purpose:
 Important interpretation:
 - This phase is a constrained elaboration layer.
 - You may introduce supporting design detail when it is non-contradictory and
-  directly or indirectly supports the stack manifest and feature spec.
+  directly or indirectly supports the phase-2 architecture and feature spec.
 - Do not multiply components or interactions unless the upstream architecture
   already contains those boundaries.
 - A trivial one-component architecture should remain one component here.
@@ -128,19 +137,26 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Read:
-- docs/architecture/stack-manifest.yaml
+Use the included upstream file contents as the primary review input:
+- docs/architecture/architecture-design.yaml
 - docs/features/feature-specification.yaml
+
+Read:
 - docs/design/solution-design.yaml
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
 Module-local judge context:
-- Use `structured-review` to review the solution design against the phase
-  directives and acceptance rules before deciding the verdict.
-- Use `traceability-discipline` to keep the review grounded in the upstream
-  artifacts.
+Embedded directives for this step:
+<Structured review directives>
+{{INCLUDE:../../../../agent-assets/skills/structured-review/SKILL.md}}
+</Structured review directives>
+
+<Traceability directives>
+{{INCLUDE:../../skills/traceability-discipline/SKILL.md}}
+</Traceability directives>
+
 - Review for responsibility overlap, weak or missing feature realization,
   invented interactions, inconsistent dependencies, and implementation-detail
   leakage that belongs to a later phase.

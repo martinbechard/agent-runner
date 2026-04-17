@@ -1,0 +1,20 @@
+components:
+  - id: "CMP-001-cli-app"
+    name: "Python CLI Application"
+    role: "Delivers the command-line executable behavior, the runnable automated verification, and the accompanying operator-facing run guidance for the Hello World feature set."
+    technology: "python"
+    runtime: "python3"
+    frameworks: []
+    persistence: "none"
+    expected_expertise:
+      - "Python 3 command-line application development and standard output handling"
+      - "Lightweight Python test authoring for executable behavior verification"
+      - "Developer-facing documentation for local run and test instructions"
+    features_served: ["FT-001", "FT-002", "FT-003"]
+integration_points: []
+rationale: |
+  The source material defines a deliberately minimal solution: one Python 3 command-line application that prints a fixed string, one README with run instructions, and one automated test that verifies the same observable output. That scope does not justify splitting the work into multiple deployable services, documentation subsystems, or separate test infrastructure components, because doing so would introduce architecture that is not required by the feature specification or requirements inventory.
+
+  A single Python component keeps the runtime model aligned with the explicit Python 3 constraint, preserves the no-unnecessary-frameworks constraint by using no framework at all, and keeps the file layout easy to understand. README guidance and the automated test are treated as responsibilities of the same component because they exist only to support operating and verifying the same command-line behavior, not to form independent runtime boundaries.
+
+  No integration points are declared because there is no real cross-component boundary in this architecture. The application has no persistence requirement, no external service dependency, and no separate process-to-process contract that downstream phases would need to model.

@@ -11,6 +11,13 @@ docs/simulations/simulation-definitions.yaml
 docs/features/feature-specification.yaml
 docs/design/solution-design.yaml
 
+### Include Files
+
+docs/design/interface-contracts.yaml
+docs/simulations/simulation-definitions.yaml
+docs/features/feature-specification.yaml
+docs/design/solution-design.yaml
+
 ### Checks Files
 
 docs/implementation/implementation-plan.yaml
