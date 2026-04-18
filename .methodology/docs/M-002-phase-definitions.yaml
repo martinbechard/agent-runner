@@ -2665,7 +2665,16 @@ phase_6_incremental_implementation:
   phase_processing_unit:
     phase_id: "PH-006-incremental-implementation"
     phase_name: "Incremental Implementation"
-    version: "1.0.0"
+    version: "2.0.0"
+
+    # NOTE:
+    #   PH-006 no longer produces implementation-plan.yaml.
+    #   The live design now produces:
+    #     - docs/implementation/implementation-workflow.md
+    #     - docs/implementation/implementation-run-report.yaml
+    #   See:
+    #     - .methodology/docs/design/components/CD-014-ph006-incremental-implementation-design.md
+    #     - .methodology/docs/prompts/PR-029-ph006-incremental-implementation.md
 
     # -----------------------------------------------------------------------
     # 1. INPUT SOURCES
@@ -3208,7 +3217,19 @@ phase_7_verification_sweep:
   phase_processing_unit:
     phase_id: "PH-007-verification-sweep"
     phase_name: "Verification Sweep"
-    version: "1.0.0"
+    version: "2.0.0"
+
+    # NOTE:
+    #   PH-007 no longer authors an E2E-plan-style traceability matrix as its
+    #   main product. The live design now produces one final verification
+    #   report grounded in:
+    #     - docs/requirements/requirements-inventory.yaml
+    #     - docs/features/feature-specification.yaml
+    #     - docs/implementation/implementation-workflow.md
+    #     - docs/implementation/implementation-run-report.yaml
+    #   See:
+    #     - .methodology/docs/design/components/CD-015-ph007-verification-sweep-design.md
+    #     - .methodology/docs/prompts/PR-030-ph007-verification-sweep.md
 
     # -----------------------------------------------------------------------
     # 1. INPUT SOURCES
@@ -3722,8 +3743,8 @@ phase_7_verification_sweep:
 # PH-003   Stack manifest                   Solution design (YAML)          INT-* ← CMP-*, design detail
 # PH-004   Solution design                  Interface contracts (YAML)      CTR-* ← INT-*, TYP-* shared
 # PH-005   Interface contracts              Simulation definitions (YAML)   SIM-* ← CTR-*, SCN-* ← AC-*
-# PH-006   Contracts + simulations + feats  Implementation plan (YAML)      UT-* ← AC-*, IT-* ← SCN-*
-# PH-007   Features + inventory + system    Verification report (YAML)      E2E-* ← AC-* ← FT-* ← RI-*
+# PH-006   Design + contracts + sims + feats  Impl workflow + run report    child prompts → code/tests → command evidence
+# PH-007   Inventory + features + impl evidence Verification report (YAML)  requirement_results ← RI-* + files/commands
 #
 # The full traceability chain:
 #   Raw requirements
@@ -3732,8 +3753,9 @@ phase_7_verification_sweep:
 #         → CMP-* (components) + INT-* (interactions)
 #           → CTR-* (contracts) + TYP-* (shared types)
 #             → SIM-* (simulations) + SCN-* (scenarios)
-#               → UT-*/IT-*/CF-* (unit/integration/conformance tests)
-#                 → E2E-* (end-to-end tests)
+#               → child implementation workflow prompts
+#                 → real code, tests, and verification commands
+#                   → requirement-by-requirement final evidence
 #
 # At any point in the chain, "why does X exist?" can be answered by following
 # the traceability links backward to the original raw requirement text.

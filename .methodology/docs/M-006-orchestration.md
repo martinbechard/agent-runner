@@ -123,43 +123,44 @@ phase_sequencing:
           - "docs/simulations/simulation-definitions.yaml"
         ready_when: "PH-003 completed or escalated-with-flag"
 
-      - phase_id: "PH-005-incremental-implementation"
+      - phase_id: "PH-006-incremental-implementation"
         predecessors: ["PH-003", "PH-004", "PH-001"]
         artifacts_consumed:
-          - path: "docs/design/interface-contracts.yaml"
-            produced_by: "PH-003"
-            role: "primary"
-          - path: "docs/simulations/simulation-definitions.yaml"
-            produced_by: "PH-004"
-            role: "primary"
-          - path: "docs/features/feature-specification.yaml"
-            produced_by: "PH-001"
-            role: "validation-reference"
           - path: "docs/design/solution-design.yaml"
             produced_by: "PH-002"
+            role: "primary"
+          - path: "docs/design/interface-contracts.yaml"
+            produced_by: "PH-003"
             role: "validation-reference"
-        artifacts_produced:
-          - "docs/implementation/implementation-plan.yaml"
-        ready_when: "PH-003 AND PH-004 AND PH-001 all completed or escalated-with-flag"
-
-      - phase_id: "PH-006-verification-sweep"
-        predecessors: ["PH-005", "PH-001", "PH-000"]
-        artifacts_consumed:
+          - path: "docs/simulations/simulation-definitions.yaml"
+            produced_by: "PH-004"
+            role: "validation-reference"
           - path: "docs/features/feature-specification.yaml"
             produced_by: "PH-001"
-            role: "primary"
+            role: "validation-reference"
+        artifacts_produced:
+          - "docs/implementation/implementation-workflow.md"
+          - "docs/implementation/implementation-run-report.yaml"
+        ready_when: "PH-003 AND PH-004 AND PH-001 all completed or escalated-with-flag"
+
+      - phase_id: "PH-007-verification-sweep"
+        predecessors: ["PH-006", "PH-001", "PH-000"]
+        artifacts_consumed:
           - path: "docs/requirements/requirements-inventory.yaml"
             produced_by: "PH-000"
             role: "primary"
-          - path: "docs/design/solution-design.yaml"
-            produced_by: "PH-002"
+          - path: "docs/features/feature-specification.yaml"
+            produced_by: "PH-001"
             role: "validation-reference"
-          - path: "docs/implementation/implementation-plan.yaml"
-            produced_by: "PH-005"
-            role: "upstream-traceability"
+          - path: "docs/implementation/implementation-workflow.md"
+            produced_by: "PH-006"
+            role: "validation-reference"
+          - path: "docs/implementation/implementation-run-report.yaml"
+            produced_by: "PH-006"
+            role: "primary-execution-evidence"
         artifacts_produced:
           - "docs/verification/verification-report.yaml"
-        ready_when: "PH-005 AND PH-001 AND PH-000 all completed or escalated-with-flag"
+        ready_when: "PH-006 AND PH-001 AND PH-000 all completed or escalated-with-flag"
 
   # ---------------------------------------------------------------------------
   # 1.2 Phase Start Conditions
@@ -1667,16 +1668,13 @@ project_state:
           simulation-registry.yaml                # Runtime registry
           simulation-health-report.yaml           # Periodic health report
         implementation/
-          implementation-plan.yaml                # PH-005 artifact
-          implementation-plan-checklist.yaml      # PH-005 completed checklist
-          implementation-plan-traceability.yaml   # PH-005 traceability mapping
+          implementation-workflow.md              # PH-006 child prompt module
+          implementation-run-report.yaml          # PH-006 child-run evidence
         verification/
-          verification-report.yaml                # PH-006 artifact
-          verification-sweep-checklist.yaml       # PH-006 completed checklist
-          verification-sweep-traceability.yaml    # PH-006 traceability mapping
+          verification-report.yaml                # PH-007 artifact
         traceability/
           registry.yaml                           # Element type registry
-          phase-0-links.yaml through phase-6-links.yaml
+          phase-0-links.yaml through phase-7-links.yaml
           graph-index.yaml                        # Merged traceability index
           validation-report.yaml                  # Latest traceability validation
         pipeline/

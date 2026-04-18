@@ -11,6 +11,7 @@ from methodology_runner.models import (
 )
 from methodology_runner.orchestrator import (
     PipelineConfig,
+    _phase_placeholder_values,
     _invoke_prompt_runner_library,
     run_pipeline,
     _run_single_phase,
@@ -97,6 +98,15 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
         "raw_requirements_path": "docs/requirements/raw-requirements.md",
     }
     assert run_config.run_id_override == "PH-000-requirements-inventory"
+
+
+def test_phase_placeholder_values_include_ph006_prompt_runner_command() -> None:
+    phase = get_phase("PH-006-incremental-implementation")
+    values = _phase_placeholder_values(phase)
+
+    assert "prompt_runner_command" in values
+    assert "prompt_runner" in values["prompt_runner_command"]
+    assert ".prompt-runner/src/cli" in values["prompt_runner_command"]
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(

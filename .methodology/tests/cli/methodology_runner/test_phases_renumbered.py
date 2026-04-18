@@ -45,11 +45,21 @@ def test_incremental_implementation_predecessors_include_simulations():
     impl = get_phase("PH-006-incremental-implementation")
     assert "PH-005-intelligent-simulations" in impl.predecessors
     assert "PH-004-interface-contracts" in impl.predecessors
+    assert impl.output_artifact_path.endswith("implementation-workflow.md")
+    assert impl.output_format == "markdown"
+    assert "docs/implementation/implementation-run-report.yaml" in impl.expected_output_files
 
 
 def test_verification_sweep_is_final_phase():
     ids = [p.phase_id for p in PHASES]
     assert ids[-1] == "PH-007-verification-sweep"
+
+
+def test_verification_sweep_reads_phase_6_workflow_and_run_report():
+    verify = get_phase("PH-007-verification-sweep")
+    refs = [src.ref_template for src in verify.input_source_templates]
+    assert any("implementation-workflow.md" in ref for ref in refs)
+    assert any("implementation-run-report.yaml" in ref for ref in refs)
 
 
 def test_phase_map_round_trip():

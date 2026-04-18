@@ -4,273 +4,213 @@
 
 This design explains how `PH-006` works from start to finish.
 
-- **GOAL: GOAL-1** Produce the implementation plan
-  - **SYNOPSIS:** `PH-006` turns the design and simulation artifacts into one
-    acceptance-ready `docs/implementation/implementation-plan.yaml` file.
-  - **BECAUSE:** Later phases depend on this file.
+- **GOAL: GOAL-1** Produce an executable implementation workflow and its run report
+  - **SYNOPSIS:** `PH-006` turns the approved solution into:
+    - `docs/implementation/implementation-workflow.md`
+    - `docs/implementation/implementation-run-report.yaml`
+  - **BECAUSE:** This phase no longer writes another planning artifact. It authors a child prompt-runner workflow, runs that workflow against the real project worktree, and records what happened.
 
 ## 2. Inputs And Outputs
 
 This section names the files that the phase uses.
 
-- **FILE: FILE-1** Interface contracts
+- **FILE: FILE-1** Solution design
   - **SYNOPSIS:** Primary input:
-    - `docs/design/interface-contracts.yaml`
-  - **BECAUSE:** `PH-006` plans what to build from the contract layer.
-
-- **FILE: FILE-2** Simulation definitions
-  - **SYNOPSIS:** Planning input:
-    - `docs/simulations/simulation-definitions.yaml`
-  - **BECAUSE:** The plan must account for simulations before replacement.
-
-- **FILE: FILE-3** Feature specification
-  - **SYNOPSIS:** Traceability input:
-    - `docs/features/feature-specification.yaml`
-  - **BECAUSE:** The plan must keep tests tied to feature acceptance criteria.
-
-- **FILE: FILE-4** Solution design
-  - **SYNOPSIS:** Dependency input:
     - `docs/design/solution-design.yaml`
-  - **BECAUSE:** The build order must respect component dependencies.
+  - **BECAUSE:** The implementation workflow must be grounded in the approved system shape.
 
-- **FILE: FILE-5** Implementation plan
+- **FILE: FILE-2** Interface contracts
+  - **SYNOPSIS:** Validation reference:
+    - `docs/design/interface-contracts.yaml`
+  - **BECAUSE:** The workflow must implement real contract behavior, not generic code slices.
+
+- **FILE: FILE-3** Simulation definitions
+  - **SYNOPSIS:** Validation reference:
+    - `docs/simulations/simulation-definitions.yaml`
+  - **BECAUSE:** The workflow must know which temporary simulations exist and when real implementation can replace them.
+
+- **FILE: FILE-4** Feature specification
+  - **SYNOPSIS:** Validation reference:
+    - `docs/features/feature-specification.yaml`
+  - **BECAUSE:** The workflow must keep implementation slices tied to real `FT-*` and `AC-*` meaning.
+
+- **FILE: FILE-5** Implementation workflow
   - **SYNOPSIS:** Primary output:
-    - `docs/implementation/implementation-plan.yaml`
-  - **BECAUSE:** This is the phase output.
+    - `docs/implementation/implementation-workflow.md`
+  - **BECAUSE:** This is the child prompt-runner module that performs the real implementation work.
 
-- **FILE: FILE-6** Prompt-runner module
+- **FILE: FILE-6** Implementation run report
+  - **SYNOPSIS:** Secondary output:
+    - `docs/implementation/implementation-run-report.yaml`
+  - **BECAUSE:** Later phases need truthful evidence of what the child workflow actually did.
+
+- **FILE: FILE-7** Prompt-runner module
   - **SYNOPSIS:** `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`
-    with:
-    - embedded directive blocks for traceability and implementation-plan review discipline
-    - fixed generic prompt-runner generator and judge roles
-    - fixed phase input and output paths
-  - **BECAUSE:** `PH-006` uses one predefined prompt-runner module.
+  - **BECAUSE:** `PH-006` uses one predefined phase module. That module authors the child workflow first, then runs it.
 
 ## 3. Technical Directives
 
-This section states the technical directives that shape the phase
-implementation.
+This section states the technical directives that shape the phase.
 
-- **RULE: RULE-1** Read the planning inputs
-  - **SYNOPSIS:** The phase must read
-    `docs/design/interface-contracts.yaml`,
-    `docs/simulations/simulation-definitions.yaml`,
-    `docs/features/feature-specification.yaml`, and
-    `docs/design/solution-design.yaml`.
-  - **BECAUSE:** The contracts are the main source, and the other files keep
-    the plan tied to simulations, features, and dependencies.
+- **RULE: RULE-1** Use the predefined prompt module
+  - **SYNOPSIS:** The phase must use `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`.
+  - **BECAUSE:** The PH-006 flow is fixed: author workflow, validate workflow, run child workflow, report truthfully.
 
-- **RULE: RULE-2** Use the predefined prompt module
-  - **SYNOPSIS:** The phase must use
-    `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`.
-  - **BECAUSE:** `PH-006` should not build a new prompt module for each run.
+- **RULE: RULE-2** Author a child workflow, not another planning spec
+  - **SYNOPSIS:** Prompt 1 must write a valid child prompt-runner file at `docs/implementation/implementation-workflow.md`.
+  - **BECAUSE:** The purpose of PH-006 is to start implementation through controlled prompt slices, not to add another abstract planning layer.
 
-- **RULE: RULE-3** Keep the phase directives inside the module
-  - **SYNOPSIS:** The prompt module must contain the PH-006 planning
-    directives and embedded traceability/review guidance that the generic
-    prompt-runner roles consume.
-  - **BECAUSE:** The module should be self-contained.
+- **RULE: RULE-3** The child workflow must be TDD-oriented
+  - **SYNOPSIS:** Each implementation child prompt must:
+    - define one small implementation slice
+    - require a failing or tightened test when new behavior is introduced
+    - require the relevant tests to run after the code change
+  - **BECAUSE:** This phase is supposed to guide real incremental implementation, not batch a large untested code dump.
 
-- **RULE: RULE-4** Write one implementation plan file
-  - **SYNOPSIS:** The phase must write exactly one file at
-    `docs/implementation/implementation-plan.yaml`.
-  - **BECAUSE:** Later verification depends on one stable plan file.
+- **RULE: RULE-4** The child workflow must target the real project worktree
+  - **SYNOPSIS:** Prompt 2 must run or resume the child workflow against the current `run_dir`.
+  - **BECAUSE:** The workflow is supposed to create real code, tests, and supporting project files in the workspace being built.
+
+- **RULE: RULE-5** The child workflow must end with final verification
+  - **SYNOPSIS:** The last child prompt must run the full verification commands for the implemented system.
+  - **BECAUSE:** PH-006 is not complete when code exists. It is complete when the workflow has driven the build to a verifiable end state.
+
+- **RULE: RULE-6** The run report must be truthful
+  - **SYNOPSIS:** Prompt 2 must write only evidence that the child run actually produced.
+  - **BECAUSE:** PH-007 depends on this report as implementation evidence. Fabricated completion or invented command history would corrupt final verification.
 
 ## 4. Workflow
 
 This section describes the phase steps.
 
 - **PROCESS: PROCESS-1** Define the phase contract
-  - **SYNOPSIS:** `PH-006` defines the input files, output path, planning
-    rules, judge rules, and output shape.
+  - **SYNOPSIS:** `PH-006` defines the input files, output files, placeholder values, workflow requirements, and run-report schema.
   - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
-    - **BECAUSE:** The phase registry is the source of truth.
-  - **BECAUSE:** The run needs this contract before it starts.
+    - **BECAUSE:** The phase registry is the source of truth for artifact paths and validation references.
+  - **READS:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+    - **BECAUSE:** The orchestrator injects `prompt_runner_command` and other runtime values used by Prompt 2.
 
-- **PROCESS: PROCESS-2** Execute the prompts with prompt-runner
-  - **SYNOPSIS:** The methodology runner runs the predefined PH-006 module
-    with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
-    - **BECAUSE:** The orchestrator owns the phase lifecycle and
-      prompt-runner invocation.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
-    - **BECAUSE:** That module executes the generator/judge revision loop.
-  - **PROMPT-MODULE: PMOD-1** PH-006 prompt-runner input file
-    - **SYNOPSIS:** The PH-006 prompt-runner input file is
-      `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`.
-    - **BECAUSE:** The phase uses one fixed module shape.
-    - **READS:** `docs/design/interface-contracts.yaml`
-      - **BECAUSE:** That file is the main source for planning build steps.
-    - **READS:** `docs/simulations/simulation-definitions.yaml`
-      - **BECAUSE:** That file defines the available simulations and
-        replacement needs.
-    - **READS:** `docs/features/feature-specification.yaml`
-      - **BECAUSE:** That file keeps tests tied to feature completion.
-    - **READS:** `docs/design/solution-design.yaml`
-      - **BECAUSE:** That file supplies component dependencies.
-    - **AGENT:** `Generator Agent`
-      - **SYNOPSIS:** Embedded generator definition in the PH-006 module.
-      - **BECAUSE:** The generator setup is fixed for this phase.
-      - **RULE:** Embedded PH-006 generation directives
-        - **SYNOPSIS:** Keep build steps, tests, and simulation replacement
-          tied to the upstream artifacts through prompt-embedded traceability guidance.
-        - **BECAUSE:** `PH-006` must stay traceable without runtime skill discovery.
-      - **RULE:** Prompt-local implementation-plan directives
-        - **SYNOPSIS:** The module itself defines build order, test-planning,
-          and simulation-retirement rules.
-        - **BECAUSE:** PH-006-specific generation behavior now lives in the
-          prompt, not in a phase-only skill.
-    - **AGENT:** `Judge Agent`
-      - **SYNOPSIS:** Embedded judge definition in the PH-006 module.
-      - **BECAUSE:** The judge setup is fixed for this phase.
-      - **RULE:** Embedded PH-006 review directives
-        - **BECAUSE:** The judge uses prompt-embedded traceability and review
-          guidance instead of separate runtime skill loading.
-      - **RULE:** Prompt-local implementation-plan review directives
-        - **SYNOPSIS:** The module itself defines the PH-006 review checks for
-          ordering, thin tests, completion gaps, and replacement defects.
-        - **BECAUSE:** PH-006-specific review behavior now lives in the
-          prompt, not in a phase-only skill.
+- **PROCESS: PROCESS-2** Author the child implementation workflow
+  - **SYNOPSIS:** Prompt 1 writes `docs/implementation/implementation-workflow.md`.
+  - **USES:** `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`
+    - **BECAUSE:** The prompt module contains the phase-specific generator and judge rules.
+  - **PROMPT-MODULE: PMOD-1** PH-006 phase module
+    - **SYNOPSIS:** The PH-006 phase module has two prompt pairs.
+    - **BECAUSE:** The phase first needs a workflow artifact, then an execution report.
     - **PROMPT-PAIR: Prompt 1**
       - **PROMPT:** `Generator`
-        - **SYNOPSIS:** Reads the contract, simulation, feature, and solution
-          design artifacts and writes
-          `docs/implementation/implementation-plan.yaml`.
-        - **BECAUSE:** The generator owns artifact production.
-        - **USES:** `Generator Agent`
-          - **BECAUSE:** The prompt pair should use the embedded generator
-            definition already declared in the prompt module.
-        - **USES:** embedded PH-006 planning directives
-          - **BECAUSE:** The generator's specialized guidance is embedded in
-            the prompt body.
-        - **USES:** prompt-local PH-006 planning directives
-          - **BECAUSE:** The generator's phase-specific behavior is embedded
-            in the module.
+        - **SYNOPSIS:** Writes the child workflow file.
+        - **READS:** `docs/design/solution-design.yaml`
+          - **BECAUSE:** The implementation slices must respect the approved system structure.
+        - **READS:** `docs/design/interface-contracts.yaml`
+          - **BECAUSE:** The workflow must implement concrete contract behavior.
+        - **READS:** `docs/simulations/simulation-definitions.yaml`
+          - **BECAUSE:** The workflow must know what temporary simulations exist and when they can be replaced.
+        - **READS:** `docs/features/feature-specification.yaml`
+          - **BECAUSE:** The workflow must ground implementation slices in feature and acceptance-criterion meaning.
       - **PROMPT:** `Judge`
-        - **SYNOPSIS:** Reviews ordering, test coverage, completion planning,
-          and simulation replacement logic.
-        - **BECAUSE:** The judge decides whether the file passes or needs
-          another revision.
-        - **USES:** `Judge Agent`
-          - **BECAUSE:** The prompt pair should use the embedded judge
-            definition already declared in the prompt module.
-        - **USES:** embedded PH-006 review directives
-          - **BECAUSE:** The judge's specialized guidance is embedded in the
-            prompt body.
-        - **USES:** prompt-local PH-006 review directives
-          - **BECAUSE:** The judge's phase-specific behavior is embedded in
-            the module.
-  - **READS:** embedded prompt-body directive blocks
-    - **BECAUSE:** `PH-006` keeps its fixed specialized guidance in the module.
-  - **LAUNCHES:** generator session
-    - **BECAUSE:** The artifact must be produced before it can be judged.
-  - **LAUNCHES:** judge session
-    - **BECAUSE:** The artifact must be reviewed for phase readiness and
-      either passed, revised, or escalated.
-  - **RESUMES:** the same artifact path across iterations
-    - **BECAUSE:** `PH-006` revises the same output file. It does not create
-      draft variants.
+        - **SYNOPSIS:** Reviews the workflow for executability, TDD cadence, slice size, traceability, and final-verification coverage.
+        - **BECAUSE:** The workflow must be phase-ready before any child run starts.
 
-- **PROCESS: PROCESS-3** Accept or reject the phase result
-  - **SYNOPSIS:** The phase is accepted only when the prompt-runner loop passes
-    and the resulting artifact is accepted as the phase output.
-  - **VALIDATES:** `docs/implementation/implementation-plan.yaml`
-    - **BECAUSE:** The output file must exist before the phase can pass.
+- **PROCESS: PROCESS-3** Deterministically validate the child workflow
+  - **SYNOPSIS:** The phase validates that the workflow file exists, parses, has a file-level module, and contains the required TDD and final-verification structure.
   - **USES:** `.methodology/src/cli/methodology_runner/phase_6_validation.py`
-    - **BECAUSE:** `PH-006` uses deterministic checks for schema, dependency
-      order, coverage counts, and top-level shape.
-  - **BECAUSE:** `PH-006` passes only when both the deterministic checks and
-    the judge review pass.
-  - **PRODUCES:** `docs/implementation/implementation-plan.yaml`
-    - **BECAUSE:** That artifact is the durable output consumed by `PH-007`.
+    - **BECAUSE:** Mechanical workflow checks should not be left to the LLM judge.
+
+- **PROCESS: PROCESS-4** Run or resume the child workflow
+  - **SYNOPSIS:** Prompt 2 parses the child workflow, runs or resumes it with child `prompt_runner`, and records what happened in `docs/implementation/implementation-run-report.yaml`.
+  - **INVOKES:** `{{prompt_runner_command}}`
+    - **BECAUSE:** The child workflow is itself a prompt-runner module.
+  - **LAUNCHES:** child prompt-runner execution
+    - **BECAUSE:** The authored workflow has to be executed against the project worktree to create real implementation artifacts.
+  - **WRITES:** `docs/implementation/implementation-run-report.yaml`
+    - **BECAUSE:** Later verification needs a truthful summary of child prompt outcomes, changed files, and observed test commands.
+
+- **PROCESS: PROCESS-5** Accept or reject the phase result
+  - **SYNOPSIS:** The phase passes only when:
+    - the child workflow file is valid
+    - the child run report is valid
+    - the prompt-runner judge(s) pass
+  - **VALIDATES:** `docs/implementation/implementation-workflow.md`
+    - **BECAUSE:** The workflow is a durable phase artifact.
+  - **VALIDATES:** `docs/implementation/implementation-run-report.yaml`
+    - **BECAUSE:** The run report is the other durable phase artifact.
+  - **USES:** `.methodology/src/cli/methodology_runner/phase_6_validation.py`
+    - **BECAUSE:** Deterministic validation checks workflow shape and report truthfulness constraints that should not drift.
 
 ## 5. Constraints
 
 This section states the main limits on the phase.
 
-- **RULE: RULE-5** No broken build order
-  - **SYNOPSIS:** The build order must not place components after work that
-    already depends on them, unless a simulation explicitly bridges that gap.
-  - **BECAUSE:** Later execution depends on a realistic build sequence.
+- **RULE: RULE-7** No abstract planning drift
+  - **SYNOPSIS:** The child workflow must not degrade into another implementation-plan artifact.
+  - **BECAUSE:** PH-006 is supposed to start real implementation work.
 
-- **RULE: RULE-6** No thin test planning
-  - **SYNOPSIS:** Unit and integration test plans must do more than name
-    artifacts. They must show what each test verifies.
-  - **BECAUSE:** Later verification depends on meaningful planned tests.
+- **RULE: RULE-8** No fake child-run completion
+  - **SYNOPSIS:** The run report must not claim completed status, passed prompts, changed files, or observed test commands that the child run did not produce.
+  - **BECAUSE:** PH-007 depends on PH-006 evidence.
 
-- **RULE: RULE-7** One fixed prompt module
-  - **SYNOPSIS:** `PH-006` must use the predefined prompt module instead of
-    building a new module per run.
-  - **BECAUSE:** The module shape should stay stable.
+- **RULE: RULE-9** One fixed phase module
+  - **SYNOPSIS:** PH-006 must use the checked-in phase module rather than inventing a new outer module per run.
+  - **BECAUSE:** The outer phase contract should stay stable.
 
 ## 6. Output Shape
 
-This section states what the output file contains.
+This section states what the phase produces.
 
-- **ENTITY: ENTITY-1** Top-level output shape
-  - **SYNOPSIS:** The top-level sections are:
-    - `build_order`
-    - `unit_test_plan`
-    - `integration_test_plan`
-    - `simulation_replacement_sequence`
-  - **BECAUSE:** That is the schema required by the PH-006 phase contract.
+- **ENTITY: ENTITY-1** Child workflow structure
+  - **SYNOPSIS:** `docs/implementation/implementation-workflow.md` must:
+    - begin with a file-level `### Module`
+    - use the slug `implementation-workflow`
+    - contain at least two child prompts
+    - include a final child prompt that runs full verification commands
+  - **BECAUSE:** The workflow has to be executable by child prompt-runner and complete enough to finish the implementation pass.
 
-- **ENTITY: ENTITY-2** Build step fields
-  - **SYNOPSIS:** Each build step contains:
-    - `step`
-    - `component_ref`
-    - `rationale`
-    - `contracts_implemented`
-    - `simulations_used`
-  - **BECAUSE:** Those are the fields downstream phases rely on.
+- **ENTITY: ENTITY-2** Run report structure
+  - **SYNOPSIS:** `docs/implementation/implementation-run-report.yaml` contains:
+    - `child_prompt_path`
+    - `child_run_dir`
+    - `execution_mode`
+    - `completion_status`
+    - `halt_reason`
+    - `prompt_results`
+    - `files_changed`
+    - `test_commands_observed`
+    - `next_action`
+  - **BECAUSE:** PH-007 needs those fields to understand what was implemented and how trustworthy the current workspace state is.
 
 ## 7. Definition Of Good
 
 This section states when the phase passes.
 
-- **RULE: RULE-8** Dependency-respecting order
-  - **SYNOPSIS:** The build order must respect component dependencies unless a
-    referenced dependency is explicitly simulated in a prior step.
-  - **BECAUSE:** Later implementation depends on a coherent build sequence.
+- **RULE: RULE-10** Executable workflow
+  - **SYNOPSIS:** The workflow parses cleanly and each child prompt defines a real implementation slice or the final verification step.
+  - **BECAUSE:** PH-006 is only useful if the authored workflow can actually run.
 
-- **RULE: RULE-9** Test traceability
-  - **SYNOPSIS:** Every `AC-*` must appear in at least one unit or integration
-    test entry, and every `CTR-*` contract must appear in at least one build
-    step.
-  - **BECAUSE:** Later verification depends on traceable planned tests.
+- **RULE: RULE-11** TDD slice discipline
+  - **SYNOPSIS:** At least one child implementation prompt explicitly tightens or adds a test before code changes, and implementation prompts run the relevant tests after the edit.
+  - **BECAUSE:** The workflow is supposed to guide incremental TDD implementation.
 
-- **RULE: RULE-10** Simulation replacement coverage
-  - **SYNOPSIS:** Every `SIM-*` simulation must appear in the replacement
-    sequence with the affected integration tests to rerun.
-  - **BECAUSE:** Later execution depends on clear simulation retirement steps.
+- **RULE: RULE-12** Truthful run report
+  - **SYNOPSIS:** The run report agrees with the child `.run-files/implementation-workflow/summary.txt` and observed child-run artifacts.
+  - **BECAUSE:** Later verification cannot rely on guessed execution history.
 
-- **RULE: RULE-11** Deterministic and judge checks both pass
-  - **SYNOPSIS:** The phase passes only if the deterministic validator passes
-    and the judge returns `VERDICT: pass`.
-  - **BECAUSE:** `PH-006` needs both shape checks and content checks.
+- **RULE: RULE-13** Deterministic and judge checks both pass
+  - **SYNOPSIS:** The phase passes only if deterministic validation passes and the outer phase module judge returns `VERDICT: pass`.
+  - **BECAUSE:** Both mechanical correctness and semantic correctness matter.
 
 ## 8. Test Cases
 
-This section lists the tests the phase design expects.
+This section lists the tests the design expects.
 
-- **TEST CASE: TC-1** Dependency-respecting order
-  - **SYNOPSIS:** Run the phase on a solution design with known dependencies
-    and confirm the build order respects them or names an explicit simulation
-    bridge.
-  - **BECAUSE:** The design depends on a realistic build sequence.
+- **TEST CASE: TC-1** Workflow parseability
+  - **SYNOPSIS:** Generate a child workflow and confirm prompt-runner can parse it as a file-level module with the expected slug.
+  - **BECAUSE:** The workflow is useless if the child runner cannot parse it.
 
-- **TEST CASE: TC-2** Embedded directive blocks
-  - **SYNOPSIS:** Confirm the PH-006 module embeds the required planning,
-    traceability, and review directives directly in the prompt body.
-  - **BECAUSE:** The module is supposed to be self-contained.
+- **TEST CASE: TC-2** Completed child run
+  - **SYNOPSIS:** Run a child workflow to completion and confirm the run report records completed status, prompt verdicts, changed files, and observed test commands truthfully.
+  - **BECAUSE:** A successful child run is the normal PH-006 happy path.
 
-- **TEST CASE: TC-3** Output file path
-  - **SYNOPSIS:** Run PH-006 and confirm the artifact written is
-    `docs/implementation/implementation-plan.yaml`.
-  - **BECAUSE:** The phase should produce one stable output file.
-
-- **TEST CASE: TC-4** Missing rerun rejection
-  - **SYNOPSIS:** Run the phase with a simulation replacement step that names
-    no integration tests to rerun and confirm the deterministic and judge loop
-    rejects it.
-  - **BECAUSE:** Thin simulation retirement plans should not pass this phase.
+- **TEST CASE: TC-3** Halted child run
+  - **SYNOPSIS:** Validate that a halted child run produces a run report with non-empty `halt_reason` and does not claim full completion.
+  - **BECAUSE:** Failure reporting must be truthful too.

@@ -13,7 +13,8 @@ Output paths align with CD-002 Section 4.5 workspace layout::
     docs/design/solution-design.yaml                # Phase 3
     docs/design/interface-contracts.yaml            # Phase 4
     docs/simulations/simulation-definitions.yaml    # Phase 5
-    docs/implementation/implementation-plan.yaml    # Phase 6
+    docs/implementation/implementation-workflow.md  # Phase 6 primary
+    docs/implementation/implementation-run-report.yaml  # Phase 6 support
     docs/verification/verification-report.yaml      # Phase 7
 
 Public API
@@ -50,7 +51,8 @@ _OUTPUT_PHASE_2 = "docs/architecture/stack-manifest.yaml"
 _OUTPUT_PHASE_3 = "docs/design/solution-design.yaml"
 _OUTPUT_PHASE_4 = "docs/design/interface-contracts.yaml"
 _OUTPUT_PHASE_5 = "docs/simulations/simulation-definitions.yaml"
-_OUTPUT_PHASE_6 = "docs/implementation/implementation-plan.yaml"
+_OUTPUT_PHASE_6 = "docs/implementation/implementation-workflow.md"
+_OUTPUT_PHASE_6_REPORT = "docs/implementation/implementation-run-report.yaml"
 _OUTPUT_PHASE_7 = "docs/verification/verification-report.yaml"
 
 _PROMPT_PHASE_0 = ".methodology/docs/prompts/PR-025-ph000-requirements-inventory.md"
@@ -873,18 +875,24 @@ _PHASE_6 = PhaseConfig(
     ],
     input_source_templates=[
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_4),
+            ref_template=_tpl(_OUTPUT_PHASE_3),
             role=InputRole.PRIMARY,
             format="yaml",
-            description="Interface contracts that define what to build",
+            description="Solution design that defines the implementation target",
+        ),
+        InputSourceTemplate(
+            ref_template=_tpl(_OUTPUT_PHASE_4),
+            role=InputRole.VALIDATION_REFERENCE,
+            format="yaml",
+            description="Interface contracts that define the required behavior",
         ),
         InputSourceTemplate(
             ref_template=_tpl(_OUTPUT_PHASE_5),
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
-                "Simulation specs for validating that the implementation "
-                "plan accounts for simulation replacement"
+                "Simulation specs for validating that the workflow uses "
+                "small test-first slices and retires simulations with real checks"
             ),
         ),
         InputSourceTemplate(
@@ -892,126 +900,105 @@ _PHASE_6 = PhaseConfig(
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
-                "Feature specification for validating that unit tests "
-                "trace to acceptance criteria"
-            ),
-        ),
-        InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_3),
-            role=InputRole.VALIDATION_REFERENCE,
-            format="yaml",
-            description=(
-                "Solution design for validating that build order "
-                "respects component dependencies"
+                "Feature specification for validating that the child workflow "
+                "covers feature acceptance criteria incrementally"
             ),
         ),
     ],
     output_artifact_path=_OUTPUT_PHASE_6,
-    output_format="yaml",
-    expected_output_files=[_OUTPUT_PHASE_6],
+    output_format="markdown",
+    expected_output_files=[_OUTPUT_PHASE_6, _OUTPUT_PHASE_6_REPORT],
     extraction_focus=(
-        "Ordering correctness: the component build order must respect\n"
-        "the dependency graph from the solution design -- no component\n"
-        "is built before its dependencies.  Test traceability: every\n"
-        "unit test traces to at least one AC-* acceptance criterion.\n"
-        "Simulation replacement: for each SIM-* simulation, the plan\n"
-        "specifies when it gets replaced by a real implementation and\n"
-        "which integration tests must re-run after replacement."
+        "Executable implementation workflow: the primary artifact must be a\n"
+        "prompt-runner module whose prompts build the real project in small\n"
+        "TDD increments, not another planning spec. Workflow truthfulness:\n"
+        "the support report must state what the child workflow actually did,\n"
+        "which files changed, which test commands ran, and whether the child\n"
+        "workflow completed or halted. Final verification readiness: the\n"
+        "workflow must end with a final verification prompt so Phase 7 can\n"
+        "verify the finished implementation instead of a plan."
     ),
     generation_instructions=(
-        "Read the interface contracts, simulation specs, feature spec,\n"
-        "and solution design.  Produce an implementation plan YAML.\n"
+        "Read the solution design, feature specification, interface\n"
+        "contracts, and simulation definitions.\n"
         "\n"
-        "build_order:\n"
-        "  - step: 1\n"
-        "    component_ref: CMP-NNN\n"
-        "    rationale: why this component is built at this position\n"
-        "    contracts_implemented: [CTR-NNN, ...]\n"
-        "    simulations_used: [SIM-NNN, ...]  # sims used as test doubles\n"
+        "Produce two artifacts across the phase's prompt sequence:\n"
+        "1. docs/implementation/implementation-workflow.md\n"
+        "   - a prompt-runner module with granular prompts that incrementally\n"
+        "     build the real implementation using a TDD cadence\n"
+        "   - each prompt should take a small slice, write or tighten tests\n"
+        "     first, implement only enough code to pass, then preserve the\n"
+        "     resulting project state for the next prompt\n"
+        "   - the last child prompt must perform final verification of the\n"
+        "     assembled implementation\n"
+        "2. docs/implementation/implementation-run-report.yaml\n"
+        "   - a truthful report written by the supervising prompt after the\n"
+        "     child workflow has been run or resumed\n"
         "\n"
-        "unit_test_plan:\n"
-        "  - component_ref: CMP-NNN\n"
-        "    tests:\n"
-        "      - name: test name\n"
-        "        description: what the test verifies\n"
-        "        acceptance_criteria_refs: [AC-NNN-NN, ...]\n"
-        "        contract_ref: CTR-NNN  # which contract operation is tested\n"
-        "\n"
-        "integration_test_plan:\n"
-        "  - name: integration test name\n"
-        "    components_involved: [CMP-NNN, ...]\n"
-        "    contracts_exercised: [CTR-NNN, ...]\n"
-        "    scenarios_from: [SIM-NNN, ...]  # scenarios to reuse\n"
-        "\n"
-        "simulation_replacement_sequence:\n"
-        "  - simulation_ref: SIM-NNN\n"
-        "    replaced_at_step: N  # build_order step when real impl is ready\n"
-        "    integration_tests_to_rerun: [test-name, ...]\n"
-        "\n"
-        "Build order must proceed from leaf components (no dependencies)\n"
-        "to composite ones.  At each step, simulations stand in for\n"
-        "components not yet built."
+        "The primary artifact is the workflow prompt file, not a YAML\n"
+        "implementation plan. The workflow must be executable by prompt-runner\n"
+        "and should create real project files such as source code, tests, and\n"
+        "README content inside the current worktree."
     ),
     judge_guidance=(
-        "Check for these failure modes:\n"
+        "Check the two PH-006 artifacts for these failure modes:\n"
         "\n"
-        "1. Ordering violations: verify that no build_order step references\n"
-        "   a component whose dependencies have not yet been built or\n"
-        "   simulated in a prior step.\n"
-        "2. Test sufficiency: every AC-* acceptance criterion from Phase 1\n"
-        "   must appear in at least one unit test's acceptance_criteria_refs\n"
-        "   or one integration test's scenario coverage.\n"
-        "3. Completion gaps: every CMP-* component from Phase 2 must appear\n"
-        "   in the build_order.  Every CTR-* contract from Phase 3 must\n"
-        "   appear in at least one build step's contracts_implemented.\n"
-        "4. Simulation orphans: every SIM-* from Phase 4 must appear in\n"
-        "   the simulation_replacement_sequence with a concrete replaced_at_step.\n"
-        "5. Missing re-test triggers: when a simulation is replaced by a\n"
-        "   real implementation, all integration tests that previously\n"
-        "   used that simulation must be listed in integration_tests_to_rerun."
+        "1. Non-executable workflow: the workflow file is prose about\n"
+        "   implementation rather than a runnable prompt-runner module.\n"
+        "2. Broken TDD cadence: child prompts implement large batches of work\n"
+        "   without test-first steps or without re-running the relevant tests.\n"
+        "3. Overlarge slices: a single child prompt attempts to implement too\n"
+        "   much of the solution at once instead of building incrementally.\n"
+        "4. Traceability gaps: the workflow ignores required features,\n"
+        "   contracts, or simulation-backed behaviors from prior phases.\n"
+        "5. Missing final verification: the child workflow does not end with\n"
+        "   a final verification step over the built implementation.\n"
+        "6. False run reporting: the support report claims files, commands, or\n"
+        "   completion states not grounded in the actual child run."
     ),
-    artifact_format="yaml",
+    artifact_format="markdown",
     artifact_schema_description=(
-        "build_order:\n"
-        "  - step: 1\n"
-        "    component_ref: \"CMP-NNN\"\n"
-        "    rationale: \"...\"\n"
-        "    contracts_implemented: [\"CTR-NNN\", ...]\n"
-        "    simulations_used: [\"SIM-NNN\", ...]\n"
+        "Primary artifact:\n"
+        "  docs/implementation/implementation-workflow.md\n"
+        "  - prompt-runner markdown module\n"
+        "  - file-level `### Module` slug: implementation-workflow\n"
+        "  - at least two prompts\n"
+        "  - each prompt advances the real implementation through a small,\n"
+        "    test-first slice\n"
+        "  - final child prompt performs final verification\n"
         "\n"
-        "unit_test_plan:\n"
-        "  - component_ref: \"CMP-NNN\"\n"
-        "    tests:\n"
-        "      - name: \"...\"\n"
-        "        description: \"...\"\n"
-        "        acceptance_criteria_refs: [\"AC-NNN-NN\", ...]\n"
-        "        contract_ref: \"CTR-NNN\"\n"
-        "\n"
-        "integration_test_plan:\n"
-        "  - name: \"...\"\n"
-        "    components_involved: [\"CMP-NNN\", ...]\n"
-        "    contracts_exercised: [\"CTR-NNN\", ...]\n"
-        "    scenarios_from: [\"SIM-NNN\", ...]\n"
-        "\n"
-        "simulation_replacement_sequence:\n"
-        "  - simulation_ref: \"SIM-NNN\"\n"
-        "    replaced_at_step: 1\n"
-        "    integration_tests_to_rerun: [\"...\"]"
+        "Support artifact:\n"
+        "  docs/implementation/implementation-run-report.yaml\n"
+        "  child_prompt_path: \"docs/implementation/implementation-workflow.md\"\n"
+        "  child_run_dir: \"/abs/or/relative/worktree/path\"\n"
+        "  execution_mode: \"fresh\"  # fresh | resume\n"
+        "  completion_status: \"completed\"  # completed | halted\n"
+        "  halt_reason: \"\"\n"
+        "  prompt_results:\n"
+        "    - prompt_index: 1\n"
+        "      title: \"Prompt title\"\n"
+        "      verdict: \"pass\"\n"
+        "      iterations: 1\n"
+        "  files_changed: [\"relative/path\", ...]\n"
+        "  test_commands_observed:\n"
+        "    - command: \"pytest -q\"\n"
+        "      exit_code: 0\n"
+        "  next_action: \"none\""
     ),
     checklist_examples_good=[
         (
-            "No build_order step references a component whose "
-            "dependencies (from Phase 2 design) appear at a later step "
-            "without a simulation standing in"
+            "The workflow file contains a small sequence of runnable child "
+            "prompts that introduce tests first, then implementation, and "
+            "ends with a final verification prompt"
         ),
         (
-            "Every AC-* acceptance criterion from Phase 1 is referenced "
-            "by at least one unit test or integration test in the plan"
+            "The run report names only files and test commands that the child "
+            "workflow actually produced or observed in the current worktree"
         ),
     ],
     checklist_examples_bad=[
-        "The implementation plan covers all components",
-        "Tests are planned",
+        "The implementation approach seems reasonable",
+        "The report mentions the child run",
     ],
     prompt_module_path=_PROMPT_PHASE_6,
 )
@@ -1028,39 +1015,39 @@ _PHASE_7 = PhaseConfig(
     predecessors=["PH-006-incremental-implementation"],
     input_source_templates=[
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_1),
+            ref_template=_tpl(_OUTPUT_PHASE_0),
             role=InputRole.PRIMARY,
             format="yaml",
             description=(
-                "Feature specification with acceptance criteria -- the "
-                "primary source for E2E test derivation"
+                "Requirements inventory whose RI-* items must be verified "
+                "against the finished implementation"
+            ),
+        ),
+        InputSourceTemplate(
+            ref_template=_tpl(_OUTPUT_PHASE_1),
+            role=InputRole.VALIDATION_REFERENCE,
+            format="yaml",
+            description=(
+                "Feature specification for validating feature coverage and "
+                "mapping requirement results back to FT-* items"
             ),
         ),
         InputSourceTemplate(
             ref_template=_tpl(_OUTPUT_PHASE_6),
             role=InputRole.VALIDATION_REFERENCE,
-            format="yaml",
+            format="markdown",
             description=(
-                "Implementation plan for validating that E2E tests "
-                "align with the build and integration test plan"
+                "Implementation workflow prompt used to understand what the "
+                "child prompts were supposed to build and verify"
             ),
         ),
         InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_3),
+            ref_template=_tpl(_OUTPUT_PHASE_6_REPORT),
             role=InputRole.VALIDATION_REFERENCE,
             format="yaml",
             description=(
-                "Solution design for validating that E2E tests cover "
-                "component interaction paths and realization maps"
-            ),
-        ),
-        InputSourceTemplate(
-            ref_template=_tpl(_OUTPUT_PHASE_0),
-            role=InputRole.UPSTREAM_TRACEABILITY,
-            format="yaml",
-            description=(
-                "Requirements inventory for end-to-end traceability "
-                "from RI through FT, AC, to E2E"
+                "Implementation run report containing the child execution "
+                "evidence that final verification must cross-check"
             ),
         ),
     ],
@@ -1068,114 +1055,93 @@ _PHASE_7 = PhaseConfig(
     output_format="yaml",
     expected_output_files=[_OUTPUT_PHASE_7],
     extraction_focus=(
-        "Chain completeness: every RI-* requirement traces through FT-*\n"
-        "features and AC-* acceptance criteria to at least one E2E-*\n"
-        "test.  No broken chains.  Test specificity: every E2E test\n"
-        "defines concrete setup, action, and assertion steps -- not\n"
-        "abstract descriptions.  Negative coverage: critical features\n"
-        "must have E2E tests for both the success path and at least one\n"
-        "failure/boundary path."
+        "Truthful final verification: every requirement result must be grounded\n"
+        "in actual implementation evidence and actual verification commands.\n"
+        "Coverage clarity: the report must account for every RI-* item as\n"
+        "satisfied, partial, or unsatisfied without inflating support.\n"
+        "Implementation alignment: the verification evidence must be consistent\n"
+        "with the child workflow and child run report instead of inventing a\n"
+        "cleaner outcome than the implementation really achieved."
     ),
     generation_instructions=(
-        "Read the feature specification, implementation plan, solution\n"
-        "design, and requirements inventory.  Produce a verification\n"
-        "plan YAML.\n"
+        "Read the requirements inventory, feature specification,\n"
+        "implementation workflow, and implementation run report. Produce a\n"
+        "final verification report YAML at docs/verification/verification-report.yaml.\n"
         "\n"
-        "e2e_tests:\n"
-        "  - id: E2E-AREA-NNN  # AREA is a short domain tag\n"
-        "    name: descriptive test name\n"
-        "    feature_ref: FT-NNN\n"
-        "    acceptance_criteria_refs: [AC-NNN-NN, ...]\n"
-        "    type: positive | negative | boundary\n"
-        "    setup:\n"
-        "      - step: description of precondition setup\n"
-        "    actions:\n"
-        "      - step: description of user or system action\n"
-        "    assertions:\n"
-        "      - description of what to verify after the actions\n"
+        "verification_commands:\n"
+        "  - command: pytest -q\n"
+        "    exit_code: 0\n"
+        "    purpose: explain what this verifies\n"
+        "    evidence: what file, output, or requirement result it supports\n"
         "\n"
-        "traceability_matrix:\n"
+        "requirement_results:\n"
         "  - inventory_ref: RI-NNN\n"
         "    feature_refs: [FT-NNN, ...]\n"
-        "    acceptance_criteria_refs: [AC-NNN-NN, ...]\n"
-        "    e2e_test_refs: [E2E-AREA-NNN, ...]\n"
-        "    coverage_status: covered | partial | uncovered\n"
+        "    status: satisfied | partial | unsatisfied\n"
+        "    evidence:\n"
+        "      files: [relative/path, ...]\n"
+        "      commands: [pytest -q, ...]\n"
+        "      notes: concise explanation of why this status is justified\n"
         "\n"
         "coverage_summary:\n"
         "  total_requirements: N\n"
-        "  covered: N\n"
+        "  satisfied: N\n"
         "  partial: N\n"
-        "  uncovered: N\n"
-        "  coverage_percentage: NN.N\n"
+        "  unsatisfied: N\n"
         "\n"
-        "Use the solution design to verify that E2E tests exercise the\n"
-        "component interaction paths from the feature_realization_map.\n"
-        "Every chain in the traceability matrix must reach from RI-*\n"
-        "through FT-* and AC-* to at least one E2E-* test.  Gaps must\n"
-        "be marked as 'uncovered' with a reason."
+        "Account for every RI-* item exactly once. Do not invent implementation\n"
+        "success that the child run report does not support."
     ),
     judge_guidance=(
         "Check for these failure modes:\n"
         "\n"
-        "1. Broken chains: verify every row in the traceability_matrix has\n"
-        "   non-empty feature_refs, acceptance_criteria_refs, AND\n"
-        "   e2e_test_refs.  Flag any row where the chain is incomplete.\n"
-        "2. Superficial tests: flag E2E tests whose assertions list\n"
-        "   contains only generic checks ('page loads', 'no errors')\n"
-        "   without verifying business-specific outcomes.\n"
-        "3. Missing negative tests: for each feature that handles user\n"
-        "   input or external data, verify there is at least one E2E\n"
-        "   test of type 'negative' or 'boundary'.\n"
-        "4. Phantom references: every FT-NNN, AC-NNN-NN, and RI-NNN\n"
-        "   referenced in the matrix must actually exist in the Phase 0\n"
-        "   and Phase 1 artifacts.\n"
-        "5. Coverage accuracy: verify that coverage_summary numbers match\n"
-        "   the actual counts in the traceability_matrix."
+        "1. Phantom satisfaction: the report marks a requirement satisfied\n"
+        "   without enough file or command evidence.\n"
+        "2. Ignored child-run outcome: the report treats the implementation\n"
+        "   as complete even though the run report or workflow shows gaps.\n"
+        "3. Thin evidence: requirement rows cite vague notes but no concrete\n"
+        "   files or commands when concrete evidence should exist.\n"
+        "4. Coverage overstatement: coverage_summary inflates satisfied or\n"
+        "   partial counts beyond what the requirement rows support.\n"
+        "5. Unsupported feature links: feature_refs cite FT-* items whose\n"
+        "   meaning is not actually reflected in the evidence."
     ),
     artifact_format="yaml",
     artifact_schema_description=(
-        "e2e_tests:\n"
-        "  - id: \"E2E-AREA-NNN\"  # AREA is a short domain tag\n"
-        "    name: \"...\"\n"
-        "    feature_ref: \"FT-NNN\"\n"
-        "    acceptance_criteria_refs: [\"AC-NNN-NN\", ...]\n"
-        "    type: \"positive\"  # positive | negative | boundary\n"
-        "    setup:\n"
-        "      - step: \"...\"\n"
-        "    actions:\n"
-        "      - step: \"...\"\n"
-        "    assertions:\n"
-        "      - \"...\"\n"
+        "verification_commands:\n"
+        "  - command: \"pytest -q\"\n"
+        "    exit_code: 0\n"
+        "    purpose: \"...\"\n"
+        "    evidence: \"...\"\n"
         "\n"
-        "traceability_matrix:\n"
+        "requirement_results:\n"
         "  - inventory_ref: \"RI-NNN\"\n"
         "    feature_refs: [\"FT-NNN\", ...]\n"
-        "    acceptance_criteria_refs: [\"AC-NNN-NN\", ...]\n"
-        "    e2e_test_refs: [\"E2E-AREA-NNN\", ...]\n"
-        "    coverage_status: \"covered\"  # covered | partial | uncovered\n"
+        "    status: \"satisfied\"  # satisfied | partial | unsatisfied\n"
+        "    evidence:\n"
+        "      files: [\"relative/path\", ...]\n"
+        "      commands: [\"pytest -q\", ...]\n"
+        "      notes: \"...\"\n"
         "\n"
         "coverage_summary:\n"
         "  total_requirements: 0\n"
-        "  covered: 0\n"
+        "  satisfied: 0\n"
         "  partial: 0\n"
-        "  uncovered: 0\n"
-        "  coverage_percentage: 0.0"
+        "  unsatisfied: 0"
     ),
     checklist_examples_good=[
         (
-            "Every row in the traceability_matrix has a complete chain: "
-            "non-empty inventory_ref, feature_refs, acceptance_criteria_refs, "
-            "and e2e_test_refs -- no broken links"
+            "Every RI-* item appears exactly once in requirement_results and "
+            "rows marked satisfied cite concrete file or command evidence"
         ),
         (
-            "Every feature that accepts user input or external data has "
-            "at least one E2E test of type 'negative' or 'boundary' "
-            "that verifies rejection of invalid inputs"
+            "verification_commands are a subset of the commands that the "
+            "implementation child run actually observed"
         ),
     ],
     checklist_examples_bad=[
-        "Verification covers the requirements",
-        "E2E tests exist",
+        "The final verification seems thorough",
+        "The report references implementation evidence",
     ],
     prompt_module_path=_PROMPT_PHASE_7,
 )

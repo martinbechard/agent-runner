@@ -645,6 +645,13 @@ def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
         values["raw_requirements_path"] = (
             f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}"
         )
+    if phase_config.phase_id == "PH-006-incremental-implementation":
+        repo_root = Path(__file__).resolve().parents[4]
+        prompt_runner_pythonpath = repo_root / ".prompt-runner" / "src" / "cli"
+        values["prompt_runner_command"] = (
+            f'PYTHONPATH="{prompt_runner_pythonpath}" '
+            f'"{sys.executable}" -m prompt_runner'
+        )
     return values
 
 

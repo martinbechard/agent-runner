@@ -378,39 +378,47 @@ Verify that:
 
 Current phase output: {output_path}
 Prior phase outputs:
+  Phase 0 (Requirements Inventory): docs/requirements/requirements-inventory.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
   Phase 3 (Solution Design): docs/design/solution-design.yaml
   Phase 4 (Interface Contracts): docs/design/interface-contracts.yaml
   Phase 5 (Intelligent Simulations): docs/simulations/simulation-definitions.yaml
 
 ### 1. Traceability
-Read {output_path}.  For each build_order step:
-- Verify component_ref references an existing CMP-NNN from Phase 3.
-- Verify contracts_implemented references existing CTR-NNN from Phase 4.
-- Verify simulations_used references existing SIM-NNN from Phase 5.
-For each unit test:
-- Verify acceptance_criteria_refs reference existing AC-NNN-NN from Phase 1.
-- Verify contract_ref references an existing CTR-NNN from Phase 4.
+Read {output_path}. Verify that it is a prompt-runner workflow module whose
+module slug is implementation-workflow.
+For each child prompt in the workflow:
+- Verify the prompt advances a concrete implementation slice rather than writing
+  another planning artifact.
+- Verify the prompt's test-first intent is traceable to FT-* acceptance
+  criteria, CTR-* contracts, or SIM-* backed behavior from earlier phases.
 
 ### 2. Coverage
-- Every CMP-NNN from Phase 3 must appear in the build_order.
-- Every CTR-NNN from Phase 4 must appear in at least one step's
-  contracts_implemented.
-- Every SIM-NNN from Phase 5 must appear in the simulation_replacement_sequence.
-- Every AC-NNN-NN from Phase 1 must be referenced by at least one test.
+- Verify the workflow covers the required implementation scope from Phases 1,
+  3, 4, and 5.
+- Flag missing features, contracts, or simulation-backed behaviors only if
+  their downstream implementation meaning is not already covered by one or more
+  other child prompts.
+- Verify the workflow ends with a final verification prompt over the assembled
+  implementation.
 
 ### 3. Consistency
 Verify that:
-- Build order respects the Phase 3 dependency graph: no component is built
-  before its dependencies are built or simulated.
-- Every SIM-* in simulation_replacement_sequence has a valid replaced_at_step.
-- integration_tests_to_rerun references actual integration test names.
+- The workflow uses a TDD cadence: write or tighten a failing test, implement
+  only enough code to pass, then continue.
+- The workflow does not tell the child runner to build against a hypothetical
+  copy instead of the current worktree.
+- The workflow does not drift back into requirements, architecture, or design
+  authoring.
 
 ### 4. Integration
-- Verify no build step references a contract belonging to a not-yet-built
-  component without a simulation standing in.
-- Verify simulation replacement is consistent with the build order.
-- Verify test coverage aligns with Phase 1 acceptance criteria priorities.\
+- Verify the workflow is compatible with the actual project worktree and can
+  create real source files, tests, and README content.
+- Verify the final child prompt leaves enough evidence for Phase 7 to perform
+  truthful final verification.
+- Verify the support report at
+  docs/implementation/implementation-run-report.yaml, if present, is consistent
+  with the workflow and actual child-run artifacts.\
 """,
 
     # ------------------------------------------------------------------
@@ -423,37 +431,36 @@ Current phase output: {output_path}
 Prior phase outputs:
   Phase 0 (Requirements Inventory): docs/requirements/requirements-inventory.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 3 (Solution Design): docs/design/solution-design.yaml
-  Phase 6 (Incremental Implementation): docs/implementation/implementation-plan.yaml
+  Phase 6 Workflow: docs/implementation/implementation-workflow.md
+  Phase 6 Run Report: docs/implementation/implementation-run-report.yaml
 
 ### 1. Traceability
-Read {output_path}.  For each E2E-* test:
-- Verify feature_ref references an existing FT-NNN from Phase 1.
-- Verify acceptance_criteria_refs reference existing AC-NNN-NN from Phase 1.
-For each traceability_matrix row:
+Read {output_path}. For each requirement_results row:
 - Verify inventory_ref references an existing RI-NNN from Phase 0.
 - Verify feature_refs reference existing FT-NNN from Phase 1.
-- Verify e2e_test_refs reference existing E2E-* tests in this file.
+- Verify the row's evidence is grounded in actual files and command outcomes
+  from the implementation run report.
 
 ### 2. Coverage
 Read docs/requirements/requirements-inventory.yaml.  Collect all RI-NNN IDs.
-For each RI-NNN, verify the traceability_matrix contains a row with a
-complete chain: non-empty feature_refs, acceptance_criteria_refs, AND
-e2e_test_refs.  Flag any RI-NNN without a complete chain.
-Verify coverage_summary numbers match actual counts.
+For each RI-NNN, verify requirement_results contains exactly one row that
+accounts for it as satisfied, partial, or unsatisfied.
+Verify coverage_summary numbers match the actual row counts.
 
 ### 3. Consistency
 Verify that:
-- All E2E-* IDs are unique.
 - Every ID reference resolves to the correct source phase.
 - coverage_summary.total_requirements matches the RI-* count in Phase 0.
-- covered + partial + uncovered = total_requirements.
-- coverage_percentage = (covered / total_requirements) * 100.
+- satisfied + partial + unsatisfied = total_requirements.
+- Rows marked satisfied cite at least one concrete file or command.
 
 ### 4. Integration
-- Verify E2E tests exercise the component interaction paths from Phase 3.
-- Verify no E2E test references features marked out-of-scope in Phase 1.
-- Verify alignment with the Phase 6 implementation plan.\
+- Verify the report does not overstate implementation success beyond what the
+  Phase 6 workflow and run report support.
+- Verify every verification command was actually observed during the child
+  implementation run.
+- Verify the final verification report is aligned with the implemented project,
+  not with a hypothetical completion state.\
 """,
 }
 
@@ -463,42 +470,44 @@ Verify that:
 # ---------------------------------------------------------------------------
 
 END_TO_END_PROMPT_TEMPLATE = """\
-You are performing a final end-to-end verification across all seven phases
+You are performing a final end-to-end verification across all eight phases
 of an AI-driven software development methodology.
 
 ## All phase outputs
 
   Phase 0 (Requirements Inventory): docs/requirements/requirements-inventory.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 2 (Solution Design): docs/design/solution-design.yaml
-  Phase 3 (Interface Contracts): docs/design/interface-contracts.yaml
-  Phase 4 (Intelligent Simulations): docs/simulations/simulation-definitions.yaml
-  Phase 5 (Implementation Plan): docs/implementation/implementation-plan.yaml
-  Phase 6 (Verification Sweep): docs/verification/verification-report.yaml
+  Phase 2 (Architecture): docs/architecture/stack-manifest.yaml
+  Phase 3 (Solution Design): docs/design/solution-design.yaml
+  Phase 4 (Interface Contracts): docs/design/interface-contracts.yaml
+  Phase 5 (Intelligent Simulations): docs/simulations/simulation-definitions.yaml
+  Phase 6 (Implementation Workflow): docs/implementation/implementation-workflow.md
+  Phase 6 Run Report: docs/implementation/implementation-run-report.yaml
+  Phase 7 (Verification Sweep): docs/verification/verification-report.yaml
 
 ## End-to-End Traceability Verification
 
 Trace every RI-* item from the Phase 0 requirements inventory through the
-full chain to E2E tests.  For each RI-NNN:
+full chain to implemented evidence. For each RI-NNN:
 
 1. Find which FT-* features reference it (source_inventory_refs in Phase 1).
 2. Find which CMP-* components realize those features (feature_realization_map
-   in Phase 2).
-3. Find which INT-* interactions connect those components (Phase 2).
-4. Find which CTR-* contracts cover those interactions (Phase 3).
-5. Find which SIM-* simulations verify those contracts (Phase 4).
-6. Find which build steps implement those components (Phase 5).
-7. Find which E2E-* tests verify those features (Phase 6).
+   in Phase 3).
+3. Find which CTR-* contracts cover the relevant behavior (Phase 4).
+4. Find which SIM-* simulations modeled the behavior before implementation
+   (Phase 5), if any.
+5. Find which child prompts in Phase 6 implemented and tested the behavior.
+6. Find which files or verification commands in Phase 7 are cited as evidence.
 
-Report any broken chain -- an RI-* item that cannot be traced to an E2E
-test, or any intermediate element that is orphaned.
+Report any broken chain -- an RI-* item that cannot be traced to implemented
+evidence, or any intermediate element that is orphaned.
 
 ### 1. Traceability
-- Every RI-* must reach at least one E2E-* through the full chain.
+- Every RI-* must reach at least one verification-evidence row through the full chain.
 - Every FT-* must be realized by at least one CMP-*.
-- Every INT-* must have at least one CTR-*.
 - Every CTR-* must have at least one SIM-*.
-- Every CMP-* must appear in the build_order.
+- The Phase 6 workflow must end with final verification and the Phase 6 run
+  report must describe a truthful child-run outcome.
 
 ### 2. Coverage
 - Calculate the percentage of RI-* items with complete chains.
@@ -514,8 +523,9 @@ test, or any intermediate element that is orphaned.
 
 ### 4. Integration
 - The verification report's coverage_summary must accurately reflect the
-  traceability matrix.
-- The implementation plan's test coverage must align with Phase 6's E2E tests.
+  requirement_results rows.
+- The implementation workflow and run report must align with the verification
+  evidence cited in Phase 7.
 - No phase's output may contradict another phase's output.
 
 ## Instructions

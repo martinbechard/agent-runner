@@ -643,10 +643,12 @@ class TestAssembleEndToEndPrompt:
         prompt = assemble_end_to_end_prompt()
         assert "requirements-inventory.yaml" in prompt
         assert "feature-specification.yaml" in prompt
+        assert "stack-manifest.yaml" in prompt
         assert "solution-design.yaml" in prompt
         assert "interface-contracts.yaml" in prompt
         assert "simulation-definitions.yaml" in prompt
-        assert "implementation-plan.yaml" in prompt
+        assert "implementation-workflow.md" in prompt
+        assert "implementation-run-report.yaml" in prompt
         assert "verification-report.yaml" in prompt
 
     def test_contains_traceability_instructions(self) -> None:
@@ -656,7 +658,7 @@ class TestAssembleEndToEndPrompt:
         assert "CMP-*" in prompt
         assert "CTR-*" in prompt
         assert "SIM-*" in prompt
-        assert "E2E-*" in prompt
+        assert "implemented evidence" in prompt
 
 
 # ---------------------------------------------------------------------------
@@ -732,8 +734,8 @@ class TestPhaseCrossRefChecks:
         t = PHASE_CROSS_REF_CHECKS["PH-007-verification-sweep"]
         assert "requirements-inventory.yaml" in t
         assert "feature-specification.yaml" in t
-        assert "solution-design.yaml" in t
-        assert "implementation-plan.yaml" in t
+        assert "implementation-workflow.md" in t
+        assert "implementation-run-report.yaml" in t
 
 
 # ---------------------------------------------------------------------------

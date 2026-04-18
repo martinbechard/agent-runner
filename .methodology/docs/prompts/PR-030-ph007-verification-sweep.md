@@ -2,21 +2,21 @@
 
 verification-sweep
 
-## Prompt 1: Produce Verification Sweep
+## Prompt 1: Produce Final Verification Report
 
 ### Required Files
 
 docs/features/feature-specification.yaml
-docs/implementation/implementation-plan.yaml
-docs/design/solution-design.yaml
 docs/requirements/requirements-inventory.yaml
+docs/implementation/implementation-workflow.md
+docs/implementation/implementation-run-report.yaml
 
 ### Include Files
 
 docs/features/feature-specification.yaml
-docs/implementation/implementation-plan.yaml
-docs/design/solution-design.yaml
 docs/requirements/requirements-inventory.yaml
+docs/implementation/implementation-workflow.md
+docs/implementation/implementation-run-report.yaml
 
 ### Checks Files
 
@@ -27,166 +27,162 @@ docs/verification/verification-report.yaml
 .methodology/src/cli/methodology_runner/phase_7_validation.py
 --feature-spec
 docs/features/feature-specification.yaml
---implementation-plan
-docs/implementation/implementation-plan.yaml
---solution-design
-docs/design/solution-design.yaml
 --requirements-inventory
 docs/requirements/requirements-inventory.yaml
+--implementation-workflow
+docs/implementation/implementation-workflow.md
+--implementation-run-report
+docs/implementation/implementation-run-report.yaml
 --verification-report
 docs/verification/verification-report.yaml
 
 ### Generation Prompt
 
-As a verification planner, you must build the verification sweep and
-traceability report from the upstream artifacts and write it to
+As a verification auditor, you must perform the final verification after the
+child implementation workflow completed and write the result to
 docs/verification/verification-report.yaml.
 
 The feature specification is provided above in <FEATURE_SPECIFICATION>.
-The implementation plan is provided above in <IMPLEMENTATION_PLAN>.
-The solution design is provided above in <SOLUTION_DESIGN>.
 The requirements inventory is provided above in <REQUIREMENTS_INVENTORY>.
-
-Module-local generator context:
-Embedded directives for this step:
-
-- Build an honest chain from `RI-*` through `FT-*` and `AC-*` to `E2E-*`.
-- Write end-to-end tests that are concrete enough to review: real setup,
-  actions, and feature-specific assertions.
-- Add negative or boundary coverage where the feature or input shape requires
-  it.
-- Mark rows partial or uncovered when the upstream artifacts do not support a
-  complete chain. Do not fake completeness.
+The implementation workflow is provided above in <IMPLEMENTATION_WORKFLOW>.
+The implementation run report is provided above in <IMPLEMENTATION_RUN_REPORT>.
 
 Phase purpose:
-- Define concrete end-to-end tests.
-- Build a traceability matrix from RI-* through FT-* and AC-* to E2E-*.
-- Summarize overall coverage and explicit remaining gaps.
+- Confirm the child implementation workflow completed successfully.
+- Verify the implemented workspace using real files and real verification
+  commands, not hypothetical plans.
+- Record per-requirement satisfaction with concrete evidence.
+- Report any partial or unsatisfied requirements honestly.
 
-Important interpretation:
-- This phase is a verification-planning layer.
-- E2E tests must be concrete enough to review, but they are still plans rather
-  than executable code.
-- If upstream artifacts intentionally leave a requirement uncovered, record that
-  honestly in coverage_status rather than fabricating a complete chain.
+Verification discipline:
+- Use the implementation run report as the primary source for:
+  - which files were changed
+  - which test commands were already observed
+  - whether the child run completed
+- Inspect the changed files and rerun low-cost verification commands when
+  needed to confirm real behavior.
+- Do not fabricate evidence. Only claim a requirement is satisfied when the
+  files and observed command behavior materially support that claim.
+- If a requirement is only partially supported, mark it `partial` rather than
+  forcing `satisfied`.
+- Do not mark a requirement `satisfied` based only on subjective judgment,
+  stylistic preference, or a vague sense that the implementation is "close
+  enough".
+- If a requirement contains qualitative language and the evidence only proves
+  part of it, use `partial` or `unsatisfied` unless the evidence proves the
+  underlying claim explicitly.
+- If exact runtime output matters, preserve that exact observed output in the
+  evidence notes rather than paraphrasing it.
 
 Output schema to satisfy:
-e2e_tests:
-  - id: "E2E-AREA-NNN"
-    name: "Descriptive test name"
-    feature_ref: "FT-NNN"
-    acceptance_criteria_refs: ["AC-NNN-NN", "..."]
-    type: "positive"
-    setup:
-      - step: "Precondition"
-    actions:
-      - step: "Action"
-    assertions:
-      - "What must be true"
-traceability_matrix:
+verification_commands:
+  - command: "pytest -q"
+    exit_code: 0
+    purpose: "What this command verified"
+    evidence: "Short observed result"
+requirement_results:
   - inventory_ref: "RI-NNN"
     feature_refs: ["FT-NNN", "..."]
-    acceptance_criteria_refs: ["AC-NNN-NN", "..."]
-    e2e_test_refs: ["E2E-AREA-NNN", "..."]
-    coverage_status: "covered"
+    status: "satisfied"
+    evidence:
+      files: ["relative/path", "..."]
+      commands: ["command", "..."]
+      notes: "Why this requirement is satisfied, partial, or unsatisfied"
 coverage_summary:
   total_requirements: 0
-  covered: 0
+  satisfied: 0
   partial: 0
-  uncovered: 0
-  coverage_percentage: 0.0
+  unsatisfied: 0
+  satisfaction_percentage: 0.0
 
 Acceptance requirements:
 - The file must be valid YAML parseable by a standard YAML parser.
 - The top-level keys must appear exactly in this order:
-  e2e_tests
-  traceability_matrix
+  verification_commands
+  requirement_results
   coverage_summary
-- Every E2E test must contain:
-  id
-  name
-  feature_ref
-  acceptance_criteria_refs
-  type
-  setup
-  actions
-  assertions
-- type must be one of:
-  positive
-  negative
-  boundary
 - Every RI-* from docs/requirements/requirements-inventory.yaml must appear in
-  traceability_matrix.
-- coverage_status must be one of:
-  covered
+  requirement_results.
+- status must be one of:
+  satisfied
   partial
-  uncovered
-- coverage_summary counts must match the actual matrix counts.
+  unsatisfied
+- Every requirement_results entry must include:
+  inventory_ref
+  feature_refs
+  status
+  evidence
+- evidence.files, evidence.commands, and evidence.notes must all be present.
+- coverage_summary counts must match the actual requirement_results rows.
 - Do not create any files other than docs/verification/verification-report.yaml.
 - Write the full file contents to docs/verification/verification-report.yaml.
 
 ### Validation Prompt
 
-Review the current verification sweep against <FEATURE_SPECIFICATION>,
-<IMPLEMENTATION_PLAN>, <SOLUTION_DESIGN>, and <REQUIREMENTS_INVENTORY>.
-The current artifact is provided above in <VERIFICATION_REPORT>.
+Review the current final verification report against <FEATURE_SPECIFICATION>,
+<REQUIREMENTS_INVENTORY>, <IMPLEMENTATION_WORKFLOW>, and
+<IMPLEMENTATION_RUN_REPORT>. The current artifact is provided above in
+<VERIFICATION_REPORT>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
-Module-local judge context:
-
-- Review for broken chains, superficial tests, missing negative or boundary
-  coverage, phantom references, and misleading coverage claims.
-
-Your job is to decide whether the generated verification sweep is phase-ready.
+Your job is to decide whether the final verification report is truthful and
+phase-ready.
 
 Review method:
-- Iterate through traceability_matrix rows in RI-* order.
-- Then iterate through e2e_tests in E2E-* order.
-- Then review coverage_summary against the actual matrix.
-- Before flagging a requirement, chain, or coverage claim as missing, check
-  whether that same downstream-actionable verification meaning is already
-  covered elsewhere in the traceability matrix or E2E test set.
-- Only flag it as missing if the allegedly missing content would change
-  downstream verification confidence or coverage truthfulness.
+- Iterate through requirement_results in RI-* order.
+- Then iterate through verification_commands in authored order.
+- Then review coverage_summary against the actual requirement rows.
+- Before flagging evidence or coverage as missing, check whether the same
+  downstream-actionable verification meaning is already covered elsewhere in
+  the report.
+- Only flag it as missing if the allegedly missing content would change the
+  truthfulness of the final verification outcome.
 
 Focus your semantic review on these failure modes:
 
-1. Broken chains:
-   - Flag RI rows that claim coverage but do not materially connect through the
-     referenced features, acceptance criteria, and E2E tests.
-2. Superficial tests:
-   - Flag E2E tests that only assert generic success and do not verify
-     feature-specific outcomes.
-3. Missing negative or boundary coverage:
-   - Flag features that materially need non-happy-path coverage but do not have it.
-4. Phantom references:
-   - Flag references that technically exist but are semantically unrelated to
-     the row or test they are used to justify.
-5. Misleading coverage claims:
-   - Flag rows or summaries that overstate coverage rather than honestly marking
-     partial or uncovered status.
+1. Phantom satisfaction:
+   - Flag requirements marked satisfied without materially relevant file or
+     command evidence.
+2. Ignored child-run outcome:
+   - Flag reports that treat a halted child workflow as successfully verified.
+3. Thin evidence:
+   - Flag rows whose evidence is too generic to justify the stated status.
+4. Coverage overstatement:
+   - Flag reports that force `satisfied` where the evidence supports only
+     `partial` or `unsatisfied`.
+5. Unsupported feature links:
+   - Flag feature_refs that do not materially connect the requirement to the
+     implementation evidence.
+6. Subjective satisfaction:
+   - Flag rows marked satisfied when the evidence is only qualitative,
+     impressionistic, or inferred rather than directly supported by files or
+     commands.
+7. Evidence contradiction:
+   - Flag rows whose evidence notes contradict the exact observed command
+     outputs, test assertions, or implementation files.
 
 Review instructions:
-- Use the deterministic validation report as authoritative for structural
-  checks, reference existence, matrix row coverage, and summary counts.
-- Treat this phase as a verification-planning layer.
-- Only ask for a change when the current report is wrong, contradictory,
-  materially unsupported, or materially misstates coverage.
-- Do not force fake completeness. If a requirement is genuinely partial or
-  uncovered given upstream artifacts, partial or uncovered may be correct.
-- Do not request wording polish or alternate test names unless the current
+- Treat this phase as final verification of the real implemented workspace.
+- Do not ask for speculative future tests if the current report can already
+  state an honest partial or unsatisfied outcome.
+- Do not request wording polish or alternate phrasing unless the current
   wording is misleading or materially consequential.
-- If you find issues, cite exact RI-* / FT-* / AC-* / E2E-* IDs.
+- If you find issues, cite exact RI-* / FT-* IDs and, when useful, the file
+  paths or verification commands involved.
+- When evaluating a `satisfied` row, ask explicitly:
+  - does the cited evidence prove the requirement's actual meaning?
+  - or is the row only inferring satisfaction from nearby implementation?
 - For each material correction, include at least one corrective rule in this form:
   - RULE: the generator MUST / MUST NOT / SHOULD / SHOULD NOT make a specific change
     - BECAUSE: why that correction is necessary
-- Use VERDICT: pass only if the artifact is phase-ready with no material
-  traceability, specificity, or coverage-accounting defects.
-- Use VERDICT: revise if the artifact can be corrected within this same file.
-- Use VERDICT: escalate only if the upstream artifacts are too ambiguous or
-  contradictory to produce a stable verification sweep.
+- Use VERDICT: pass only if the report is truthful, complete, and materially
+  supported by the implementation evidence.
+- Use VERDICT: revise if the report can be corrected within this same file.
+- Use VERDICT: escalate only if the child implementation run failed or the
+  workspace does not contain enough real evidence to complete final
+  verification.
 
 End with exactly one of:
 VERDICT: pass
