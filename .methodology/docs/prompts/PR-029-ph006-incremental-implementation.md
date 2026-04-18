@@ -38,21 +38,14 @@ docs/implementation/implementation-plan.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-006-incremental-implementation.
+As an implementation planner, you must build a dependency-respecting
+implementation plan from the design artifacts and write it to
+docs/implementation/implementation-plan.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/design/interface-contracts.yaml
-- docs/simulations/simulation-definitions.yaml
-- docs/features/feature-specification.yaml
-- docs/design/solution-design.yaml
-
-Write:
-- docs/implementation/implementation-plan.yaml
-
-Task:
-Produce the final acceptance-ready YAML incremental implementation plan in one
-file. Use this prompt pair's built-in revise loop to correct any issues the
-judge finds. Do not create draft-only or partial versions on purpose.
+The interface contracts are provided above in <INTERFACE_CONTRACTS>.
+The simulations are provided above in <SIMULATION_DEFINITIONS>.
+The feature specification is provided above in <FEATURE_SPECIFICATION>.
+The solution design is provided above in <SOLUTION_DESIGN>.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -116,14 +109,9 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/design/interface-contracts.yaml
-- docs/simulations/simulation-definitions.yaml
-- docs/features/feature-specification.yaml
-- docs/design/solution-design.yaml
-
-Read:
-- docs/implementation/implementation-plan.yaml
+Review the current implementation plan against <INTERFACE_CONTRACTS>,
+<SIMULATION_DEFINITIONS>, <FEATURE_SPECIFICATION>, and <SOLUTION_DESIGN>.
+The current artifact is provided above in <IMPLEMENTATION_PLAN>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -134,6 +122,18 @@ Module-local judge context:
   simulation-retirement gaps, and unsupported sequencing detail.
 
 Your job is to decide whether the generated implementation plan is phase-ready.
+
+Review method:
+- Iterate through build_order entries in step order.
+- Then iterate through unit_test_plan entries by component_ref.
+- Then iterate through integration_test_plan entries in authored order.
+- Then iterate through simulation_replacement_sequence entries in SIM-* order.
+- Before flagging a plan element as missing, check whether that same
+  downstream-actionable sequencing or verification meaning is already covered
+  elsewhere in the plan.
+- Only flag it as missing if the allegedly missing content would change
+  downstream implementation execution or verification work.
+
 Focus your semantic review on these failure modes:
 
 1. Ordering violations:

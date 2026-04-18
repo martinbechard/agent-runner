@@ -38,21 +38,14 @@ docs/verification/verification-report.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-007-verification-sweep.
+As a verification planner, you must build the verification sweep and
+traceability report from the upstream artifacts and write it to
+docs/verification/verification-report.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/features/feature-specification.yaml
-- docs/implementation/implementation-plan.yaml
-- docs/design/solution-design.yaml
-- docs/requirements/requirements-inventory.yaml
-
-Write:
-- docs/verification/verification-report.yaml
-
-Task:
-Produce the final acceptance-ready YAML verification sweep in one file.
-Use this prompt pair's built-in revise loop to correct any issues the judge
-finds. Do not create draft-only or partial versions on purpose.
+The feature specification is provided above in <FEATURE_SPECIFICATION>.
+The implementation plan is provided above in <IMPLEMENTATION_PLAN>.
+The solution design is provided above in <SOLUTION_DESIGN>.
+The requirements inventory is provided above in <REQUIREMENTS_INVENTORY>.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -134,14 +127,9 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/features/feature-specification.yaml
-- docs/implementation/implementation-plan.yaml
-- docs/design/solution-design.yaml
-- docs/requirements/requirements-inventory.yaml
-
-Read:
-- docs/verification/verification-report.yaml
+Review the current verification sweep against <FEATURE_SPECIFICATION>,
+<IMPLEMENTATION_PLAN>, <SOLUTION_DESIGN>, and <REQUIREMENTS_INVENTORY>.
+The current artifact is provided above in <VERIFICATION_REPORT>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -152,6 +140,17 @@ Module-local judge context:
   coverage, phantom references, and misleading coverage claims.
 
 Your job is to decide whether the generated verification sweep is phase-ready.
+
+Review method:
+- Iterate through traceability_matrix rows in RI-* order.
+- Then iterate through e2e_tests in E2E-* order.
+- Then review coverage_summary against the actual matrix.
+- Before flagging a requirement, chain, or coverage claim as missing, check
+  whether that same downstream-actionable verification meaning is already
+  covered elsewhere in the traceability matrix or E2E test set.
+- Only flag it as missing if the allegedly missing content would change
+  downstream verification confidence or coverage truthfulness.
+
 Focus your semantic review on these failure modes:
 
 1. Broken chains:

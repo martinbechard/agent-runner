@@ -18,16 +18,11 @@ docs/architecture/architecture-design.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-002-architecture.
+As a software architect, you must turn the feature specification into a
+coherent architecture document and write it to
+docs/architecture/architecture-design.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/features/feature-specification.yaml
-
-Write:
-- docs/architecture/architecture-design.yaml
-
-Produce one final YAML architecture document.
-Do not create notes, drafts, or side files.
+The feature specification is provided above in <FEATURE_SPECIFICATION>.
 
 This phase is a constrained elaboration phase.
 You may choose technology and architecture details that are coherent with the
@@ -54,13 +49,20 @@ Requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/features/feature-specification.yaml
-
-Read:
-- docs/architecture/architecture-design.yaml
+Review the current architecture artifact against <FEATURE_SPECIFICATION>.
+The current artifact is provided above in <ARCHITECTURE_DESIGN>.
 
 Decide whether the YAML architecture is phase-ready.
+
+Review method:
+- Iterate through the authored architecture units in order.
+- Review each architecture unit for supported feature coverage, justified
+  boundaries, and downstream usefulness.
+- Before flagging a feature, boundary, or rationale as missing, check whether
+  that same actionable meaning is already covered elsewhere in the
+  architecture.
+- Only flag it as missing if the allegedly missing content would change
+  downstream design, contracts, implementation, or verification.
 
 Focus on material defects only:
 - missing feature coverage

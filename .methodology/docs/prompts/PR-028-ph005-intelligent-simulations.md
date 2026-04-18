@@ -30,19 +30,12 @@ docs/simulations/simulation-definitions.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-005-intelligent-simulations.
+As a simulation designer, you must derive contract-faithful simulations from
+the interface contracts and write them to
+docs/simulations/simulation-definitions.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/design/interface-contracts.yaml
-- docs/features/feature-specification.yaml
-
-Write:
-- docs/simulations/simulation-definitions.yaml
-
-Task:
-Produce the final acceptance-ready YAML simulation definitions artifact in one
-file. Use this prompt pair's built-in revise loop to correct any issues the
-judge finds. Do not create draft-only or partial versions on purpose.
+The interface contracts are provided above in <INTERFACE_CONTRACTS>.
+The feature specification is provided above in <FEATURE_SPECIFICATION>.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -146,12 +139,9 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/design/interface-contracts.yaml
-- docs/features/feature-specification.yaml
-
-Read:
-- docs/simulations/simulation-definitions.yaml
+Review the current simulation definitions against <INTERFACE_CONTRACTS> and
+<FEATURE_SPECIFICATION>.
+The current artifact is provided above in <SIMULATION_DEFINITIONS>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -162,6 +152,18 @@ Module-local judge context:
   missing error coverage, contract underuse, and unsupported synthetic setup.
 
 Your job is to decide whether the generated simulation definitions are phase-ready.
+
+Review method:
+- Iterate through simulations in SIM-* order.
+- For each simulation, review its contract_ref, scenario_bank,
+  llm_adjuster, and validation_rules together.
+- Within each simulation, iterate through scenarios in authored order.
+- Before flagging coverage, assertions, or scenario detail as missing, check
+  whether that same downstream-actionable contract meaning is already covered
+  elsewhere in the simulation set.
+- Only flag it as missing if the allegedly missing content would change
+  downstream verification or implementation planning.
+
 Focus your semantic review on these failure modes:
 
 1. Validation gaps:

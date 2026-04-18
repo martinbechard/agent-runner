@@ -30,19 +30,12 @@ docs/features/feature-specification.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-003-solution-design.
+As a software designer, you must refine the architecture into explicit
+component responsibilities and write the solution design to
+docs/design/solution-design.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/architecture/architecture-design.yaml
-- docs/features/feature-specification.yaml
-
-Write:
-- docs/design/solution-design.yaml
-
-Task:
-Produce the final acceptance-ready YAML solution design in one file.
-Use this prompt pair's built-in revise loop to correct any issues the judge
-finds. Do not create draft-only or partial versions on purpose.
+The architecture is provided above in <ARCHITECTURE_DESIGN>.
+The feature specification is provided above in <FEATURE_SPECIFICATION>.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -134,12 +127,9 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/architecture/architecture-design.yaml
-- docs/features/feature-specification.yaml
-
-Read:
-- docs/design/solution-design.yaml
+Review the current solution design against <ARCHITECTURE_DESIGN> and
+<FEATURE_SPECIFICATION>.
+The current artifact is provided above in <SOLUTION_DESIGN>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -156,6 +146,18 @@ Embedded directives for this step:
   leakage that belongs to a later phase.
 
 Your job is to decide whether the generated solution design is phase-ready.
+
+Review method:
+- Iterate through components in CMP-* order.
+- For each component, review responsibility, technology, feature_realization_map,
+  and dependencies together.
+- Then iterate through interactions in INT-* order.
+- Before flagging any feature realization, interaction, or ownership boundary
+  as missing, check whether that same downstream-actionable meaning is already
+  covered elsewhere in the artifact.
+- Only flag it as missing if the allegedly missing content would change
+  downstream contracts or implementation work.
+
 Focus your semantic review on these failure modes:
 
 1. Orphan components:

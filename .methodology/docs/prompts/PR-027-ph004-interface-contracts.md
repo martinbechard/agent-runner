@@ -30,19 +30,11 @@ docs/design/interface-contracts.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-004-interface-contracts.
+As an interface designer, you must turn the solution design interactions into
+concrete contracts and write them to docs/design/interface-contracts.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/design/solution-design.yaml
-- docs/features/feature-specification.yaml
-
-Write:
-- docs/design/interface-contracts.yaml
-
-Task:
-Produce the final acceptance-ready YAML interface contracts artifact in one file.
-Use this prompt pair's built-in revise loop to correct any issues the judge
-finds. Do not create draft-only or partial versions on purpose.
+The solution design is provided above in <SOLUTION_DESIGN>.
+The feature specification is provided above in <FEATURE_SPECIFICATION>.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -128,12 +120,9 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/design/solution-design.yaml
-- docs/features/feature-specification.yaml
-
-Read:
-- docs/design/interface-contracts.yaml
+Review the current interface contracts against <SOLUTION_DESIGN> and
+<FEATURE_SPECIFICATION>.
+The current artifact is provided above in <INTERFACE_CONTRACTS>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -145,6 +134,18 @@ Module-local judge context:
   simulation.
 
 Your job is to decide whether the generated interface contracts are phase-ready.
+
+Review method:
+- Iterate through contracts in CTR-* order.
+- For each contract, review interaction_ref, component refs, operations,
+  schemas, error_types, and behavioral_specs together.
+- Within each contract, iterate through operations in authored order.
+- Before flagging a contract, operation, schema field, or behavioral rule as
+  missing, check whether that same downstream-actionable meaning is already
+  covered elsewhere in the contract set.
+- Only flag it as missing if the allegedly missing content would change
+  downstream simulations or implementation.
+
 Focus your semantic review on these failure modes:
 
 1. Type holes:

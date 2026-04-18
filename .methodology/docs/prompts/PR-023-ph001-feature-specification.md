@@ -28,19 +28,12 @@ docs/requirements/requirements-inventory.yaml
 
 ### Generation Prompt
 
-You are producing the phase artifact for PH-001-feature-specification.
+As a software product analyst, you must group the requirements inventory into
+coherent features and write the feature specification to
+docs/features/feature-specification.yaml.
 
-Use the included upstream file contents as the primary source input:
-- docs/requirements/requirements-inventory.yaml
-- docs/requirements/raw-requirements.md
-
-Write:
-- docs/features/feature-specification.yaml
-
-Task:
-Produce the final acceptance-ready YAML feature specification in one file.
-Use this prompt pair's built-in revise loop to correct any issues the judge
-finds. Do not create draft-only or partial versions on purpose.
+The requirements inventory is provided above in <REQUIREMENTS_INVENTORY>.
+The original request is provided above in <RAW_REQUIREMENTS>.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -173,12 +166,9 @@ Acceptance requirements:
 
 ### Validation Prompt
 
-Use the included upstream file contents as the primary review input:
-- docs/requirements/raw-requirements.md
-- docs/requirements/requirements-inventory.yaml
-
-Read:
-- docs/features/feature-specification.yaml
+Review the current feature specification against <REQUIREMENTS_INVENTORY> and
+<RAW_REQUIREMENTS>.
+The current artifact is provided above in <FEATURE_SPECIFICATION>.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -196,6 +186,21 @@ Embedded directives for this step:
   or `AC-*` to weaken `one`, `at most`, `within`, or similar exact limits.
 
 Your job is to decide whether the generated feature specification is phase-ready.
+
+Review method:
+- Iterate through features in FT-* order.
+- For each feature, review its description, source_inventory_refs,
+  acceptance_criteria, and dependencies together.
+- Then review out_of_scope entries in RI-* order.
+- Then review cross_cutting_concerns in CC-* order.
+- Before flagging any requirement, scope statement, or concern as missing,
+  check whether that same actionable meaning is already covered elsewhere in
+  another feature, acceptance criterion, out_of_scope entry, or cross-cutting
+  concern.
+- Only flag it as missing if the allegedly missing text contributes distinct
+  downstream-actionable behavior, constraint, dependency, or rationale that is
+  not already represented.
+
 Focus your semantic review on these failure modes:
 
 1. Vague acceptance criteria:
