@@ -174,8 +174,8 @@
 - **Tests location:** `tests/shared/` — mirror path, `<module>.test.ts`.
 
 ### docs/plans/
-- **Purpose:** Transient, TDD-style implementation plans — sequential task groups that decompose a finished design into bite-sized, test-first steps. Not a design document (no decisions), not a requirements document, and not acceptance criteria. Historical value once implementation is complete.
-- **Signals:** "task group", "write failing test", "run pytest", "step-N deliverable", references a companion `CD-NNN` or `HLD-NNN` doc, implementation order section, TDD cadence (failing test → minimal implementation → commit).
+- **Purpose:** Transient implementation and migration plans — staged work plans that decompose an approved design, restructuring effort, or bounded migration into concrete execution steps. These are not design authorities, not requirements documents, and not acceptance-criteria specs. Historical value once the work is complete.
+- **Signals:** "task group", "migration plan", "reorganization plan", "write failing test", "run pytest", "step-N deliverable", references a companion `CD-NNN` or `HLD-NNN` doc, implementation order section, cutover section, staged path moves, TDD cadence (failing test → minimal implementation → commit) when the plan is code-oriented.
 - **Filename pattern:** `PLAN-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the component or feature being implemented.
 - **Example:** `docs/plans/PLAN-004-tiny-baseline-run.md`
 
@@ -290,6 +290,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-18 — docs/plans/ extended — existing PLAN files already include migration and repo-change plans, so the taxonomy must explicitly allow staged reorganization and migration plans rather than only TDD implementation plans.
 - 2026-04-15 — .codex/agents/ added — repository-local Codex custom agents need a canonical home separate from the older Claude-specific agent folder.
 - 2026-04-15 — .archive/ added — archived documents should leave the active tree and move into a git-ignored mirrored archive path under `.archive/`.
 - 2026-04-15 — docs/design/components/ extended — YAML structured-design companions for existing component designs need a canonical home alongside the markdown authority when explicitly requested.
