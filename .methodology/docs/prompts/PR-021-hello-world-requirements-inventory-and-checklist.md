@@ -1,8 +1,8 @@
-## Prompt 1: Generate Or Revise Requirements Inventory And Checklist
-
 ### Module
 
 requirements-inventory
+
+## Prompt 1: Generate Or Revise Requirements Inventory And Checklist
 
 ### Required Files
 

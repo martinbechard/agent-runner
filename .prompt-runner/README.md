@@ -76,9 +76,12 @@ Examples:
 
 ## Prompt subsections
 
-Normal prompts use `###` subsections. Allowed subsection headings are:
+Prompt files may declare one file-level module slug before the first prompt:
 
 - `### Module`
+
+Normal prompts use `###` subsections. Allowed prompt subsection headings are:
+
 - `### Required Files`
 - `### Include Files`
 - `### Checks Files`
@@ -90,7 +93,7 @@ Rules:
 
 - `### Generation Prompt` is required.
 - `### Validation Prompt` is optional.
-- `### Module`, `### Required Files`, `### Include Files`, `### Checks Files`, and `### Deterministic Validation`, if present, must appear before `### Generation Prompt`.
+- `### Required Files`, `### Include Files`, `### Checks Files`, and `### Deterministic Validation`, if present, must appear before `### Generation Prompt`.
 - Each subsection may appear at most once per prompt.
 - Prompt bodies may contain deeper headings such as `####` or `#####`; only the exact reserved subsection level is structural.
 
@@ -133,10 +136,12 @@ Rules:
 
 ### Module
 
-Optional stable slug for runner-owned files under `.run-files/<module-slug>/`.
+Optional file-level stable slug for runner-owned files under `.run-files/<module-slug>/`.
 
+- Place it before the first `## Prompt ...` heading.
+- The whole file is one module.
 - Use this when prompt titles are long or likely to change.
-- If omitted, prompt-runner falls back to a slug derived from the prompt title.
+- If omitted, prompt-runner falls back to a slug derived from the first prompt title.
 - This affects only runner-owned bookkeeping paths, not the artifact output paths inside the run worktree.
 
 ### Required Files

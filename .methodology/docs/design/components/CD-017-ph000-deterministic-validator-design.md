@@ -32,13 +32,19 @@ This section names the files that the validator uses.
     - `docs/requirements/requirements-inventory.yaml`
   - **BECAUSE:** This is the PH-000 output artifact being validated.
 
-- **FILE: FILE-3** Validator script
+- **FILE: FILE-3** Requirements coverage support file
+  - **SYNOPSIS:** Input support artifact:
+    - `docs/requirements/requirements-inventory-coverage.yaml`
+  - **BECAUSE:** The coverage bookkeeping is now stored separately from the
+    real inventory artifact.
+
+- **FILE: FILE-4** Validator script
   - **SYNOPSIS:** Runtime helper:
     - `.methodology/src/cli/methodology_runner/phase_0_validation.py`
   - **BECAUSE:** Prompt-runner executes this script as the deterministic
     validator for PH-000.
 
-- **FILE: FILE-4** Validator report
+- **FILE: FILE-5** Validator report
   - **SYNOPSIS:** Standard output JSON report with:
     - validator name
     - overall status
@@ -86,12 +92,14 @@ This section states the technical directives that shape the validator.
 This section describes the validator steps.
 
 - **PROCESS: PROCESS-1** Load the two input artifacts
-  - **SYNOPSIS:** The validator reads the raw requirements markdown and the
-    requirements inventory YAML.
+  - **SYNOPSIS:** The validator reads the raw requirements markdown, the
+    requirements inventory YAML, and the separate coverage support YAML.
   - **READS:** `{{raw_requirements_path}}`
     - **BECAUSE:** Quote and coverage checks depend on the real source text.
   - **READS:** `docs/requirements/requirements-inventory.yaml`
     - **BECAUSE:** This is the artifact under test.
+  - **READS:** `docs/requirements/requirements-inventory-coverage.yaml`
+    - **BECAUSE:** Coverage bookkeeping is validated from the separate support file.
 
 - **PROCESS: PROCESS-2** Parse the inventory and check the schema
   - **SYNOPSIS:** The validator parses YAML and checks top-level key order,
@@ -103,6 +111,12 @@ This section describes the validator steps.
     non-empty exact substring of the raw requirements text.
   - **BECAUSE:** PH-000 forbids paraphrase in `verbatim_quote`.
 
+- **PROCESS: PROCESS-3A** Check normalized requirement presence
+  - **SYNOPSIS:** The validator confirms that every `RI-*` item has a non-empty
+    `normalized_requirement`.
+  - **BECAUSE:** PH-000 now requires each inventory item to include a coherent
+    downstream-ready requirement statement in addition to the exact quote.
+
 - **PROCESS: PROCESS-4** Build the source phrase set
   - **SYNOPSIS:** The validator derives the requirement-bearing phrase set from
     the actual source text used for the run.
@@ -111,7 +125,8 @@ This section describes the validator steps.
 
 - **PROCESS: PROCESS-5** Validate coverage bookkeeping
   - **SYNOPSIS:** The validator checks that every source phrase appears in
-    `coverage_check`, that every mapped id is a real `RI-*`, and that
+    the separate coverage file's `coverage_check`, that every mapped id is a
+    real `RI-*`, and that
     `coverage_verdict` matches the actual counts.
   - **BECAUSE:** Coverage bookkeeping is only useful if it is complete and
     internally consistent.

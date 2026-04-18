@@ -1,8 +1,8 @@
-## Prompt 1: Produce Feature Specification
-
 ### Module
 
 feature-specification
+
+## Prompt 1: Produce Feature Specification
 
 ### Required Files
 
@@ -169,7 +169,7 @@ Acceptance requirements:
 - Each cross-cutting concern must affect at least two features.
 - Do not invent functionality that is not traceable to the requirements inventory.
 - Do not create any files other than docs/features/feature-specification.yaml.
-- Use the Write tool to write the full file contents to docs/features/feature-specification.yaml.
+- Write the full file contents to docs/features/feature-specification.yaml.
 
 ### Validation Prompt
 

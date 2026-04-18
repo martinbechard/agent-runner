@@ -12,6 +12,7 @@ from methodology_runner.models import (
 from methodology_runner.orchestrator import (
     PipelineConfig,
     _invoke_prompt_runner_library,
+    run_pipeline,
     _run_single_phase,
 )
 from methodology_runner.phases import PHASES, get_phase
@@ -48,11 +49,11 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
     )
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    run_dir = tmp_path / "run"
     config = PipelineConfig(
         requirements_path=tmp_path / "req.md",
         workspace_dir=workspace,
         backend="codex",
+        debug=4,
     )
     captured: dict[str, object] = {}
 
@@ -75,7 +76,7 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
     ok, iterations, error = _invoke_prompt_runner_library(
         prompt_file,
         workspace,
-        run_dir,
+        "PH-000-requirements-inventory",
         config,
         claude_client=object(),
         placeholder_values={"raw_requirements_path": "docs/requirements/raw-requirements.md"},
@@ -85,14 +86,17 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
     assert iterations == 0
     assert error is None
     assert captured["source_file"] == prompt_file
+    assert captured["run_dir"] == workspace
     assert captured["source_project_dir"] == workspace
     assert captured["worktree_dir"] == workspace
     run_config = captured["config"]
+    assert run_config.debug == 4
     assert run_config.generator_prelude is None
     assert run_config.judge_prelude is None
     assert run_config.placeholder_values == {
         "raw_requirements_path": "docs/requirements/raw-requirements.md",
     }
+    assert run_config.run_id_override == "PH-000-requirements-inventory"
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(
@@ -218,10 +222,69 @@ def test_cross_ref_retry_preserves_existing_artifact_for_retry(
     assert artifact_path.read_text(encoding="utf-8") == "second pass\n"
     retry_guidance = (
         workspace
-        / ".methodology-runner"
-        / "runs"
-        / "phase-0"
+        / ".run-files"
+        / "PH-000-requirements-inventory"
         / "retry-guidance-1.txt"
     )
     assert retry_guidance.exists()
     assert "fix this" in retry_guidance.read_text(encoding="utf-8")
+
+
+def test_run_pipeline_debug_writes_methodology_process_log(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    req = tmp_path / "req.md"
+    req.write_text("# Requirements\n", encoding="utf-8")
+    config = PipelineConfig(
+        requirements_path=req,
+        workspace_dir=workspace,
+        backend="codex",
+        debug=2,
+        phases_to_run=["PH-000-requirements-inventory"],
+    )
+
+    def fake_run_single_phase(
+        phase,
+        state,
+        workspace_dir,
+        pipeline_config,
+        claude_client=None,
+        cross_ref_only=False,
+    ):
+        return SimpleNamespace(
+            phase_id=phase.phase_id,
+            status=PhaseStatus.COMPLETED,
+            prompt_runner_file="prompt.md",
+            iteration_count=0,
+            wall_time_seconds=0.1,
+            prompt_runner_success=True,
+            cross_ref_result=None,
+            error_message=None,
+        )
+
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator._run_single_phase",
+        fake_run_single_phase,
+    )
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator._git_commit",
+        lambda workspace, message: "deadbeef",
+    )
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator.verify_end_to_end",
+        lambda **kwargs: SimpleNamespace(
+            passed=True,
+            issues=[],
+            traceability_gaps=[],
+            orphaned_elements=[],
+            coverage_summary={},
+        ),
+    )
+
+    result = run_pipeline(config, claude_client=object())
+    assert result.halted_early is False
+    process_log = workspace / ".methodology-runner" / "process.log"
+    text = process_log.read_text(encoding="utf-8")
+    assert "[debug-trace] enabled depth=2" in text

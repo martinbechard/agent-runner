@@ -156,7 +156,8 @@ def _reset_phase_selection(
     if cleanup_files:
         for rid in ids_to_reset:
             phase = PHASE_MAP[rid]
-            (workspace / phase.output_artifact_path).unlink(missing_ok=True)
+            for relpath in phase.expected_output_files:
+                (workspace / relpath).unlink(missing_ok=True)
             shutil.rmtree(
                 _phase_run_artifact_dir(workspace, phase.phase_number),
                 ignore_errors=True,
@@ -237,6 +238,7 @@ def cmd_run(args: argparse.Namespace) -> int:
         resume=False,
         phases_to_run=phases_to_run,
         max_prompt_runner_iterations=args.max_iterations,
+        debug=args.debug,
         escalation_policy=escalation_policy,
         max_cross_ref_retries=args.max_cross_ref_retries,
     )
@@ -439,6 +441,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
         resume=True,
         phases_to_run=phases_to_run,
         max_prompt_runner_iterations=args.max_iterations,
+        debug=args.debug,
         escalation_policy=escalation_policy,
         max_cross_ref_retries=args.max_cross_ref_retries,
     )
@@ -594,6 +597,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override max prompt-runner iterations per prompt.",
     )
     run_cmd.add_argument(
+        "--debug",
+        nargs="?",
+        const=3,
+        default=0,
+        type=int,
+        metavar="N",
+        help=(
+            "Enable depth-limited debug tracing. Passed through to "
+            "prompt-runner. Default depth is 3 when the flag is present "
+            "without a value."
+        ),
+    )
+    run_cmd.add_argument(
         "--phases",
         default=None,
         help=(
@@ -660,6 +676,19 @@ def _build_parser() -> argparse.ArgumentParser:
         type=int,
         default=None,
         help="Override max prompt-runner iterations per prompt.",
+    )
+    resume_cmd.add_argument(
+        "--debug",
+        nargs="?",
+        const=3,
+        default=0,
+        type=int,
+        metavar="N",
+        help=(
+            "Enable depth-limited debug tracing. Passed through to "
+            "prompt-runner. Default depth is 3 when the flag is present "
+            "without a value."
+        ),
     )
     resume_cmd.add_argument(
         "--phases",

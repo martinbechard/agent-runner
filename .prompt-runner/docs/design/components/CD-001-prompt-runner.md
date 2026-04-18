@@ -42,11 +42,20 @@ Optional prompt-heading markers:
 
 `[interactive]` and `[VARIANTS]` are mutually exclusive.
 
-### 2.2 Normal prompt subsections
+### 2.2 File-level metadata and normal prompt subsections
 
-Normal prompts use exact `###` subsection headings. Allowed subsection names are:
+Prompt files may declare one file-level metadata block before the first prompt:
 
-- `Module`
+- `### Module`
+
+Rules for file-level metadata:
+
+- `### Module` applies to the whole file, not to one prompt pair.
+- `### Module` may appear at most once.
+- No other `### ...` subsection is allowed before the first prompt heading.
+
+Normal prompts then use exact `###` subsection headings. Allowed subsection names are:
+
 - `Required Files`
 - `Include Files`
 - `Checks Files`
@@ -121,6 +130,7 @@ class PromptPair:
     include_files: tuple[str, ...] = ()
     checks_files: tuple[str, ...] = ()
     deterministic_validation: tuple[str, ...] = ()
+    module_slug: str | None = None
     interactive: bool = False
     model_override: str | None = None
     effort_override: str | None = None
@@ -143,6 +153,9 @@ class ForkPoint:
 
 `generation_line` and `validation_line` point at the subsection heading lines.
 
+`module_slug` is file-scoped metadata propagated onto every parsed prompt pair in the file.
+If the file omits `### Module`, the runner must infer one file-level module slug from the first prompt title and apply it consistently across the file.
+
 ## 4. Parser errors
 
 Every parse failure raises `ParseError(error_id, message)`.
@@ -155,6 +168,8 @@ Stable parser error IDs:
 - `E-UNKNOWN-SUBSECTION`
 - `E-NO-VARIANTS`
 
+`### Module` inside a prompt pair or variant pair is invalid and must be rejected as an unknown subsection, because module scope belongs to the whole file.
+
 Messages must identify the prompt or variant, cite the relevant line number, and include a concrete repair instruction.
 
 ## 5. Serialization contract
@@ -164,6 +179,7 @@ Any internal synthetic prompt file emitted by the runner must use the same headi
 That includes:
 
 - `## Prompt N: Title`
+- optional file-level `### Module`
 - optional `### Required Files`
 - optional `### Include Files`
 - optional `### Checks Files`
@@ -172,6 +188,16 @@ That includes:
 - optional `### Validation Prompt`
 
 Synthetic prompt files and all other runner-owned artifacts are stored under `run_dir/.run-files/`.
+Runner-owned artifacts for one prompt file are grouped under `run_dir/.run-files/<module-slug>/`.
+
+Per-iteration forensic traces must also include the exact rendered backend input prompts:
+
+- generator input prompt for each iteration
+- judge input prompt for each iteration
+- generator output capture for each iteration
+- judge output capture for each iteration
+
+These traces must be stored in runner-owned paths under `.run-files/` and must reflect the exact prompt text after placeholder resolution, inline includes, preludes, and revision feedback assembly.
 
 ## 6. Testing focus
 
@@ -187,3 +213,4 @@ Tests must cover:
 - multiple prompt pairs within one variant
 - unknown, duplicated, or misordered subsections
 - serializer output in heading-only format
+- persistence of rendered generator and judge input prompts for each iteration

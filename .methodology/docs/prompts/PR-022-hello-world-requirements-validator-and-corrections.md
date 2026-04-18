@@ -1,8 +1,8 @@
-## Prompt 1: Validate Requirements Inventory And Emit Corrections
-
 ### Module
 
 requirements-inventory
+
+## Prompt 1: Validate Requirements Inventory And Emit Corrections
 
 ### Required Files
 

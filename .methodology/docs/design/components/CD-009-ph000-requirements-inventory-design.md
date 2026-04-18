@@ -178,6 +178,12 @@ This section states the main limits on the phase.
   - **SYNOPSIS:** `verbatim_quote` must keep the source wording exactly.
   - **BECAUSE:** Later phases need exact traceability.
 
+- **RULE: RULE-6A** Normalized requirement preserves meaning
+  - **SYNOPSIS:** `normalized_requirement` must restate the same meaning as a
+    coherent standalone software requirement without adding unsupported detail.
+  - **BECAUSE:** Later phases need a downstream-ready requirement statement,
+    not only a raw quote fragment.
+
 - **RULE: RULE-7** One fixed prompt module
   - **SYNOPSIS:** PH-000 must use the predefined prompt module instead of
     building a new module per run.
@@ -192,15 +198,23 @@ This section states what the output file contains.
     - `source_document`
     - `items`
     - `out_of_scope`
-    - `coverage_check`
-    - `coverage_verdict`
   - **BECAUSE:** That is the schema required by the PH-000 phase contract.
 
-- **ENTITY: ENTITY-2** Inventory item fields
+- **ENTITY: ENTITY-2** Coverage support output shape
+  - **SYNOPSIS:** PH-000 also writes a separate coverage support file with:
+    - `source_document`
+    - `inventory_document`
+    - `coverage_check`
+    - `coverage_verdict`
+  - **BECAUSE:** The coverage bookkeeping is used to help the generator check
+    for omissions without polluting the real inventory artifact.
+
+- **ENTITY: ENTITY-3** Inventory item fields
   - **SYNOPSIS:** Each `RI-*` item contains:
     - `id`
     - `category`
     - `verbatim_quote`
+    - `normalized_requirement`
     - `source_location`
     - `tags`
     - `rationale`
@@ -226,9 +240,11 @@ This section states when the phase passes.
     boundaries.
 
 - **RULE: RULE-10** Output file only
-  - **SYNOPSIS:** The phase passes only if it writes exactly one
-    `docs/requirements/requirements-inventory.yaml` file for the artifact.
-  - **BECAUSE:** Later phases need one stable file.
+  - **SYNOPSIS:** The phase passes only if it writes:
+    - `docs/requirements/requirements-inventory.yaml`
+    - `docs/requirements/requirements-inventory-coverage.yaml`
+  - **BECAUSE:** Later phases need one stable inventory artifact, and the
+    generator needs one separate coverage support file for completeness review.
 
 - **RULE: RULE-11** Deterministic and judge checks both pass
   - **SYNOPSIS:** The phase passes only if the deterministic validator passes

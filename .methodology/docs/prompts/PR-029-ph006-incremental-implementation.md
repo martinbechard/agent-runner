@@ -1,8 +1,8 @@
-## Prompt 1: Produce Incremental Implementation Plan
-
 ### Module
 
 incremental-implementation
+
+## Prompt 1: Produce Incremental Implementation Plan
 
 ### Required Files
 
@@ -112,7 +112,7 @@ Acceptance requirements:
 - Every SIM-* simulation must appear in simulation_replacement_sequence.
 - Every simulation replacement entry must specify which integration tests rerun.
 - Do not create any files other than docs/implementation/implementation-plan.yaml.
-- Use the Write tool to write the full file contents to docs/implementation/implementation-plan.yaml.
+- Write the full file contents to docs/implementation/implementation-plan.yaml.
 
 ### Validation Prompt
 

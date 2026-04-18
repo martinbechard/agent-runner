@@ -1,8 +1,8 @@
-## Prompt 1: Produce Verification Sweep
-
 ### Module
 
 verification-sweep
+
+## Prompt 1: Produce Verification Sweep
 
 ### Required Files
 
@@ -130,7 +130,7 @@ Acceptance requirements:
   uncovered
 - coverage_summary counts must match the actual matrix counts.
 - Do not create any files other than docs/verification/verification-report.yaml.
-- Use the Write tool to write the full file contents to docs/verification/verification-report.yaml.
+- Write the full file contents to docs/verification/verification-report.yaml.
 
 ### Validation Prompt
 

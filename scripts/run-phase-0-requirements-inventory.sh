@@ -5,10 +5,10 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
-prompt_file=".methodology/docs/prompts/PR-025-ph000-requirements-inventory.md"
-project_dir="tests/fixtures/ph000-hello-world-workspace"
-run_dir="work/ph000-requirements-inventory-run"
-raw_requirements_path="docs/requirements/raw-requirements.md"
+prompt_file="${PROMPT_FILE:-.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md}"
+project_dir="${PROJECT_DIR:-tests/fixtures/ph000-hello-world-workspace}"
+run_dir="${RUN_DIR:-work/ph000-requirements-inventory-run}"
+raw_requirements_path="${RAW_REQUIREMENTS_PATH:-docs/requirements/raw-requirements.md}"
 export PYTHONPATH=".prompt-runner/src/cli${PYTHONPATH:+:$PYTHONPATH}"
 prompt_runner=(python -m prompt_runner)
 

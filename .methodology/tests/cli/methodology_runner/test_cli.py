@@ -316,6 +316,7 @@ class TestBuildParser:
         assert args.backend is None
         assert args.model is None
         assert args.max_iterations is None
+        assert args.debug == 0
         assert args.phases is None
         assert args.escalation_policy is None
         assert args.max_cross_ref_retries == 2
@@ -327,6 +328,7 @@ class TestBuildParser:
             "--workspace", "/tmp/ws",
             "--model", "opus",
             "--max-iterations", "5",
+            "--debug", "4",
             "--phases",
             "PH-000-requirements-inventory,PH-001-feature-specification",
             "--escalation-policy", "flag-and-continue",
@@ -335,6 +337,7 @@ class TestBuildParser:
         assert args.workspace == "/tmp/ws"
         assert args.model == "opus"
         assert args.max_iterations == 5
+        assert args.debug == 4
         assert (
             args.phases
             == "PH-000-requirements-inventory,PH-001-feature-specification"
@@ -347,10 +350,12 @@ class TestBuildParser:
         args = parser.parse_args([
             "resume", "/tmp/ws",
             "--model", "sonnet",
+            "--debug",
             "--escalation-policy", "human-review",
         ])
         assert args.workspace_dir == "/tmp/ws"
         assert args.model == "sonnet"
+        assert args.debug == 3
         assert args.escalation_policy == "human-review"
 
     def test_reset_requires_phase(self) -> None:
@@ -584,6 +589,43 @@ class TestCmdRun:
 
         assert len(captured_config) == 1
         assert captured_config[0].escalation_policy == EscalationPolicy.FLAG_AND_CONTINUE
+
+    def test_debug_parsed(self, tmp_path: Path) -> None:
+        req = tmp_path / "req.md"
+        req.write_text("# Requirements\n")
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run", str(req),
+            "--workspace", str(tmp_path / "ws"),
+            "--debug", "5",
+        ])
+
+        from methodology_runner.orchestrator import PipelineConfig, PipelineResult
+
+        captured_config: list[PipelineConfig] = []
+        mock_result = PipelineResult(
+            workspace_dir=tmp_path / "ws",
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        def capturing_run(config: PipelineConfig) -> PipelineResult:
+            captured_config.append(config)
+            return mock_result
+
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = capturing_run
+            try:
+                cmd_run(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert captured_config[0].debug == 5
 
     def test_phases_parsed(self, tmp_path: Path) -> None:
         req = tmp_path / "req.md"
@@ -898,6 +940,43 @@ class TestCmdResume:
                 orch_mod.run_pipeline = original_run
 
         assert captured_config[0].model == "saved-model"
+
+    def test_resume_debug_parsed(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _make_project_state(workspace, model="saved-model")
+        parser = _build_parser()
+        args = parser.parse_args([
+            "resume", str(workspace),
+            "--debug", "4",
+        ])
+
+        from methodology_runner.orchestrator import PipelineConfig, PipelineResult
+
+        captured_config: list[PipelineConfig] = []
+        mock_result = PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        def capturing_run(config: PipelineConfig) -> PipelineResult:
+            captured_config.append(config)
+            return mock_result
+
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = capturing_run
+            try:
+                cmd_resume(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert captured_config[0].debug == 4
         assert captured_config[0].resume is True
 
     def test_resume_banner_shows_selected_phases(

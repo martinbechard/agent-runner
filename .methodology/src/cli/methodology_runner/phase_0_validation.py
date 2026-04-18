@@ -13,6 +13,10 @@ EXPECTED_TOP_LEVEL_KEYS = [
     "source_document",
     "items",
     "out_of_scope",
+]
+EXPECTED_COVERAGE_TOP_LEVEL_KEYS = [
+    "source_document",
+    "inventory_document",
     "coverage_check",
     "coverage_verdict",
 ]
@@ -20,6 +24,8 @@ REQUIRED_ITEM_FIELDS = [
     "id",
     "category",
     "verbatim_quote",
+    "normalized_requirement",
+    "justification",
     "source_location",
     "tags",
     "rationale",
@@ -111,8 +117,13 @@ def _extract_requirement_phrases(raw_requirements_path: Path) -> list[str]:
     return phrases
 
 
-def build_report(requirements_inventory_path: Path, raw_requirements_path: Path) -> dict:
+def build_report(
+    requirements_inventory_path: Path,
+    requirements_coverage_path: Path,
+    raw_requirements_path: Path,
+) -> dict:
     inventory = _load_yaml(requirements_inventory_path)
+    coverage = _load_yaml(requirements_coverage_path)
     raw_text = raw_requirements_path.read_text(encoding="utf-8")
     normalized_raw_text = _normalize(raw_text)
     source_phrases = _extract_requirement_phrases(raw_requirements_path)
@@ -134,7 +145,7 @@ def build_report(requirements_inventory_path: Path, raw_requirements_path: Path)
     )
     checks.append(
         {
-            "id": "source_document",
+            "id": "inventory_source_document",
             "status": "pass" if source_document_ok else "fail",
             "actual": inventory.get("source_document"),
         }
@@ -183,12 +194,24 @@ def build_report(requirements_inventory_path: Path, raw_requirements_path: Path)
     )
 
     quote_issues = []
+    normalized_requirement_issues = []
+    justification_issues = []
     for item in items:
         quote = item.get("verbatim_quote")
         if not isinstance(quote, str) or not quote.strip():
             quote_issues.append({"id": item.get("id"), "issue": "missing_quote"})
         elif _normalize(quote) not in normalized_raw_text:
             quote_issues.append({"id": item.get("id"), "quote": quote})
+        normalized_requirement = item.get("normalized_requirement")
+        if not isinstance(normalized_requirement, str) or not normalized_requirement.strip():
+            normalized_requirement_issues.append(
+                {"id": item.get("id"), "issue": "missing_normalized_requirement"}
+            )
+        justification = item.get("justification")
+        if not isinstance(justification, str):
+            justification_issues.append(
+                {"id": item.get("id"), "issue": "missing_justification"}
+            )
     checks.append(
         {
             "id": "verbatim_quotes",
@@ -196,8 +219,56 @@ def build_report(requirements_inventory_path: Path, raw_requirements_path: Path)
             "details": quote_issues,
         }
     )
+    checks.append(
+        {
+            "id": "normalized_requirements",
+            "status": "pass" if not normalized_requirement_issues else "fail",
+            "details": normalized_requirement_issues,
+        }
+    )
+    checks.append(
+        {
+            "id": "justifications",
+            "status": "pass" if not justification_issues else "fail",
+            "details": justification_issues,
+        }
+    )
 
-    coverage_check = inventory.get("coverage_check", {})
+    coverage_keys = list(coverage.keys()) if isinstance(coverage, dict) else []
+    checks.append(
+        {
+            "id": "coverage_top_level_keys",
+            "status": "pass"
+            if coverage_keys == EXPECTED_COVERAGE_TOP_LEVEL_KEYS else "fail",
+            "expected": EXPECTED_COVERAGE_TOP_LEVEL_KEYS,
+            "actual": coverage_keys,
+        }
+    )
+
+    coverage_source_document_ok = (
+        coverage.get("source_document") == "docs/requirements/raw-requirements.md"
+    )
+    checks.append(
+        {
+            "id": "coverage_source_document",
+            "status": "pass" if coverage_source_document_ok else "fail",
+            "actual": coverage.get("source_document"),
+        }
+    )
+
+    inventory_document_ok = (
+        coverage.get("inventory_document")
+        == "docs/requirements/requirements-inventory.yaml"
+    )
+    checks.append(
+        {
+            "id": "coverage_inventory_document",
+            "status": "pass" if inventory_document_ok else "fail",
+            "actual": coverage.get("inventory_document"),
+        }
+    )
+
+    coverage_check = coverage.get("coverage_check", {})
     normalized_source_phrases = {_normalize(phrase): phrase for phrase in source_phrases}
     coverage_missing = []
     coverage_bad_refs = []
@@ -233,11 +304,12 @@ def build_report(requirements_inventory_path: Path, raw_requirements_path: Path)
         }
     )
 
-    coverage_verdict = inventory.get("coverage_verdict", {})
+    coverage_verdict = coverage.get("coverage_verdict", {})
     verdict_ok = (
         coverage_verdict.get("total_upstream_phrases") == len(source_phrases)
         and coverage_verdict.get("covered") == len(source_phrases)
         and coverage_verdict.get("orphaned") == 0
+        and coverage_verdict.get("invented") == 0
         and coverage_verdict.get("verdict") == "PASS"
     )
     checks.append(
@@ -252,6 +324,7 @@ def build_report(requirements_inventory_path: Path, raw_requirements_path: Path)
     return {
         "validator": "phase_0_validation",
         "requirements_inventory_path": str(requirements_inventory_path),
+        "requirements_coverage_path": str(requirements_coverage_path),
         "raw_requirements_path": str(raw_requirements_path),
         "overall_status": "pass" if not failed else "fail",
         "failed_checks": failed,
@@ -269,6 +342,11 @@ def main(argv: list[str] | None = None) -> int:
         help="Path to the requirements inventory YAML relative to cwd.",
     )
     parser.add_argument(
+        "--requirements-coverage",
+        default="docs/requirements/requirements-inventory-coverage.yaml",
+        help="Path to the requirements inventory coverage YAML relative to cwd.",
+    )
+    parser.add_argument(
         "--raw-requirements",
         default="docs/requirements/raw-requirements.md",
         help="Path to the raw requirements markdown relative to cwd.",
@@ -277,8 +355,9 @@ def main(argv: list[str] | None = None) -> int:
 
     inventory_path = Path(args.requirements_inventory)
     raw_requirements_path = Path(args.raw_requirements)
+    coverage_path = Path(args.requirements_coverage)
     try:
-        report = build_report(inventory_path, raw_requirements_path)
+        report = build_report(inventory_path, coverage_path, raw_requirements_path)
     except Exception as exc:
         print(
             json.dumps(

@@ -44,10 +44,10 @@ ANTI_ANCHORING_CLAUSE = (
     "defer to your prior verdict."
 )
 REVISION_GENERATOR_PREAMBLE = (
-    "The judge evaluated your previous artifact and returned the feedback "
-    "below. Produce a revised artifact that addresses every fail or partial "
-    "item. Do not drop content that already passed. Your response must be the "
-    "complete revised artifact, with no commentary before or after it."
+    "You have previously attempted this task, and your output was evaluated "
+    "by a judge. Produce a revised artifact that applies every required "
+    "change. Do not drop content that already passed. Your response must be "
+    "the complete revised artifact, with no commentary before or after it."
 )
 PROJECT_ORGANISER_INSTRUCTION = (
     "If this task involves producing files on disk: before writing any new "
@@ -56,9 +56,12 @@ PROJECT_ORGANISER_INSTRUCTION = (
     "`project-organiser` sub-agent when the runtime supports it, because that "
     "keeps taxonomy context isolated. If the dedicated agent is unavailable, "
     "consult `docs/project-taxonomy.md` directly. Use the resulting path as "
-    "the exact file path for your Write tool call. Do not guess paths from the "
-    "project layout and do not rely on an external Claude CLI wrapper. If "
-    "this task is purely text output (no files), ignore this instruction."
+    "the exact file path for your file-writing action. If this runtime does "
+    "not expose a named file-write tool, use shell commands or the available "
+    "file-edit mechanism to create or update the file directly. Do not guess "
+    "paths from the project layout and do not rely on an external Claude CLI "
+    "wrapper. If this task is purely text output (no files), ignore this "
+    "instruction."
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
 RUN_FILES_DIRNAME = ".run-files"
@@ -161,6 +164,10 @@ class RunConfig:
     variant: str | None = None
     """When set, run only the named fork variant inside the selected fork
     prompt. Intended for targeted variant debugging."""
+    run_id_override: str | None = None
+    """Optional stable run identifier used instead of ``run_dir.name``.
+    Useful when the caller wants all artifacts in one shared ``.run-files``
+    tree but still needs distinct backend session ids across sub-runs."""
 
 
 def _process_log_path(run_dir: Path) -> Path:
@@ -326,6 +333,23 @@ def _format_file_manifest(files: list[Path]) -> str:
     return "\n".join(f"- {f}" for f in files)
 
 
+def _semantic_file_tag(raw_path: str) -> str:
+    stem = Path(raw_path).stem
+    tag = re.sub(r"[^A-Za-z0-9]+", "_", stem).strip("_").upper()
+    if not tag:
+        tag = "REFERENCE"
+    if tag[0].isdigit():
+        tag = f"FILE_{tag}"
+    return tag
+
+
+def _semantic_artifact_label(raw_path: str) -> str:
+    stem = Path(raw_path).stem.replace("-", " ").replace("_", " ").strip()
+    if not stem:
+        return "artifact"
+    return stem
+
+
 def _format_included_files_section(
     pair: PromptPair,
     worktree_dir: Path,
@@ -341,21 +365,46 @@ def _format_included_files_section(
             raise FileNotFoundError(
                 f'Include Files entry "{raw_path}" could not be read at "{resolved}": {exc}'
             ) from exc
+        tag = _semantic_file_tag(raw_path)
         blocks.append(
-            f"## BEGIN INCLUDED FILE: {raw_path}\n\n"
-            "```text\n"
+            f"<{tag}>\n"
             f"{text.rstrip()}\n"
-            "```\n\n"
-            f"## END INCLUDED FILE: {raw_path}"
+            f"</{tag}>"
         )
     return (
-        "# Included context files\n\n"
-        "These files are included inline as authoritative context for this call. "
-        "Use the delimited blocks below as the primary file contents. Do not "
-        "re-read these same upstream files with tools unless you need to verify "
-        "that the live worktree state has changed since they were included.\n\n"
+        "# Reference Blocks\n\n"
+        "The files requested by this prompt are embedded below in semantic blocks.\n\n"
         + "\n\n".join(blocks)
     )
+
+
+def _format_optional_checks_context_section(
+    pair: PromptPair,
+    worktree_dir: Path,
+) -> str:
+    if not pair.checks_files:
+        return ""
+    blocks: list[str] = []
+    for raw_path in pair.checks_files:
+        resolved = _resolve_required_file(raw_path, worktree_dir)
+        tag = _semantic_file_tag(raw_path)
+        label = _semantic_artifact_label(raw_path)
+        if resolved.exists():
+            try:
+                text = resolved.read_text(encoding="utf-8")
+            except OSError as exc:
+                raise FileNotFoundError(
+                    f'Checks Files entry "{raw_path}" could not be read at "{resolved}": {exc}'
+                ) from exc
+        else:
+            text = ""
+        blocks.append(
+            f"# Current {label} artifact\n\n"
+            f"<{tag}>\n"
+            f"{text.rstrip()}\n"
+            f"</{tag}>"
+        )
+    return "\n\n".join(blocks)
 
 
 def build_initial_generator_message(
@@ -381,14 +430,27 @@ def build_initial_generator_message(
         sections.append("# Prior approved artifacts\n\n" + "\n\n".join(prior_blocks))
         sections.append(
             "The files listed above exist on disk in the current working "
-            "directory (your cwd is the project root). You can Read them "
-            "with the Read tool if you need to import from them, reference "
-            "their contents, or extend them."
+            "directory (your cwd is the project root). Read them directly "
+            "from disk if you need to import from them, reference their "
+            "contents, or extend them."
         )
 
     included_files_section = _format_included_files_section(pair, worktree_dir)
     if included_files_section:
         sections.append(included_files_section)
+    checks_context_section = _format_optional_checks_context_section(
+        pair, worktree_dir,
+    )
+    if checks_context_section:
+        sections.append(checks_context_section)
+
+    sections.append(
+        "Complete the task by making the required on-disk changes in the "
+        "current working directory. Inspection, planning, or describing the "
+        "intended artifact is not sufficient. If the prompt specifies a file "
+        "to write or update, the task is not complete until that file exists "
+        "on disk with the final contents."
+    )
 
     sections.append(f"# Your task\n\n{pair.generation_prompt}")
     if include_project_organiser:
@@ -468,11 +530,19 @@ def build_initial_judge_message(
         deterministic_validation,
     )
     include_section = _format_included_files_section(pair, worktree_dir)
+    checks_context_section = _format_optional_checks_context_section(
+        pair, worktree_dir,
+    )
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
+    checks_block = (
+        f"{checks_context_section}{_HORIZONTAL_RULE}"
+        if checks_context_section else ""
+    )
     return (
         f"{prelude_block}"
         f"{include_block}"
+        f"{checks_block}"
         f"{pair.validation_prompt}"
         f"{_HORIZONTAL_RULE}"
         f"# Artifact to evaluate (generator's text response)\n\n{artifact}"
@@ -495,12 +565,19 @@ def build_revision_generator_message(
     include_project_organiser: bool = True,
 ) -> str:
     prelude_block = f"{generator_prelude}{_HORIZONTAL_RULE}" if generator_prelude else ""
+    include_section = _format_included_files_section(pair, worktree_dir)
+    include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
+    checks_context_section = _format_optional_checks_context_section(
+        pair, worktree_dir,
+    )
+    checks_block = (
+        f"{checks_context_section}{_HORIZONTAL_RULE}"
+        if checks_context_section else ""
+    )
     task_block = (
         f"# Original task\n\n{original_task}{_HORIZONTAL_RULE}"
         if original_task else ""
     )
-    include_section = _format_included_files_section(pair, worktree_dir)
-    include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
     previous_artifact_block = (
         f"# Previous artifact (generator's last text response)\n\n"
         f"{previous_artifact}{_HORIZONTAL_RULE}"
@@ -508,11 +585,15 @@ def build_revision_generator_message(
     )
     msg = (
         f"{prelude_block}"
-        f"{task_block}"
         f"{include_block}"
+        f"{checks_block}"
+        f"{task_block}"
         f"{previous_artifact_block}"
         f"{REVISION_GENERATOR_PREAMBLE}\n\n"
-        f"# Judge feedback\n\n{judge_output}"
+        "The judge found the following issues that MUST be applied:\n"
+        "<REQUIRED_CHANGES>\n"
+        f"{judge_output}\n"
+        "</REQUIRED_CHANGES>"
     )
     if include_project_organiser:
         msg += f"{_HORIZONTAL_RULE}{PROJECT_ORGANISER_INSTRUCTION}"
@@ -533,8 +614,15 @@ def build_revision_judge_message(
         deterministic_validation,
     )
     include_section = _format_included_files_section(pair, worktree_dir)
+    checks_context_section = _format_optional_checks_context_section(
+        pair, worktree_dir,
+    )
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
+    checks_block = (
+        f"{checks_context_section}{_HORIZONTAL_RULE}"
+        if checks_context_section else ""
+    )
     validation_block = (
         f"{validation_prompt}{_HORIZONTAL_RULE}"
         if validation_prompt else ""
@@ -542,6 +630,7 @@ def build_revision_judge_message(
     return (
         f"{prelude_block}"
         f"{include_block}"
+        f"{checks_block}"
         f"{validation_block}"
         f"{ANTI_ANCHORING_CLAUSE}\n\n"
         f"# Revised artifact (generator's text response)\n\n{new_artifact}"
@@ -568,7 +657,9 @@ def _prompt_dir_name(pair: PromptPair) -> str:
 
 
 def _module_slug(pair: PromptPair) -> str:
-    return pair.module_slug or _slugify(pair.title)
+    if pair.module_slug:
+        return _slugify(pair.module_slug)
+    return _slugify(pair.title)
 
 
 def _module_dir(run_dir: Path, pair: PromptPair) -> Path:
@@ -605,6 +696,20 @@ def _iteration_history_path(
     )
 
 
+def _iteration_prompt_input_path(
+    run_dir: Path,
+    pair: PromptPair,
+    iteration_number: int,
+    *,
+    validation: bool = False,
+) -> Path:
+    suffix = "-validation-prompt" if validation else "-prompt"
+    return (
+        _prompt_history_dir(run_dir, pair)
+        / f"iter-{iteration_number:02d}{suffix}.md"
+    )
+
+
 def _append_log(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a", encoding="utf-8") as f:
@@ -618,6 +723,24 @@ def _write(path: Path, content: str) -> None:
 
 def _run_files_dir(run_dir: Path) -> Path:
     return run_dir / RUN_FILES_DIRNAME
+
+
+def _summary_output_path(
+    run_dir: Path,
+    pairs: list[PromptPair | ForkPoint],
+    prompt_results: list[PromptResult],
+) -> Path:
+    """Return the module-scoped summary path for the run."""
+    if prompt_results:
+        return _module_dir(run_dir, prompt_results[0].pair) / "summary.txt"
+
+    for item in pairs:
+        if isinstance(item, PromptPair):
+            return _module_dir(run_dir, item) / "summary.txt"
+        if item.variants and item.variants[0].pairs:
+            return _module_dir(run_dir, item.variants[0].pairs[0]) / "summary.txt"
+
+    return _run_files_dir(run_dir) / "summary.txt"
 
 
 def _git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -1289,6 +1412,10 @@ def run_prompt(
                 include_project_organiser=config.include_project_organiser,
             )
         )
+        _write(
+            _iteration_prompt_input_path(run_dir, pair, iteration_number),
+            gen_msg,
+        )
         # When forking from a prior session, the FIRST generator call
         # uses --resume <prior-session> --fork-session to inherit context.
         # Subsequent iterations resume from the forked session normally.
@@ -1410,6 +1537,12 @@ def run_prompt(
                     pair.validation_prompt if stateless_revisions else None
                 ),
             )
+        )
+        _write(
+            _iteration_prompt_input_path(
+                run_dir, pair, iteration_number, validation=True,
+            ),
+            jud_msg,
         )
         jud_call = _make_call(
             prompt=jud_msg,
@@ -1594,6 +1727,12 @@ def _run_judge_only_prompt(
         created_files,
         deterministic_validation=deterministic_validation,
         judge_prelude=config.judge_prelude,
+    )
+    _write(
+        _iteration_prompt_input_path(
+            run_dir, pair, iteration_number, validation=True,
+        ),
+        jud_msg,
     )
     jud_call = _make_call(
         prompt=jud_msg,
@@ -1959,6 +2098,9 @@ def _run_deterministic_validation(
 def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
     """Convert PromptPair objects back to heading-based prompt-runner markdown."""
     sections: list[str] = []
+    module_slug = pairs[0].module_slug if pairs and pairs[0].module_slug else None
+    if module_slug:
+        sections.extend(["### Module", "", module_slug, ""])
     for pair in pairs:
         heading = f"## Prompt {pair.index}: {pair.title}"
         if pair.model_override:
@@ -1966,11 +2108,6 @@ def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
         if pair.effort_override:
             heading += f" [EFFORT:{pair.effort_override}]"
         lines: list[str] = [heading, ""]
-        if pair.module_slug:
-            lines.append("### Module")
-            lines.append("")
-            lines.append(pair.module_slug)
-            lines.append("")
         if pair.required_files:
             lines.append("### Required Files")
             lines.append("")
@@ -2274,7 +2411,7 @@ def run_pipeline(
     resume: bool = False,
 ) -> PipelineResult:
     run_dir = run_dir.resolve()
-    run_id = run_dir.name
+    run_id = config.run_id_override or run_dir.name
     run_dir.mkdir(parents=True, exist_ok=True)
     previous_process_log_env = os.environ.get("PROMPT_RUNNER_PROCESS_LOG")
     os.environ["PROMPT_RUNNER_PROCESS_LOG"] = str(_process_log_path(run_dir))
@@ -2724,7 +2861,7 @@ def _finalise(
     manifest["wall_time"] = wall_time
     _write(manifest_path, json.dumps(manifest, indent=2) + "\n")
 
-    _write(_run_files_dir(run_dir) / "summary.txt", _format_summary(
+    _write(_summary_output_path(run_dir, pairs, prompt_results), _format_summary(
         source_file, run_dir, pairs, prompt_results,
         halted_early, halt_reason, wall_time,
         fork_results=fork_results or [],

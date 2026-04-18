@@ -1,8 +1,8 @@
-## Prompt 1: Produce Interface Contracts
-
 ### Module
 
 interface-contracts
+
+## Prompt 1: Produce Interface Contracts
 
 ### Required Files
 
@@ -124,7 +124,7 @@ Acceptance requirements:
   postcondition
   invariant
 - Do not create any files other than docs/design/interface-contracts.yaml.
-- Use the Write tool to write the full file contents to docs/design/interface-contracts.yaml.
+- Write the full file contents to docs/design/interface-contracts.yaml.
 
 ### Validation Prompt
 

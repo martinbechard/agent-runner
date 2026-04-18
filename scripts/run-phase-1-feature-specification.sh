@@ -5,9 +5,9 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/.." && pwd)"
 cd "$repo_root"
 
-prompt_file=".methodology/docs/prompts/PR-023-ph001-feature-specification.md"
-project_dir="tests/fixtures/ph001-hello-world-workspace"
-run_dir="work/ph001-feature-specification-run"
+prompt_file="${PROMPT_FILE:-.methodology/docs/prompts/PR-023-ph001-feature-specification.md}"
+project_dir="${PROJECT_DIR:-tests/fixtures/ph001-hello-world-workspace}"
+run_dir="${RUN_DIR:-work/ph001-feature-specification-run}"
 export PYTHONPATH=".prompt-runner/src/cli${PYTHONPATH:+:$PYTHONPATH}"
 prompt_runner=(python -m prompt_runner)
 

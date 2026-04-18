@@ -82,6 +82,7 @@ A methodology run uses one shared workspace for all phases:
   docs/
     requirements/raw-requirements.md
     requirements/requirements-inventory.yaml
+    requirements/requirements-inventory-coverage.yaml
     features/feature-specification.yaml
     architecture/stack-manifest.yaml
     design/solution-design.yaml
@@ -123,6 +124,13 @@ than restarting from a cleaned workspace.
 
 - The checked-in prompt modules are the canonical phase prompt source.
 - `PhaseConfig.prompt_module_path` must be populated for every runnable phase.
+- When a phase knows specific upstream files will be needed by the generator or
+  judge, the prompt module should prefer `Include Files` so prompt-runner
+  inlines those files up front as authoritative reference material.
+- Known-needed source content should be provided proactively instead of relying
+  on the model to issue ad hoc file-read tool calls.
+- Inlined reference material should be wrapped with semantic XML-style tags
+  rather than tool-oriented "included file" narration.
 - Run-local artifacts should capture execution evidence, not duplicate prompt
   authorship.
 - Cleanup is opt-in. Normal run and resume preserve artifacts even on

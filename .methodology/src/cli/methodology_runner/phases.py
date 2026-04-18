@@ -44,6 +44,7 @@ from .models import (
 _RAW_REQUIREMENTS_TEMPLATE = "{workspace}/docs/requirements/raw-requirements.md"
 
 _OUTPUT_PHASE_0 = "docs/requirements/requirements-inventory.yaml"
+_OUTPUT_PHASE_0_COVERAGE = "docs/requirements/requirements-inventory-coverage.yaml"
 _OUTPUT_PHASE_1 = "docs/features/feature-specification.yaml"
 _OUTPUT_PHASE_2 = "docs/architecture/stack-manifest.yaml"
 _OUTPUT_PHASE_3 = "docs/design/solution-design.yaml"
@@ -87,14 +88,16 @@ _PHASE_0 = PhaseConfig(
     ],
     output_artifact_path=_OUTPUT_PHASE_0,
     output_format="yaml",
-    expected_output_files=[_OUTPUT_PHASE_0],
+    expected_output_files=[_OUTPUT_PHASE_0, _OUTPUT_PHASE_0_COVERAGE],
     extraction_focus=(
         "Completeness: every requirement-bearing statement in the source\n"
         "document must appear as an inventory item.  Atomicity: compound\n"
         "requirements (those containing 'and', 'or', or multiple independent\n"
         "clauses) must be split into separate RI-* items.  Fidelity: the\n"
-        "verbatim_quote field must reproduce the original text exactly --\n"
-        "no paraphrasing, summarisation, or interpretation."
+        "verbatim_quote field must reproduce the original text exactly.\n"
+        "Normalization: each item must also include a normalized_requirement\n"
+        "that captures the same meaning as a coherent standalone software\n"
+        "requirement without adding unsupported detail."
     ),
     generation_instructions=(
         "Read the raw requirements document and produce a YAML inventory\n"
@@ -104,6 +107,11 @@ _PHASE_0 = PhaseConfig(
         "  source_document: path/to/raw-requirements.md\n"
         "  items: [...]          # the inventory items\n"
         "  out_of_scope: [...]   # requirements explicitly deferred\n"
+        "\n"
+        "Also write a separate coverage support file at\n"
+        "docs/requirements/requirements-inventory-coverage.yaml with:\n"
+        "  source_document: path/to/raw-requirements.md\n"
+        "  inventory_document: docs/requirements/requirements-inventory.yaml\n"
         "  coverage_check: {...} # maps source phrases to RI-* IDs\n"
         "  coverage_verdict: ... # summary counts + PASS/FAIL\n"
         "\n"
@@ -112,6 +120,8 @@ _PHASE_0 = PhaseConfig(
         "  - category: one of functional, non_functional, constraint,\n"
         "    assumption\n"
         "  - verbatim_quote: the exact text from the source document\n"
+        "  - normalized_requirement: the same requirement restated as a\n"
+        "    coherent standalone software requirement\n"
         "  - source_location: section heading or paragraph identifier\n"
         "  - tags: list of domain keywords for cross-referencing\n"
         "  - rationale: WHY this was extracted as a separate item\n"
@@ -127,7 +137,8 @@ _PHASE_0 = PhaseConfig(
         "\n"
         "When a paragraph contains multiple independent requirements,\n"
         "split them into separate items.  Preserve the original wording\n"
-        "in verbatim_quote -- do not rewrite, summarise, or interpret."
+        "in verbatim_quote, and use normalized_requirement only to restate\n"
+        "that same meaning more coherently for downstream phases."
     ),
     judge_guidance=(
         "Check for these failure modes in priority order:\n"
@@ -138,13 +149,16 @@ _PHASE_0 = PhaseConfig(
         "2. Invented requirements: verify each verbatim_quote appears in\n"
         "   the source document.  Flag any item whose quote cannot be\n"
         "   located in the original text.\n"
-        "3. Unsplit compounds: look for items whose verbatim_quote contains\n"
+        "3. Meaning loss or drift: verify each normalized_requirement still\n"
+        "   captures the original source meaning without dropping important\n"
+        "   qualifiers or adding unsupported detail.\n"
+        "4. Unsplit compounds: look for items whose verbatim_quote contains\n"
         "   'and' or 'or' joining independent clauses that describe\n"
         "   distinct behaviours.  Flag as needing decomposition.\n"
-        "4. Lost nuance: check that category assignments match the language\n"
+        "5. Lost nuance: check that category assignments match the language\n"
         "   strength (shall/must -> functional, should -> non_functional,\n"
         "   given/assuming -> assumption, within/limited-to -> constraint).\n"
-        "5. Wrong categories: verify constraints vs. assumptions vs.\n"
+        "6. Wrong categories: verify constraints vs. assumptions vs.\n"
         "   functional vs. non_functional.\n"
         "\n"
         "The inventory MUST be valid YAML parseable by a standard YAML\n"
@@ -159,6 +173,7 @@ _PHASE_0 = PhaseConfig(
         "  - id: \"RI-NNN\"           # zero-padded three-digit sequential ID\n"
         "    category: \"functional\"  # functional | non_functional | constraint | assumption\n"
         "    verbatim_quote: \"...\"   # exact text from source document (no paraphrasing)\n"
+        "    normalized_requirement: \"...\"  # coherent standalone requirement with same meaning\n"
         "    source_location: \"...\"  # section heading or paragraph identifier\n"
         "    tags: [\"tag1\", \"tag2\"]  # domain keywords for cross-referencing\n"
         "    rationale:               # WHY this was extracted as a separate item\n"
@@ -174,6 +189,9 @@ _PHASE_0 = PhaseConfig(
         "  - inventory_ref: \"RI-NNN\"\n"
         "    reason: \"...\"\n"
         "\n"
+        "Separate coverage support file:\n"
+        "source_document: \"path/to/raw-requirements.md\"\n"
+        "inventory_document: \"docs/requirements/requirements-inventory.yaml\"\n"
         "coverage_check:             # maps source phrases to RI-* IDs\n"
         "  \"phrase from source\": [\"RI-NNN\", ...]\n"
         "  status: \"N/N phrases covered, 0 orphans, 0 invented\"\n"
@@ -182,8 +200,7 @@ _PHASE_0 = PhaseConfig(
         "  total_upstream_phrases: 0\n"
         "  covered: 0\n"
         "  orphaned: 0\n"
-        "  out_of_scope: 0\n"
-        "  open_assumptions: 0\n"
+        "  invented: 0\n"
         "  verdict: \"PASS\"          # PASS | FAIL"
     ),
     checklist_examples_good=[

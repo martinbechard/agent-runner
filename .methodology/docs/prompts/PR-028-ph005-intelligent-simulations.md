@@ -1,8 +1,8 @@
-## Prompt 1: Produce Intelligent Simulations
-
 ### Module
 
 intelligent-simulations
+
+## Prompt 1: Produce Intelligent Simulations
 
 ### Required Files
 
@@ -142,7 +142,7 @@ Acceptance requirements:
   derived from synthetic contract-surface setup that explicitly represents the
   declared failure condition.
 - Do not create any files other than docs/simulations/simulation-definitions.yaml.
-- Use the Write tool to write the full file contents to docs/simulations/simulation-definitions.yaml.
+- Write the full file contents to docs/simulations/simulation-definitions.yaml.
 
 ### Validation Prompt
 

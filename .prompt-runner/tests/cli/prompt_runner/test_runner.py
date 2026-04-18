@@ -52,6 +52,18 @@ def _prompt_history_dir(run_dir: Path, title: str, index: int) -> Path:
     return _module_dir(run_dir, title) / "history" / f"prompt-{index:02d}"
 
 
+def _prompt_input_path(
+    run_dir: Path,
+    title: str,
+    index: int,
+    iteration: int,
+    *,
+    validation: bool = False,
+) -> Path:
+    suffix = "-validation-prompt" if validation else "-prompt"
+    return _prompt_history_dir(run_dir, title, index) / f"iter-{iteration:02d}{suffix}.md"
+
+
 def _pair(
     index: int,
     title: str,
@@ -136,6 +148,7 @@ def test_initial_generator_message_can_skip_organiser_instruction(tmp_path: Path
 def test_revision_generator_message_includes_organiser_instruction(tmp_path: Path):
     msg = build_revision_generator_message(_pair(1, "X"), "feedback text", tmp_path)
     assert "feedback text" in msg
+    assert "<REQUIRED_CHANGES>" in msg
     assert "project-organiser" in msg
 
 
@@ -161,6 +174,7 @@ def test_revision_generator_message_can_be_self_contained(tmp_path: Path):
     assert "original task body" in msg
     assert "old artifact body" in msg
     assert "feedback text" in msg
+    assert "The judge found the following issues that MUST be applied" in msg
 
 
 def test_initial_judge_message_lists_generator_files(tmp_path: Path):
@@ -236,9 +250,9 @@ def test_include_files_are_injected_into_generator_message(tmp_path: Path):
     (tmp_path / "context.txt").write_text("shared context\n", encoding="utf-8")
     p = _pair(1, "With include", include_files=("context.txt",))
     msg = build_initial_generator_message(p, [], tmp_path)
-    assert "# Included context files" in msg
-    assert "## BEGIN INCLUDED FILE: context.txt" in msg
-    assert "## END INCLUDED FILE: context.txt" in msg
+    assert "# Reference Blocks" in msg
+    assert "<CONTEXT>" in msg
+    assert "</CONTEXT>" in msg
     assert "shared context" in msg
 
 
@@ -246,9 +260,9 @@ def test_include_files_are_injected_into_judge_message(tmp_path: Path):
     (tmp_path / "context.txt").write_text("shared context\n", encoding="utf-8")
     p = _pair(1, "With include", include_files=("context.txt",))
     msg = build_initial_judge_message(p, "artifact text", tmp_path)
-    assert "# Included context files" in msg
-    assert "## BEGIN INCLUDED FILE: context.txt" in msg
-    assert "## END INCLUDED FILE: context.txt" in msg
+    assert "# Reference Blocks" in msg
+    assert "<CONTEXT>" in msg
+    assert "</CONTEXT>" in msg
     assert "shared context" in msg
 
 
@@ -256,7 +270,24 @@ def test_include_files_are_front_loaded_in_initial_judge_message(tmp_path: Path)
     (tmp_path / "context.txt").write_text("shared context\n", encoding="utf-8")
     p = _pair(1, "With include", val="VALIDATE", include_files=("context.txt",))
     msg = build_initial_judge_message(p, "artifact text", tmp_path)
-    assert msg.index("# Included context files") < msg.index("VALIDATE")
+    assert msg.index("# Reference Blocks") < msg.index("VALIDATE")
+
+
+def test_checks_files_are_injected_into_generator_message(tmp_path: Path):
+    (tmp_path / "inventory.yaml").write_text("k: v\n", encoding="utf-8")
+    p = _pair(1, "With checks", checks_files=("inventory.yaml",))
+    msg = build_initial_generator_message(p, [], tmp_path)
+    assert "# Current inventory artifact" in msg
+    assert "<INVENTORY>" in msg
+    assert "k: v" in msg
+
+
+def test_missing_checks_file_is_still_injected_as_empty_artifact_block(tmp_path: Path):
+    p = _pair(1, "With checks", checks_files=("inventory.yaml",))
+    msg = build_initial_generator_message(p, [], tmp_path)
+    assert "# Current inventory artifact" in msg
+    assert "<INVENTORY>" in msg
+    assert "</INVENTORY>" in msg
 
 
 def test_render_prompt_pair_inlines_include_from_placeholder_bound_path(tmp_path: Path):
@@ -325,7 +356,26 @@ def test_include_files_are_front_loaded_in_revision_judge_message(tmp_path: Path
         tmp_path,
         validation_prompt="VALIDATE",
     )
-    assert msg.index("# Included context files") < msg.index("VALIDATE")
+    assert msg.index("# Reference Blocks") < msg.index("VALIDATE")
+
+
+def test_checks_files_are_front_loaded_in_judge_message(tmp_path: Path):
+    (tmp_path / "inventory.yaml").write_text("k: v\n", encoding="utf-8")
+    p = _pair(1, "With checks", val="VALIDATE", checks_files=("inventory.yaml",))
+    msg = build_initial_judge_message(p, "artifact text", tmp_path)
+    assert msg.index("# Current inventory artifact") < msg.index("VALIDATE")
+
+
+def test_revision_generator_message_places_reference_materials_before_original_task(tmp_path: Path):
+    (tmp_path / "context.txt").write_text("ctx\n", encoding="utf-8")
+    p = _pair(1, "X", checks_files=("context.txt",))
+    msg = build_revision_generator_message(
+        p,
+        "feedback text",
+        tmp_path,
+        original_task="original task body",
+    )
+    assert msg.index("# Current context artifact") < msg.index("# Original task")
 
 
 def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
@@ -757,6 +807,55 @@ def test_single_prompt_passes_first_try(tmp_path: Path):
     assert client.received[0].new_session is True
     assert client.received[1].new_session is True
     assert client.received[0].session_id != client.received[1].session_id
+
+
+def test_run_prompt_persists_rendered_generator_and_judge_inputs(tmp_path: Path):
+    pair = _pair(1, "Alpha", gen="GEN BODY", val="VAL BODY")
+    run_dir = tmp_path / "run"
+    client = FakeClaudeClient(scripted=[_pass_response("gen-output"), _judge_pass()])
+
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=run_dir,
+        config=RunConfig(),
+        claude_client=client,
+        run_id="testrun",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    generator_prompt_path = _prompt_input_path(run_dir, "Alpha", 1, 1)
+    judge_prompt_path = _prompt_input_path(
+        run_dir, "Alpha", 1, 1, validation=True,
+    )
+    assert generator_prompt_path.read_text() == client.received[0].prompt
+    assert judge_prompt_path.read_text() == client.received[1].prompt
+
+
+def test_run_prompt_persists_revision_generator_input(tmp_path: Path):
+    pair = _pair(1, "Alpha", gen="GEN BODY", val="VAL BODY")
+    run_dir = tmp_path / "run"
+    client = FakeClaudeClient(
+        scripted=[
+            _pass_response("artifact-1"),
+            _judge_revise("Please revise."),
+            _pass_response("artifact-2"),
+            _judge_pass(),
+        ]
+    )
+
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=run_dir,
+        config=RunConfig(max_iterations=2),
+        claude_client=client,
+        run_id="testrun",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    revision_prompt_path = _prompt_input_path(run_dir, "Alpha", 1, 2)
+    assert revision_prompt_path.read_text() == client.received[2].prompt
 
 
 def test_single_prompt_passes_on_second_iteration(tmp_path: Path):
@@ -1353,7 +1452,7 @@ def test_dry_run_makes_no_real_calls(tmp_path: Path):
 
 def test_summary_txt_is_written_on_halt(tmp_path: Path):
     """Halting the pipeline must write summary.txt before exit."""
-    pair = _pair(1, "Alpha")
+    pair = _pair(1, "Alpha", checks_files=(), include_files=())
     client = FakeClaudeClient(scripted=[_pass_response(), _judge_escalate()])
     run_dir = tmp_path / "run"
     run_pipeline(
@@ -1361,7 +1460,7 @@ def test_summary_txt_is_written_on_halt(tmp_path: Path):
         claude_client=client, source_file=tmp_path / "source.md",
         worktree_dir=_worktree(tmp_path),
     )
-    summary_path = _run_files(run_dir) / "summary.txt"
+    summary_path = _run_files(run_dir) / "alpha" / "summary.txt"
     assert summary_path.exists()
     text = summary_path.read_text()
     assert "alpha" in text
@@ -1385,7 +1484,7 @@ def test_skipped_prompts_appear_in_summary(tmp_path: Path):
         claude_client=client, source_file=tmp_path / "source.md",
         worktree_dir=_worktree(tmp_path),
     )
-    summary_text = (_run_files(run_dir) / "summary.txt").read_text()
+    summary_text = (_run_files(run_dir) / "first" / "summary.txt").read_text()
     # p1 ran and passed
     assert "first" in summary_text
     assert "pass" in summary_text
@@ -1439,7 +1538,7 @@ def test_summary_includes_wall_time(tmp_path: Path):
         claude_client=client, source_file=tmp_path / "source.md",
         worktree_dir=_worktree(tmp_path),
     )
-    summary = (_run_files(run_dir) / "summary.txt").read_text()
+    summary = (_run_files(run_dir) / "alpha" / "summary.txt").read_text()
     assert "Wall time:" in summary
     # Format must look like HH:MM:SS.
     import re as _re

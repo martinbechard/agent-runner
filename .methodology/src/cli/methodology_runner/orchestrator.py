@@ -30,10 +30,13 @@ import re
 import fcntl
 import shutil
 import subprocess
+import sys
+import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from .models import (
@@ -71,16 +74,22 @@ MAX_CROSS_REF_RETRIES = 2
 """Default maximum re-generation attempts when cross-ref verification fails."""
 
 METHODOLOGY_DIR = ".methodology-runner"
-"""Hidden directory within the workspace for internal state and run artifacts."""
+"""Hidden directory within the workspace for methodology control state."""
+
+RUN_FILES_DIRNAME = ".run-files"
+"""Shared execution-artifact root in the workspace."""
+
+METHODOLOGY_RUN_FILES_SUBDIR = "methodology-runner"
+"""Methodology-owned artifacts within the shared .run-files tree."""
 
 STATE_FILENAME = "state.json"
 """Name of the project-state JSON file inside METHODOLOGY_DIR."""
 
-RUNS_SUBDIR = "runs"
-"""Subdirectory of METHODOLOGY_DIR holding per-phase run artifacts."""
-
 SUMMARY_FILENAME = "summary.txt"
 """Human-readable summary written after pipeline completion."""
+
+PROCESS_LOG_FILENAME = "process.log"
+"""Debug/process log for methodology-runner itself."""
 
 REQUIREMENTS_DEST = "docs/requirements"
 """Workspace-relative directory where the raw requirements are copied."""
@@ -161,6 +170,9 @@ class PipelineConfig:
     resume: bool = False
     phases_to_run: list[str] | None = None
     max_prompt_runner_iterations: int | None = None
+    debug: int = 0
+    """When > 0, enable depth-limited prompt-runner tracing in per-phase
+    process logs and any methodology-owned debug logging."""
     escalation_policy: EscalationPolicy | None = None
     max_cross_ref_retries: int = MAX_CROSS_REF_RETRIES
 
@@ -230,6 +242,81 @@ def _git_diff(workspace: Path) -> str:
     return _git(workspace, "diff")
 
 
+def _process_log_path(workspace: Path) -> Path:
+    return workspace / METHODOLOGY_DIR / PROCESS_LOG_FILENAME
+
+
+def _append_process_log(workspace: Path, source: str, message: str) -> None:
+    path = _process_log_path(workspace)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    with open(path, "a", encoding="utf-8") as log:
+        for line in message.splitlines(keepends=True):
+            log.write(f"{timestamp} [{source}] {line}")
+        if message and not message.endswith("\n"):
+            log.write("\n")
+
+
+@contextmanager
+def _debug_trace(workspace: Path, debug_depth: int):
+    if debug_depth <= 0:
+        yield
+        return
+
+    package_root = Path(__file__).resolve().parent
+    local = threading.local()
+
+    def tracer(frame, event, arg):
+        filename = frame.f_code.co_filename
+        if not filename:
+            return tracer
+        try:
+            frame_path = Path(filename).resolve()
+        except OSError:
+            return tracer
+        if package_root not in frame_path.parents and frame_path != package_root:
+            return tracer
+
+        stack = getattr(local, "stack", [])
+        if event == "call":
+            stack = stack + [frame]
+            local.stack = stack
+            if len(stack) <= debug_depth:
+                rel = frame_path.relative_to(package_root)
+                _append_process_log(
+                    workspace,
+                    "debug-trace",
+                    f"call depth={len(stack)} {rel}:{frame.f_lineno} {frame.f_code.co_name}()",
+                )
+            return tracer
+        if event in {"return", "exception"}:
+            if not stack:
+                return tracer
+            depth = len(stack)
+            if depth <= debug_depth:
+                rel = frame_path.relative_to(package_root)
+                label = "return" if event == "return" else "exception"
+                _append_process_log(
+                    workspace,
+                    "debug-trace",
+                    f"{label} depth={depth} {rel}:{frame.f_lineno} {frame.f_code.co_name}()",
+                )
+            local.stack = stack[:-1]
+            return tracer
+        return tracer
+
+    previous_profile = sys.getprofile()
+    sys.setprofile(tracer)
+    threading.setprofile(tracer)
+    _append_process_log(workspace, "debug-trace", f"enabled depth={debug_depth}")
+    try:
+        yield
+    finally:
+        sys.setprofile(previous_profile)
+        threading.setprofile(None)
+        _append_process_log(workspace, "debug-trace", "disabled")
+
+
 # ---------------------------------------------------------------------------
 # Workspace initialization (CD-002 Section 5.1)
 # ---------------------------------------------------------------------------
@@ -251,8 +338,6 @@ def initialize_workspace(config: PipelineConfig) -> Path:
     # Internal directories
     meth_dir = workspace / METHODOLOGY_DIR
     meth_dir.mkdir(exist_ok=True)
-    (meth_dir / RUNS_SUBDIR).mkdir(exist_ok=True)
-
     # Phase-output directories (CD-002 Section 4.5)
     for subdir in (
         "docs/requirements",
@@ -292,6 +377,16 @@ def initialize_workspace(config: PipelineConfig) -> Path:
 def _state_path(workspace: Path) -> Path:
     """Return the path to the project-state file."""
     return workspace / METHODOLOGY_DIR / STATE_FILENAME
+
+
+def _summary_path(workspace: Path) -> Path:
+    """Return the methodology summary path under the shared .run-files tree."""
+    return (
+        workspace
+        / RUN_FILES_DIRNAME
+        / METHODOLOGY_RUN_FILES_SUBDIR
+        / SUMMARY_FILENAME
+    )
 
 
 def load_project_state(workspace: Path) -> ProjectState | None:
@@ -429,7 +524,7 @@ def _verify_phase_output_exists(
 def _invoke_prompt_runner_library(
     md_file: Path,
     workspace: Path,
-    run_dir: Path,
+    run_id: str,
     config: PipelineConfig,
     claude_client: AgentClient | None = None,
     generator_prelude: str | None = None,
@@ -454,15 +549,17 @@ def _invoke_prompt_runner_library(
         backend=config.backend,
         max_iterations=max_iters,
         model=config.model,
+        debug=config.debug,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
         include_project_organiser=False,
         placeholder_values=placeholder_values or {},
+        run_id_override=run_id,
     )
 
     pr_result = pr_run_pipeline(
         pairs=pairs,
-        run_dir=run_dir,
+        run_dir=workspace,
         config=pr_config,
         claude_client=claude_client,
         source_file=md_file,
@@ -483,7 +580,7 @@ def _invoke_prompt_runner_library(
 def _invoke_prompt_runner(
     md_file: Path,
     workspace: Path,
-    run_dir: Path,
+    run_id: str,
     config: PipelineConfig,
     claude_client: AgentClient | None = None,
     generator_prelude: str | None = None,
@@ -495,7 +592,7 @@ def _invoke_prompt_runner(
     Returns ``(success, iteration_count, error_message_or_none)``.
     """
     return _invoke_prompt_runner_library(
-        md_file, workspace, run_dir, config, claude_client,
+        md_file, workspace, run_id, config, claude_client,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
         placeholder_values=placeholder_values,
@@ -523,13 +620,8 @@ def _get_completed_phase_states(state: ProjectState) -> list[PhaseState]:
 
 
 def _phase_run_dir(workspace: Path, phase_config: PhaseConfig) -> Path:
-    """Return the run-artifact directory for a phase."""
-    return (
-        workspace
-        / METHODOLOGY_DIR
-        / RUNS_SUBDIR
-        / f"phase-{phase_config.phase_number}"
-    )
+    """Return the methodology phase-artifact directory under shared .run-files."""
+    return workspace / RUN_FILES_DIRNAME / phase_config.phase_id
 
 
 def _resolve_phase_prompt_module_path(phase_config: PhaseConfig) -> Path:
@@ -691,11 +783,9 @@ def _run_single_phase(
         # it, every phase's prompt-1 gen/jud sessions collide on the
         # same UUID and claude rejects the second invocation with
         # "Session ID ... is already in use".
-        pr_run_dir = (
-            run_dir / f"prompt-runner-output-phase-{phase_config.phase_number}"
-        )
+        pr_run_id = phase_id
         success, iteration_count, pr_error = _invoke_prompt_runner(
-            prompt_file, workspace, pr_run_dir, config, claude_client,
+            prompt_file, workspace, pr_run_id, config, claude_client,
             placeholder_values=placeholder_values,
         )
 
@@ -788,12 +878,9 @@ def _run_single_phase(
         # Re-run prompt-runner on the same prompt module with retry guidance.
         # Phase number included so the retry run_id differs from other phases'
         # retries (same session-collision concern as the main invocation above).
-        retry_run_dir = (
-            run_dir
-            / f"prompt-runner-output-phase-{phase_config.phase_number}-retry-{attempt + 1}"
-        )
+        retry_run_id = f"{phase_id}-retry-{attempt + 1}"
         success, extra_iters, pr_error = _invoke_prompt_runner(
-            prompt_file, workspace, retry_run_dir, config, claude_client,
+            prompt_file, workspace, retry_run_id, config, claude_client,
             generator_prelude=guidance,
             judge_prelude=guidance,
             placeholder_values=placeholder_values,
@@ -871,7 +958,7 @@ def _run_single_phase(
 # ---------------------------------------------------------------------------
 
 def write_summary(workspace: Path, result: PipelineResult) -> None:
-    """Write a human-readable summary to .methodology-runner/summary.txt.
+    """Write a human-readable summary to .run-files/methodology-runner/summary.txt.
 
     Called incrementally after each phase and once at pipeline end.
     Each call overwrites the file so it always reflects the latest state.
@@ -957,7 +1044,7 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
 
     lines.extend(["", "=" * 60, ""])
 
-    summary_path = workspace / METHODOLOGY_DIR / SUMMARY_FILENAME
+    summary_path = _summary_path(workspace)
     summary_path.parent.mkdir(parents=True, exist_ok=True)
     summary_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -1000,172 +1087,179 @@ def run_pipeline(
 
     # ---- workspace lock (prevent concurrent instances) ----
     lock = _WorkspaceLock(workspace)
-    try:
-        lock.acquire()
-    except WorkspaceLockError as exc:
-        return PipelineResult(
-            workspace_dir=workspace,
-            phase_results=[],
-            halted_early=True,
-            halt_reason=str(exc),
-            end_to_end_result=None,
-            wall_time_seconds=time.monotonic() - t0,
-            execution_scope=(
-                "selected-phases"
-                if config.phases_to_run is not None
-                else "all-phases"
-            ),
-            selected_phase_ids=(
-                list(config.phases_to_run)
-                if config.phases_to_run is not None
-                else None
-            ),
-        )
-
-    state: ProjectState | None = None
-    if config.resume:
-        state = load_project_state(workspace)
-
-    if state is None:
-        state = _create_initial_state(workspace, config)
-        save_project_state(state, workspace)
-    else:
-        state.execution_scope = (
-            "selected-phases"
-            if config.phases_to_run is not None
-            else "all-phases"
-        )
-        state.selected_phase_ids = (
-            list(config.phases_to_run)
-            if config.phases_to_run is not None
-            else None
-        )
-        save_project_state(state, workspace)
-
-    # ---- backend client ----
-    if claude_client is None:
-        claude_client = make_client(config.backend)
-
-    # ---- determine phases ----
-    phases_to_run: list[PhaseConfig] = list(PHASES)
-    if config.phases_to_run is not None:
-        phases_to_run = [
-            get_phase(pid) for pid in normalize_phase_selection(config.phases_to_run)
-        ]
-
-    # ---- execute phases ----
-    phase_results: list[PhaseResult] = []
-    halted_early = False
-    halt_reason: str | None = None
-
-    for phase in phases_to_run:
-        ps = _find_phase_state(state, phase.phase_id)
-
-        # Resume: skip completed phases
-        if config.resume and ps.status in _COMPLETED_STATUSES:
-            existing = state.phase_results.get(phase.phase_id)
-            if existing is not None:
-                phase_results.append(existing)
-            continue
-
-        # Resume: re-run cross-ref only if prompt-runner already passed
-        cross_ref_only = (
-            config.resume
-            and ps.status == PhaseStatus.PROMPT_RUNNER_PASSED
-        )
-
-        # Predecessor check: verify both status and artifact existence
-        if not cross_ref_only:
-            err = _verify_predecessor_artifacts(phase, state, workspace)
-            if err is not None:
-                halted_early = True
-                halt_reason = err
-                break
-
-        # Execute
-        result = _run_single_phase(
-            phase, state, workspace, config,
-            claude_client=claude_client,
-            cross_ref_only=cross_ref_only,
-        )
-        phase_results.append(result)
-
-        # Incremental summary: overwrite after each phase so a crash
-        # mid-pipeline still leaves a readable summary of progress.
-        write_summary(
-            workspace,
-            PipelineResult(
+    with _debug_trace(workspace, config.debug):
+        try:
+            lock.acquire()
+        except WorkspaceLockError as exc:
+            return PipelineResult(
                 workspace_dir=workspace,
-                phase_results=list(phase_results),
-                halted_early=False,
-                halt_reason=None,
+                phase_results=[],
+                halted_early=True,
+                halt_reason=str(exc),
                 end_to_end_result=None,
                 wall_time_seconds=time.monotonic() - t0,
+                execution_scope=(
+                    "selected-phases"
+                    if config.phases_to_run is not None
+                    else "all-phases"
+                ),
+                selected_phase_ids=(
+                    list(config.phases_to_run)
+                    if config.phases_to_run is not None
+                    else None
+                ),
+            )
+
+        try:
+            state: ProjectState | None = None
+            if config.resume:
+                state = load_project_state(workspace)
+
+            if state is None:
+                state = _create_initial_state(workspace, config)
+                save_project_state(state, workspace)
+            else:
+                state.execution_scope = (
+                    "selected-phases"
+                    if config.phases_to_run is not None
+                    else "all-phases"
+                )
+                state.selected_phase_ids = (
+                    list(config.phases_to_run)
+                    if config.phases_to_run is not None
+                    else None
+                )
+                save_project_state(state, workspace)
+
+            # ---- backend client ----
+            if claude_client is None:
+                claude_client = make_client(config.backend)
+
+            # ---- determine phases ----
+            phases_to_run: list[PhaseConfig] = list(PHASES)
+            if config.phases_to_run is not None:
+                phases_to_run = [
+                    get_phase(pid)
+                    for pid in normalize_phase_selection(config.phases_to_run)
+                ]
+
+            # ---- execute phases ----
+            phase_results: list[PhaseResult] = []
+            halted_early = False
+            halt_reason: str | None = None
+
+            for phase in phases_to_run:
+                ps = _find_phase_state(state, phase.phase_id)
+
+                # Resume: skip completed phases
+                if config.resume and ps.status in _COMPLETED_STATUSES:
+                    existing = state.phase_results.get(phase.phase_id)
+                    if existing is not None:
+                        phase_results.append(existing)
+                    continue
+
+                # Resume: re-run cross-ref only if prompt-runner already passed
+                cross_ref_only = (
+                    config.resume
+                    and ps.status == PhaseStatus.PROMPT_RUNNER_PASSED
+                )
+
+                # Predecessor check: verify both status and artifact existence
+                if not cross_ref_only:
+                    err = _verify_predecessor_artifacts(phase, state, workspace)
+                    if err is not None:
+                        halted_early = True
+                        halt_reason = err
+                        break
+
+                # Execute
+                result = _run_single_phase(
+                    phase,
+                    state,
+                    workspace,
+                    config,
+                    claude_client=claude_client,
+                    cross_ref_only=cross_ref_only,
+                )
+                phase_results.append(result)
+
+                # Incremental summary: overwrite after each phase so a crash
+                # mid-pipeline still leaves a readable summary of progress.
+                write_summary(
+                    workspace,
+                    PipelineResult(
+                        workspace_dir=workspace,
+                        phase_results=list(phase_results),
+                        halted_early=False,
+                        halt_reason=None,
+                        end_to_end_result=None,
+                        wall_time_seconds=time.monotonic() - t0,
+                        execution_scope=state.execution_scope,
+                        selected_phase_ids=(
+                            list(state.selected_phase_ids)
+                            if state.selected_phase_ids is not None
+                            else None
+                        ),
+                    ),
+                )
+
+                # Handle failure
+                if result.status in (PhaseStatus.FAILED, PhaseStatus.ESCALATED):
+                    policy = _effective_escalation_policy(config, phase)
+                    if policy != EscalationPolicy.FLAG_AND_CONTINUE:
+                        halted_early = True
+                        halt_reason = result.error_message
+                        break
+                    # FLAG_AND_CONTINUE: keep going (subsequent phases may fail
+                    # their predecessor check, which is correct behaviour)
+
+            # ---- end-to-end verification ----
+            end_to_end_result: CrossRefResult | None = None
+            all_done = all(
+                _find_phase_state(state, p.phase_id).status in _COMPLETED_STATUSES
+                for p in PHASES
+            )
+
+            if all_done and not halted_early:
+                try:
+                    end_to_end_result = verify_end_to_end(
+                        workspace=workspace,
+                        backend=config.backend,
+                        model=config.model,
+                        claude_client=claude_client,
+                    )
+                except CrossReferenceError as exc:
+                    end_to_end_result = CrossRefResult(
+                        passed=False,
+                        issues=[str(exc)],
+                        traceability_gaps=[],
+                        orphaned_elements=[],
+                        coverage_summary={},
+                    )
+
+            # ---- finalise ----
+            state.finished_at = _iso_now() if all_done and not halted_early else None
+            state.current_phase = None
+            save_project_state(state, workspace)
+
+            wall_time = time.monotonic() - t0
+            pipeline_result = PipelineResult(
+                workspace_dir=workspace,
+                phase_results=phase_results,
+                halted_early=halted_early,
+                halt_reason=halt_reason,
+                end_to_end_result=end_to_end_result,
+                wall_time_seconds=wall_time,
                 execution_scope=state.execution_scope,
                 selected_phase_ids=(
                     list(state.selected_phase_ids)
                     if state.selected_phase_ids is not None
                     else None
                 ),
-            ),
-        )
-
-        # Handle failure
-        if result.status in (PhaseStatus.FAILED, PhaseStatus.ESCALATED):
-            policy = _effective_escalation_policy(config, phase)
-            if policy != EscalationPolicy.FLAG_AND_CONTINUE:
-                halted_early = True
-                halt_reason = result.error_message
-                break
-            # FLAG_AND_CONTINUE: keep going (subsequent phases may fail
-            # their predecessor check, which is correct behaviour)
-
-    # ---- end-to-end verification ----
-    end_to_end_result: CrossRefResult | None = None
-    all_done = all(
-        _find_phase_state(state, p.phase_id).status in _COMPLETED_STATUSES
-        for p in PHASES
-    )
-
-    if all_done and not halted_early:
-        try:
-            end_to_end_result = verify_end_to_end(
-                workspace=workspace,
-                backend=config.backend,
-                model=config.model,
-                claude_client=claude_client,
-            )
-        except CrossReferenceError as exc:
-            end_to_end_result = CrossRefResult(
-                passed=False,
-                issues=[str(exc)],
-                traceability_gaps=[],
-                orphaned_elements=[],
-                coverage_summary={},
             )
 
-    # ---- finalise ----
-    state.finished_at = _iso_now() if all_done and not halted_early else None
-    state.current_phase = None
-    save_project_state(state, workspace)
-
-    wall_time = time.monotonic() - t0
-    pipeline_result = PipelineResult(
-        workspace_dir=workspace,
-        phase_results=phase_results,
-        halted_early=halted_early,
-        halt_reason=halt_reason,
-        end_to_end_result=end_to_end_result,
-        wall_time_seconds=wall_time,
-        execution_scope=state.execution_scope,
-        selected_phase_ids=(
-            list(state.selected_phase_ids)
-            if state.selected_phase_ids is not None
-            else None
-        ),
-    )
-
-    # Final summary with end-to-end results and halt status
-    write_summary(workspace, pipeline_result)
-    lock.release()
-    return pipeline_result
+            # Final summary with end-to-end results and halt status
+            write_summary(workspace, pipeline_result)
+            return pipeline_result
+        finally:
+            lock.release()

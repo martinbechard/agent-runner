@@ -1,8 +1,8 @@
-## Prompt 1: Produce Solution Design
-
 ### Module
 
 solution-design
+
+## Prompt 1: Produce Solution Design
 
 ### Required Files
 
@@ -130,7 +130,7 @@ Acceptance requirements:
 - Do not create components that serve no features.
 - Do not create interactions for fake or purely rhetorical boundaries.
 - Do not create any files other than docs/design/solution-design.yaml.
-- Use the Write tool to write the full file contents to docs/design/solution-design.yaml.
+- Write the full file contents to docs/design/solution-design.yaml.
 
 ### Validation Prompt
 
