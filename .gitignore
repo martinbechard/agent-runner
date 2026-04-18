@@ -25,6 +25,7 @@ relative/
 .archive/
 *.log
 .claude/
+work/
 work/**/.git
 work/pr-021-run/
 

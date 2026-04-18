@@ -276,10 +276,10 @@
 - **Tests location:** n/a — temporary working directories are not canonical test locations.
 
 ### .archive/
-- **Purpose:** Git-ignored archive storage for superseded or intentionally retained historical documents that should not remain in the active project tree. Archive paths mirror the live project path beneath `.archive/` so the original location stays obvious.
-- **Signals:** "archived version", "superseded doc", "retained old copy", "historical variant to keep but not keep active", explicit instruction to archive a file instead of deleting it.
-- **Filename pattern:** preserve the original filename and relative path under `.archive/`; for example `docs/design/components/CD-009-...md` becomes `.archive/docs/design/components/CD-009-...md`.
-- **Tests location:** n/a — archived files are retained history, not active artifacts.
+- **Purpose:** Git-ignored archive storage for superseded or intentionally retained historical artifacts that should not remain in the active project tree. Archive paths mirror the live project path beneath `.archive/` so the original location stays obvious.
+- **Signals:** "archived version", "superseded doc", "retained old copy", "historical variant to keep but not keep active", archived workflow-run tree, retained generated evidence, explicit instruction to archive a file or directory instead of deleting it.
+- **Filename pattern:** preserve the original relative path under `.archive/`; for example `docs/design/components/CD-009-...md` becomes `.archive/docs/design/components/CD-009-...md`, and `tools/prompt-runner/workflows/...` becomes `.archive/tools/prompt-runner/workflows/...`.
+- **Tests location:** n/a — archived files and directories are retained history, not active artifacts.
 
 ### (project root)
 - **Purpose:** Tooling configuration files and agent instruction files that must live at the repository root by ecosystem convention.
@@ -292,6 +292,7 @@
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
 - 2026-04-18 — docs/plans/ extended — existing PLAN files already include migration and repo-change plans, so the taxonomy must explicitly allow staged reorganization and migration plans rather than only TDD implementation plans.
 - 2026-04-15 — .codex/agents/ added — repository-local Codex custom agents need a canonical home separate from the older Claude-specific agent folder.
+- 2026-04-18 — .archive/ broadened — archived historical directories such as generated workflow-run trees may also move into mirrored paths under `.archive/`.
 - 2026-04-15 — .archive/ added — archived documents should leave the active tree and move into a git-ignored mirrored archive path under `.archive/`.
 - 2026-04-15 — docs/design/components/ extended — YAML structured-design companions for existing component designs need a canonical home alongside the markdown authority when explicitly requested.
 - 2026-04-15 — plugins/<plugin-name>/skills/<skill-name>/agents/ added — skill UI metadata such as `agents/openai.yaml` is distinct from the skill definition and needs its own category under each skill folder.
