@@ -10,6 +10,8 @@ project_dir="${PROJECT_DIR:-tests/fixtures/ph006-hello-world-workspace}"
 run_dir="${RUN_DIR:-work/ph006-incremental-implementation-run}"
 export PYTHONPATH=".prompt-runner/src/cli${PYTHONPATH:+:$PYTHONPATH}"
 prompt_runner=(python -m prompt_runner)
+python_bin="$(command -v python3 || command -v python)"
+child_prompt_runner_command="PYTHONPATH=\"$repo_root/.prompt-runner/src/cli\" \"$python_bin\" -m prompt_runner"
 
 preserve_run_dir=false
 for arg in "$@"; do
@@ -28,4 +30,5 @@ fi
   --verbose \
   --project-dir "$project_dir" \
   --run-dir "$run_dir" \
+  --var "prompt_runner_command=$child_prompt_runner_command" \
   "$@"

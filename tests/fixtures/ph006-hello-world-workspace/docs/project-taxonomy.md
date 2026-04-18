@@ -20,10 +20,16 @@ This fixture workspace is a minimal project used by prompt-runner phase tests.
 - Purpose: simulation definitions and related verification-planning artifacts.
 
 ### docs/implementation/
-- Purpose: implementation-plan artifacts.
+- Purpose: implementation workflow prompts and child-run execution reports.
+
+### docs/verification/
+- Purpose: final verification artifacts derived from implemented project evidence.
+
+### tests/
+- Purpose: automated project tests and verification harness files.
 
 ### scripts/
 - Purpose: deterministic validation helpers executed during prompt validation.
 
 ### (project root)
-- Purpose: fixed project-level files required by tooling or agent instructions.
+- Purpose: fixed project-level files required by tooling or by the implemented project, such as `app.py` and `README.md`.
