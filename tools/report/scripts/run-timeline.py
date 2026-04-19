@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 import sys
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -150,6 +151,7 @@ class PhaseTimeline:
     phase_id: str
     phase_number: int
     steps: list[Step] = field(default_factory=list)
+    drilldown_links: list[tuple[str, str]] = field(default_factory=list)
 
     @property
     def total_seconds(self) -> float:
@@ -190,6 +192,7 @@ class ReportDocument:
     timelines: list[PhaseTimeline] = field(default_factory=list)
     shared_steps: list[Step] = field(default_factory=list)
     fork_sections: list[ForkSection] = field(default_factory=list)
+    nav_links: list[tuple[str, str]] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -206,6 +209,8 @@ def detect_log_backend(path: Path) -> str:
             try:
                 obj = json.loads(raw)
             except json.JSONDecodeError:
+                continue
+            if not isinstance(obj, dict):
                 continue
             etype = obj.get("type", "")
             if etype in {"thread.started", "turn.started", "item.started", "item.completed", "turn.completed"}:
@@ -245,6 +250,8 @@ def parse_claude_log(path: Path) -> CallDetail:
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
             continue
 
         etype = obj.get("type", "")
@@ -399,6 +406,8 @@ def parse_codex_log(path: Path) -> CallDetail:
         try:
             obj = json.loads(raw)
         except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
             continue
 
         etype = obj.get("type", "")
@@ -595,6 +604,53 @@ def _load_log_metadata(log_path: Path) -> dict[str, object]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _read_top_level_toml_string(path: Path, key: str) -> str:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    pattern = re.compile(rf'^{re.escape(key)}\s*=\s*["\']([^"\']+)["\']\s*$', re.MULTILINE)
+    match = pattern.search(content)
+    return match.group(1).strip() if match else ""
+
+
+def _resolve_codex_model_for_step(step_name: str, workspace_root: Path) -> str:
+    lower = step_name.lower()
+    agent_name = ""
+    if "judge" in lower:
+        agent_name = "prompt-runner-judge"
+    elif "generator" in lower:
+        agent_name = "prompt-runner-generator"
+
+    if agent_name:
+        for root in (workspace_root, REPO_ROOT, Path.home()):
+            agent_path = root / ".codex" / "agents" / f"{agent_name}.toml"
+            if agent_path.exists():
+                model = _read_top_level_toml_string(agent_path, "model")
+                if model:
+                    return model
+
+    for root in (workspace_root, REPO_ROOT, Path.home()):
+        config_path = root / ".codex" / "config.toml"
+        if config_path.exists():
+            model = _read_top_level_toml_string(config_path, "model")
+            if model:
+                return model
+
+    return ""
+
+
+def _apply_codex_model_fallback(steps: list[Step], workspace_root: Path) -> None:
+    for step in steps:
+        detail = step.detail
+        if detail is None or detail.backend != "codex" or detail.model:
+            continue
+        inferred = _resolve_codex_model_for_step(step.name, workspace_root)
+        if inferred:
+            detail.model = inferred
+            _finalize_detail(detail)
+
+
 def _file_step(name: str, start_file: Path, end_file: Path,
                log_file: Path | None = None) -> Step | None:
     if not start_file.exists() or not end_file.exists():
@@ -635,6 +691,110 @@ def _normalize_step_sequence(
         step.started = cursor
         step.ended = completed_at
         cursor = completed_at
+
+
+def _prompt_name_map_from_module_dir(module_dir: Path) -> dict[str, str]:
+    import re
+
+    names: dict[str, str] = {}
+    for verdict in sorted(module_dir.glob("prompt-*.final-verdict.txt")):
+        match = re.match(r"^(prompt-\d+)(?:-(.+))?\.final-verdict\.txt$", verdict.name)
+        if not match:
+            continue
+        prompt_id = match.group(1)
+        suffix = match.group(2) or ""
+        names[prompt_id] = f"{prompt_id}-{suffix}" if suffix else prompt_id
+    return names
+
+
+def _backfill_prompts_from_history(module_dir: Path, steps: list[Step]) -> None:
+    import re
+
+    history_dir = module_dir / "history"
+    if not history_dir.exists():
+        return
+
+    for step in steps:
+        if not step.detail or step.detail.prompt_text:
+            continue
+        match = re.search(r"(prompt-\d+).*/ iter (\d+)", step.name)
+        if not match:
+            continue
+        prompt_id = match.group(1)
+        iter_num = match.group(2)
+        prompt_history_dir = history_dir / prompt_id
+        if not prompt_history_dir.exists():
+            continue
+        filename = (
+            f"iter-{iter_num}-validation-prompt.md"
+            if "judge" in step.name.lower()
+            else f"iter-{iter_num}-prompt.md"
+        )
+        prompt_path = prompt_history_dir / filename
+        try:
+            step.detail.prompt_text = prompt_path.read_text(encoding="utf-8")
+        except OSError:
+            continue
+
+
+def _parse_prompt_module_dir(
+    module_dir: Path,
+    *,
+    prefix: str = "",
+) -> list[Step]:
+    import re
+
+    steps: list[Step] = []
+    prompt_names = _prompt_name_map_from_module_dir(module_dir)
+    generator_logs = sorted(module_dir.glob("prompt-*.iter-*-generator.stdout.log"))
+    for iter_log in generator_logs:
+        match = re.match(r"^(prompt-\d+)\.iter-(\d+)-generator\.stdout\.log$", iter_log.name)
+        if not match:
+            continue
+        prompt_id = match.group(1)
+        iter_num = match.group(2)
+        prompt_name = prompt_names.get(prompt_id, prompt_id)
+        step_prefix = f"{prefix}{prompt_name}" if prefix else prompt_name
+
+        stderr = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-generator.stderr.log")
+        step = _file_step(
+            f"{step_prefix} / iter {iter_num} generator",
+            stderr if stderr.exists() else iter_log,
+            iter_log,
+            iter_log,
+        )
+        if step:
+            steps.append(step)
+
+        det_stdout = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-deterministic-validation.stdout.log")
+        det_stderr = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-deterministic-validation.stderr.log")
+        det_proc = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-deterministic-validation.proc.json")
+        if det_stdout.exists():
+            steps.append(
+                Step(
+                    name=f"{step_prefix} / iter {iter_num} deterministic validation",
+                    started=_mtime(det_stderr if det_stderr.exists() else det_stdout),
+                    ended=_mtime(det_proc if det_proc.exists() else det_stdout),
+                    size_bytes=(det_proc if det_proc.exists() else det_stdout).stat().st_size,
+                    log_path=det_stdout,
+                )
+            )
+
+        judge_log = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-judge.stdout.log")
+        judge_stderr = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-judge.stderr.log")
+        if judge_log.exists():
+            step = _file_step(
+                f"{step_prefix} / iter {iter_num} judge",
+                judge_stderr if judge_stderr.exists() else judge_log,
+                judge_log,
+                judge_log,
+            )
+            if step:
+                steps.append(step)
+
+    _backfill_prompts_from_history(module_dir, steps)
+    _apply_codex_model_fallback(steps, module_dir.parent.parent)
+    return steps
 
 
 # ---------------------------------------------------------------------------
@@ -891,11 +1051,59 @@ def _backfill_prompts_from_synthetic(steps: list[Step], synth_path: Path) -> Non
 
 
 def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
+    state_path = workspace / ".methodology-runner" / "state.json"
+    run_files_dir = workspace / ".run-files"
+    if state_path.exists() and run_files_dir.exists():
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+        timelines: list[PhaseTimeline] = []
+        for phase_meta in state.get("phases", []):
+            phase_id = phase_meta.get("phase_id", "")
+            if not phase_id.startswith("PH-"):
+                continue
+            try:
+                phase_number = int(phase_id[3:6])
+            except (IndexError, ValueError):
+                continue
+
+            module_slug = phase_id.split("-", 2)[2]
+            module_dir = run_files_dir / module_slug
+            steps = _parse_prompt_module_dir(module_dir) if module_dir.exists() else []
+
+            cross_ref_result_path = phase_meta.get("cross_ref_result_path")
+            if cross_ref_result_path:
+                xref = Path(cross_ref_result_path)
+                if xref.exists() and steps:
+                    prev = steps[-1]
+                    step = Step(
+                        name="Cross-reference verification",
+                        started=prev.ended,
+                        ended=_mtime(xref),
+                        size_bytes=xref.stat().st_size,
+                    )
+                    if step.duration_seconds > 0:
+                        steps.append(step)
+
+            if not steps:
+                continue
+
+            _normalize_step_sequence(
+                steps,
+                start_anchor=_parse_iso_datetime(phase_meta.get("started_at")),
+            )
+            timelines.append(
+                PhaseTimeline(
+                    phase_id=phase_id,
+                    phase_number=phase_number,
+                    steps=steps,
+                )
+            )
+        if timelines:
+            return timelines
+
     runs_dir = workspace / ".methodology-runner" / "runs"
     if not runs_dir.exists():
         return []
 
-    state_path = workspace / ".methodology-runner" / "state.json"
     phases_map: dict[int, str] = {}
     phase_started_map: dict[int, datetime] = {}
     if state_path.exists():
@@ -927,6 +1135,39 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
         if tl:
             timelines.append(tl)
     return timelines
+
+
+def _read_yaml_scalar_field(path: Path, field_name: str) -> str:
+    import re
+
+    try:
+        content = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    pattern = re.compile(rf"^{re.escape(field_name)}:\s*(.+?)\s*$", re.MULTILINE)
+    match = pattern.search(content)
+    if not match:
+        return ""
+    value = match.group(1).strip()
+    if value in {"", "null", "none", "None"}:
+        return ""
+    if (value.startswith('"') and value.endswith('"')) or (value.startswith("'") and value.endswith("'")):
+        value = value[1:-1]
+    return value
+
+
+def discover_ph006_child_report(workspace: Path) -> tuple[str, Path] | None:
+    run_report = workspace / "docs" / "implementation" / "implementation-run-report.yaml"
+    if not run_report.exists():
+        return None
+    child_prompt_path = _read_yaml_scalar_field(run_report, "child_prompt_path")
+    if not child_prompt_path:
+        return None
+    module_slug = Path(child_prompt_path).stem
+    module_dir = workspace / ".run-files" / module_slug
+    if not module_dir.exists():
+        return None
+    return module_slug, module_dir
 
 
 # ---------------------------------------------------------------------------
@@ -971,6 +1212,12 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
     shared_steps: list[Step] = []
     fork_sections: list[ForkSection] = []
     run_started_at: datetime | None = None
+
+    if any(run_dir.glob("prompt-*.iter-*-generator.stdout.log")):
+        shared_steps = _parse_prompt_module_dir(run_dir)
+        if shared_steps:
+            _normalize_step_sequence(shared_steps)
+        return shared_steps, fork_sections
 
     # Shared pre-fork steps from top-level logs/
     top_logs = run_dir / "logs"
@@ -1144,7 +1391,10 @@ class BaseReportAdapter:
 class MethodologyWorkspaceAdapter(BaseReportAdapter):
     @staticmethod
     def matches(path: Path) -> bool:
-        return path.is_dir() and (path / ".methodology-runner" / "runs").exists()
+        return path.is_dir() and (
+            (path / ".methodology-runner" / "state.json").exists()
+            or (path / ".methodology-runner" / "runs").exists()
+        )
 
     @staticmethod
     def build(path: Path) -> ReportDocument:
@@ -1161,7 +1411,12 @@ class MethodologyWorkspaceAdapter(BaseReportAdapter):
 class PromptRunnerRunAdapter(BaseReportAdapter):
     @staticmethod
     def matches(path: Path) -> bool:
-        return path.is_dir() and ((path / "logs").exists() or (path / "manifest.json").exists())
+        return path.is_dir() and (
+            (path / "logs").exists()
+            or (path / "manifest.json").exists()
+            or (path / "module.log").exists()
+            or any(path.glob("prompt-*.iter-*-generator.stdout.log"))
+        )
 
     @staticmethod
     def build(path: Path) -> ReportDocument:
@@ -1207,7 +1462,8 @@ def load_report_document(path: Path) -> ReportDocument:
             return adapter.build(path)
     raise ValueError(
         f"Cannot detect input type for {path}.\n"
-        f"Expected a comparison manifest file, .methodology-runner/runs/, or logs/ / manifest.json"
+        f"Expected a comparison manifest file, a methodology workspace with .methodology-runner/state.json, "
+        f"or a prompt-runner run/module directory."
     )
 
 
@@ -1429,6 +1685,9 @@ def _render_log_structured(
         try:
             obj = _jlog.loads(line)
         except (ValueError, TypeError):
+            items.append(f'<div class="log-unknown">{_escape_html(line[:500])}</div>')
+            continue
+        if not isinstance(obj, dict):
             items.append(f'<div class="log-unknown">{_escape_html(line[:500])}</div>')
             continue
         parsed_any = True
@@ -2069,6 +2328,8 @@ def _render_steps_rows(
     popups: list[str],
     report_started_at: datetime,
     row_class: str = "",
+    group_id: str | None = None,
+    group_hidden: bool = False,
 ) -> int:
     """Render step rows into rows/popups lists, returns updated step_counter."""
     for step in steps:
@@ -2084,6 +2345,9 @@ def _render_steps_rows(
             popups=popups,
             step_duration_seconds=step.duration_seconds,
         ) if step.detail else ""
+        has_detail = bool(detail_html)
+        detail_row_id = f"{step_id}-detail"
+        toggle_id = f"{step_id}-toggle"
         elapsed_str = _fmt_elapsed_padded((step.started - report_started_at).total_seconds())
         start_str = _fmt_clock(step.started)
 
@@ -2091,19 +2355,36 @@ def _render_steps_rows(
         has_prompt = step.detail and step.detail.prompt_text
         has_output = step.detail and step.detail.output_text
         has_log = step.log_path and step.log_path.exists() and step.log_path.stat().st_size > 0
-        name_html = step.name
+        name_html = (
+            f'<span class="step-toggle" id="{toggle_id}" aria-hidden="true">▸</span>{step.name}'
+            if has_detail
+            else step.name
+        )
         links = []
         if has_prompt:
-            links.append(f'<a href="#" onclick="showPopup(\'{step_id}-prompt\');return false">prompt</a>')
+            links.append(f'<a href="#" onclick="event.stopPropagation();showPopup(\'{step_id}-prompt\');return false">prompt</a>')
         if has_output:
-            links.append(f'<a href="#" onclick="showPopup(\'{step_id}-output\');return false">output</a>')
+            links.append(f'<a href="#" onclick="event.stopPropagation();showPopup(\'{step_id}-output\');return false">output</a>')
         if has_log:
-            links.append(f'<a href="#" onclick="showPopup(\'{step_id}-log\');return false">log</a>')
+            links.append(f'<a href="#" onclick="event.stopPropagation();showPopup(\'{step_id}-log\');return false">log</a>')
         links_html = f'<span class="popup-links">{" | ".join(links)}</span>' if links else "—"
 
         tr_cls = f"step-row {row_class}".strip()
+        if has_detail:
+            tr_cls = f"{tr_cls} is-collapsible".strip()
+            row_attrs = (
+                f' class="{tr_cls}"'
+                f' onclick="toggleStepDetail(\'{detail_row_id}\', \'{toggle_id}\')"'
+                f' data-detail-id="{detail_row_id}"'
+            )
+        else:
+            row_attrs = f' class="{tr_cls}"'
+        if group_id:
+            row_attrs += f' data-group="{group_id}"'
+        if group_hidden:
+            row_attrs += ' style="display:none"'
         rows.append(
-            f'<tr class="{tr_cls}">'
+            f'<tr{row_attrs}>'
             f'<td class="step-elapsed">{elapsed_str}</td>'
             f'<td class="step-start">{start_str}</td>'
             f'<td class="step-name">{name_html}</td>'
@@ -2118,8 +2399,16 @@ def _render_steps_rows(
         )
         if detail_html:
             det_cls = f"detail-row {row_class}".strip()
+            detail_attrs = (
+                f' id="{detail_row_id}"'
+                f' class="{det_cls}"'
+                f' style="display:none"'
+                f' data-open="0"'
+            )
+            if group_id:
+                detail_attrs += f' data-group="{group_id}"'
             rows.append(
-                f'<tr class="{det_cls}"><td colspan="8">{detail_html}</td></tr>'
+                f'<tr{detail_attrs}><td colspan="8">{detail_html}</td></tr>'
             )
 
         # Build popup divs
@@ -2339,18 +2628,36 @@ def render_html(
             default=datetime.now(timezone.utc),
         )
     has_estimated_cost = any(detail.cost_estimated for detail in all_details)
+    nav_html = ""
+    if document.nav_links:
+        nav_html = '<div class="nav-links">' + " | ".join(
+            f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
+            for label, href in document.nav_links
+        ) + '</div>'
 
     if timelines:
         # Methodology-runner mode: phase-grouped flat table
         for tl in timelines:
+            drilldown_html = ""
+            if tl.drilldown_links:
+                links = " | ".join(
+                    f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
+                    for label, href in tl.drilldown_links
+                )
+                drilldown_html = f' <span class="phase-links">{links}</span>'
+            phase_group_id = f"phase-{tl.phase_number:03d}"
+            phase_toggle_id = f"{phase_group_id}-toggle"
             rows.append(
-                f'<tr class="phase-header"><td colspan="8">'
+                f'<tr class="phase-header is-collapsible" onclick="toggleGroup(\'{phase_group_id}\', \'{phase_toggle_id}\')"><td colspan="8">'
+                f'<span class="phase-toggle" id="{phase_toggle_id}" aria-hidden="true">▸</span>'
                 f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
                 f' — ${tl.total_cost:.2f}'
+                f'{drilldown_html}'
                 f'</td></tr>'
             )
             step_counter = _render_steps_rows(
-                tl.steps, grand_total, step_counter, rows, popups, report_started_at
+                tl.steps, grand_total, step_counter, rows, popups, report_started_at,
+                group_id=phase_group_id, group_hidden=True,
             )
     else:
         # Prompt-runner mode: steps and fork sections interleaved
@@ -2375,6 +2682,10 @@ def render_html(
   body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; background: #fafafa; color: #333; }}
   h1 {{ font-size: 1.4em; }}
   h2 {{ font-size: 1.1em; color: #555; }}
+  .nav-links {{ margin: 0 0 16px; font-size: 0.92em; }}
+  .nav-links a, .phase-links a {{ color: #4a90d9; text-decoration: none; }}
+  .nav-links a:hover, .phase-links a:hover {{ text-decoration: underline; }}
+  .phase-links {{ font-size: 0.9em; margin-left: 12px; }}
   table {{ border-collapse: collapse; width: 100%; max-width: 1400px; }}
   thead th {{
     position: sticky; top: 0; background: #fafafa; z-index: 2;
@@ -2382,11 +2693,25 @@ def render_html(
     font-size: 0.85em; color: #666;
   }}
   tr.phase-header td {{ background: #eee; padding: 8px 12px; font-size: 1.05em; border-top: 2px solid #ccc; }}
+  tr.phase-header.is-collapsible {{ cursor: pointer; }}
+  tr.phase-header.is-collapsible:hover td {{ background: #e7edf4; }}
   tr.step-row td {{ padding: 4px 12px; vertical-align: middle; }}
   tr.detail-row td {{ padding: 0 12px 12px 24px; }}
+  tr.step-row.is-collapsible {{ cursor: pointer; }}
+  tr.step-row.is-collapsible:hover td {{ background: #f3f7fb; }}
   .step-elapsed {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
   .step-start {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
   .step-name {{ width: 30%; font-size: 0.9em; }}
+  .step-toggle {{
+    display: inline-block; width: 1.1em; margin-right: 4px; color: #666;
+    transition: transform 0.12s ease;
+  }}
+  .step-toggle.is-open {{ transform: rotate(90deg); }}
+  .phase-toggle {{
+    display: inline-block; width: 1.1em; margin-right: 6px; color: #555;
+    transition: transform 0.12s ease;
+  }}
+  .phase-toggle.is-open {{ transform: rotate(90deg); }}
   .step-time {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.9em; }}
   .step-cost {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
   .step-size {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #888; }}
@@ -2509,6 +2834,49 @@ function showPopup(id) {{
 function hidePopup(id) {{
   document.getElementById(id).style.display = 'none';
 }}
+function toggleGroup(groupId, toggleId) {{
+  var rows = document.querySelectorAll('[data-group="' + groupId + '"]');
+  if (!rows.length) return;
+  var willOpen = true;
+  for (var i = 0; i < rows.length; i++) {{
+    var row = rows[i];
+    if (!row.classList.contains('detail-row')) {{
+      willOpen = row.style.display === 'none';
+      break;
+    }}
+  }}
+  rows.forEach(function(row) {{
+    if (willOpen) {{
+      if (row.classList.contains('detail-row')) {{
+        row.style.display = row.dataset.open === '1' ? 'table-row' : 'none';
+      }} else {{
+        row.style.display = 'table-row';
+      }}
+    }} else {{
+      row.style.display = 'none';
+    }}
+  }});
+  var toggle = document.getElementById(toggleId);
+  if (toggle) {{
+    if (willOpen) toggle.classList.add('is-open');
+    else toggle.classList.remove('is-open');
+  }}
+}}
+function toggleStepDetail(rowId, toggleId) {{
+  var row = document.getElementById(rowId);
+  if (!row) return;
+  var toggle = document.getElementById(toggleId);
+  var isOpen = row.style.display !== 'none';
+  if (isOpen) {{
+    row.style.display = 'none';
+    row.dataset.open = '0';
+    if (toggle) toggle.classList.remove('is-open');
+  }} else {{
+    row.style.display = 'table-row';
+    row.dataset.open = '1';
+    if (toggle) toggle.classList.add('is-open');
+  }}
+}}
 function toggleView(uid) {{
   var el = document.getElementById(uid);
   if (!el) return;
@@ -2627,6 +2995,7 @@ document.addEventListener('keydown', function(e) {{
 <body>
 <h1>{run_title}</h1>
 <h2>{workspace} — total {grand_m}m{grand_s:02d}s — ${grand_cost:.2f}</h2>
+{nav_html}
 <table>
 <thead>
 <tr>
@@ -2654,6 +3023,11 @@ document.addEventListener('keydown', function(e) {{
 # CLI
 # ---------------------------------------------------------------------------
 
+
+def _child_output_path(parent_output: Path, slug: str) -> Path:
+    suffix = parent_output.suffix or ".html"
+    return parent_output.with_name(f"{parent_output.stem}-{slug}{suffix}")
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Generate timeline report for a methodology-runner workspace, prompt-runner run directory, or comparison manifest."
@@ -2680,9 +3054,31 @@ def main(argv: list[str] | None = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    html = render_html(document)
-
     output.parent.mkdir(parents=True, exist_ok=True)
+    if MethodologyWorkspaceAdapter.matches(input_path):
+        nested = discover_ph006_child_report(input_path)
+        if nested is not None:
+            child_slug, child_run_dir = nested
+            child_output = _child_output_path(output, child_slug)
+            rel_child = child_output.name
+            rel_parent = output.name
+
+            for tl in document.timelines:
+                if tl.phase_id == "PH-006-incremental-implementation":
+                    tl.drilldown_links.append(("drill down", rel_child))
+                    break
+
+            child_document = load_report_document(child_run_dir)
+            child_document.run_title = f"{child_slug.replace('-', ' ').title()} Timeline"
+            child_document.nav_links.append(("bubble up", rel_parent))
+
+            output.write_text(render_html(document), encoding="utf-8")
+            child_output.write_text(render_html(child_document), encoding="utf-8")
+            print(f"Timeline written to {output}")
+            print(f"Nested timeline written to {child_output}")
+            return 0
+
+    html = render_html(document)
     output.write_text(html, encoding="utf-8")
     print(f"Timeline written to {output}")
     return 0

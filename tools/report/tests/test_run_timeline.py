@@ -268,6 +268,39 @@ def _write_codex_run(run_dir: Path, source_file: Path, step_name: str, prompt_te
     )
 
 
+def _write_current_module_run(module_dir: Path, prompt_slug: str = "prompt-01-demo-step") -> None:
+    fixture_log = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "module.log").write_text("", encoding="utf-8")
+
+    (module_dir / f"{prompt_slug}.final-verdict.txt").write_text("VERDICT: pass\n", encoding="utf-8")
+    (module_dir / f"{prompt_slug}.files-created.txt").write_text("docs/out.txt\n", encoding="utf-8")
+    (module_dir / "prompt-01.iter-01-generator.stdout.log").write_text(
+        fixture_log.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (module_dir / "prompt-01.iter-01-generator.stderr.log").write_text("", encoding="utf-8")
+    (module_dir / "prompt-01.iter-01-deterministic-validation.stdout.log").write_text(
+        json.dumps({"validator": "demo", "overall_status": "pass"}) + "\n",
+        encoding="utf-8",
+    )
+    (module_dir / "prompt-01.iter-01-deterministic-validation.stderr.log").write_text("", encoding="utf-8")
+    (module_dir / "prompt-01.iter-01-deterministic-validation.proc.json").write_text(
+        json.dumps({"exit_code": 0}),
+        encoding="utf-8",
+    )
+    (module_dir / "prompt-01.iter-01-judge.stdout.log").write_text(
+        fixture_log.read_text(encoding="utf-8"),
+        encoding="utf-8",
+    )
+    (module_dir / "prompt-01.iter-01-judge.stderr.log").write_text("", encoding="utf-8")
+
+    history_dir = module_dir / "history" / "prompt-01"
+    history_dir.mkdir(parents=True, exist_ok=True)
+    (history_dir / "iter-01-prompt.md").write_text("Generator prompt body", encoding="utf-8")
+    (history_dir / "iter-01-validation-prompt.md").write_text("Judge prompt body", encoding="utf-8")
+
+
 def test_parse_comparison_manifest_collapses_shared_prefix(tmp_path):
     module = _load_module()
     source_file_a = tmp_path / "source-a.md"
@@ -462,6 +495,9 @@ def test_render_html_includes_elapsed_start_and_links_columns(tmp_path):
     assert "prompt</a>" in html
     assert "output</a>" in html
     assert "log</a>" in html
+    assert "toggleStepDetail(" in html
+    assert 'style="display:none"' in html
+    assert 'step-toggle' in html
 
 
 def test_backfill_prompts_from_file_sets_model_and_estimates_cost(tmp_path):
@@ -521,3 +557,181 @@ def test_parse_comparison_manifest_reports_missing_run_path(tmp_path):
         assert "run path not found" in str(exc)
     else:
         raise AssertionError("expected ValueError")
+
+
+def test_parse_prompt_runner_run_supports_current_module_layout(tmp_path):
+    module = _load_module()
+    run_dir = tmp_path / "requirements-inventory"
+    agents_dir = tmp_path / ".codex" / "agents"
+    agents_dir.mkdir(parents=True, exist_ok=True)
+    (agents_dir / "prompt-runner-generator.toml").write_text(
+        'model = "gpt-5.4"\nmodel_reasoning_effort = "medium"\n',
+        encoding="utf-8",
+    )
+    (agents_dir / "prompt-runner-judge.toml").write_text(
+        'model = "gpt-5.4"\nmodel_reasoning_effort = "medium"\n',
+        encoding="utf-8",
+    )
+    _write_current_module_run(run_dir, prompt_slug="prompt-01-produce-requirements-inventory")
+
+    shared_steps, fork_sections = module.parse_prompt_runner_run(run_dir)
+
+    assert not fork_sections
+    assert [step.name for step in shared_steps] == [
+        "prompt-01-produce-requirements-inventory / iter 01 generator",
+        "prompt-01-produce-requirements-inventory / iter 01 deterministic validation",
+        "prompt-01-produce-requirements-inventory / iter 01 judge",
+    ]
+    assert shared_steps[0].detail is not None
+    assert shared_steps[0].detail.prompt_text == "Generator prompt body"
+    assert shared_steps[0].detail.model == "gpt-5.4"
+    assert shared_steps[0].detail.cost_estimated is True
+    assert shared_steps[0].detail.cost_usd > 0
+    assert shared_steps[2].detail is not None
+    assert shared_steps[2].detail.prompt_text == "Judge prompt body"
+    assert shared_steps[2].detail.model == "gpt-5.4"
+    assert shared_steps[2].detail.cost_estimated is True
+    assert shared_steps[2].detail.cost_usd > 0
+
+
+def test_load_report_document_supports_current_methodology_workspace_layout(tmp_path):
+    module = _load_module()
+    workspace = tmp_path / "workspace"
+    phase_module_dir = workspace / ".run-files" / "requirements-inventory"
+    _write_current_module_run(phase_module_dir, prompt_slug="prompt-01-produce-requirements-inventory")
+
+    cross_ref_dir = workspace / ".run-files" / "PH-000-requirements-inventory"
+    cross_ref_dir.mkdir(parents=True, exist_ok=True)
+    cross_ref_path = cross_ref_dir / "cross-ref-result.json"
+    cross_ref_path.write_text(json.dumps({"passed": True, "issues": []}), encoding="utf-8")
+
+    state_dir = workspace / ".methodology-runner"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {
+                        "phase_id": "PH-000-requirements-inventory",
+                        "status": "completed",
+                        "started_at": "2026-04-19T05:11:51.338212+00:00",
+                        "completed_at": "2026-04-19T05:14:23.049138+00:00",
+                        "cross_ref_result_path": str(cross_ref_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    document = module.load_report_document(workspace)
+
+    assert document.run_title == "Methodology Runner Timeline"
+    assert len(document.timelines) == 1
+    timeline = document.timelines[0]
+    assert timeline.phase_id == "PH-000-requirements-inventory"
+    assert [step.name for step in timeline.steps] == [
+        "prompt-01-produce-requirements-inventory / iter 01 generator",
+        "prompt-01-produce-requirements-inventory / iter 01 deterministic validation",
+        "prompt-01-produce-requirements-inventory / iter 01 judge",
+        "Cross-reference verification",
+    ]
+
+
+def test_render_html_collapses_phases_by_default(tmp_path):
+    module = _load_module()
+    started = module._parse_iso_datetime("2026-04-12T02:10:11Z")
+    ended = module._parse_iso_datetime("2026-04-12T02:13:09Z")
+    assert started is not None
+    assert ended is not None
+    step = module.Step(
+        name="prompt-01-build / iter 01 generator",
+        started=started,
+        ended=ended,
+        size_bytes=1024,
+        detail=module.CallDetail(
+            backend="codex",
+            output_tokens=20,
+            prompt_text="Write docs/out.txt",
+            output_text="done",
+        ),
+    )
+    timeline = module.PhaseTimeline(
+        phase_id="PH-000-requirements-inventory",
+        phase_number=0,
+        steps=[step],
+    )
+    doc = module.ReportDocument(
+        run_title="Demo",
+        workspace=tmp_path,
+        timelines=[timeline],
+    )
+
+    html = module.render_html(doc)
+
+    assert "toggleGroup(" in html
+    assert 'phase-toggle' in html
+    assert 'data-group="phase-000"' in html
+
+
+def test_main_writes_parent_and_child_reports_for_ph006_nested_run(tmp_path):
+    module = _load_module()
+    workspace = tmp_path / "workspace"
+
+    phase6_module_dir = workspace / ".run-files" / "incremental-implementation"
+    _write_current_module_run(phase6_module_dir, prompt_slug="prompt-01-produce-incremental-implementation-workflow")
+
+    child_module_dir = workspace / ".run-files" / "implementation-workflow"
+    _write_current_module_run(child_module_dir, prompt_slug="prompt-01-first-executable-slice")
+
+    cross_ref_dir = workspace / ".run-files" / "PH-006-incremental-implementation"
+    cross_ref_dir.mkdir(parents=True, exist_ok=True)
+    cross_ref_path = cross_ref_dir / "cross-ref-result.json"
+    cross_ref_path.write_text(json.dumps({"passed": True, "issues": []}), encoding="utf-8")
+
+    state_dir = workspace / ".methodology-runner"
+    state_dir.mkdir(parents=True, exist_ok=True)
+    (state_dir / "state.json").write_text(
+        json.dumps(
+            {
+                "phases": [
+                    {
+                        "phase_id": "PH-006-incremental-implementation",
+                        "status": "completed",
+                        "started_at": "2026-04-19T05:39:58.354173+00:00",
+                        "completed_at": "2026-04-19T05:54:23.386282+00:00",
+                        "cross_ref_result_path": str(cross_ref_path),
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    impl_docs = workspace / "docs" / "implementation"
+    impl_docs.mkdir(parents=True, exist_ok=True)
+    (impl_docs / "implementation-run-report.yaml").write_text(
+        "\n".join(
+            [
+                "child_prompt_path: docs/implementation/implementation-workflow.md",
+                f"child_run_dir: {workspace}",
+                "completion_status: completed",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    output = workspace / "timeline.html"
+    rc = module.main([str(workspace), "--output", str(output)])
+
+    assert rc == 0
+    assert output.exists()
+    child_output = workspace / "timeline-implementation-workflow.html"
+    assert child_output.exists()
+    parent_html = output.read_text(encoding="utf-8")
+    child_html = child_output.read_text(encoding="utf-8")
+    assert 'drill down' in parent_html
+    assert 'timeline-implementation-workflow.html' in parent_html
+    assert 'bubble up' in child_html
+    assert 'timeline.html' in child_html
