@@ -344,7 +344,7 @@ methodology workflow ready for the real web-app request.
   - **BECAUSE:** The trusted real baseline is the input for real
     step-level model and prompt experiments.
 - **TASK:** Run the full supervised workflow on
-  `docs/requests/web-prompt-runner-report.md`.
+  `.archive/docs/requests/web-prompt-runner-report.md`.
   - **STATUS:** `todo`
   - **CHAIN-OF-THOUGHT:** The supervised workflow is the mechanism that
     creates the real baseline and its associated planning and harness
