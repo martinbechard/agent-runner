@@ -1,9 +1,11 @@
 """Pipeline orchestration for prompt-runner.
 
-See .prompt-runner/docs/design/components/CD-001-prompt-runner.md sections 9 and 11.
+See tools/prompt-runner/docs/design/components/CD-001-prompt-runner.md
+sections 9 and 11.
 """
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -129,6 +131,9 @@ class RunConfig:
     """Agent backend to use for prompt execution."""
     max_iterations: int = MAX_ITERATIONS_DEFAULT
     model: str | None = None
+    default_effort: str | None = "medium"
+    """Default reasoning effort for backend calls when a prompt pair does not
+    override effort explicitly via ``[EFFORT:...]``."""
     only: int | None = None
     judge_only: int | None = None
     dry_run: bool = False
@@ -378,41 +383,13 @@ def _format_included_files_section(
     )
 
 
-def _format_optional_checks_context_section(
-    pair: PromptPair,
-    worktree_dir: Path,
-) -> str:
-    if not pair.checks_files:
-        return ""
-    blocks: list[str] = []
-    for raw_path in pair.checks_files:
-        resolved = _resolve_required_file(raw_path, worktree_dir)
-        tag = _semantic_file_tag(raw_path)
-        label = _semantic_artifact_label(raw_path)
-        if resolved.exists():
-            try:
-                text = resolved.read_text(encoding="utf-8")
-            except OSError as exc:
-                raise FileNotFoundError(
-                    f'Checks Files entry "{raw_path}" could not be read at "{resolved}": {exc}'
-                ) from exc
-        else:
-            text = ""
-        blocks.append(
-            f"# Current {label} artifact\n\n"
-            f"<{tag}>\n"
-            f"{text.rstrip()}\n"
-            f"</{tag}>"
-        )
-    return "\n\n".join(blocks)
-
-
 def build_initial_generator_message(
     pair: PromptPair,
     prior_artifacts: list[PriorArtifact],
     worktree_dir: Path,
     generator_prelude: str | None = None,
     include_project_organiser: bool = True,
+    source_file: Path | None = None,
 ) -> str:
     sections: list[str] = []
 
@@ -438,11 +415,6 @@ def build_initial_generator_message(
     included_files_section = _format_included_files_section(pair, worktree_dir)
     if included_files_section:
         sections.append(included_files_section)
-    checks_context_section = _format_optional_checks_context_section(
-        pair, worktree_dir,
-    )
-    if checks_context_section:
-        sections.append(checks_context_section)
 
     sections.append(
         "Complete the task by making the required on-disk changes in the "
@@ -452,7 +424,10 @@ def build_initial_generator_message(
         "on disk with the final contents."
     )
 
-    sections.append(f"# Your task\n\n{pair.generation_prompt}")
+    sections.append(
+        "# Your task\n\n"
+        f"{_materialize_runtime_includes(pair.generation_prompt, worktree_dir, source_file)}"
+    )
     if include_project_organiser:
         sections.append(PROJECT_ORGANISER_INSTRUCTION)
 
@@ -524,26 +499,24 @@ def build_initial_judge_message(
     generator_files: list[Path] | None = None,
     deterministic_validation: DeterministicValidationResult | None = None,
     judge_prelude: str | None = None,
+    source_file: Path | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
     deterministic_section = _format_deterministic_validation_section(
         deterministic_validation,
     )
     include_section = _format_included_files_section(pair, worktree_dir)
-    checks_context_section = _format_optional_checks_context_section(
-        pair, worktree_dir,
-    )
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
-    checks_block = (
-        f"{checks_context_section}{_HORIZONTAL_RULE}"
-        if checks_context_section else ""
+    validation_prompt = _materialize_runtime_includes(
+        pair.validation_prompt,
+        worktree_dir,
+        source_file,
     )
     return (
         f"{prelude_block}"
         f"{include_block}"
-        f"{checks_block}"
-        f"{pair.validation_prompt}"
+        f"{validation_prompt}"
         f"{_HORIZONTAL_RULE}"
         f"# Artifact to evaluate (generator's text response)\n\n{artifact}"
         f"{_HORIZONTAL_RULE}"
@@ -563,37 +536,60 @@ def build_revision_generator_message(
     original_task: str | None = None,
     previous_artifact: str | None = None,
     include_project_organiser: bool = True,
+    source_file: Path | None = None,
 ) -> str:
     prelude_block = f"{generator_prelude}{_HORIZONTAL_RULE}" if generator_prelude else ""
     include_section = _format_included_files_section(pair, worktree_dir)
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
-    checks_context_section = _format_optional_checks_context_section(
-        pair, worktree_dir,
-    )
-    checks_block = (
-        f"{checks_context_section}{_HORIZONTAL_RULE}"
-        if checks_context_section else ""
+    rendered_original_task = (
+        _materialize_runtime_includes(original_task, worktree_dir, source_file)
+        if original_task else None
     )
     task_block = (
-        f"# Original task\n\n{original_task}{_HORIZONTAL_RULE}"
-        if original_task else ""
+        f"# Original task\n\n{rendered_original_task}{_HORIZONTAL_RULE}"
+        if rendered_original_task else ""
     )
     previous_artifact_block = (
         f"# Previous artifact (generator's last text response)\n\n"
         f"{previous_artifact}{_HORIZONTAL_RULE}"
         if previous_artifact else ""
     )
-    msg = (
-        f"{prelude_block}"
-        f"{include_block}"
-        f"{checks_block}"
-        f"{task_block}"
-        f"{previous_artifact_block}"
-        f"{REVISION_GENERATOR_PREAMBLE}\n\n"
+    required_changes_block = (
         "The judge found the following issues that MUST be applied:\n"
         "<REQUIRED_CHANGES>\n"
         f"{judge_output}\n"
         "</REQUIRED_CHANGES>"
+    )
+    default_retry_instruction = (
+        f"{REVISION_GENERATOR_PREAMBLE}{_HORIZONTAL_RULE}{required_changes_block}"
+    )
+    retry_prompt = pair.retry_prompt.strip()
+    if retry_prompt:
+        retry_prompt = _materialize_runtime_includes(
+            retry_prompt,
+            worktree_dir,
+            source_file,
+        )
+        if pair.retry_mode == "append":
+            retry_instruction_block = (
+                f"{default_retry_instruction}{_HORIZONTAL_RULE}{retry_prompt}"
+            )
+        elif pair.retry_mode == "prepend":
+            retry_instruction_block = (
+                f"{retry_prompt}{_HORIZONTAL_RULE}{default_retry_instruction}"
+            )
+        else:
+            retry_instruction_block = (
+                f"{retry_prompt}{_HORIZONTAL_RULE}{required_changes_block}"
+            )
+    else:
+        retry_instruction_block = default_retry_instruction
+    msg = (
+        f"{prelude_block}"
+        f"{include_block}"
+        f"{task_block}"
+        f"{previous_artifact_block}"
+        f"{retry_instruction_block}"
     )
     if include_project_organiser:
         msg += f"{_HORIZONTAL_RULE}{PROJECT_ORGANISER_INSTRUCTION}"
@@ -608,29 +604,26 @@ def build_revision_judge_message(
     deterministic_validation: DeterministicValidationResult | None = None,
     judge_prelude: str | None = None,
     validation_prompt: str | None = None,
+    source_file: Path | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
     deterministic_section = _format_deterministic_validation_section(
         deterministic_validation,
     )
     include_section = _format_included_files_section(pair, worktree_dir)
-    checks_context_section = _format_optional_checks_context_section(
-        pair, worktree_dir,
-    )
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
-    checks_block = (
-        f"{checks_context_section}{_HORIZONTAL_RULE}"
-        if checks_context_section else ""
+    rendered_validation_prompt = (
+        _materialize_runtime_includes(validation_prompt, worktree_dir, source_file)
+        if validation_prompt else None
     )
     validation_block = (
-        f"{validation_prompt}{_HORIZONTAL_RULE}"
-        if validation_prompt else ""
+        f"{rendered_validation_prompt}{_HORIZONTAL_RULE}"
+        if rendered_validation_prompt else ""
     )
     return (
         f"{prelude_block}"
         f"{include_block}"
-        f"{checks_block}"
         f"{validation_block}"
         f"{ANTI_ANCHORING_CLAUSE}\n\n"
         f"# Revised artifact (generator's text response)\n\n{new_artifact}"
@@ -741,6 +734,33 @@ def _summary_output_path(
             return _module_dir(run_dir, item.variants[0].pairs[0]) / "summary.txt"
 
     return _run_files_dir(run_dir) / "summary.txt"
+
+
+def _clear_module_scoped_artifacts(
+    run_dir: Path,
+    pairs: list[PromptPair | ForkPoint],
+) -> None:
+    """Remove stale module-scoped artifacts before a source-changed rerun.
+
+    When a resume is invalidated because the source prompt file changed, the
+    current run must not keep prior prompt histories, verdict markers, or
+    module summaries around. Those files describe an older prompt contract and
+    can confuse later resume, reporting, or cross-reference steps.
+    """
+    module_dirs: set[Path] = set()
+
+    def _collect(items: list[PromptPair | ForkPoint]) -> None:
+        for item in items:
+            if isinstance(item, PromptPair):
+                module_dirs.add(_module_dir(run_dir, item))
+                continue
+            for variant in item.variants:
+                _collect(list(variant.pairs))
+
+    _collect(pairs)
+    for module_dir in module_dirs:
+        if module_dir.exists():
+            shutil.rmtree(module_dir)
 
 
 def _git(args: list[str], cwd: Path, check: bool = True) -> subprocess.CompletedProcess[str]:
@@ -1075,20 +1095,12 @@ def _read_saved_prompt_artifact_text(
         target = worktree_dir / created_files[0]
         return target.read_text(encoding="utf-8")
 
-    existing_checks = [
-        worktree_dir / Path(path_text)
-        for path_text in pair.checks_files
-        if (worktree_dir / Path(path_text)).exists()
-    ]
-    if len(existing_checks) == 1:
-        return existing_checks[0].read_text(encoding="utf-8")
-
     if not created_files:
         return ""
 
     raise FileNotFoundError(
         "prompt state requires exactly one readable artifact file, "
-        f"but found created_files={created_files!r} checks_files={pair.checks_files!r}"
+        f"but found created_files={created_files!r}"
     )
 
 
@@ -1398,6 +1410,7 @@ def run_prompt(
                 pair, prior_artifacts, worktree_dir,
                 generator_prelude=config.generator_prelude,
                 include_project_organiser=config.include_project_organiser,
+                source_file=source_file,
             )
             if is_first
             else build_revision_generator_message(
@@ -1410,6 +1423,7 @@ def run_prompt(
                     iterations[-1].generator_output if stateless_revisions else None
                 ),
                 include_project_organiser=config.include_project_organiser,
+                source_file=source_file,
             )
         )
         _write(
@@ -1437,7 +1451,7 @@ def run_prompt(
             session_id=fork_new_session,
             new_session=(is_first and not use_fork) or stateless_revisions,
             model=pair.model_override or config.model,
-            effort=pair.effort_override,
+            effort=pair.effort_override or config.default_effort,
             module_log_path=module_log_path,
             iteration=iteration_number,
             role="generator",
@@ -1527,6 +1541,7 @@ def run_prompt(
                 pair, artifact_text, worktree_dir, files_so_far,
                 deterministic_validation=deterministic_validation,
                 judge_prelude=config.judge_prelude,
+                source_file=source_file,
             )
             if is_first
             else build_revision_judge_message(
@@ -1536,6 +1551,7 @@ def run_prompt(
                 validation_prompt=(
                     pair.validation_prompt if stateless_revisions else None
                 ),
+                source_file=source_file,
             )
         )
         _write(
@@ -1549,7 +1565,7 @@ def run_prompt(
             session_id=jud_session,
             new_session=is_first or stateless_revisions,
             model=pair.model_override or config.model,
-            effort=pair.effort_override,
+            effort=pair.effort_override or config.default_effort,
             module_log_path=module_log_path,
             iteration=iteration_number,
             role="judge",
@@ -1727,6 +1743,7 @@ def _run_judge_only_prompt(
         created_files,
         deterministic_validation=deterministic_validation,
         judge_prelude=config.judge_prelude,
+        source_file=source_file,
     )
     _write(
         _iteration_prompt_input_path(
@@ -1739,7 +1756,7 @@ def _run_judge_only_prompt(
         session_id=jud_session,
         new_session=True,
         model=pair.model_override or config.model,
-        effort=pair.effort_override,
+        effort=pair.effort_override or config.default_effort,
         module_log_path=module_log_path,
         iteration=iteration_number,
         role="judge",
@@ -1874,6 +1891,7 @@ def _missing_required_files(pair: PromptPair, worktree_dir: Path) -> list[Path]:
 
 _PLACEHOLDER_RE = re.compile(r"\{\{([A-Za-z_][A-Za-z0-9_]*)\}\}")
 _INLINE_INCLUDE_RE = re.compile(r"\{\{INCLUDE:([^}]+)\}\}")
+_RUNTIME_INCLUDE_RE = re.compile(r"\{\{RUNTIME_INCLUDE:([^}]+)\}\}")
 
 
 def _placeholder_context(
@@ -1919,20 +1937,73 @@ def _render_inline_includes(
     return _INLINE_INCLUDE_RE.sub(replace, text)
 
 
+def _render_runtime_include_targets(
+    text: str,
+    context: dict[str, str],
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        raw_target = match.group(1).strip()
+        resolved_target = context.get(raw_target, raw_target)
+        resolved_target = _render_placeholders(resolved_target, context)
+        return f"{{{{RUNTIME_INCLUDE:{resolved_target}}}}}"
+
+    return _RUNTIME_INCLUDE_RE.sub(replace, text)
+
+
+def _materialize_runtime_includes(
+    text: str,
+    worktree_dir: Path,
+    source_file: Path | None,
+) -> str:
+    def replace(match: re.Match[str]) -> str:
+        raw_target = match.group(1).strip()
+        resolved = _resolve_required_file(raw_target, worktree_dir)
+        if not resolved.exists() and source_file is not None:
+            prompt_relative = (source_file.parent / raw_target).resolve()
+            if prompt_relative.exists():
+                resolved = prompt_relative
+        try:
+            return resolved.read_text(encoding="utf-8")
+        except OSError as exc:
+            raise FileNotFoundError(
+                f'Runtime include "{raw_target}" could not be read at "{resolved}": {exc}'
+            ) from exc
+
+    return _RUNTIME_INCLUDE_RE.sub(replace, text)
+
+
 def _render_prompt_pair(
     pair: PromptPair,
     context: dict[str, str],
     worktree_dir: Path,
     source_file: Path | None,
 ) -> PromptPair:
-    rendered_generation = _render_inline_includes(
+    generation_prompt = _render_runtime_include_targets(
         _render_placeholders(pair.generation_prompt, context),
+        context,
+    )
+    validation_prompt = _render_runtime_include_targets(
+        _render_placeholders(pair.validation_prompt, context),
+        context,
+    )
+    retry_prompt = _render_runtime_include_targets(
+        _render_placeholders(pair.retry_prompt, context),
+        context,
+    )
+    rendered_generation = _render_inline_includes(
+        generation_prompt,
         context,
         worktree_dir,
         source_file,
     )
     rendered_validation = _render_inline_includes(
-        _render_placeholders(pair.validation_prompt, context),
+        validation_prompt,
+        context,
+        worktree_dir,
+        source_file,
+    )
+    rendered_retry = _render_inline_includes(
+        retry_prompt,
         context,
         worktree_dir,
         source_file,
@@ -1942,9 +2013,11 @@ def _render_prompt_pair(
         title=_render_placeholders(pair.title, context),
         generation_prompt=rendered_generation,
         validation_prompt=rendered_validation,
+        retry_prompt=rendered_retry,
         heading_line=pair.heading_line,
         generation_line=pair.generation_line,
         validation_line=pair.validation_line,
+        retry_line=pair.retry_line,
         required_files=tuple(
             _render_placeholders(path, context) for path in pair.required_files
         ),
@@ -1958,6 +2031,7 @@ def _render_prompt_pair(
             _render_placeholders(value, context)
             for value in pair.deterministic_validation
         ),
+        retry_mode=pair.retry_mode,
         module_slug=(
             _render_placeholders(pair.module_slug, context)
             if pair.module_slug is not None
@@ -1975,6 +2049,7 @@ def _pair_unresolved_placeholders(pair: PromptPair) -> list[str]:
         pair.title,
         pair.generation_prompt,
         pair.validation_prompt,
+        pair.retry_prompt,
         *pair.required_files,
         *pair.include_files,
         *pair.checks_files,
@@ -2007,10 +2082,19 @@ def _write_optional_file_checks_trace(
     if not pair.checks_files:
         return
     checks = _optional_file_checks(pair, worktree_dir)
+    missing_paths = [entry["path"] for entry in checks if entry["exists"] is False]
+    warning_block = ""
+    if missing_paths:
+        warning_lines = "\n".join(f"- {path}" for path in missing_paths)
+        warning_block = (
+            "WARNING: optional check files missing\n"
+            f"{warning_lines}\n"
+        )
     _append_log(
         _module_log_path(run_dir, pair),
         "\n=== checks files ===\n"
         f"{json.dumps(checks, indent=2)}\n"
+        f"{warning_block}"
         "=== checks files end ===\n",
     )
 
@@ -2026,13 +2110,30 @@ def _run_deterministic_validation(
 ) -> DeterministicValidationResult | None:
     if not pair.deterministic_validation:
         return None
-    script_path = _resolve_deterministic_validation_script(pair, worktree_dir, source_file)
-    assert script_path is not None
-    argv = [
-        sys.executable,
-        str(script_path),
-        *pair.deterministic_validation[1:],
-    ]
+    raw_target = pair.deterministic_validation[0]
+    if raw_target.startswith("python-module:"):
+        module_name = raw_target.split(":", 1)[1].strip()
+        if not module_name:
+            raise DeterministicValidationError(
+                "R-MISSING-DETERMINISTIC-VALIDATION:\n"
+                "deterministic validation module target is empty.\n"
+                "Use python-module:<module.name>."
+            )
+        script_path = Path(raw_target)
+        argv = [
+            sys.executable,
+            "-m",
+            module_name,
+            *pair.deterministic_validation[1:],
+        ]
+    else:
+        script_path = _resolve_deterministic_validation_script(pair, worktree_dir, source_file)
+        assert script_path is not None
+        argv = [
+            sys.executable,
+            str(script_path),
+            *pair.deterministic_validation[1:],
+        ]
     stdout_log_path = (
         prompt_dir / f"prompt-{pair.index:02d}.iter-{iteration_number:02d}-deterministic-validation.stdout.log"
     )
@@ -2052,6 +2153,18 @@ def _run_deterministic_validation(
             "PROMPT_RUNNER_ITERATION": str(iteration_number),
         }
     )
+    pythonpath = env.get("PYTHONPATH")
+    if pythonpath:
+        launch_cwd = Path.cwd()
+        normalized_entries: list[str] = []
+        for entry in pythonpath.split(os.pathsep):
+            if not entry:
+                continue
+            path_entry = Path(entry)
+            if not path_entry.is_absolute():
+                path_entry = (launch_cwd / path_entry).resolve()
+            normalized_entries.append(str(path_entry))
+        env["PYTHONPATH"] = os.pathsep.join(normalized_entries)
     proc = subprocess.Popen(
         argv,
         cwd=worktree_dir,
@@ -2136,6 +2249,14 @@ def _serialize_pairs_to_md(pairs: list[PromptPair]) -> str:
             lines.append("### Validation Prompt")
             lines.append("")
             lines.append(pair.validation_prompt)
+        if pair.retry_prompt:
+            lines.append("")
+            retry_heading = "### Retry Prompt"
+            if pair.retry_mode != "replace":
+                retry_heading += f" [{pair.retry_mode.upper()}]"
+            lines.append(retry_heading)
+            lines.append("")
+            lines.append(pair.retry_prompt)
         sections.append("\n".join(lines))
     return "\n\n".join(sections) + "\n"
 
@@ -2440,6 +2561,20 @@ def run_pipeline(
                 run_id,
                 started_at=_format_iso(started_at),
             )
+        resume_source_changed = False
+        if resume:
+            manifest_path = _run_files_dir(run_dir) / "manifest.json"
+            if manifest_path.exists():
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                previous_digest = manifest.get("source_file_sha256")
+                current_digest = _file_sha256(source_file)
+                resume_source_changed = previous_digest != current_digest
+                if resume_source_changed:
+                    _clear_module_scoped_artifacts(run_dir, pairs)
+                    _emit_progress(
+                        f"{_progress_prefix(started_at)} "
+                        f"run resume invalidated source-changed {run_id}"
+                    )
         _emit_progress(
             f"{_progress_prefix(started_at)} "
             f"run start {run_id} backend={config.backend}"
@@ -2454,7 +2589,7 @@ def run_pipeline(
         # When resuming, track whether we have hit the first incomplete prompt.
         # All prompts before it that have a 'pass' verdict are skipped; once we
         # encounter an incomplete prompt we switch to normal forward execution.
-        still_skipping = resume
+        still_skipping = resume and not resume_source_changed
 
         for item_index, item in enumerate(pairs):
             # --- ForkPoint handling ---
@@ -2617,11 +2752,17 @@ def run_pipeline(
                     halt_reason=halt_reason,
                 )
 
-            deterministic_script = _resolve_deterministic_validation_script(
-                rendered_pair,
-                worktree_dir,
-                source_file,
+            raw_deterministic_target = (
+                rendered_pair.deterministic_validation[0]
+                if rendered_pair.deterministic_validation else ""
             )
+            deterministic_script = None
+            if not raw_deterministic_target.startswith("python-module:"):
+                deterministic_script = _resolve_deterministic_validation_script(
+                    rendered_pair,
+                    worktree_dir,
+                    source_file,
+                )
             if deterministic_script is not None and not deterministic_script.exists():
                 halt_reason = (
                     f"R-MISSING-DETERMINISTIC-VALIDATION: prompt "
@@ -2819,11 +2960,18 @@ def _format_iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _file_sha256(path: Path) -> str:
+    if not path.exists():
+        return ""
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
 def _write_manifest(
     run_dir: Path, source_file: Path, config: RunConfig, run_id: str, started_at: str
 ) -> None:
     manifest = {
         "source_file": str(source_file.resolve()),
+        "source_file_sha256": _file_sha256(source_file),
         "run_id": run_id,
         "config": {
             "max_iterations": config.max_iterations,
@@ -2856,6 +3004,8 @@ def _finalise(
     # Rewrite manifest.json with finished_at and halt_reason.
     manifest_path = _run_files_dir(run_dir) / "manifest.json"
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["source_file"] = str(source_file.resolve())
+    manifest["source_file_sha256"] = _file_sha256(source_file)
     manifest["finished_at"] = _format_iso(finished_at)
     manifest["halt_reason"] = halt_reason
     manifest["wall_time"] = wall_time

@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 
 import pytest
@@ -69,6 +70,8 @@ def _pair(
     title: str,
     gen: str = "GEN",
     val: str = "VAL",
+    retry: str = "",
+    retry_mode: str = "replace",
     required_files: tuple[str, ...] = (),
     include_files: tuple[str, ...] = (),
     checks_files: tuple[str, ...] = (),
@@ -79,13 +82,16 @@ def _pair(
         title=title,
         generation_prompt=gen,
         validation_prompt=val,
+        retry_prompt=retry,
         heading_line=1,
         generation_line=2,
         validation_line=5,
+        retry_line=0,
         required_files=required_files,
         include_files=include_files,
         checks_files=checks_files,
         deterministic_validation=deterministic_validation,
+        retry_mode=retry_mode,
     )
 
 
@@ -175,6 +181,39 @@ def test_revision_generator_message_can_be_self_contained(tmp_path: Path):
     assert "old artifact body" in msg
     assert "feedback text" in msg
     assert "The judge found the following issues that MUST be applied" in msg
+
+
+def test_revision_generator_message_replaces_default_retry_instruction(tmp_path: Path):
+    msg = build_revision_generator_message(
+        _pair(1, "X", retry="CUSTOM RETRY", retry_mode="replace"),
+        "feedback text",
+        tmp_path,
+    )
+    assert "CUSTOM RETRY" in msg
+    assert "feedback text" in msg
+    assert REVISION_GENERATOR_PREAMBLE not in msg
+
+
+def test_revision_generator_message_prepends_custom_retry_instruction(tmp_path: Path):
+    msg = build_revision_generator_message(
+        _pair(1, "X", retry="CUSTOM RETRY", retry_mode="prepend"),
+        "feedback text",
+        tmp_path,
+    )
+    assert "CUSTOM RETRY" in msg
+    assert REVISION_GENERATOR_PREAMBLE in msg
+    assert msg.index("CUSTOM RETRY") < msg.index(REVISION_GENERATOR_PREAMBLE)
+
+
+def test_revision_generator_message_appends_custom_retry_instruction(tmp_path: Path):
+    msg = build_revision_generator_message(
+        _pair(1, "X", retry="CUSTOM RETRY", retry_mode="append"),
+        "feedback text",
+        tmp_path,
+    )
+    assert "CUSTOM RETRY" in msg
+    assert REVISION_GENERATOR_PREAMBLE in msg
+    assert msg.index(REVISION_GENERATOR_PREAMBLE) < msg.index("CUSTOM RETRY")
 
 
 def test_initial_judge_message_lists_generator_files(tmp_path: Path):
@@ -273,21 +312,21 @@ def test_include_files_are_front_loaded_in_initial_judge_message(tmp_path: Path)
     assert msg.index("# Reference Blocks") < msg.index("VALIDATE")
 
 
-def test_checks_files_are_injected_into_generator_message(tmp_path: Path):
+def test_checks_files_are_not_injected_into_generator_message(tmp_path: Path):
     (tmp_path / "inventory.yaml").write_text("k: v\n", encoding="utf-8")
     p = _pair(1, "With checks", checks_files=("inventory.yaml",))
     msg = build_initial_generator_message(p, [], tmp_path)
-    assert "# Current inventory artifact" in msg
-    assert "<INVENTORY>" in msg
-    assert "k: v" in msg
+    assert "# Current inventory artifact" not in msg
+    assert "<INVENTORY>" not in msg
+    assert "k: v" not in msg
 
 
-def test_missing_checks_file_is_still_injected_as_empty_artifact_block(tmp_path: Path):
+def test_missing_checks_file_does_not_inject_empty_artifact_block(tmp_path: Path):
     p = _pair(1, "With checks", checks_files=("inventory.yaml",))
     msg = build_initial_generator_message(p, [], tmp_path)
-    assert "# Current inventory artifact" in msg
-    assert "<INVENTORY>" in msg
-    assert "</INVENTORY>" in msg
+    assert "# Current inventory artifact" not in msg
+    assert "<INVENTORY>" not in msg
+    assert "</INVENTORY>" not in msg
 
 
 def test_render_prompt_pair_inlines_include_from_placeholder_bound_path(tmp_path: Path):
@@ -315,6 +354,48 @@ def test_render_prompt_pair_inlines_include_from_placeholder_bound_path(tmp_path
     assert "docs/requirements/raw.md" not in rendered.validation_prompt
     assert "first line\nsecond line" in rendered.generation_prompt
     assert "first line\nsecond line" in rendered.validation_prompt
+
+
+def test_render_prompt_pair_inlines_include_inside_retry_prompt(tmp_path: Path):
+    worktree = _worktree(tmp_path)
+    source = worktree / "docs" / "requirements" / "raw.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("retry source text\n", encoding="utf-8")
+    pair = _pair(
+        1,
+        "Inline include retry",
+        retry="<RAW>\n{{INCLUDE:raw_requirements_path}}\n</RAW>",
+    )
+
+    rendered = _render_prompt_pair(
+        pair,
+        {"raw_requirements_path": "docs/requirements/raw.md"},
+        worktree,
+        None,
+    )
+
+    assert "{{INCLUDE:raw_requirements_path}}" not in rendered.retry_prompt
+    assert "retry source text" in rendered.retry_prompt
+
+
+def test_render_prompt_pair_resolves_runtime_include_target_from_placeholder(tmp_path: Path):
+    worktree = _worktree(tmp_path)
+    pair = _pair(
+        1,
+        "Runtime include",
+        val="<ART>\n{{RUNTIME_INCLUDE:artifact_path}}\n</ART>",
+    )
+
+    rendered = _render_prompt_pair(
+        pair,
+        {"artifact_path": "docs/output/inventory.yaml"},
+        worktree,
+        None,
+    )
+
+    assert rendered.validation_prompt == (
+        "<ART>\n{{RUNTIME_INCLUDE:docs/output/inventory.yaml}}\n</ART>"
+    )
 
 
 def test_render_prompt_pair_inlines_include_from_literal_path(tmp_path: Path):
@@ -363,19 +444,35 @@ def test_checks_files_are_front_loaded_in_judge_message(tmp_path: Path):
     (tmp_path / "inventory.yaml").write_text("k: v\n", encoding="utf-8")
     p = _pair(1, "With checks", val="VALIDATE", checks_files=("inventory.yaml",))
     msg = build_initial_judge_message(p, "artifact text", tmp_path)
-    assert msg.index("# Current inventory artifact") < msg.index("VALIDATE")
+    assert "# Current inventory artifact" not in msg
+    assert "k: v" not in msg
 
 
-def test_revision_generator_message_places_reference_materials_before_original_task(tmp_path: Path):
+def test_runtime_include_is_materialized_inside_initial_judge_prompt(tmp_path: Path):
+    (tmp_path / "inventory.yaml").write_text("k: v\n", encoding="utf-8")
+    p = _pair(
+        1,
+        "X",
+        val="Context\n<INVENTORY>\n{{RUNTIME_INCLUDE:inventory.yaml}}\n</INVENTORY>\nDone",
+    )
+    msg = build_initial_judge_message(p, "artifact", tmp_path)
+    assert msg.index("Context") < msg.index("<INVENTORY>")
+    assert "k: v" in msg
+    assert "{{RUNTIME_INCLUDE:inventory.yaml}}" not in msg
+
+
+def test_runtime_include_is_materialized_inside_revision_generator_message(tmp_path: Path):
     (tmp_path / "context.txt").write_text("ctx\n", encoding="utf-8")
-    p = _pair(1, "X", checks_files=("context.txt",))
+    p = _pair(1, "X", retry="<CTX>\n{{RUNTIME_INCLUDE:context.txt}}\n</CTX>")
     msg = build_revision_generator_message(
         p,
         "feedback text",
         tmp_path,
         original_task="original task body",
     )
-    assert msg.index("# Current context artifact") < msg.index("# Original task")
+    assert "<CTX>\nctx" in msg
+    assert "</CTX>" in msg
+    assert "{{RUNTIME_INCLUDE:context.txt}}" not in msg
 
 
 def test_judge_receives_file_list_from_snapshot_diff(tmp_path: Path):
@@ -1012,6 +1109,45 @@ def test_session_ids_are_valid_uuids_and_distinct(tmp_path: Path):
     assert gen_call.session_id != jud_call.session_id
 
 
+def test_default_effort_is_applied_when_pair_has_no_override(tmp_path: Path):
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=tmp_path / "run",
+        config=RunConfig(backend="codex", default_effort="medium"),
+        claude_client=client,
+        run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
+    )
+    gen_call, jud_call = client.received
+    assert gen_call.effort == "medium"
+    assert jud_call.effort == "medium"
+
+
+def test_pair_effort_override_wins_over_default_effort(tmp_path: Path):
+    pair = PromptPair(
+        **{
+            **_pair(1, "Alpha").__dict__,
+            "effort_override": "high",
+        }
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=tmp_path / "run",
+        config=RunConfig(backend="codex", default_effort="medium"),
+        claude_client=client,
+        run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
+    )
+    gen_call, jud_call = client.received
+    assert gen_call.effort == "high"
+    assert jud_call.effort == "high"
+
+
 def test_session_ids_are_deterministic(tmp_path: Path):
     """Iteration 2's --resume must use the same session ID that iteration 1
     created with --session-id, so the mapping from logical label to UUID
@@ -1242,6 +1378,7 @@ def test_checks_files_writes_trace_without_halting(tmp_path: Path):
     assert '"exists": true' in checks
     assert '"path": "missing.txt"' in checks
     assert '"exists": false' in checks
+    assert "WARNING: optional check files missing" in checks
 
 
 def test_missing_deterministic_validation_halts_before_backend_call(tmp_path: Path):
@@ -1339,6 +1476,88 @@ def test_deterministic_validation_runtime_error_halts_pipeline(tmp_path: Path):
     assert result.halted_early
     assert result.halt_reason is not None
     assert "R-DETERMINISTIC-VALIDATION-FAILED" in result.halt_reason
+
+
+def test_deterministic_validation_supports_python_module_targets(tmp_path: Path):
+    pair = _pair(
+        1,
+        "Alpha",
+        deterministic_validation=("python-module:json.tool", "--help"),
+    )
+
+    class ValidationAwareClient:
+        def __init__(self) -> None:
+            self._n = 0
+            self.judge_prompt = ""
+
+        def call(self, call):
+            self._n += 1
+            if self._n == 1:
+                return _pass_response("artifact")
+            self.judge_prompt = call.prompt
+            return _judge_pass()
+
+    client = ValidationAwareClient()
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    assert result.halted_early is False
+    assert "Deterministic validation" in client.judge_prompt
+    assert "usage:" in client.judge_prompt.lower()
+    assert "python-module:json.tool" in client.judge_prompt
+
+
+def test_deterministic_validation_normalizes_relative_pythonpath_for_module_targets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    pkgroot = tmp_path / "pkgroot"
+    package = pkgroot / "demo_pkg"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "validator.py").write_text(
+        "print('relative-pythonpath-ok')\n",
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PYTHONPATH", "pkgroot")
+
+    pair = _pair(
+        1,
+        "Alpha",
+        deterministic_validation=("python-module:demo_pkg.validator",),
+    )
+
+    class ValidationAwareClient:
+        def __init__(self) -> None:
+            self._n = 0
+            self.judge_prompt = ""
+
+        def call(self, call):
+            self._n += 1
+            if self._n == 1:
+                return _pass_response("artifact")
+            self.judge_prompt = call.prompt
+            return _judge_pass()
+
+    client = ValidationAwareClient()
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=tmp_path / "run",
+        config=RunConfig(),
+        claude_client=client,
+        source_file=tmp_path / "source.md",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    assert result.halted_early is False
+    assert "relative-pythonpath-ok" in client.judge_prompt
+    assert "ModuleNotFoundError" not in client.judge_prompt
 
 
 def test_required_files_support_built_in_placeholder_rendering(tmp_path: Path):
@@ -1695,7 +1914,9 @@ def test_no_validator_skips_judge_and_marks_pass(tmp_path: Path):
         index=1, title="Validator-less",
         generation_prompt="do the thing",
         validation_prompt="",  # empty!
+        retry_prompt="",
         heading_line=1, generation_line=2, validation_line=0,
+        retry_line=0,
         interactive=False,
     )
     client = FakeClaudeClient(scripted=[
@@ -1722,9 +1943,11 @@ def test_judge_only_reruns_judge_from_saved_prompt_state(tmp_path: Path):
         title="Judge target",
         generation_prompt="generate",
         validation_prompt="validate",
+        retry_prompt="",
         heading_line=1,
         generation_line=2,
         validation_line=5,
+        retry_line=0,
         interactive=False,
     )
     run_dir = tmp_path / "run"
@@ -1791,7 +2014,9 @@ def test_interactive_mode_spawns_subprocess_and_marks_pass(tmp_path: Path, monke
         index=1, title="Interactive author",
         generation_prompt="author the thing",
         validation_prompt="",
+        retry_prompt="",
         heading_line=1, generation_line=2, validation_line=0,
+        retry_line=0,
         interactive=True,
     )
     result = run_prompt(
@@ -1837,7 +2062,8 @@ def test_interactive_mode_passes_model_flag_when_set(tmp_path: Path, monkeypatch
 
     pair = PromptPair(
         index=1, title="X", generation_prompt="m", validation_prompt="",
-        heading_line=1, generation_line=2, validation_line=0, interactive=True,
+        retry_prompt="",
+        heading_line=1, generation_line=2, validation_line=0, retry_line=0, interactive=True,
     )
     run_prompt(
         pair=pair, prior_artifacts=[],
@@ -1873,7 +2099,9 @@ def test_interactive_mode_captures_created_files(tmp_path: Path, monkeypatch):
         index=1, title="Author",
         generation_prompt="create newly-authored-skill.md",
         validation_prompt="",
+        retry_prompt="",
         heading_line=1, generation_line=2, validation_line=0, interactive=True,
+        retry_line=0,
     )
     result = run_prompt(
         pair=pair, prior_artifacts=[],
@@ -1898,6 +2126,8 @@ def test_resume_skips_completed_prompts(tmp_path: Path):
 
     run_dir = tmp_path / "run"
     worktree = _worktree(tmp_path)
+    source_file = tmp_path / "src.md"
+    source_file.write_text("source v1\n", encoding="utf-8")
 
     # Set up the resume state: prompts 1 and 2 have pass verdicts on disk
     for i in (1, 2):
@@ -1913,7 +2143,8 @@ def test_resume_skips_completed_prompts(tmp_path: Path):
     import json as _json
     (_run_files(run_dir) / "manifest.json").write_text(
         _json.dumps({
-            "source_file": str(tmp_path / "src.md"),
+            "source_file": str(source_file),
+            "source_file_sha256": hashlib.sha256(source_file.read_bytes()).hexdigest(),
             "run_id": run_dir.name,
             "config": {"max_iterations": 3, "model": None, "only": None, "dry_run": False},
             "started_at": "2026-01-01T00:00:00Z",
@@ -1926,7 +2157,8 @@ def test_resume_skips_completed_prompts(tmp_path: Path):
     pairs = [
         PromptPair(index=i, title=f"Prompt {i}",
                    generation_prompt=f"gen {i}", validation_prompt=f"val {i}",
-                   heading_line=1, generation_line=2, validation_line=5)
+                   retry_prompt="", heading_line=1, generation_line=2,
+                   validation_line=5, retry_line=0)
         for i in (1, 2, 3)
     ]
 
@@ -1940,7 +2172,7 @@ def test_resume_skips_completed_prompts(tmp_path: Path):
         pairs=pairs, run_dir=run_dir,
         config=RunConfig(max_iterations=3),
         claude_client=client,
-        source_file=tmp_path / "src.md",
+        source_file=source_file,
         worktree_dir=worktree,
         resume=True,
     )
@@ -1964,6 +2196,8 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
 
     run_dir = tmp_path / "run"
     worktree = _worktree(tmp_path)
+    source_file = tmp_path / "src.md"
+    source_file.write_text("source v1\n", encoding="utf-8")
 
     # Prompt 1: completed
     pd1 = _module_dir(run_dir, "Prompt 1")
@@ -1985,7 +2219,8 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
     import json as _json
     (_run_files(run_dir) / "manifest.json").write_text(
         _json.dumps({
-            "source_file": str(tmp_path / "src.md"),
+            "source_file": str(source_file),
+            "source_file_sha256": hashlib.sha256(source_file.read_bytes()).hexdigest(),
             "run_id": run_dir.name,
             "config": {"max_iterations": 3, "model": None, "only": None, "dry_run": False},
             "started_at": "2026-01-01T00:00:00Z",
@@ -1997,7 +2232,8 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
     pairs = [
         PromptPair(index=i, title=f"Prompt {i}",
                    generation_prompt=f"gen {i}", validation_prompt=f"val {i}",
-                   heading_line=1, generation_line=2, validation_line=5)
+                   retry_prompt="", heading_line=1, generation_line=2,
+                   validation_line=5, retry_line=0)
         for i in (1, 2, 3)
     ]
     # Prompts 2 and 3 both run for real: 4 claude calls (gen+judge each)
@@ -2011,7 +2247,7 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
         pairs=pairs, run_dir=run_dir,
         config=RunConfig(max_iterations=3),
         claude_client=client,
-        source_file=tmp_path / "src.md",
+        source_file=source_file,
         worktree_dir=worktree,
         resume=True,
     )
@@ -2021,12 +2257,86 @@ def test_resume_stops_skipping_at_first_incomplete_prompt(tmp_path: Path):
     assert len(result.prompt_results[2].iterations) == 1   # re-run (stale pass ignored)
 
 
+def test_resume_reruns_completed_prompts_when_source_file_changed(tmp_path: Path):
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
+    from prompt_runner.runner import run_pipeline
+    from prompt_runner.parser import PromptPair
+
+    run_dir = tmp_path / "run"
+    worktree = _worktree(tmp_path)
+    source_file = tmp_path / "src.md"
+    source_file.write_text("source v1\n", encoding="utf-8")
+
+    prompt_dir = _module_dir(run_dir, "Prompt 1")
+    prompt_dir.mkdir(parents=True)
+    slug = _prompt_slug(1, "Prompt 1")
+    (prompt_dir / f"{slug}.final-verdict.txt").write_text("pass\n", encoding="utf-8")
+    (prompt_dir / f"{slug}.files-created.txt").write_text("artifact-1.txt\n", encoding="utf-8")
+    stale_history = _prompt_history_dir(run_dir, "Prompt 1", 1)
+    stale_history.mkdir(parents=True)
+    (stale_history / "iter-01-validation.md").write_text("VERDICT: revise\n", encoding="utf-8")
+    stale_marker = prompt_dir / "stale-only.txt"
+    stale_marker.write_text("stale\n", encoding="utf-8")
+    (run_dir / "artifact-1.txt").write_text("artifact 1\n", encoding="utf-8")
+
+    import json as _json
+    (_run_files(run_dir) / "manifest.json").write_text(
+        _json.dumps({
+            "source_file": str(source_file),
+            "source_file_sha256": hashlib.sha256(source_file.read_bytes()).hexdigest(),
+            "run_id": run_dir.name,
+            "config": {"max_iterations": 3, "model": None, "only": None, "dry_run": False},
+            "started_at": "2026-01-01T00:00:00Z",
+            "finished_at": None,
+        }, indent=2) + "\n",
+        encoding="utf-8",
+    )
+
+    source_file.write_text("source v2\n", encoding="utf-8")
+
+    pair = PromptPair(
+        index=1,
+        title="Prompt 1",
+        generation_prompt="gen 1",
+        validation_prompt="val 1",
+        retry_prompt="",
+        heading_line=1,
+        generation_line=2,
+        validation_line=5,
+        retry_line=0,
+    )
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="new artifact 1", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+    ])
+
+    result = run_pipeline(
+        pairs=[pair],
+        run_dir=run_dir,
+        config=RunConfig(max_iterations=3),
+        claude_client=client,
+        source_file=source_file,
+        worktree_dir=worktree,
+        resume=True,
+    )
+
+    assert not result.halted_early
+    assert len(client.received) == 2
+    assert len(result.prompt_results) == 1
+    assert len(result.prompt_results[0].iterations) == 1
+    manifest = _json.loads((_run_files(run_dir) / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["source_file_sha256"] == hashlib.sha256(source_file.read_bytes()).hexdigest()
+    assert not stale_marker.exists()
+
+
 def test_judge_only_does_not_resume_skip_selected_prompt(tmp_path: Path):
     from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient
     from prompt_runner.runner import RunConfig, run_pipeline
 
     run_dir = tmp_path / "run"
     worktree = _worktree(tmp_path)
+    source_file = tmp_path / "src.md"
+    source_file.write_text("source v1\n", encoding="utf-8")
     run_dir.mkdir(parents=True, exist_ok=True)
     (worktree / "artifact.txt").write_text("artifact\n", encoding="utf-8")
     pair = PromptPair(
@@ -2034,9 +2344,11 @@ def test_judge_only_does_not_resume_skip_selected_prompt(tmp_path: Path):
         title="Prompt 1",
         generation_prompt="gen 1",
         validation_prompt="val 1",
+        retry_prompt="",
         heading_line=1,
         generation_line=2,
         validation_line=5,
+        retry_line=0,
     )
     prompt_dir = _module_dir(run_dir, pair.title)
     prompt_dir.mkdir(parents=True)
@@ -2047,7 +2359,8 @@ def test_judge_only_does_not_resume_skip_selected_prompt(tmp_path: Path):
     import json as _json
     (_run_files(run_dir) / "manifest.json").write_text(
         _json.dumps({
-            "source_file": str(tmp_path / "src.md"),
+            "source_file": str(source_file),
+            "source_file_sha256": hashlib.sha256(source_file.read_bytes()).hexdigest(),
             "run_id": run_dir.name,
             "config": {
                 "max_iterations": 3,
@@ -2071,7 +2384,7 @@ def test_judge_only_does_not_resume_skip_selected_prompt(tmp_path: Path):
         run_dir=run_dir,
         config=RunConfig(max_iterations=3, only=1, judge_only=1),
         claude_client=client,
-        source_file=tmp_path / "src.md",
+        source_file=source_file,
         worktree_dir=worktree,
         resume=True,
     )

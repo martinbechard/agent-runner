@@ -33,13 +33,16 @@ class PromptPair:
     title: str
     generation_prompt: str
     validation_prompt: str
+    retry_prompt: str
     heading_line: int
     generation_line: int
     validation_line: int
+    retry_line: int
     required_files: tuple[str, ...] = ()
     include_files: tuple[str, ...] = ()
     checks_files: tuple[str, ...] = ()
     deterministic_validation: tuple[str, ...] = ()
+    retry_mode: str = "replace"
     module_slug: str | None = None
     interactive: bool = False
     model_override: str | None = None
@@ -81,13 +84,16 @@ class _Accumulator:
     heading_line: int
     generation_line: int = 0
     validation_line: int = 0
+    retry_line: int = 0
     required_files: list[str] = field(default_factory=list)
     include_files: list[str] = field(default_factory=list)
     checks_files: list[str] = field(default_factory=list)
     deterministic_validation: list[str] = field(default_factory=list)
+    retry_mode: str = "replace"
     module_slug: str | None = None
     generation_lines: list[str] = field(default_factory=list)
     validation_lines: list[str] = field(default_factory=list)
+    retry_lines: list[str] = field(default_factory=list)
     interactive: bool = False
     model_override: str | None = None
     effort_override: str | None = None
@@ -98,13 +104,16 @@ class _Accumulator:
             title=self.title or _UNTITLED,
             generation_prompt="\n".join(self.generation_lines),
             validation_prompt="\n".join(self.validation_lines),
+            retry_prompt="\n".join(self.retry_lines),
             heading_line=self.heading_line,
             generation_line=self.generation_line,
             validation_line=self.validation_line,
+            retry_line=self.retry_line,
             required_files=tuple(self.required_files),
             include_files=tuple(self.include_files),
             checks_files=tuple(self.checks_files),
             deterministic_validation=tuple(self.deterministic_validation),
+            retry_mode=self.retry_mode,
             module_slug=self.module_slug,
             interactive=self.interactive,
             model_override=self.model_override,
@@ -133,7 +142,12 @@ _REQUIRED = "required"
 _INCLUDE = "include"
 _CHECKS = "checks"
 _DETERMINISTIC = "deterministic"
+_RETRY = "retry"
 _MODULE = "module"
+_RETRY_MODE_RE = re.compile(
+    r"^retry prompt(?:\s*\[(replace|append|prepend)\])?$",
+    re.IGNORECASE,
+)
 
 
 def _extract_directives(raw_title: str) -> tuple[str, str | None, str | None]:
@@ -290,10 +304,13 @@ def _apply_file_module_scope(
                 heading_line=item.heading_line,
                 generation_line=item.generation_line,
                 validation_line=item.validation_line,
+                retry_prompt=item.retry_prompt,
+                retry_line=item.retry_line,
                 required_files=item.required_files,
                 include_files=item.include_files,
                 checks_files=item.checks_files,
                 deterministic_validation=item.deterministic_validation,
+                retry_mode=item.retry_mode,
                 module_slug=module_slug,
                 interactive=item.interactive,
                 model_override=item.model_override,
@@ -312,10 +329,13 @@ def _apply_file_module_scope(
                     heading_line=pair.heading_line,
                     generation_line=pair.generation_line,
                     validation_line=pair.validation_line,
+                    retry_prompt=pair.retry_prompt,
+                    retry_line=pair.retry_line,
                     required_files=pair.required_files,
                     include_files=pair.include_files,
                     checks_files=pair.checks_files,
                     deterministic_validation=pair.deterministic_validation,
+                    retry_mode=pair.retry_mode,
                     module_slug=module_slug,
                     interactive=pair.interactive,
                     model_override=pair.model_override,
@@ -383,7 +403,7 @@ def _parse_normal_prompt(
             cursor += 1
             continue
 
-        section = _normalize_prompt_subsection(level3_match.group(1))
+        section, retry_mode = _normalize_prompt_subsection(level3_match.group(1))
         if section is None:
             raise ParseError(
                 "E-UNKNOWN-SUBSECTION",
@@ -424,6 +444,20 @@ def _parse_normal_prompt(
                 ),
             )
 
+        if section == _RETRY and pair.validation_line == 0:
+            raise ParseError(
+                "E-BAD-SECTION-ORDER",
+                _format_bad_order(
+                    index=index,
+                    title=title,
+                    heading_line=heading_line,
+                    subsection_line=cursor + 1,
+                    found_name="Retry Prompt",
+                    required_name="Validation Prompt",
+                    expected_level="###",
+                ),
+            )
+
         if section in {_REQUIRED, _INCLUDE, _CHECKS, _DETERMINISTIC} and pair.generation_line != 0:
             raise ParseError(
                 "E-BAD-SECTION-ORDER",
@@ -448,7 +482,13 @@ def _parse_normal_prompt(
         )
 
         seen_sections.add(section)
-        _assign_section(pair, section, body_lines, heading_line=section_heading_line)
+        _assign_section(
+            pair,
+            section,
+            body_lines,
+            heading_line=section_heading_line,
+            retry_mode=retry_mode,
+        )
 
     if pair.generation_line == 0:
         raise ParseError(
@@ -561,7 +601,7 @@ def _parse_variant_pairs(
 
         level4_match = _LEVEL4_RE.match(lines[cursor])
         if level4_match is not None:
-            section = _normalize_prompt_subsection(level4_match.group(1))
+            section, retry_mode = _normalize_prompt_subsection(level4_match.group(1))
             if section is None:
                 raise ParseError(
                     "E-UNKNOWN-SUBSECTION",
@@ -605,7 +645,21 @@ def _parse_variant_pairs(
                     ),
                 )
 
-            if section in {_REQUIRED, _CHECKS, _DETERMINISTIC} and current.generation_line != 0:
+            if section == _RETRY and current.validation_line == 0:
+                raise ParseError(
+                    "E-BAD-SECTION-ORDER",
+                    _format_bad_order(
+                        index=0,
+                        title=variant_title,
+                        heading_line=heading_line,
+                        subsection_line=cursor + 1,
+                        found_name="Retry Prompt",
+                        required_name="Validation Prompt",
+                        expected_level="####",
+                    ),
+                )
+
+            if section in {_REQUIRED, _INCLUDE, _CHECKS, _DETERMINISTIC} and current.generation_line != 0:
                 raise ParseError(
                     "E-BAD-SECTION-ORDER",
                     _format_bad_order(
@@ -633,7 +687,13 @@ def _parse_variant_pairs(
                 ),
             )
             seen_sections.add(section)
-            _assign_section(current, section, body_lines, heading_line=section_heading_line)
+            _assign_section(
+                current,
+                section,
+                body_lines,
+                heading_line=section_heading_line,
+                retry_mode=retry_mode,
+            )
             continue
 
         if current.generation_line == 0:
@@ -694,6 +754,7 @@ def _assign_section(
     section: str,
     body_lines: list[str],
     heading_line: int,
+    retry_mode: str | None = None,
 ) -> None:
     if section == _GENERATION:
         pair.generation_line = heading_line
@@ -702,6 +763,11 @@ def _assign_section(
     if section == _VALIDATION:
         pair.validation_line = heading_line
         pair.validation_lines = body_lines
+        return
+    if section == _RETRY:
+        pair.retry_line = heading_line
+        pair.retry_lines = body_lines
+        pair.retry_mode = retry_mode or "replace"
         return
     if section == _REQUIRED:
         pair.required_files = [line.strip() for line in body_lines if line.strip()]
@@ -718,27 +784,31 @@ def _assign_section(
     raise AssertionError(f"Unhandled section {section}")
 
 
-def _normalize_prompt_subsection(raw_heading: str) -> str | None:
+def _normalize_prompt_subsection(raw_heading: str) -> tuple[str | None, str | None]:
     normalized = " ".join(raw_heading.strip().lower().split())
     if normalized == "generation prompt":
-        return _GENERATION
+        return _GENERATION, None
     if normalized == "validation prompt":
-        return _VALIDATION
+        return _VALIDATION, None
+    retry_match = _RETRY_MODE_RE.match(raw_heading.strip())
+    if retry_match is not None:
+        return _RETRY, (retry_match.group(1) or "replace").lower()
     if normalized == "required files":
-        return _REQUIRED
+        return _REQUIRED, None
     if normalized == "include files":
-        return _INCLUDE
+        return _INCLUDE, None
     if normalized == "checks files":
-        return _CHECKS
+        return _CHECKS, None
     if normalized == "deterministic validation":
-        return _DETERMINISTIC
-    return None
+        return _DETERMINISTIC, None
+    return None, None
 
 
 def _display_name(section: str) -> str:
     mapping = {
         _GENERATION: "Generation Prompt",
         _VALIDATION: "Validation Prompt",
+        _RETRY: "Retry Prompt",
         _REQUIRED: "Required Files",
         _INCLUDE: "Include Files",
         _CHECKS: "Checks Files",
@@ -814,5 +884,5 @@ def _format_unknown_subsection(
         f"Allowed prompt subsections at this level are: "
         f'"{expected_level} Module", "{expected_level} Required Files", "{expected_level} Include Files", "{expected_level} Checks Files", '
         f'"{expected_level} Deterministic Validation", "{expected_level} Generation Prompt", '
-        f'and "{expected_level} Validation Prompt".'
+        f'"{expected_level} Validation Prompt", and "{expected_level} Retry Prompt [REPLACE|APPEND|PREPEND]".'
     )

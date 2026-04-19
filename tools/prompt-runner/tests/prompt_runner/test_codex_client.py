@@ -172,6 +172,45 @@ def test_subsequent_calls_still_use_stateless_codex_exec(monkeypatch, tmp_path: 
     assert response.session_id == "resume-sid"
 
 
+def test_effort_override_is_forwarded_to_codex_config(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
+    captured: dict = {}
+
+    def fake_popen(argv, **kwargs):
+        captured["argv"] = argv
+        message_path = Path(argv[argv.index("--output-last-message") + 1])
+        message_path.write_text("artifact body\n", encoding="utf-8")
+        return _FakePopen(stdout="")
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    client = RealCodexClient()
+    call = _call(tmp_path, new_session=True)
+    call = ClaudeCall(**{**call.__dict__, "effort": "high"})
+    response = client.call(call)
+    assert response.stdout == "artifact body"
+    assert '-c' in captured["argv"]
+    assert 'model_reasoning_effort="high"' in captured["argv"]
+
+
+def test_effort_max_is_normalized_to_xhigh_for_codex(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
+    captured: dict = {}
+
+    def fake_popen(argv, **kwargs):
+        captured["argv"] = argv
+        message_path = Path(argv[argv.index("--output-last-message") + 1])
+        message_path.write_text("artifact body\n", encoding="utf-8")
+        return _FakePopen(stdout="")
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    client = RealCodexClient()
+    call = _call(tmp_path, new_session=True)
+    call = ClaudeCall(**{**call.__dict__, "effort": "max"})
+    response = client.call(call)
+    assert response.stdout == "artifact body"
+    assert 'model_reasoning_effort="xhigh"' in captured["argv"]
+
+
 def test_falls_back_to_last_agent_message_when_sidecar_missing(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
 

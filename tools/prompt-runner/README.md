@@ -2,6 +2,32 @@
 
 This guide is for people and agents authoring prompt files for `prompt-runner`.
 
+## Install
+
+```bash
+pip install -e tools/prompt-runner
+```
+
+For development and tests:
+
+```bash
+pip install -e tools/prompt-runner[dev]
+```
+
+## Main Commands
+
+Validate a prompt file:
+
+```bash
+prompt-runner parse your-file.md
+```
+
+Run a prompt file:
+
+```bash
+prompt-runner run your-file.md --project-dir /path/to/project --run-dir /path/to/run
+```
+
 ## What this tool does
 
 `prompt-runner` reads a markdown workflow, executes each generation prompt with a configured backend, optionally executes a matching validation prompt in a separate session, and iterates on revision feedback.
@@ -88,12 +114,17 @@ Normal prompts use `###` subsections. Allowed prompt subsection headings are:
 - `### Deterministic Validation`
 - `### Generation Prompt`
 - `### Validation Prompt`
+- `### Retry Prompt`
+- `### Retry Prompt [REPLACE]`
+- `### Retry Prompt [APPEND]`
+- `### Retry Prompt [PREPEND]`
 
 Rules:
 
 - `### Generation Prompt` is required.
 - `### Validation Prompt` is optional.
 - `### Required Files`, `### Include Files`, `### Checks Files`, and `### Deterministic Validation`, if present, must appear before `### Generation Prompt`.
+- `### Retry Prompt`, if present, must appear after `### Validation Prompt`.
 - Each subsection may appear at most once per prompt.
 - Prompt bodies may contain deeper headings such as `####` or `#####`; only the exact reserved subsection level is structural.
 
@@ -148,6 +179,9 @@ Optional file-level stable slug for runner-owned files under `.run-files/<module
 
 Each non-empty line is treated as a path that must exist before the generator runs.
 
+- If any required file is missing, prompt-runner halts before making a backend call.
+- `Required Files` only checks existence. It does not inject file contents into the prompt.
+
 ### Include Files
 
 Each non-empty line is treated as a path that must exist and whose full text
@@ -160,6 +194,9 @@ the prompt itself rather than relying on a later tool read.
 
 Each non-empty line is treated as a path whose existence should be recorded without failing the prompt.
 The results are appended to the module's `module.log`; prompt-runner does not create a separate checks file.
+
+- Missing check files are logged as warnings in `module.log`.
+- `Checks Files` only records presence. It does not inject file contents into the prompt.
 
 ### Deterministic Validation
 
@@ -202,6 +239,7 @@ Prompt bodies also support inline file embedding:
 
 - `{{INCLUDE:path/to/file.txt}}`
 - `{{INCLUDE:raw_requirements_path}}`
+- `{{RUNTIME_INCLUDE:path/to/generated-artifact.yaml}}`
 
 `{{INCLUDE:...}}` reads the referenced file and replaces the directive with the
 file contents directly inside the prompt body. If the token after `INCLUDE:` matches
@@ -210,16 +248,42 @@ then reads the resulting path. Relative inline include paths are resolved first
 against the run worktree and, if not found there, against the prompt file's own
 directory.
 
+`{{RUNTIME_INCLUDE:...}}` also embeds a file inline, but it is expanded later when
+the specific generator or judge message is being built. Use this for files that do
+not exist at initial prompt render time, such as an artifact created by the
+generator and then embedded inside the validation prompt's `Context` section.
+
 Use inline include when you want the prompt body itself to contain the source
 text and you do not want to expose the path as part of the visible task wording.
 Use `### Include Files` when you want front-loaded, delimited context blocks
 shared across generator and judge calls.
+
+### Retry Prompt
+
+Optional revision-only instruction block used on generator retries after a
+judge returns `VERDICT: revise`.
+
+- `### Retry Prompt` defaults to `REPLACE` mode.
+- `### Retry Prompt [REPLACE]` replaces the default revision instruction block.
+- `### Retry Prompt [APPEND]` appends your custom retry instructions after the
+  default revision instruction block.
+- `### Retry Prompt [PREPEND]` prepends your custom retry instructions before
+  the default revision instruction block.
+
+Prompt-runner still supplies the revision context, including:
+- the original task when stateless revisions are enabled
+- the previous artifact when stateless revisions are enabled
+- the judge feedback inside `<REQUIRED_CHANGES>`
+
+Use `Retry Prompt` when the first-pass prompt should stay clean and
+revision-only guidance should appear only on retries.
 
 ## What not to do
 
 - Do not omit `### Generation Prompt` or `#### Generation Prompt`.
 - Do not invent other subsection headings at the reserved structural level.
 - Do not place `Required Files`, `Include Files`, `Checks Files`, or `Deterministic Validation` after the generation subsection.
+- Do not place `Retry Prompt` before `Validation Prompt`.
 - Do not put your own verdict-format instruction in the validation prompt; prompt-runner appends its own verdict instruction.
 
 ## Parser error IDs

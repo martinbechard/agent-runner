@@ -127,6 +127,68 @@ generate
     assert pairs[0].include_files == ("docs/request.md", "docs/context.md")
 
 
+def test_retry_prompt_section_is_parsed_with_default_replace_mode():
+    text = """## Prompt 1: Needs retry
+
+### Generation Prompt
+
+generate
+
+### Validation Prompt
+
+validate
+
+### Retry Prompt
+
+retry instructions
+"""
+    pairs = parse_text(text)
+    assert pairs[0].retry_prompt == "retry instructions"
+    assert pairs[0].retry_mode == "replace"
+
+
+def test_retry_prompt_section_accepts_append_mode():
+    text = """## Prompt 1: Needs retry
+
+### Generation Prompt
+
+generate
+
+### Validation Prompt
+
+validate
+
+### Retry Prompt [APPEND]
+
+retry instructions
+"""
+    pairs = parse_text(text)
+    assert pairs[0].retry_prompt == "retry instructions"
+    assert pairs[0].retry_mode == "append"
+
+
+def test_retry_prompt_before_validation_is_rejected():
+    text = """## Prompt 1: Bad retry order
+
+### Generation Prompt
+
+generate
+
+### Retry Prompt [PREPEND]
+
+retry instructions
+
+### Validation Prompt
+
+validate
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_text(text)
+    err = exc_info.value
+    assert err.error_id == "E-BAD-SECTION-ORDER"
+    assert "Retry Prompt" in err.message
+
+
 def test_module_section_is_parsed():
     text = """### Module
 

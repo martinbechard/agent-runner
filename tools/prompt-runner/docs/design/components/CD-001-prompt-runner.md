@@ -62,12 +62,14 @@ Normal prompts then use exact `###` subsection headings. Allowed subsection name
 - `Deterministic Validation`
 - `Generation Prompt`
 - `Validation Prompt`
+- `Retry Prompt`
 
 Rules:
 
 - `### Generation Prompt` is required.
 - `### Validation Prompt` is optional.
 - Metadata subsections must appear before `### Generation Prompt`.
+- `### Retry Prompt`, if present, must appear after `### Validation Prompt`.
 - Each subsection may appear at most once per prompt pair.
 - Only the exact reserved subsection level is structural; deeper headings remain part of the prompt body.
 
@@ -101,13 +103,26 @@ Rules:
 ### 2.4 Metadata semantics
 
 - `Required Files`: each non-empty line is a path that must exist before generation.
+  - Missing required files halt the run before any backend call.
+  - Required files do not inject their contents into prompts.
 - `Include Files`: each non-empty line is a path that must exist and whose text must be injected into the generator and judge prompts.
 - `Checks Files`: each non-empty line is a path whose existence should be recorded without failing the prompt.
+  - Missing check files are logged as warnings.
+  - Checks files do not inject their contents into prompts.
 - `Deterministic Validation`: each non-empty line becomes one argv element for a Python validator invoked after generation and before judging.
+- `Retry Prompt`: optional revision-only instruction block for generator retries.
+  - `Retry Prompt` defaults to `REPLACE`.
+  - `[REPLACE]` replaces the default retry instruction block.
+  - `[APPEND]` appends custom retry instructions after the default block.
+  - `[PREPEND]` prepends custom retry instructions before the default block.
+  - Runner-supplied retry context such as `<REQUIRED_CHANGES>` remains available.
 - Prompt bodies may also embed file contents inline with `{{INCLUDE:...}}`.
   - `{{INCLUDE:path/to/file}}` reads the named file and replaces the directive with the file text.
   - `{{INCLUDE:placeholder_name}}` first resolves the placeholder, then reads the resulting file.
   - Inline include is for cases where the prompt body itself should contain the source text rather than pointing at a path.
+- Prompt bodies may also embed runtime-created files inline with `{{RUNTIME_INCLUDE:...}}`.
+  - `{{RUNTIME_INCLUDE:path/to/file}}` reads the named file later, when the specific generator or judge message is assembled.
+  - Runtime include is for artifacts that do not exist when the prompt pair is first rendered, such as a generated inventory file embedded inside the validation prompt's `Context` section.
 
 Metadata path resolution is relative to the run worktree root.
 Inline include resolution is relative to the run worktree first and then to the prompt file's own directory when the worktree path does not exist.
@@ -123,13 +138,16 @@ class PromptPair:
     title: str
     generation_prompt: str
     validation_prompt: str
+    retry_prompt: str
     heading_line: int
     generation_line: int
     validation_line: int
+    retry_line: int
     required_files: tuple[str, ...] = ()
     include_files: tuple[str, ...] = ()
     checks_files: tuple[str, ...] = ()
     deterministic_validation: tuple[str, ...] = ()
+    retry_mode: str = "replace"
     module_slug: str | None = None
     interactive: bool = False
     model_override: str | None = None
@@ -151,7 +169,7 @@ class ForkPoint:
     variants: list[VariantPrompt]
 ```
 
-`generation_line` and `validation_line` point at the subsection heading lines.
+`generation_line`, `validation_line`, and `retry_line` point at the subsection heading lines.
 
 `module_slug` is file-scoped metadata propagated onto every parsed prompt pair in the file.
 If the file omits `### Module`, the runner must infer one file-level module slug from the first prompt title and apply it consistently across the file.
@@ -208,6 +226,7 @@ Tests must cover:
 - required/checks/deterministic subsections
 - include-file injection
 - inline `{{INCLUDE:...}}` expansion
+- late-bound `{{RUNTIME_INCLUDE:...}}` expansion
 - validator-less prompts
 - variant forks
 - multiple prompt pairs within one variant

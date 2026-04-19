@@ -44,6 +44,14 @@ NON_INTERACTIVE_PROMPT_PREFIX = (
 )
 
 
+def _normalize_codex_effort(effort: str) -> str:
+    """Translate prompt-runner effort labels to Codex config values."""
+    normalized = effort.strip().lower()
+    if normalized == "max":
+        return "xhigh"
+    return normalized
+
+
 def _append_aggregate_log(
     path: Path | None,
     prefix: str,
@@ -301,6 +309,11 @@ class RealCodexClient:
         ]
         if call.model is not None:
             base += ["--model", call.model]
+        if call.effort is not None:
+            base += [
+                "-c",
+                f'model_reasoning_effort="{_normalize_codex_effort(call.effort)}"',
+            ]
         sections = [NON_INTERACTIVE_PROMPT_PREFIX]
         if call.agent_name:
             sections.append(f"Assume the `{call.agent_name}` agent role.")

@@ -106,8 +106,8 @@ val 3
 def test_serialize_pairs_to_md():
     pair = PromptPair(
         index=1, title="Test", generation_prompt="gen body",
-        validation_prompt="val body", heading_line=1,
-        generation_line=2, validation_line=5,
+        validation_prompt="val body", retry_prompt="", heading_line=1,
+        generation_line=2, validation_line=5, retry_line=0,
     )
     md = _serialize_pairs_to_md([pair])
     assert "## Prompt 1: Test" in md
@@ -120,8 +120,8 @@ def test_serialize_pairs_to_md():
 def test_serialize_pair_without_validator():
     pair = PromptPair(
         index=1, title="No val", generation_prompt="gen",
-        validation_prompt="", heading_line=1,
-        generation_line=2, validation_line=0,
+        validation_prompt="", retry_prompt="", heading_line=1,
+        generation_line=2, validation_line=0, retry_line=0,
     )
     md = _serialize_pairs_to_md([pair])
     assert "## Prompt 1: No val" in md
@@ -134,13 +134,13 @@ def test_serialize_multiple_pairs():
     pairs = [
         PromptPair(
             index=1, title="First", generation_prompt="gen1",
-            validation_prompt="val1", heading_line=1,
-            generation_line=2, validation_line=5,
+            validation_prompt="val1", retry_prompt="", heading_line=1,
+            generation_line=2, validation_line=5, retry_line=0,
         ),
         PromptPair(
             index=2, title="Second", generation_prompt="gen2",
-            validation_prompt="val2", heading_line=8,
-            generation_line=9, validation_line=12,
+            validation_prompt="val2", retry_prompt="", heading_line=8,
+            generation_line=9, validation_line=12, retry_line=0,
         ),
     ]
     md = _serialize_pairs_to_md(pairs)
@@ -361,7 +361,8 @@ def test_model_override_used_in_make_call(tmp_path: Path):
 
     pair = PromptPair(
         index=1, title="X", generation_prompt="g", validation_prompt="v",
-        heading_line=1, generation_line=2, validation_line=5,
+        retry_prompt="", heading_line=1, generation_line=2, validation_line=5,
+        retry_line=0,
         model_override="claude-sonnet-4-6",
     )
     call = _make_call(
@@ -382,7 +383,8 @@ def test_effort_override_in_make_call(tmp_path: Path):
 
     pair = PromptPair(
         index=1, title="X", generation_prompt="g", validation_prompt="v",
-        heading_line=1, generation_line=2, validation_line=5,
+        retry_prompt="", heading_line=1, generation_line=2, validation_line=5,
+        retry_line=0,
         effort_override="low",
     )
     call = _make_call(
@@ -399,8 +401,8 @@ def test_serialize_preserves_model_and_effort():
     """_serialize_pairs_to_md writes [MODEL:] and [EFFORT:] directives in headings."""
     pair = PromptPair(
         index=1, title="Test", generation_prompt="gen",
-        validation_prompt="val", heading_line=1,
-        generation_line=2, validation_line=5,
+        validation_prompt="val", retry_prompt="", heading_line=1,
+        generation_line=2, validation_line=5, retry_line=0,
         model_override="claude-sonnet-4-6",
         effort_override="medium",
     )
@@ -413,8 +415,8 @@ def test_serialize_omits_directives_when_not_set():
     """_serialize_pairs_to_md does not add directive text when fields are None."""
     pair = PromptPair(
         index=1, title="Plain", generation_prompt="gen",
-        validation_prompt="val", heading_line=1,
-        generation_line=2, validation_line=5,
+        validation_prompt="val", retry_prompt="", heading_line=1,
+        generation_line=2, validation_line=5, retry_line=0,
     )
     md = _serialize_pairs_to_md([pair])
     assert "[MODEL:" not in md
@@ -457,8 +459,8 @@ def test_run_pipeline_no_fork_unaffected(tmp_path: Path):
     """A pipeline without fork points behaves identically to before."""
     pair1 = PromptPair(
         index=1, title="Only", generation_prompt="do it",
-        validation_prompt="check it", heading_line=1,
-        generation_line=2, validation_line=5,
+        validation_prompt="check it", retry_prompt="", heading_line=1,
+        generation_line=2, validation_line=5, retry_line=0,
     )
     worktree = _worktree(tmp_path)
     client = FakeClaudeClient(scripted=[
