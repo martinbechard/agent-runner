@@ -213,6 +213,25 @@
 - **Filename pattern:** `SKILL.md` inside `tools/methodology-runner/skills/<skill-name>/`.
 - **Example:** `tools/methodology-runner/skills/traceability-discipline/SKILL.md`
 
+### tools/report/
+- **Purpose:** Root for the repository's cross-tool reporting utilities. Use this path for reporting-specific documentation and support files when they are not owned by prompt-runner or methodology-runner alone.
+- **Signals:** timeline report tool, reporting utility root, cross-tool diagnostics, report-specific README, tooling that inspects both prompt-runner and methodology-runner outputs.
+- **Filename pattern:** fixed tool-root filenames such as `README.md`.
+- **Example:** `tools/report/README.md`
+
+### tools/report/scripts/
+- **Purpose:** Reporting scripts and direct-entry utilities that analyze or render run data across tools. Use this path when a script belongs to the reporting tool rather than to prompt-runner, methodology-runner, or generic repo maintenance.
+- **Signals:** timeline report generator, HTML report builder, run-log analyzer, reporting-specific CLI invoked as `python tools/report/scripts/...`.
+- **Filename pattern:** `snake_case.py` for Python, `kebab-case.sh` for shell.
+- **Tests location:** `tools/report/tests/` — `test_<script_basename>.py` for Python helpers.
+- **Example:** `tools/report/scripts/run-timeline.py`
+
+### tools/report/tests/
+- **Purpose:** Tests for the reporting tool. Use this path when the tests exercise `tools/report/scripts/` or related reporting logic.
+- **Signals:** imports or dynamically loads reporting scripts, asserts over rendered report content, cross-tool log parsing tests.
+- **Filename pattern:** `test_<module>.py`; fixtures stay in descriptive subfolders such as `fixtures/`.
+- **Mirrors:** `tools/report/scripts/`
+
 ### .codex/agents/
 - **Purpose:** Repository-local Codex custom agent definitions. Use this path for TOML agent files that define reusable Codex agents for this repository and are meant to be registered into the user's Codex agent directory.
 - **Signals:** Codex custom agent, `name =`, `description =`, `developer_instructions =`, `.toml` agent definition, reusable repo-local agent role, file meant to be linked or copied into `~/.codex/agents/`.
@@ -372,6 +391,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-19 — tools/report/ added — the timeline report script, its tests, and its fixtures are cross-tool diagnostics and belong under a dedicated reporting tool instead of lingering in root `scripts/` and `tests/`.
 - 2026-04-18 — sample/ added — curated example bundles such as Hello World need one self-contained home instead of being split across docs and methodology fixtures.
 - 2026-04-18 — docs/plans/ extended — existing PLAN files already include migration and repo-change plans, so the taxonomy must explicitly allow staged reorganization and migration plans rather than only TDD implementation plans.
 - 2026-04-15 — .codex/agents/ added — repository-local Codex custom agents need a canonical home separate from the older Claude-specific agent folder.

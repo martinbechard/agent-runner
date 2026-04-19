@@ -7,8 +7,8 @@ from pathlib import Path
 
 
 def _load_module():
-    root = Path(__file__).resolve().parents[2]
-    script_path = root / "scripts" / "run-timeline.py"
+    tool_root = Path(__file__).resolve().parents[1]
+    script_path = tool_root / "scripts" / "run-timeline.py"
     spec = importlib.util.spec_from_file_location("run_timeline", script_path)
     module = importlib.util.module_from_spec(spec)
     assert spec is not None
@@ -20,13 +20,13 @@ def _load_module():
 
 def test_detect_log_backend_codex():
     module = _load_module()
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    path = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     assert module.detect_log_backend(path) == "codex"
 
 
 def test_parse_codex_log_extracts_usage_and_activity():
     module = _load_module()
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    path = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     detail = module.parse_log(path)
     assert detail.backend == "codex"
     assert detail.input_tokens == 78640
@@ -45,7 +45,7 @@ def test_parse_codex_log_extracts_usage_and_activity():
 
 def test_render_codex_log_structured_shows_usage():
     module = _load_module()
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    path = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     detail = module.parse_log(path)
     html = module._render_log_structured(path, "popup-1", prompt_text="do the thing", detail=detail, step_duration_seconds=15)
     assert "THREAD" in html
@@ -82,7 +82,7 @@ def test_render_codex_log_structured_treats_prompt_as_part_of_turn_one(tmp_path)
 
 def test_render_detail_for_codex_uses_fresh_input_and_backend_label():
     module = _load_module()
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    path = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     detail = module.parse_log(path)
     html = module._render_detail(detail, step_id="step-1", popups=[])
     assert "CODEX" in html
@@ -91,7 +91,7 @@ def test_render_detail_for_codex_uses_fresh_input_and_backend_label():
 
 def test_parse_log_estimates_codex_cost_from_pricing_table():
     module = _load_module()
-    path = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    path = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     detail = module.parse_log(path)
     detail.model = "gpt-5.4-mini"
     detail = module._finalize_detail(detail)
@@ -140,7 +140,7 @@ def test_parse_prompt_runner_run_backfills_prompt_from_manifest_source(tmp_path)
     prompt_dir = run_dir / "logs" / "prompt-01-generator-only"
     prompt_dir.mkdir(parents=True)
 
-    fixture_log = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    fixture_log = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     stdout_log = prompt_dir / "iter-01-generator.stdout.log"
     stderr_log = prompt_dir / "iter-01-generator.stderr.log"
     stdout_log.write_text(fixture_log.read_text(encoding="utf-8"), encoding="utf-8")
@@ -179,7 +179,7 @@ def test_parse_prompt_runner_run_uses_manifest_start_for_sequential_step_timing(
     prompt1.mkdir(parents=True)
     prompt2.mkdir(parents=True)
 
-    fixture_log = Path(__file__).resolve().parents[1] / "fixtures" / "codex-json-generator.stdout.log"
+    fixture_log = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     gen1 = prompt1 / "iter-01-generator.stdout.log"
     err1 = prompt1 / "iter-01-generator.stderr.log"
     gen2 = prompt2 / "iter-01-generator.stdout.log"

@@ -190,7 +190,8 @@ After all variants complete, the parent generates a comparison summary:
 - Output diff (structural comparison of the final workspace artifacts)
 - Which variant's judge passed/failed and at which prompt
 
-This could integrate with the timeline report (`scripts/run-timeline.py`)
+This could integrate with the timeline report
+(`tools/report/scripts/run-timeline.py`)
 to produce a side-by-side view.
 
 ## 3. Applying variants to the audit improvement
@@ -253,7 +254,7 @@ Variant B wins if:
 
 ### 3.5 Timeline report integration
 
-After running both variants, use `scripts/run-timeline.py` on each
+After running both variants, use `tools/report/scripts/run-timeline.py` on each
 variant's workspace to produce side-by-side timing breakdowns. The
 comparison should make the cost/quality tradeoff visible.
 

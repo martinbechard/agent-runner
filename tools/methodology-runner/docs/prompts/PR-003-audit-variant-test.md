@@ -17,7 +17,7 @@ The workspace must already contain:
 Prompt 1 reads and validates both files exist. Prompt 2 forks into two
 variants that each audit the inventory using a different approach.
 After both variants complete, compare their results via
-`scripts/run-timeline.py` and the fork's `comparison.txt`.
+`tools/report/scripts/run-timeline.py` and the fork's `comparison.txt`.
 
 ---
 
@@ -274,4 +274,3 @@ VERDICT: pass
 VERDICT: revise
 VERDICT: escalate
 ```
-

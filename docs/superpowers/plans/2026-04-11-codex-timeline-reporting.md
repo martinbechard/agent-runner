@@ -21,7 +21,8 @@ without regressing existing Claude reports.
 
 ## Current state
 
-The current report generator is [`scripts/run-timeline.py`](../../../scripts/run-timeline.py).
+The current report generator is
+[`tools/report/scripts/run-timeline.py`](../../../tools/report/scripts/run-timeline.py).
 It has two layers:
 
 1. A mostly reusable data/rendering layer:
@@ -101,7 +102,7 @@ and may need to modify `prompt-runner`.
 
 To avoid conflict:
 
-- keep the first changes isolated to `scripts/run-timeline.py`
+- keep the first changes isolated to `tools/report/scripts/run-timeline.py`
 - make the logging change in `.prompt-runner/src/cli/prompt_runner/codex_client.py` as narrow
   as possible
 - avoid broader prompt-runner refactors until the Codex event shape is known
@@ -114,7 +115,7 @@ Claude reporting must continue to work unchanged.
 
 ### A. Split parser from renderer
 
-Refactor `scripts/run-timeline.py` into three logical parts:
+Refactor `tools/report/scripts/run-timeline.py` into three logical parts:
 
 1. backend-neutral report model
 2. backend-specific log parsers
@@ -185,7 +186,7 @@ Exit criteria:
 
 Scope:
 
-- `scripts/run-timeline.py` only
+- `tools/report/scripts/run-timeline.py` only
 
 Tasks:
 
@@ -203,7 +204,7 @@ Exit criteria:
 
 Scope:
 
-- `scripts/run-timeline.py`
+- `tools/report/scripts/run-timeline.py`
 - Codex fixtures/tests
 
 Tasks:
@@ -226,7 +227,7 @@ Exit criteria:
 
 Scope:
 
-- `scripts/run-timeline.py`
+- `tools/report/scripts/run-timeline.py`
 - pricing helper module if needed
 
 Tasks:
@@ -262,7 +263,7 @@ Exit criteria:
 
 ### Phase 2-4 likely files
 
-- `scripts/run-timeline.py`
+- `tools/report/scripts/run-timeline.py`
 - possibly a small helper module for pricing/backend detection
 
 ## Risks

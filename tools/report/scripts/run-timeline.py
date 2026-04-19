@@ -10,7 +10,7 @@ Parses JSONL logs to show:
 - Fork comparison tables with delta rows when variants are present
 
 Usage:
-    python scripts/run-timeline.py <path> [--output report.html]
+    python tools/report/scripts/run-timeline.py <path> [--output report.html]
 
 The path can be:
   - A methodology-runner workspace (contains .methodology-runner/runs/)
@@ -34,7 +34,8 @@ from functools import lru_cache
 
 POPUP_TRUNCATE_CHARS = 20_000_000  # 20 MB
 MIN_BAR_PCT = 0.5
-PRICING_FILE = Path(__file__).resolve().parents[1] / "docs" / "reference" / "openai-model-pricing.json"
+REPO_ROOT = Path(__file__).resolve().parents[3]
+PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
 
 
 # ---------------------------------------------------------------------------

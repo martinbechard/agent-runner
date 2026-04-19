@@ -434,7 +434,7 @@ methodology run.
 
 ### Step 5: Generate the run timeline
 
-- **SCRIPT: SCRIPT-1** `scripts/run-timeline.py`
+- **SCRIPT: SCRIPT-1** `tools/report/scripts/run-timeline.py`
   - **SYNOPSIS:** Generates `timeline.html` from the current methodology
     worktree whenever the worktree exists.
   - **CHAIN-OF-THOUGHT:** The summary is compact but not enough for
