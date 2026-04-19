@@ -4,7 +4,8 @@ Defines all dataclasses and enums shared across the methodology-runner
 system.  No dependencies on other methodology-runner modules; imports
 from the standard library only.
 
-See .methodology/docs/design/components/CD-002-methodology-runner.md section 10.1.
+See tools/methodology-runner/docs/design/components/CD-002-methodology-runner.md
+section 10.1.
 """
 from __future__ import annotations
 
@@ -656,4 +657,3 @@ class ProjectState:
         """Read project state from a JSON file at *path*."""
         raw = json.loads(path.read_text(encoding="utf-8"))
         return cls.from_dict(raw)
-

@@ -55,14 +55,14 @@ _OUTPUT_PHASE_6 = "docs/implementation/implementation-workflow.md"
 _OUTPUT_PHASE_6_REPORT = "docs/implementation/implementation-run-report.yaml"
 _OUTPUT_PHASE_7 = "docs/verification/verification-report.yaml"
 
-_PROMPT_PHASE_0 = "tools/methodology-runner/docs/prompts/PR-025-ph000-requirements-inventory.md"
-_PROMPT_PHASE_1 = "tools/methodology-runner/docs/prompts/PR-023-ph001-feature-specification.md"
-_PROMPT_PHASE_2 = "tools/methodology-runner/docs/prompts/PR-024-ph002-architecture.md"
-_PROMPT_PHASE_3 = "tools/methodology-runner/docs/prompts/PR-026-ph003-solution-design.md"
-_PROMPT_PHASE_4 = "tools/methodology-runner/docs/prompts/PR-027-ph004-interface-contracts.md"
-_PROMPT_PHASE_5 = "tools/methodology-runner/docs/prompts/PR-028-ph005-intelligent-simulations.md"
-_PROMPT_PHASE_6 = "tools/methodology-runner/docs/prompts/PR-029-ph006-incremental-implementation.md"
-_PROMPT_PHASE_7 = "tools/methodology-runner/docs/prompts/PR-030-ph007-verification-sweep.md"
+_PROMPT_PHASE_0 = "prompts/PR-025-ph000-requirements-inventory.md"
+_PROMPT_PHASE_1 = "prompts/PR-023-ph001-feature-specification.md"
+_PROMPT_PHASE_2 = "prompts/PR-024-ph002-architecture.md"
+_PROMPT_PHASE_3 = "prompts/PR-026-ph003-solution-design.md"
+_PROMPT_PHASE_4 = "prompts/PR-027-ph004-interface-contracts.md"
+_PROMPT_PHASE_5 = "prompts/PR-028-ph005-intelligent-simulations.md"
+_PROMPT_PHASE_6 = "prompts/PR-029-ph006-incremental-implementation.md"
+_PROMPT_PHASE_7 = "prompts/PR-030-ph007-verification-sweep.md"
 
 
 def _tpl(relative_path: str) -> str:

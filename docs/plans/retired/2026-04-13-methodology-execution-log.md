@@ -54,7 +54,7 @@ happened, what state each run reached, and what comes next.
 
 3. Ran the first tiny baseline on the original hello-world request.
    - Request:
-     - `docs/requests/hello-world-python-app.md`
+     - `sample/hello-world/requests/hello-world-python-app.md`
    - Result:
      - real methodology execution reached `PH-000`
      - the run failed for a real content reason, not an infrastructure

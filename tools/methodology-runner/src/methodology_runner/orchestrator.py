@@ -4,7 +4,8 @@ Sequences the methodology phases, manages the workspace and git,
 invokes prompt-runner with the checked-in phase prompt modules, runs
 cross-reference verification, and handles escalation and resumption.
 
-See .methodology/docs/design/components/CD-002-methodology-runner.md Sections 5-9.
+See tools/methodology-runner/docs/design/components/CD-002-methodology-runner.md
+Sections 5-9.
 
 Public API
 ----------
@@ -625,17 +626,23 @@ def _phase_run_dir(workspace: Path, phase_config: PhaseConfig) -> Path:
 
 
 def _resolve_phase_prompt_module_path(phase_config: PhaseConfig) -> Path:
-    """Return the checked-in prompt module path for a phase."""
+    """Return the bundled prompt module path for a phase."""
     if not phase_config.prompt_module_path:
         raise RuntimeError(
             f"No prompt module is registered for {phase_config.phase_id}"
         )
-    path = Path(phase_config.prompt_module_path).resolve()
-    if not path.exists():
-        raise RuntimeError(
-            f"Prompt module for {phase_config.phase_id} does not exist: {path}"
-        )
-    return path
+    raw_path = Path(phase_config.prompt_module_path)
+    candidates = [
+        raw_path.resolve(),
+        (Path(__file__).resolve().parent / raw_path).resolve(),
+    ]
+    for path in candidates:
+        if path.exists():
+            return path
+    raise RuntimeError(
+        f"Prompt module for {phase_config.phase_id} does not exist. "
+        f"Tried: {', '.join(str(path) for path in candidates)}"
+    )
 
 
 def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
@@ -646,12 +653,7 @@ def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
             f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}"
         )
     if phase_config.phase_id == "PH-006-incremental-implementation":
-        repo_root = Path(__file__).resolve().parents[4]
-        prompt_runner_pythonpath = repo_root / "tools" / "prompt-runner" / "src"
-        values["prompt_runner_command"] = (
-            f'PYTHONPATH="{prompt_runner_pythonpath}" '
-            f'"{sys.executable}" -m prompt_runner'
-        )
+        values["prompt_runner_command"] = "prompt-runner"
     return values
 
 

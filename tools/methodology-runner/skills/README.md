@@ -11,7 +11,7 @@ All active methodology skills live here, covering the methodology phases with a 
 ## Discovery
 
 methodology-runner discovers skills by walking
-`<cwd>/.methodology/skills/**/SKILL.md`. Run methodology-runner from the
+`<cwd>/tools/methodology-runner/skills/**/SKILL.md`. Run methodology-runner from the
 repo root and these skills are picked up automatically.
 
 ## Quick start
@@ -24,7 +24,7 @@ methodology-runner run \
   --workspace /tmp/test-release-smoke
 ```
 
-This uses repo-local discovery from `./.methodology/skills/`. No symlinks or extra install step are required while developing in this repo.
+This uses repo-local discovery from `./tools/methodology-runner/skills/`. No symlinks or extra install step are required while developing in this repo.
 
 ## Active skill list
 
@@ -37,7 +37,7 @@ This uses repo-local discovery from `./.methodology/skills/`. No symlinks or ext
 ## Structure
 
 ```
-.methodology/skills/
+tools/methodology-runner/skills/
   README.md
   AUTHORING-CONTEXT.md
   authoring-prelude.txt

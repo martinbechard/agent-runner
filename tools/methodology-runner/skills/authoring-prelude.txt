@@ -1,4 +1,4 @@
-Read `.methodology/skills/AUTHORING-CONTEXT.md` first.
+Read `tools/methodology-runner/skills/AUTHORING-CONTEXT.md` first.
 It has before/after examples for each lesson. Key patterns:
 
 - Hybrid structure (procedure + transforms) > either alone
@@ -52,4 +52,3 @@ Use --project-dir for workspace paths:
 NEVER run two methodology-runner instances on the same workspace.
 
 ---
-

@@ -12,7 +12,8 @@ Exit codes (CD-002 Section 10.6):
     1  Pipeline halted due to escalation or phase failure.
     2  Usage error (missing file, bad arguments, missing dependency).
 
-See .methodology/docs/design/components/CD-002-methodology-runner.md Section 10.6.
+See tools/methodology-runner/docs/design/components/CD-002-methodology-runner.md
+Section 10.6.
 """
 from __future__ import annotations
 
@@ -206,7 +207,7 @@ def cmd_run(args: argparse.Namespace) -> int:
     except ImportError as exc:
         _print_error(
             f"Could not import methodology-runner orchestrator: {exc}\n"
-            "Make sure prompt-runner is installed: pip install -e .[dev]"
+            "Make sure prompt-runner is installed: pip install -e tools/prompt-runner"
         )
         return EXIT_USAGE_ERROR
 
@@ -409,7 +410,7 @@ def cmd_resume(args: argparse.Namespace) -> int:
     except ImportError as exc:
         _print_error(
             f"Could not import methodology-runner orchestrator: {exc}\n"
-            "Make sure prompt-runner is installed: pip install -e .[dev]"
+            "Make sure prompt-runner is installed: pip install -e tools/prompt-runner"
         )
         return EXIT_USAGE_ERROR
 

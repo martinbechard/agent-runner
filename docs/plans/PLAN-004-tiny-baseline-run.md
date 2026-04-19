@@ -25,7 +25,7 @@ of the methodology workflow can continue.
 
 ## Fixed Inputs
 
-- **INPUT:** `docs/requests/hello-world-python-app.md`
+- **INPUT:** `sample/hello-world/requests/hello-world-python-app.md`
   - **CHAIN-OF-THOUGHT:** The point of this run is to test workflow
     mechanics cheaply. A tiny request gives real methodology behavior
     without the cost and ambiguity of the web-app request.

@@ -6,7 +6,7 @@ repo_root="$(cd "$script_dir/../../.." && pwd)"
 cd "$repo_root"
 
 prompt_file="${PROMPT_FILE:-tools/methodology-runner/docs/prompts/PR-024-ph002-architecture.md}"
-project_dir="${PROJECT_DIR:-tools/methodology-runner/fixtures/ph002-hello-world-workspace}"
+project_dir="${PROJECT_DIR:-sample/hello-world/fixtures/ph002-hello-world-workspace}"
 run_dir="${RUN_DIR:-work/ph002-architecture-run}"
 export PYTHONPATH="tools/prompt-runner/src${PYTHONPATH:+:$PYTHONPATH}"
 prompt_runner=(python -m prompt_runner)

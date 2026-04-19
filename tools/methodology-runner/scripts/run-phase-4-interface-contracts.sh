@@ -6,7 +6,7 @@ repo_root="$(cd "$script_dir/../../.." && pwd)"
 cd "$repo_root"
 
 prompt_file="${PROMPT_FILE:-tools/methodology-runner/docs/prompts/PR-027-ph004-interface-contracts.md}"
-project_dir="${PROJECT_DIR:-tools/methodology-runner/fixtures/ph004-hello-world-workspace}"
+project_dir="${PROJECT_DIR:-sample/hello-world/fixtures/ph004-hello-world-workspace}"
 run_dir="${RUN_DIR:-work/ph004-interface-contracts-run}"
 export PYTHONPATH="tools/prompt-runner/src${PYTHONPATH:+:$PYTHONPATH}"
 prompt_runner=(python -m prompt_runner)

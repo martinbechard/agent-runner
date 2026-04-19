@@ -19,19 +19,76 @@
 
 ## Top-Level Folder Principles
 
-- **Project files** live in the normal project tree such as `docs/`, `src/`,
-  `tests/`, and other product-facing paths.
-- **Prompt-runner files** live under `.prompt-runner/`.
-- **Methodology files** live under `.methodology/`.
+- **Repo-level files** live in the repository root and shared top-level areas
+  such as `docs/`, `scripts/`, and `tests/` when they describe or exercise the
+  repository itself rather than the built project.
+- **Project files** live under `project/` when they are the actual promoted
+  implementation, tests, docs, or support scripts produced by the tools.
+- **Prompt-runner files** live under `tools/prompt-runner/`.
+- **Methodology files** live under `tools/methodology-runner/`.
+- **Sample files** live under `sample/`.
 - **Rule:** When a file exists only to support prompt-runner execution, keep it
-  under `.prompt-runner/` rather than mixing it with project files.
+  under `tools/prompt-runner/` rather than mixing it with project files.
 - **Rule:** When a file exists only to support methodology-runner execution,
-  keep it under `.methodology/` rather than mixing it with project
+  keep it under `tools/methodology-runner/` rather than mixing it with project
   files.
-- **Rule:** Project outputs produced by a phase stay in the project tree unless
-  the file is runner-owned state or tooling support data.
+- **Rule:** When a file is a curated example bundle or runnable repository
+  sample, keep it under `sample/` so the request, fixtures, and helper assets
+  stay together.
+- **Rule:** Project outputs produced by a phase stay under `project/` once they
+  are promoted into the canonical implementation tree, unless the file is
+  runner-owned state or tooling support data.
 
 ## Categories
+
+### project/README.md
+- **Purpose:** Human-facing guide for the canonical implementation tree that the
+  methodology eventually produces or promotes into.
+- **Signals:** promotion target overview, "this is where the real built project
+  lives", implementation-tree orientation, explanation of `project/src`,
+  `project/tests`, `project/docs`, or `project/scripts`.
+- **Filename pattern:** `README.md`.
+- **Example:** `project/README.md`
+
+### project/src/
+- **Purpose:** Canonical source tree for the built project. Use this path when
+  the file is real implementation code rather than tool code, sample material,
+  or repo-level support code.
+- **Signals:** application modules, product runtime code, implementation output
+  promoted from methodology runs, code imported by the built project itself.
+- **Filename pattern:** use the language-appropriate conventions for the
+  project being built.
+- **Tests location:** `project/tests/` — mirror path when the project language
+  supports mirrored tests.
+
+### project/tests/
+- **Purpose:** Canonical test tree for the built project. Use this path when
+  the file verifies the promoted implementation rather than the tools
+  themselves.
+- **Signals:** project unit tests, integration tests for promoted code, tests
+  that run against `project/src/`, delivered verification code for the built
+  system.
+- **Filename pattern:** use the language-appropriate project test convention.
+- **Mirrors:** `project/src/`
+
+### project/docs/
+- **Purpose:** Canonical project-specific documentation for the promoted
+  implementation, distinct from repo-level documentation in the root `docs/`
+  tree.
+- **Signals:** built-project README companions, app usage docs, product-facing
+  documentation, operational docs for the promoted project rather than for the
+  tools or the repository itself.
+- **Filename pattern:** descriptive markdown or other doc filenames matching the
+  built project's conventions.
+
+### project/scripts/
+- **Purpose:** Canonical support scripts for the promoted project. Use this path
+  when a script exists to run, build, verify, or maintain the built project
+  rather than the repository tooling.
+- **Signals:** project-local helper scripts, run/build/test wrappers for the
+  promoted implementation, app maintenance scripts.
+- **Filename pattern:** `snake_case.py` for Python or `kebab-case.sh` for shell,
+  following the built project's language conventions.
 
 ### docs/requirements/functional/
 - **Purpose:** What the system must do, from a user's point of view.
@@ -57,85 +114,104 @@
 - **Filename pattern:** `CD-NNN-<slug>.md` for canonical markdown component designs; `CD-NNN-<slug>.yaml` for explicit YAML structured-design companions when the task specifically calls for the same component design in YAML form.
 - **Example:** `CD-001-cli-runner.md`
 
-### .prompt-runner/docs/design/components/
+### tools/prompt-runner/
+- **Purpose:** Package root for the prompt-runner tool itself. Use this path for tool-level packaging files such as `pyproject.toml`, the tool README, and other root files that define how prompt-runner is installed and presented as a product.
+- **Signals:** prompt-runner package metadata, prompt-runner distribution root, tool-level install instructions, console entry point definition, prompt-runner product README.
+- **Filename pattern:** fixed tool-root filenames such as `pyproject.toml` and `README.md`.
+- **Example:** `tools/prompt-runner/pyproject.toml`
+
+### tools/prompt-runner/docs/design/components/
 - **Purpose:** Canonical design documents for prompt-runner itself. Use this mirrored design path when a component design belongs to prompt-runner rather than to the main project tree or to methodology-runner.
 - **Signals:** prompt-runner parser model, prompt-runner runtime contract, prompt-runner agent model, prompt-runner CLI execution design, design authority for prompt-runner internals rather than for the main project or the methodology layer.
 - **Filename pattern:** preserve the existing component-design filename such as `CD-NNN-<slug>.md`.
-- **Example:** `.prompt-runner/docs/design/components/CD-001-prompt-runner.md`
+- **Example:** `tools/prompt-runner/docs/design/components/CD-001-prompt-runner.md`
 
-### .prompt-runner/README.md
+### tools/prompt-runner/README.md
 - **Purpose:** Human- and agent-facing guide for prompt-runner itself. Use this path for prompt-runner-specific usage, authoring, and file-format guidance that belongs to prompt-runner rather than to the main project or to methodology-runner.
 - **Signals:** "prompt-runner input format", authoring guide for prompt modules, prompt-runner usage notes, prompt-runner-specific examples, references for prompt-runner users.
 - **Filename pattern:** `README.md`.
-- **Example:** `.prompt-runner/README.md`
+- **Example:** `tools/prompt-runner/README.md`
 
-### .prompt-runner/docs/testing/
+### tools/prompt-runner/docs/testing/
 - **Purpose:** Acceptance criteria and verification specs for prompt-runner itself.
 - **Signals:** prompt-runner implementation acceptance criteria, verification targets for prompt-runner behavior, checks tied to prompt-runner design docs.
 - **Filename pattern:** preserve the existing acceptance-criteria filename such as `AC-NNN-<slug>.md`.
-- **Example:** `.prompt-runner/docs/testing/AC-001-prompt-runner.md`
+- **Example:** `tools/prompt-runner/docs/testing/AC-001-prompt-runner.md`
 
-### .prompt-runner/docs/plans/
+### tools/prompt-runner/docs/plans/
 - **Purpose:** Prompt-runner-specific implementation plans and historical planning artifacts. Use this mirrored plan path when the plan belongs to prompt-runner rather than to the main project or to methodology-runner.
 - **Signals:** prompt-runner implementation plan, prompt-runner historical plan, prompt-runner-specific task breakdown, retired prompt-runner plan.
 - **Filename pattern:** preserve the existing plan filename under the matching subpath, such as `PLAN-NNN-<slug>.md` or dated retired plan names.
-- **Example:** `.prompt-runner/docs/plans/retired/PLAN-001-prompt-runner.md`
+- **Example:** `tools/prompt-runner/docs/plans/retired/PLAN-001-prompt-runner.md`
 
-### .prompt-runner/src/cli/
+### tools/prompt-runner/src/
 - **Purpose:** Prompt-runner Python source code. Use this mirrored source path when the code belongs to prompt-runner rather than to the main project tree or to methodology-runner.
 - **Signals:** prompt-runner CLI entry point, parser, runner loop, agent clients, prompt-runner config, prompt-runner package code imported as `prompt_runner`.
 - **Filename pattern:** `snake_case.py` for modules and fixed Python package files such as `__init__.py` and `__main__.py`.
-- **Tests location:** `.prompt-runner/tests/cli/` — mirror path, `test_<module>.py`.
-- **Example:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+- **Tests location:** `tools/prompt-runner/tests/` — mirror path, `test_<module>.py`.
+- **Example:** `tools/prompt-runner/src/prompt_runner/runner.py`
 
-### .prompt-runner/tests/cli/
+### tools/prompt-runner/tests/
 - **Purpose:** Prompt-runner Python tests and fixtures. Use this mirrored test path when the tests exercise prompt-runner code rather than the main project tree or methodology-runner.
 - **Signals:** prompt-runner parser tests, runner tests, prompt-runner CLI tests, fixtures imported only by prompt-runner tests.
 - **Filename pattern:** `test_<module>.py`; fixtures keep descriptive filenames in subfolders such as `fixtures/`.
-- **Mirrors:** `.prompt-runner/src/cli/`
+- **Mirrors:** `tools/prompt-runner/src/`
 
-### .methodology/docs/design/high-level/
+### tools/methodology-runner/
+- **Purpose:** Package root for the methodology-runner tool itself. Use this path for tool-level packaging files such as `pyproject.toml`, the tool README, and other root files that define how methodology-runner is installed and presented as a product.
+- **Signals:** methodology-runner package metadata, methodology-runner distribution root, tool-level install instructions, console entry point definition, methodology-runner product README.
+- **Filename pattern:** fixed tool-root filenames such as `pyproject.toml` and `README.md`.
+- **Example:** `tools/methodology-runner/pyproject.toml`
+
+### tools/methodology-runner/docs/design/high-level/
 - **Purpose:** High-level design documents for the methodology layer itself. Use this mirrored design path when the document describes methodology-wide structure, workflow, or execution architecture rather than the main project or prompt-runner.
 - **Signals:** methodology-wide architecture, methodology workflow, phase-to-phase flow, optimization workflow, execution architecture for the methodology layer.
 - **Filename pattern:** preserve the existing high-level-design filename such as `HLD-NNN-<slug>.md`.
-- **Example:** `.methodology/docs/design/high-level/HLD-002-methodology-execution-architecture.md`
+- **Example:** `tools/methodology-runner/docs/design/high-level/HLD-002-methodology-execution-architecture.md`
 
-### .methodology/docs/design/components/
+### tools/methodology-runner/docs/design/components/
 - **Purpose:** Canonical component designs for methodology-runner and phase-specific methodology components. Use this mirrored design path when the document describes methodology-runner internals, a methodology support component, or a phase design.
 - **Signals:** methodology-runner component internals, phase design authority, methodology supervision design, standalone phase harness design, per-phase methodology component design.
 - **Filename pattern:** preserve the existing component-design filename such as `CD-NNN-<slug>.md`.
-- **Example:** `.methodology/docs/design/components/CD-009-ph000-requirements-inventory-design.md`
+- **Example:** `tools/methodology-runner/docs/design/components/CD-009-ph000-requirements-inventory-design.md`
 
-### .methodology/docs/prompts/
+### tools/methodology-runner/docs/prompts/
 - **Purpose:** Canonical prompt modules and related prompt-runner input files owned by the methodology layer. Use this mirrored prompt path when the prompt exists to run a methodology phase, methodology workflow, or methodology experiment rather than to document prompt-runner itself.
 - **Signals:** phase prompt module, methodology workflow prompt, hello-world methodology prompt, integration-agent prompt for methodology phases, methodology prompt README, retired methodology prompt.
 - **Filename pattern:** preserve the existing prompt filename such as `PR-NNN-<slug>.md`, `integration-agent-PH-NNN-<slug>.md`, or `README.md`.
-- **Example:** `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`
+- **Example:** `tools/methodology-runner/docs/prompts/PR-025-ph000-requirements-inventory.md`
 
-### .methodology/src/cli/
+### tools/methodology-runner/src/
 - **Purpose:** Methodology-runner Python source code. Use this mirrored source path when the code belongs to methodology-runner rather than to the main project tree or to prompt-runner.
 - **Signals:** methodology-runner CLI entry point, orchestrator, phase registry, prompt-module selection, skill discovery, cross-reference logic, package code imported as `methodology_runner`.
 - **Filename pattern:** `snake_case.py` for modules and fixed Python package files such as `__init__.py` and `__main__.py`.
-- **Tests location:** `.methodology/tests/cli/` — mirror path, `test_<module>.py`.
-- **Example:** `.methodology/.methodology/src/cli/methodology_runner/orchestrator.py`
+- **Tests location:** `tools/methodology-runner/tests/` — mirror path, `test_<module>.py`.
+- **Example:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
 
-### .methodology/tests/cli/
+### tools/methodology-runner/src/methodology_runner/prompts/
+- **Purpose:** Packaged runtime copies of methodology phase prompt modules. Use this path when a prompt must ship inside the installed `methodology_runner` package so the CLI can resolve it outside the source checkout.
+- **Signals:** bundled phase prompt resources, packaged `PR-NNN-*.md` files, runtime prompt corpus for installed methodology-runner.
+- **Filename pattern:** preserve the existing methodology prompt filename such as `PR-NNN-<slug>.md`.
+- **Tests location:** `tools/methodology-runner/tests/` — add resource-consistency checks there when needed.
+- **Example:** `tools/methodology-runner/src/methodology_runner/prompts/PR-025-ph000-requirements-inventory.md`
+
+### tools/methodology-runner/tests/
 - **Purpose:** Methodology-runner Python tests. Use this mirrored test path when the tests exercise methodology-runner code rather than the main project tree or prompt-runner.
 - **Signals:** methodology-runner CLI tests, orchestrator tests, phase tests, skill catalog tests, cross-reference tests, imports from `methodology_runner`.
 - **Filename pattern:** `test_<module>.py`.
-- **Mirrors:** `.methodology/src/cli/`
+- **Mirrors:** `tools/methodology-runner/src/`
 
-### .methodology/skills/
+### tools/methodology-runner/skills/
 - **Purpose:** Methodology-owned skill-pack files that support methodology-runner execution and skill authoring. Use this path for methodology skill pack overview files and shared authoring guidance that belong to the methodology layer rather than to a generic plugin package.
 - **Signals:** methodology skill pack README, methodology skill authoring context, methodology skill authoring prelude, shared guidance for the methodology skill set.
 - **Filename pattern:** fixed support filenames such as `README.md`, `AUTHORING-CONTEXT.md`, or `authoring-prelude.txt`.
-- **Example:** `.methodology/skills/README.md`
+- **Example:** `tools/methodology-runner/skills/README.md`
 
-### .methodology/skills/<skill-name>/
+### tools/methodology-runner/skills/<skill-name>/
 - **Purpose:** Canonical methodology skill definitions used by methodology-runner. Each skill lives in its own directory with a `SKILL.md` file and belongs to the methodology layer rather than to a repo-local plugin wrapper.
 - **Signals:** methodology skill definition, `SKILL.md`, phase-local or shared methodology discipline, skill loaded by methodology-runner, audience is methodology generator or judge agents.
-- **Filename pattern:** `SKILL.md` inside `.methodology/skills/<skill-name>/`.
-- **Example:** `.methodology/skills/traceability-discipline/SKILL.md`
+- **Filename pattern:** `SKILL.md` inside `tools/methodology-runner/skills/<skill-name>/`.
+- **Example:** `tools/methodology-runner/skills/traceability-discipline/SKILL.md`
 
 ### .codex/agents/
 - **Purpose:** Repository-local Codex custom agent definitions. Use this path for TOML agent files that define reusable Codex agents for this repository and are meant to be registered into the user's Codex agent directory.
@@ -193,9 +269,15 @@
 
 ### tests/fixtures/
 - **Purpose:** Static input files used by interactive or automated methodology-runner sessions during skill authoring and verification. These are not unit-test source files and do not mirror any `src/` module; they are realistic-but-minimal data files consumed as `--input` or equivalent arguments to CLI tools under development.
-- **Signals:** "test fixture", "used by methodology-runner run", "skill-authoring session", "tiny requirements", "sample input", not a `def test_` file, not a `describe(` block, referenced from a `.methodology/docs/prompts/PR-NNN-*.md` file as the concrete input to a runner session.
+- **Signals:** "test fixture", "used by methodology-runner run", "skill-authoring session", "tiny requirements", "sample input", not a `def test_` file, not a `describe(` block, referenced from a `tools/methodology-runner/docs/prompts/PR-NNN-*.md` file as the concrete input to a runner session.
 - **Filename pattern:** `<topic-slug>.<ext>` in kebab-case, where ext matches the fixture format (e.g. `tiny-requirements.md`, `sample-config.yaml`).
 - **Tests location:** n/a — these files are themselves fixtures, not code under test.
+
+### sample/
+- **Purpose:** Curated example bundles that demonstrate a coherent repository workflow or runnable scenario. Keep the example request, example fixtures, and any other sample-specific assets together under one sample subtree instead of scattering them across project docs and tool-owned folders.
+- **Signals:** "hello world example", "demo workspace", "tutorial sample", "reference scenario", example-only request plus matching phase workspaces, assets retained so humans and agents can inspect or run one consistent example end to end.
+- **Filename pattern:** use `sample/<sample-slug>/...`; beneath that sample root, preserve stable descriptive names such as `requests/hello-world-python-app.md` or `fixtures/ph000-hello-world-workspace/`.
+- **Tests location:** n/a — sample bundles are curated reference assets, not test source files.
 
 ### tests/cli/
 - **Purpose:** Python unit tests mirroring `src/cli/`.
@@ -215,16 +297,16 @@
 - **Filename pattern:** `<module>.test.tsx`
 - **Mirrors:** `src/web/`
 
-### .methodology/docs/
+### tools/methodology-runner/docs/
 - **Purpose:** Canonical reference specifications for the AI-driven software development methodology. This is the standing corpus that methodology-runner and related AI pipeline agents consult when executing the methodology on real projects. These documents define phases, agent roles, data models, and control flow for the methodology itself, not for any specific codebase that uses it.
 - **Signals:** "AI-Driven Development Pipeline", "Phase Processing Unit", "agent role", "checklist extractor", "judge", "orchestrator", "simulation framework", "traceability infrastructure", "phase sequencing", YAML spec of pipeline phases or agent system prompts, audience is AI agents not human developers of a specific tool, not a design of agent-runner components.
 - **Filename pattern:** `M-NNN-<slug>.md` or fixed supporting filenames such as `skills-baselines.yaml`.
-- **Example:** `.methodology/docs/M-001-phase-processing-unit-schema.md`
+- **Example:** `tools/methodology-runner/docs/M-001-phase-processing-unit-schema.md`
 
-### .prompt-runner/runs/<run-id>/
-- **Purpose:** Generated, run-scoped prompt-runner artifacts produced during one execution of a prompt sequence. This directory holds per-run YAML or markdown outputs such as inventories, traceability maps, correction files, checklists, and similar intermediate or final artifacts tied to a single run ID.
-- **Signals:** `.prompt-runner/runs/`, timestamped run directory, "requirements-inventory", "traceability", "checklist", "corrections", phase output consumed by a later step in the same run, generated artifact that should remain attached to one concrete prompt-runner execution rather than promoted into `docs/`.
-- **Filename pattern:** descriptive fixed-name artifacts in kebab-case with `.yaml` or `.md` extensions as required by the run protocol (for example `requirements-inventory.yaml`, `requirements-inventory-traceability.yaml`, `requirements-inventory-checklist.yaml`).
+### .run-files/
+- **Purpose:** Generated, run-scoped prompt-runner and methodology-runner artifacts produced inside a concrete worktree execution. This directory holds logs, prompt histories, summaries, and other runner-owned forensic data that should stay attached to that one run rather than being promoted into the canonical project tree.
+- **Signals:** `.run-files/`, module-scoped runner output, execution logs, prompt history, runner summary, per-run bookkeeping, generated forensic evidence for one concrete run.
+- **Filename pattern:** preserve runner-owned filenames and subdirectories such as `summary.txt`, `module.log`, `history/`, or tool-specific subdirectories like `.run-files/methodology-runner/`.
 - **Tests location:** n/a — run artifacts are generated outputs, not source files under direct test.
 
 ### docs/superpowers/plans/
@@ -290,6 +372,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-18 — sample/ added — curated example bundles such as Hello World need one self-contained home instead of being split across docs and methodology fixtures.
 - 2026-04-18 — docs/plans/ extended — existing PLAN files already include migration and repo-change plans, so the taxonomy must explicitly allow staged reorganization and migration plans rather than only TDD implementation plans.
 - 2026-04-15 — .codex/agents/ added — repository-local Codex custom agents need a canonical home separate from the older Claude-specific agent folder.
 - 2026-04-18 — .archive/ broadened — archived historical directories such as generated workflow-run trees may also move into mirrored paths under `.archive/`.

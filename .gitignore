@@ -15,9 +15,6 @@ build/
 runs/
 .prompt-runner/
 
-# Generated documentation workspace
-project/
-
 # Local tool and scratch state
 .codex/
 tmp/

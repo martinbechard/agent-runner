@@ -5,7 +5,7 @@ script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 repo_root="$(cd "$script_dir/../../.." && pwd)"
 cd "$repo_root"
 
-seed_workspace="${SEED_WORKSPACE:-tools/methodology-runner/fixtures/ph000-hello-world-workspace}"
+seed_workspace="${SEED_WORKSPACE:-sample/hello-world/fixtures/ph000-hello-world-workspace}"
 workspace="${WORKSPACE:-work/full-pipeline-workspace}"
 runs_root="${RUNS_ROOT:-work/full-pipeline-runs}"
 
