@@ -15,7 +15,8 @@ It owns:
 
 It does **not** synthesize phase prompt files at run time. The canonical prompt
 contracts live as checked-in prompt modules under
-`.methodology/docs/prompts/`, and each `PhaseConfig` points to the module it
+`tools/methodology-runner/src/methodology_runner/prompts/`, and each
+`PhaseConfig` points to the module it
 uses.
 
 ## 2. Scope
@@ -26,7 +27,7 @@ uses.
 - Running either all phases or a caller-selected subset
 - Initializing and locking a shared workspace
 - Persisting run state in `.methodology-runner/state.json`
-- Writing phase-local execution artifacts under `.methodology-runner/runs/`
+- Writing runner-owned execution artifacts under `.run-files/`
 - Invoking prompt-runner with checked-in prompt modules, validators, runtime
   guidance, and placeholder values
 - Running phase and end-to-end cross-reference verification
@@ -41,7 +42,7 @@ uses.
 
 ## 3. Components
 
-Source code lives under `.methodology/src/cli/methodology_runner/`. The active
+Source code lives under `tools/methodology-runner/src/methodology_runner/`. The active
 component set is:
 
 - `models.py`
@@ -88,23 +89,27 @@ A methodology run uses one shared workspace for all phases:
     design/solution-design.yaml
     design/interface-contracts.yaml
     simulations/simulation-definitions.yaml
-    implementation/implementation-plan.yaml
+    implementation/implementation-workflow.md
+    implementation/implementation-run-report.yaml
     verification/verification-report.yaml
   .methodology-runner/
     state.json
-    summary.txt
     run.lock
-    runs/
-      phase-0/
+  .run-files/
+    methodology-runner/
+      summary.txt
+    PH-000-requirements-inventory/
         cross-ref-result.json
         retry-guidance-1.txt
-        prompt-runner-output-phase-0/
-      ...
+    requirements-inventory/
+      history/
+      module.log
+    ...
 ```
 
-The prompt module itself stays checked in under `.methodology/docs/prompts/`
-and is referenced from state; it is not copied into `runs/phase-N/` as a new
-run-local prompt copy.
+The prompt module itself stays checked in under
+`tools/methodology-runner/src/methodology_runner/prompts/` and is referenced
+from state; it is not copied into a run-local prompt tree.
 
 ## 6. Retry Model
 
@@ -125,10 +130,22 @@ than restarting from a cleaned workspace.
 - The checked-in prompt modules are the canonical phase prompt source.
 - `PhaseConfig.prompt_module_path` must be populated for every runnable phase.
 - When a phase knows specific upstream files will be needed by the generator or
-  judge, the prompt module should prefer `Include Files` so prompt-runner
-  inlines those files up front as authoritative reference material.
+  judge, the prompt module should prefer inline embedding inside the authored
+  prompt body so the context appears where the task actually uses it.
 - Known-needed source content should be provided proactively instead of relying
   on the model to issue ad hoc file-read tool calls.
+- Pre-existing source material should normally be embedded with
+  `{{INCLUDE:...}}` inside a semantic XML-style block in the relevant `Context`
+  section.
+- Generated artifacts that need to appear inside a later judge or retry prompt
+  should be embedded with `{{RUNTIME_INCLUDE:...}}` inside the authored prompt
+  body, not prepended globally.
+- `Required Files` and `Checks Files` are validation metadata only:
+  - `Required Files` halts when a required path is missing.
+  - `Checks Files` records presence and missing-path warnings in runner logs.
+  - Neither subsection injects file contents into the prompt.
+- `Include Files` should be reserved for cases where front-loaded shared context
+  is explicitly wanted across the whole call.
 - Inlined reference material should be wrapped with semantic XML-style tags
   rather than tool-oriented "included file" narration.
 - Run-local artifacts should capture execution evidence, not duplicate prompt

@@ -163,7 +163,12 @@ Raw requirements source: docs/requirements/raw-requirements.md
 ### 1. Traceability
 Read the requirements inventory YAML at {output_path}.
 For each RI-* item, verify that:
-- The verbatim_quote text can be found in docs/requirements/raw-requirements.md.
+- The verbatim_quote text matches the source text identified by source_location
+  in docs/requirements/raw-requirements.md.
+- When the source text is a wrapped paragraph or a wrapped bullet with
+  continuation indentation, treat line wrapping and continuation indentation as
+  formatting rather than a traceability failure. Compare the quote against the
+  referenced source span after normalizing only that wrapping/indentation.
 - The source_location field references a real section or paragraph heading.
 Use the Read tool on both files.  Search for each verbatim_quote in the raw
 requirements using Grep.
@@ -184,8 +189,12 @@ Verify that:
 ### 4. Integration
 Phase 0 is the first phase, so integration checks are minimal:
 - Verify the inventory does not invent requirements absent from the source.
-- Verify no compound requirements (containing 'and'/'or' joining independent
-  clauses describing distinct behaviours) remain unsplit.\
+- Flag a compound RI-* item as incorrectly unsplit only when it joins
+  independently satisfiable behaviours that could be separated into exact
+  source-faithful child quotes without losing meaning.
+- Do not flag a requirement merely because it contains 'and' or 'or' inside a
+  single behavior, a single acceptance check, or a result clause that depends
+  on the same action.\
 """,
 
     # ------------------------------------------------------------------
@@ -406,6 +415,14 @@ For each child prompt in the workflow:
 Verify that:
 - The workflow uses a TDD cadence: write or tighten a failing test, implement
   only enough code to pass, then continue.
+- Treat the TDD cadence as satisfied for a child prompt when both of these are
+  true:
+  - the workflow explicitly requires a failing test run after the test is
+    written or tightened and before the corresponding file updates
+  - the child prompt's required response/report sections give the run a place
+    to record both that failing run and the later passing run
+- Do not flag missing red-green evidence when the workflow text and the
+  Phase 6 run report already show that sequence explicitly.
 - The workflow does not tell the child runner to build against a hypothetical
   copy instead of the current worktree.
 - The workflow does not drift back into requirements, architecture, or design
@@ -845,6 +862,7 @@ def _call_backend_for_verification(
         session_id=session_id,
         new_session=True,
         model=model,
+        effort="medium",
         stdout_log_path=log_dir / "stdout.log",
         stderr_log_path=log_dir / "stderr.log",
         stream_header=(

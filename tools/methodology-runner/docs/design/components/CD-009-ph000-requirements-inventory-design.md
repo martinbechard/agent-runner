@@ -25,7 +25,7 @@ This section names the files that the phase uses.
   - **BECAUSE:** This is the phase output.
 
 - **FILE: FILE-3** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-025-ph000-requirements-inventory.md`
     with:
     - embedded generator agent definition
     - embedded judge agent definition
@@ -45,7 +45,7 @@ implementation.
 
 - **RULE: RULE-2** Use the predefined prompt module
   - **SYNOPSIS:** The phase must use
-    `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`.
+    `tools/methodology-runner/src/methodology_runner/prompts/PR-025-ph000-requirements-inventory.md`.
   - **BECAUSE:** PH-000 should not build a new prompt module for each run.
 
 - **RULE: RULE-3** Keep the generator and judge setup inside the module
@@ -66,26 +66,34 @@ This section describes the phase steps.
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-000` defines the input path, output path, extraction
     rules, judge rules, and output shape.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth.
   - **BECAUSE:** The run needs this contract before it starts.
 
 - **PROCESS: PROCESS-2** Execute the prompts with prompt-runner
   - **SYNOPSIS:** The methodology runner fills in the request placeholders in
     the predefined PH-000 module, then runs that module with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle and
       prompt-runner invocation.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
     - **BECAUSE:** That module executes the generator/judge revision loop.
   - **PROMPT-MODULE: PMOD-1** PH-000 prompt-runner input file
     - **SYNOPSIS:** The PH-000 prompt-runner input file is
-      `.methodology/docs/prompts/PR-025-ph000-requirements-inventory.md`,
+      `tools/methodology-runner/src/methodology_runner/prompts/PR-025-ph000-requirements-inventory.md`,
       executed as a checked-in prompt module with run-time placeholder values.
     - **BECAUSE:** The phase should keep one fixed module shape and only fill
       in request values.
     - **READS:** `{{raw_requirements_path}}`
       - **BECAUSE:** The source path is a request value.
+    - **RULE:** Just-in-time source embedding
+      - **SYNOPSIS:** The generator must embed the raw requirements inline in
+        its `Context` section with:
+        - `<RAW_REQUIREMENTS>`
+        - `{{INCLUDE:raw_requirements_path}}`
+        - `</RAW_REQUIREMENTS>`
+      - **BECAUSE:** The source request should appear where the generator task
+        actually uses it, not as a front-loaded preamble.
     - **AGENT:** `Generator Agent`
       - **SYNOPSIS:** Embedded generator definition in the PH-000 module.
       - **BECAUSE:** The generator setup is fixed for this phase.
@@ -128,6 +136,15 @@ This section describes the phase steps.
           category drift, traceability defects, and structural defects.
         - **BECAUSE:** The judge decides whether the file passes or needs
           another revision.
+        - **RULE:** Just-in-time artifact embedding
+          - **SYNOPSIS:** The judge prompt must embed the generated inventory
+            inline in its `Context` section with:
+            - `<REQUIREMENTS_INVENTORY>`
+            - `{{RUNTIME_INCLUDE:docs/requirements/requirements-inventory.yaml}}`
+            - `</REQUIREMENTS_INVENTORY>`
+          - **BECAUSE:** The judge should begin with its review role and task,
+            then see the artifact exactly where the comparison context calls for
+            it.
         - **USES:** `Judge Agent`
           - **BECAUSE:** The prompt pair should use the embedded judge
             definition already declared in the prompt module.
@@ -157,7 +174,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/requirements/requirements-inventory.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_0_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_0_validation.py`
     - **BECAUSE:** PH-000 uses deterministic checks for schema, IDs, coverage
       bookkeeping, and exact-quote presence.
   - **BECAUSE:** PH-000 passes only when both the deterministic checks and the
@@ -188,6 +205,13 @@ This section states the main limits on the phase.
   - **SYNOPSIS:** PH-000 must use the predefined prompt module instead of
     building a new module per run.
   - **BECAUSE:** The module shape should stay stable.
+
+- **RULE: RULE-8** Validation metadata does not inject prompt content
+  - **SYNOPSIS:** `Required Files` and `Checks Files` may verify path presence,
+    but they must not be used as a side channel for injecting source or artifact
+    text into the generator or judge prompts.
+  - **BECAUSE:** PH-000 prompt structure should be controlled by explicit inline
+    embedding in the authored prompt body.
 
 ## 6. Output Shape
 
@@ -273,7 +297,8 @@ This section lists the tests the phase design expects.
 
 - **TEST CASE: TC-4** Deterministic validation
   - **SYNOPSIS:** Run the phase with a malformed inventory and confirm
-    `.methodology/src/cli/methodology_runner/phase_0_validation.py` fails it.
+    `tools/methodology-runner/src/methodology_runner/phase_0_validation.py`
+    fails it.
   - **BECAUSE:** Shape errors should fail before semantic acceptance.
 
 - **TEST CASE: TC-5** Judge revise loop

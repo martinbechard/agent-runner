@@ -45,7 +45,7 @@ This section names the files that the phase uses.
   - **BECAUSE:** Later phases need truthful evidence of what the child workflow actually did.
 
 - **FILE: FILE-7** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-029-ph006-incremental-implementation.md`
   - **BECAUSE:** `PH-006` uses one predefined phase module. That module authors the child workflow first, then runs it.
 
 ## 3. Technical Directives
@@ -53,7 +53,7 @@ This section names the files that the phase uses.
 This section states the technical directives that shape the phase.
 
 - **RULE: RULE-1** Use the predefined prompt module
-  - **SYNOPSIS:** The phase must use `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`.
+  - **SYNOPSIS:** The phase must use `tools/methodology-runner/src/methodology_runner/prompts/PR-029-ph006-incremental-implementation.md`.
   - **BECAUSE:** The PH-006 flow is fixed: author workflow, validate workflow, run child workflow, report truthfully.
 
 - **RULE: RULE-2** Author a child workflow, not another planning spec
@@ -71,6 +71,10 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** Prompt 2 must run or resume the child workflow against the current `run_dir`.
   - **BECAUSE:** The workflow is supposed to create real code, tests, and supporting project files in the workspace being built.
 
+- **RULE: RULE-4A** Child prompts that run commands must report them explicitly
+  - **SYNOPSIS:** Any child prompt that runs tests or verification commands must require a fixed generator response section that lists the commands run and the observed outcome for each one.
+  - **BECAUSE:** The child prompt judges intentionally validate against the child prompt's own generator response text plus the concrete files, so command execution evidence has to be explicit in that response.
+
 - **RULE: RULE-5** The child workflow must end with final verification
   - **SYNOPSIS:** The last child prompt must run the full verification commands for the implemented system.
   - **BECAUSE:** PH-006 is not complete when code exists. It is complete when the workflow has driven the build to a verifiable end state.
@@ -85,14 +89,14 @@ This section describes the phase steps.
 
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-006` defines the input files, output files, placeholder values, workflow requirements, and run-report schema.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth for artifact paths and validation references.
-  - **READS:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator injects `prompt_runner_command` and other runtime values used by Prompt 2.
 
 - **PROCESS: PROCESS-2** Author the child implementation workflow
   - **SYNOPSIS:** Prompt 1 writes `docs/implementation/implementation-workflow.md`.
-  - **USES:** `.methodology/docs/prompts/PR-029-ph006-incremental-implementation.md`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/prompts/PR-029-ph006-incremental-implementation.md`
     - **BECAUSE:** The prompt module contains the phase-specific generator and judge rules.
   - **PROMPT-MODULE: PMOD-1** PH-006 phase module
     - **SYNOPSIS:** The PH-006 phase module has two prompt pairs.
@@ -108,23 +112,35 @@ This section describes the phase steps.
           - **BECAUSE:** The workflow must know what temporary simulations exist and when they can be replaced.
         - **READS:** `docs/features/feature-specification.yaml`
           - **BECAUSE:** The workflow must ground implementation slices in feature and acceptance-criterion meaning.
+        - **RULE:** Just-in-time source embedding
+          - **SYNOPSIS:** Prompt 1 embeds the approved design, contracts, simulations, and feature specification inline in `Context` with `{{INCLUDE:...}}`.
+          - **BECAUSE:** The workflow-authoring prompt should begin with its task and then present the upstream inputs where it uses them.
       - **PROMPT:** `Judge`
         - **SYNOPSIS:** Reviews the workflow for executability, TDD cadence, slice size, traceability, and final-verification coverage.
         - **BECAUSE:** The workflow must be phase-ready before any child run starts.
+        - **RULE:** Just-in-time artifact embedding
+          - **SYNOPSIS:** Prompt 1's judge embeds the current child workflow inline in `Context` with `{{RUNTIME_INCLUDE:docs/implementation/implementation-workflow.md}}`.
+          - **BECAUSE:** The workflow under review should appear where the judge compares it to the upstream design inputs.
 
 - **PROCESS: PROCESS-3** Deterministically validate the child workflow
   - **SYNOPSIS:** The phase validates that the workflow file exists, parses, has a file-level module, and contains the required TDD and final-verification structure.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_6_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_6_validation.py`
     - **BECAUSE:** Mechanical workflow checks should not be left to the LLM judge.
 
 - **PROCESS: PROCESS-4** Run or resume the child workflow
   - **SYNOPSIS:** Prompt 2 parses the child workflow, runs or resumes it with child `prompt_runner`, and records what happened in `docs/implementation/implementation-run-report.yaml`.
   - **INVOKES:** `{{prompt_runner_command}}`
     - **BECAUSE:** The child workflow is itself a prompt-runner module.
+  - **RULE:** Disable project-organiser injection for the child run
+    - **SYNOPSIS:** Prompt 2 should invoke the child workflow with `--no-project-organiser`.
+    - **BECAUSE:** The child prompts operate on fixed, already-declared workspace paths rather than classifying new files against the repository taxonomy.
   - **LAUNCHES:** child prompt-runner execution
     - **BECAUSE:** The authored workflow has to be executed against the project worktree to create real implementation artifacts.
   - **WRITES:** `docs/implementation/implementation-run-report.yaml`
     - **BECAUSE:** Later verification needs a truthful summary of child prompt outcomes, changed files, and observed test commands.
+  - **RULE:** Mixed include timing for Prompt 2
+    - **SYNOPSIS:** Prompt 2 embeds `docs/implementation/implementation-workflow.md` inline with `{{INCLUDE:...}}`, and its judge embeds `docs/implementation/implementation-run-report.yaml` inline with `{{RUNTIME_INCLUDE:...}}`.
+    - **BECAUSE:** The child workflow exists before Prompt 2 starts, but the run report does not exist until Prompt 2's generator writes it.
 
 - **PROCESS: PROCESS-5** Accept or reject the phase result
   - **SYNOPSIS:** The phase passes only when:
@@ -135,7 +151,7 @@ This section describes the phase steps.
     - **BECAUSE:** The workflow is a durable phase artifact.
   - **VALIDATES:** `docs/implementation/implementation-run-report.yaml`
     - **BECAUSE:** The run report is the other durable phase artifact.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_6_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_6_validation.py`
     - **BECAUSE:** Deterministic validation checks workflow shape and report truthfulness constraints that should not drift.
 
 ## 5. Constraints

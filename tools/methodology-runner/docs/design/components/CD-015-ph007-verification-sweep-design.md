@@ -38,7 +38,7 @@ This section names the files that the phase uses.
   - **BECAUSE:** This is the durable output consumed as the final verification artifact.
 
 - **FILE: FILE-6** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-030-ph007-verification-sweep.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-030-ph007-verification-sweep.md`
   - **BECAUSE:** `PH-007` uses one predefined phase module for final verification.
 
 ## 3. Technical Directives
@@ -46,7 +46,7 @@ This section names the files that the phase uses.
 This section states the technical directives that shape the phase.
 
 - **RULE: RULE-1** Use the predefined prompt module
-  - **SYNOPSIS:** The phase must use `.methodology/docs/prompts/PR-030-ph007-verification-sweep.md`.
+  - **SYNOPSIS:** The phase must use `tools/methodology-runner/src/methodology_runner/prompts/PR-030-ph007-verification-sweep.md`.
   - **BECAUSE:** The final-verification contract should stay stable across runs.
 
 - **RULE: RULE-2** Verify the real implemented workspace
@@ -81,14 +81,14 @@ This section describes the phase steps.
 
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-007` defines the input files, output file, evidence rules, review rules, and output schema.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth for input and output paths.
 
 - **PROCESS: PROCESS-2** Execute the verification module
   - **SYNOPSIS:** The methodology runner runs the predefined PH-007 module with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
     - **BECAUSE:** That module executes the generator/judge revision loop.
   - **PROMPT-MODULE: PMOD-1** PH-007 phase module
     - **SYNOPSIS:** The PH-007 module has one prompt pair.
@@ -104,13 +104,19 @@ This section describes the phase steps.
           - **BECAUSE:** The final verification phase must know the structure and intent of the child implementation workflow.
         - **READS:** `docs/implementation/implementation-run-report.yaml`
           - **BECAUSE:** The run report is the primary execution-evidence source.
+        - **RULE:** Just-in-time source embedding
+          - **SYNOPSIS:** The generator and judge embed the requirements inventory, feature specification, implementation workflow, and implementation run report inline in `Context` with `{{INCLUDE:...}}`.
+          - **BECAUSE:** Final verification should begin with the verification task and then present the upstream evidence where that task uses it.
       - **PROMPT:** `Judge`
         - **SYNOPSIS:** Reviews the report for truthfulness, evidence quality, honest coverage, and unsupported satisfaction claims.
         - **BECAUSE:** The final report must not overstate what was actually verified.
+        - **RULE:** Just-in-time artifact embedding
+          - **SYNOPSIS:** The judge embeds the current verification report inline in `Context` with `{{RUNTIME_INCLUDE:docs/verification/verification-report.yaml}}`.
+          - **BECAUSE:** The report under review should appear where the judge compares it to the upstream evidence set.
 
 - **PROCESS: PROCESS-3** Deterministically validate the report
   - **SYNOPSIS:** The phase checks the top-level report shape, RI coverage, and command-evidence consistency.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_7_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_7_validation.py`
     - **BECAUSE:** Mechanical report checks should stay deterministic.
 
 - **PROCESS: PROCESS-4** Accept or reject the phase result

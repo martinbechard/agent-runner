@@ -22,7 +22,7 @@ This design explains how `PH-002` works from start to finish.
   - **BECAUSE:** This is the durable output consumed by `PH-003`.
 
 - **FILE: FILE-3** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-024-ph002-architecture.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-024-ph002-architecture.md`
     with:
     - fixed phase input and output paths
     - embedded directive blocks for `structured-design`,
@@ -38,7 +38,7 @@ This design explains how `PH-002` works from start to finish.
 
 - **RULE: RULE-2** Use the predefined prompt module
   - **SYNOPSIS:** The phase must use
-    `.methodology/docs/prompts/PR-024-ph002-architecture.md`.
+    `tools/methodology-runner/src/methodology_runner/prompts/PR-024-ph002-architecture.md`.
   - **BECAUSE:** `PH-002` should not synthesize a new module per run.
 
 - **RULE: RULE-3** Keep the specialized directives inside the module
@@ -57,21 +57,24 @@ This design explains how `PH-002` works from start to finish.
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-002` defines the input file, output path, architecture
     directives, review rules, and output shape.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth.
 
 - **PROCESS: PROCESS-2** Execute the prompt with prompt-runner
   - **SYNOPSIS:** The methodology runner executes the predefined PH-002
     module with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
     - **BECAUSE:** That module executes the generator/judge revision loop.
   - **PROMPT-MODULE: PMOD-1** PH-002 prompt module
     - **SYNOPSIS:** The PH-002 module is
-      `.methodology/docs/prompts/PR-024-ph002-architecture.md`.
+      `tools/methodology-runner/src/methodology_runner/prompts/PR-024-ph002-architecture.md`.
     - **READS:** `docs/features/feature-specification.yaml`
       - **BECAUSE:** That file is the main source for architecture decisions.
+    - **RULE:** Just-in-time source embedding
+      - **SYNOPSIS:** The generator and judge embed `docs/features/feature-specification.yaml` inline in `Context` with `{{INCLUDE:...}}`.
+      - **BECAUSE:** The prompt should lead with the architecture task, then present the upstream feature source where it is used.
     - **USES:** generic prompt-runner `Generator Agent`
       - **BECAUSE:** Artifact production uses the stable generator role.
     - **USES:** embedded PH-002 architecture directives
@@ -81,6 +84,9 @@ This design explains how `PH-002` works from start to finish.
       - **BECAUSE:** Review uses the stable judge role.
     - **USES:** embedded PH-002 architecture review directives
       - **BECAUSE:** Phase-local review guidance lives in the prompt body.
+    - **RULE:** Just-in-time artifact embedding
+      - **SYNOPSIS:** The judge embeds the current architecture artifact inline in `Context` with `{{RUNTIME_INCLUDE:docs/architecture/architecture-design.yaml}}`.
+      - **BECAUSE:** The architecture under review should be embedded where the judge compares it to the feature source.
   - **RESUMES:** the same artifact path across iterations
     - **BECAUSE:** `PH-002` revises one file rather than creating drafts.
 

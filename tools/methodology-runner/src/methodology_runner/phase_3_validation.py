@@ -89,15 +89,21 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
     checks.append({"id": "interaction_validity", "status": "pass" if not bad_interactions else "fail", "details": bad_interactions})
     checks.append({"id": "dependency_interactions", "status": "pass" if not dependency_gaps else "fail", "details": dependency_gaps})
 
+    architecture_components = architecture.get("system_shape", {}).get("components", [])
+    if not architecture_components:
+        architecture_components = architecture.get("system_shape", {}).get("modules", [])
+    if not architecture_components:
+        architecture_components = architecture.get("components", [])
+
     stack_features = {
         feature
-        for component in architecture.get("system_shape", {}).get("modules", [])
+        for component in architecture_components
         for feature in component.get("supports", [])
     }
     if not stack_features:
         stack_features = {
             feature
-            for component in architecture.get("components", [])
+            for component in architecture_components
             for feature in component.get("features_served", [])
         }
     stack_alignment_failures = sorted(feature_ids - stack_features)

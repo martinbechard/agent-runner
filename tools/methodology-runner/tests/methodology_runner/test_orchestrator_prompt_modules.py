@@ -13,6 +13,7 @@ from methodology_runner.models import (
 from methodology_runner.orchestrator import (
     PipelineConfig,
     _phase_placeholder_values,
+    _resolve_phase_prompt_module_path,
     _invoke_prompt_runner_library,
     run_pipeline,
     _run_single_phase,
@@ -33,7 +34,7 @@ def test_all_phases_have_checked_in_prompt_modules() -> None:
     ):
         phase = get_phase(phase_id)
         assert phase.prompt_module_path is not None
-        assert Path(phase.prompt_module_path).exists()
+        assert _resolve_phase_prompt_module_path(phase).exists()
 
 
 def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_project(
@@ -106,8 +107,7 @@ def test_phase_placeholder_values_include_ph006_prompt_runner_command() -> None:
     values = _phase_placeholder_values(phase)
 
     assert "prompt_runner_command" in values
-    assert "prompt_runner" in values["prompt_runner_command"]
-    assert "tools/prompt-runner/src" in values["prompt_runner_command"]
+    assert values["prompt_runner_command"] == "prompt-runner"
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(

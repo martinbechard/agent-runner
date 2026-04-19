@@ -147,6 +147,28 @@ def test_call_backend_for_verification_uses_selected_backend(
     assert captured == ["codex"]
 
 
+def test_call_backend_for_verification_sets_medium_effort_by_default(
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout=_wrap_in_fence(_passing_json()), stderr="", returncode=0),
+    ])
+
+    _call_backend_for_verification(
+        prompt="Verify",
+        phase_id="PH-000",
+        workspace=workspace,
+        backend="codex",
+        model=None,
+        claude_client=client,
+    )
+
+    assert len(client.received) == 1
+    assert client.received[0].effort == "medium"
+
+
 def _minimal_phase(
     *,
     phase_id: str = "PH-000-requirements-inventory",
@@ -729,6 +751,8 @@ class TestPhaseCrossRefChecks:
         assert "solution-design.yaml" in t
         assert "interface-contracts.yaml" in t
         assert "simulation-definitions.yaml" in t
+        assert "failing test run after the test is" in t
+        assert "Phase 6 run report already show that sequence explicitly" in t
 
     def test_phase_7_references_phases_0_1_3_6(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-007-verification-sweep"]

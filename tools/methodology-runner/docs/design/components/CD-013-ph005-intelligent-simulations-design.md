@@ -30,7 +30,7 @@ This section names the files that the phase uses.
   - **BECAUSE:** This is the phase output.
 
 - **FILE: FILE-4** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-028-ph005-intelligent-simulations.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-028-ph005-intelligent-simulations.md`
     with:
     - embedded directive blocks for traceability and simulation review discipline
     - fixed generic prompt-runner generator and judge roles
@@ -50,7 +50,7 @@ implementation.
 
 - **RULE: RULE-2** Use the predefined prompt module
   - **SYNOPSIS:** The phase must use
-    `.methodology/docs/prompts/PR-028-ph005-intelligent-simulations.md`.
+    `tools/methodology-runner/src/methodology_runner/prompts/PR-028-ph005-intelligent-simulations.md`.
   - **BECAUSE:** `PH-005` should not build a new prompt module for each run.
 
 - **RULE: RULE-3** Keep the phase directives inside the module
@@ -71,26 +71,29 @@ This section describes the phase steps.
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-005` defines the input files, output path, simulation
     rules, judge rules, and output shape.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth.
   - **BECAUSE:** The run needs this contract before it starts.
 
 - **PROCESS: PROCESS-2** Execute the prompts with prompt-runner
   - **SYNOPSIS:** The methodology runner runs the predefined PH-005 module
     with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle and
       prompt-runner invocation.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
     - **BECAUSE:** That module executes the generator/judge revision loop.
   - **PROMPT-MODULE: PMOD-1** PH-005 prompt-runner input file
     - **SYNOPSIS:** The PH-005 prompt-runner input file is
-      `.methodology/docs/prompts/PR-028-ph005-intelligent-simulations.md`.
+      `tools/methodology-runner/src/methodology_runner/prompts/PR-028-ph005-intelligent-simulations.md`.
     - **BECAUSE:** The phase uses one fixed module shape.
     - **READS:** `docs/design/interface-contracts.yaml`
       - **BECAUSE:** That file is the main source for simulation design.
     - **READS:** `docs/features/feature-specification.yaml`
       - **BECAUSE:** That file keeps simulations tied to feature intent.
+    - **RULE:** Just-in-time source embedding
+      - **SYNOPSIS:** The generator and judge embed `docs/design/interface-contracts.yaml` and `docs/features/feature-specification.yaml` inline in `Context` with `{{INCLUDE:...}}`.
+      - **BECAUSE:** The simulation prompt should present upstream contract and feature context where the simulation task uses it.
     - **AGENT:** `Generator Agent`
       - **SYNOPSIS:** Embedded generator definition in the PH-005 module.
       - **BECAUSE:** The generator setup is fixed for this phase.
@@ -103,6 +106,9 @@ This section describes the phase steps.
           assertions, and synthetic-setup limits.
         - **BECAUSE:** PH-005-specific generation behavior now lives in the
           prompt, not in a phase-only skill.
+      - **RULE:** Concrete invocation examples when contracts make them concrete
+        - **SYNOPSIS:** When a contract already makes the invocation boundary concrete enough for a realistic example, the generator must use a realistic concrete command string or argv value rather than an abstract placeholder token.
+        - **BECAUSE:** Cross-reference and downstream implementation planning need simulations grounded in the same invocation surface the contracts already declare.
     - **AGENT:** `Judge Agent`
       - **SYNOPSIS:** Embedded judge definition in the PH-005 module.
       - **BECAUSE:** The judge setup is fixed for this phase.
@@ -114,6 +120,9 @@ This section describes the phase steps.
           weak assertions, realism defects, missing error coverage, and leakage.
         - **BECAUSE:** PH-005-specific review behavior now lives in the
           prompt, not in a phase-only skill.
+      - **RULE:** Placeholder invocations are only allowed when the contract stays abstract
+        - **SYNOPSIS:** The judge must accept placeholder command or argv values only when the contract does not already support a realistic concrete invocation example.
+        - **BECAUSE:** PH-005 should not pass simulations that avoid choosing concrete values where the interface contract already makes the invocation surface concrete enough to do so faithfully.
     - **PROMPT-PAIR: Prompt 1**
       - **PROMPT:** `Generator`
         - **SYNOPSIS:** Reads the interface contracts and feature spec and
@@ -133,6 +142,9 @@ This section describes the phase steps.
           coverage, and implementation leakage.
         - **BECAUSE:** The judge decides whether the file passes or needs
           another revision.
+        - **RULE:** Just-in-time artifact embedding
+          - **SYNOPSIS:** The judge embeds the current simulation definitions inline in `Context` with `{{RUNTIME_INCLUDE:docs/simulations/simulation-definitions.yaml}}`.
+          - **BECAUSE:** The simulation artifact under review should appear where the judge compares it to the contract and feature sources.
         - **USES:** `Judge Agent`
           - **BECAUSE:** The prompt pair should use the embedded judge
             definition already declared in the prompt module.
@@ -158,7 +170,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/simulations/simulation-definitions.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_5_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_5_validation.py`
     - **BECAUSE:** `PH-005` uses deterministic checks for schema, contract
       coverage, scenario type coverage, and top-level shape.
   - **BECAUSE:** `PH-005` passes only when both the deterministic checks and

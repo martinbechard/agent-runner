@@ -30,7 +30,7 @@ This section names the files that the phase uses.
   - **BECAUSE:** This is the phase output.
 
 - **FILE: FILE-4** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-023-ph001-feature-specification.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-023-ph001-feature-specification.md`
     with:
     - embedded generator agent definition
     - embedded judge agent definition
@@ -51,7 +51,7 @@ implementation.
 
 - **RULE: RULE-2** Use the predefined prompt module
   - **SYNOPSIS:** The phase must use
-    `.methodology/docs/prompts/PR-023-ph001-feature-specification.md`.
+    `tools/methodology-runner/src/methodology_runner/prompts/PR-023-ph001-feature-specification.md`.
   - **BECAUSE:** `PH-001` should not build a new prompt module for each run.
 
 - **RULE: RULE-3** Keep the generator and judge setup inside the module
@@ -72,26 +72,29 @@ This section describes the phase steps.
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-001` defines the input files, output path, feature
     grouping rules, judge rules, and output shape.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth.
   - **BECAUSE:** The run needs this contract before it starts.
 
 - **PROCESS: PROCESS-2** Execute the prompts with prompt-runner
   - **SYNOPSIS:** The methodology runner runs the predefined PH-001 module
     with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle and
       prompt-runner invocation.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
     - **BECAUSE:** That module executes the generator/judge revision loop.
   - **PROMPT-MODULE: PMOD-1** PH-001 prompt-runner input file
     - **SYNOPSIS:** The PH-001 prompt-runner input file is
-      `.methodology/docs/prompts/PR-023-ph001-feature-specification.md`.
+      `tools/methodology-runner/src/methodology_runner/prompts/PR-023-ph001-feature-specification.md`.
     - **BECAUSE:** The phase uses one fixed module shape.
     - **READS:** `docs/requirements/requirements-inventory.yaml`
       - **BECAUSE:** That file is the main source for feature grouping.
     - **READS:** `docs/requirements/raw-requirements.md`
       - **BECAUSE:** That file is used to check semantic fidelity.
+    - **RULE:** Just-in-time source embedding
+      - **SYNOPSIS:** The generator and judge embed `docs/requirements/raw-requirements.md` and `docs/requirements/requirements-inventory.yaml` inline in their `Context` sections with `{{INCLUDE:...}}`.
+      - **BECAUSE:** The prompt should begin with its task and only then present the source material where that task uses it.
     - **AGENT:** `Generator Agent`
       - **SYNOPSIS:** Embedded generator definition in the PH-001 module.
       - **BECAUSE:** The generator setup is fixed for this phase.
@@ -135,6 +138,9 @@ This section describes the phase steps.
           source requirements.
         - **BECAUSE:** The judge decides whether the file passes or needs
           another revision.
+        - **RULE:** Just-in-time artifact embedding
+          - **SYNOPSIS:** The judge embeds the current feature specification inline in `Context` with `{{RUNTIME_INCLUDE:docs/features/feature-specification.yaml}}`.
+          - **BECAUSE:** The artifact under review should appear where the review instructions refer to it, not as a front-loaded preamble.
         - **USES:** `Judge Agent`
           - **BECAUSE:** The prompt pair should use the embedded judge
             definition already declared in the prompt module.
@@ -161,7 +167,7 @@ This section describes the phase steps.
     and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/features/feature-specification.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_1_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_1_validation.py`
     - **BECAUSE:** `PH-001` uses deterministic checks for schema, feature
       coverage, dependency references, and top-level shape.
   - **BECAUSE:** `PH-001` passes only when both the deterministic checks and

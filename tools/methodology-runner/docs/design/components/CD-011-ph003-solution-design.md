@@ -28,7 +28,7 @@ This design explains how `PH-003` works from start to finish.
   - **BECAUSE:** This is the phase output.
 
 - **FILE: FILE-4** Prompt-runner module
-  - **SYNOPSIS:** `.methodology/docs/prompts/PR-026-ph003-solution-design.md`
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-026-ph003-solution-design.md`
     with:
     - embedded directive blocks for design and review discipline
     - fixed generic prompt-runner generator and judge roles
@@ -46,7 +46,7 @@ This design explains how `PH-003` works from start to finish.
 
 - **RULE: RULE-2** Use the predefined prompt module
   - **SYNOPSIS:** The phase must use
-    `.methodology/docs/prompts/PR-026-ph003-solution-design.md`.
+    `tools/methodology-runner/src/methodology_runner/prompts/PR-026-ph003-solution-design.md`.
   - **BECAUSE:** `PH-003` should not build a new prompt module for each run.
 
 - **RULE: RULE-3** Keep the phase directives inside the module
@@ -66,24 +66,27 @@ This design explains how `PH-003` works from start to finish.
 - **PROCESS: PROCESS-1** Define the phase contract
   - **SYNOPSIS:** `PH-003` defines the input files, output path,
     responsibility rules, interaction rules, review rules, and output shape.
-  - **READS:** `.methodology/src/cli/methodology_runner/phases.py`
+  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
     - **BECAUSE:** The phase registry is the source of truth.
 
 - **PROCESS: PROCESS-2** Execute the prompt with prompt-runner
   - **SYNOPSIS:** The methodology runner runs the predefined PH-003 module
     with prompt-runner.
-  - **USES:** `.methodology/src/cli/methodology_runner/orchestrator.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
     - **BECAUSE:** The orchestrator owns the phase lifecycle.
-  - **USES:** `.prompt-runner/src/cli/prompt_runner/runner.py`
+  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
     - **BECAUSE:** That module executes the generator/judge revision loop.
   - **PROMPT-MODULE: PMOD-1** PH-003 prompt module
     - **SYNOPSIS:** The PH-003 prompt module is
-      `.methodology/docs/prompts/PR-026-ph003-solution-design.md`.
+      `tools/methodology-runner/src/methodology_runner/prompts/PR-026-ph003-solution-design.md`.
     - **READS:** `docs/architecture/architecture-design.yaml`
       - **BECAUSE:** That file is the main source for ownership and
         interaction design.
     - **READS:** `docs/features/feature-specification.yaml`
       - **BECAUSE:** That file keeps responsibilities traceable to feature intent.
+    - **RULE:** Just-in-time source embedding
+      - **SYNOPSIS:** The generator and judge embed `docs/architecture/architecture-design.yaml` and `docs/features/feature-specification.yaml` inline in `Context` with `{{INCLUDE:...}}`.
+      - **BECAUSE:** The prompt should present architecture and feature sources where the design task uses them, not as a preamble.
     - **USES:** generic prompt-runner `Generator Agent`
       - **BECAUSE:** Artifact production uses the stable generator role.
     - **USES:** embedded PH-003 solution-design directives
@@ -93,6 +96,9 @@ This design explains how `PH-003` works from start to finish.
       - **BECAUSE:** Review uses the stable judge role.
     - **USES:** embedded PH-003 review directives
       - **BECAUSE:** Phase-local review guidance lives in the prompt body.
+    - **RULE:** Just-in-time artifact embedding
+      - **SYNOPSIS:** The judge embeds the current solution design inline in `Context` with `{{RUNTIME_INCLUDE:docs/design/solution-design.yaml}}`.
+      - **BECAUSE:** The artifact under review should appear where the review instructions compare it to architecture and feature intent.
   - **RESUMES:** the same artifact path across iterations
     - **BECAUSE:** `PH-003` revises one file rather than creating drafts.
 
@@ -101,7 +107,7 @@ This design explains how `PH-003` works from start to finish.
     passes and the resulting artifact is accepted as the phase output.
   - **VALIDATES:** `docs/design/solution-design.yaml`
     - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `.methodology/src/cli/methodology_runner/phase_3_validation.py`
+  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_3_validation.py`
     - **BECAUSE:** `PH-003` uses deterministic checks for schema, feature
       coverage, dependency references, and interaction shape.
   - **BECAUSE:** `PH-003` passes only when both the deterministic checks and
@@ -155,6 +161,10 @@ This design explains how `PH-003` works from start to finish.
   - **SYNOPSIS:** Every dependency that implies meaningful runtime or data flow
     must have an explicit `INT-*` interaction.
   - **BECAUSE:** Later contract design depends on complete interaction scope.
+
+- **RULE: RULE-9A** Human-mediated architecture handoffs still require interactions
+  - **SYNOPSIS:** When the preserved architecture defines a documentation-to-runtime handoff, verification-to-runtime handoff, or other human-mediated linkage as a real integration point, the solution design must keep an explicit `INT-*` interaction for it.
+  - **BECAUSE:** Downstream contracts and implementation work still need that dependency to be explicit, even when a human rather than a program mediates the handoff.
 
 - **RULE: RULE-10** Clear component boundaries
   - **SYNOPSIS:** Components must express real ownership boundaries that would
