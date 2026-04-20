@@ -32,6 +32,10 @@ Context:
 <REQUIREMENTS_INVENTORY>
 {{INCLUDE:docs/requirements/requirements-inventory.yaml}}
 </REQUIREMENTS_INVENTORY>
+- If steady-state feature docs already exist under `docs/features/*.md`, inspect
+  those markdown files as continuity context.
+- Exclude the in-run working artifact `docs/features/feature-specification.yaml`
+  and anything under `docs/changes/` from that continuity scan.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -59,6 +63,13 @@ Embedded directives for this step:
   minimal`, `simple file layout`, `easy to understand`, and `short` remain
   qualitative unless the source gives a concrete threshold. Do not convert
   them into vague acceptance criteria.
+- Use existing steady-state feature docs under `docs/features/*.md` to preserve
+  stable feature names, capability boundaries, and decomposition when they
+  still fit the current requirements inventory.
+- If the new request requires a real feature rename, merge, or split, make that
+  change deliberately instead of copying the old structure blindly.
+- The raw requirements and requirements inventory are authoritative over older
+  steady-state feature docs when they conflict.
 
 Phase purpose:
 - Group related RI-* items into coherent FT-* features.
@@ -180,6 +191,10 @@ Context:
 <FEATURE_SPECIFICATION>
 {{RUNTIME_INCLUDE:docs/features/feature-specification.yaml}}
 </FEATURE_SPECIFICATION>
+- If steady-state feature docs already exist under `docs/features/*.md`, inspect
+  those markdown files as continuity context.
+- Exclude the in-run working artifact `docs/features/feature-specification.yaml`
+  and anything under `docs/changes/` from that continuity scan.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -195,6 +210,10 @@ Embedded directives for this step:
   defects, and exact-meaning drift as blocking.
 - Preserve exact boundaries from upstream requirements. Do not allow a feature
   or `AC-*` to weaken `one`, `at most`, `within`, or similar exact limits.
+- Review continuity with existing steady-state feature docs when they exist.
+  Flag unjustified feature renames, decomposition churn, or dropped current
+  capabilities, but do not block deliberate evolution that is supported by the
+  current raw requirements and requirements inventory.
 
 Your job is to decide whether the generated feature specification is phase-ready.
 

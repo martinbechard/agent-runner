@@ -665,7 +665,7 @@ class TestAssembleEndToEndPrompt:
         prompt = assemble_end_to_end_prompt()
         assert "requirements-inventory.yaml" in prompt
         assert "feature-specification.yaml" in prompt
-        assert "stack-manifest.yaml" in prompt
+        assert "architecture-design.yaml" in prompt
         assert "solution-design.yaml" in prompt
         assert "interface-contracts.yaml" in prompt
         assert "simulation-definitions.yaml" in prompt
@@ -735,7 +735,7 @@ class TestPhaseCrossRefChecks:
 
     def test_phase_3_references_phase_2(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-003-solution-design"]
-        assert "stack-manifest.yaml" in t
+        assert "architecture-design.yaml" in t
 
     def test_phase_4_references_phase_3(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-004-interface-contracts"]

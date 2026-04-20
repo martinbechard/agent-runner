@@ -12,7 +12,9 @@ from methodology_runner.models import (
 )
 from methodology_runner.orchestrator import (
     PipelineConfig,
+    _phase_path_mappings,
     _phase_placeholder_values,
+    _resolve_bundled_skills_root,
     _resolve_phase_prompt_module_path,
     _invoke_prompt_runner_library,
     run_pipeline,
@@ -35,6 +37,38 @@ def test_all_phases_have_checked_in_prompt_modules() -> None:
         phase = get_phase(phase_id)
         assert phase.prompt_module_path is not None
         assert _resolve_phase_prompt_module_path(phase).exists()
+
+
+def test_phase_prompts_do_not_depend_on_external_agent_assets() -> None:
+    tool_root = Path(__file__).resolve().parents[2]
+    package_root = tool_root / "src" / "methodology_runner"
+    prompt_dir = package_root / "prompts"
+    bundled_skill_paths = [
+        tool_root / "skills" / "structured-design" / "SKILL.md",
+        tool_root / "skills" / "structured-review" / "SKILL.md",
+        tool_root / "skills" / "structured-review" / "references" / "generic-structured-document-checklist.md",
+    ]
+
+    for skill_path in bundled_skill_paths:
+        assert skill_path.exists()
+
+    for prompt_path in (
+        prompt_dir / "PR-024-ph002-architecture.md",
+        prompt_dir / "PR-026-ph003-solution-design.md",
+    ):
+        text = prompt_path.read_text(encoding="utf-8")
+        assert "agent-assets/skills" not in text
+        assert "{{INCLUDE:skills/structured-design/SKILL.md}}" in text
+        assert "{{INCLUDE:skills/structured-review/SKILL.md}}" in text
+
+
+def test_phase_path_mappings_resolve_bundled_skill_root() -> None:
+    path_mappings = _phase_path_mappings()
+    skills_root = _resolve_bundled_skills_root()
+
+    assert path_mappings["skills/"] == str(skills_root)
+    assert (skills_root / "structured-design" / "SKILL.md").exists()
+    assert (skills_root / "structured-review" / "SKILL.md").exists()
 
 
 def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_project(
@@ -99,6 +133,7 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
     assert run_config.placeholder_values == {
         "raw_requirements_path": "docs/requirements/raw-requirements.md",
     }
+    assert run_config.path_mappings["skills/"].endswith("/skills")
     assert run_config.run_id_override == "PH-000-requirements-inventory"
 
 

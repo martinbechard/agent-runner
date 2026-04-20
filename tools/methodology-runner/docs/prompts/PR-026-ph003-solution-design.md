@@ -32,11 +32,15 @@ Context:
 <FEATURE_SPECIFICATION>
 {{INCLUDE:docs/features/feature-specification.yaml}}
 </FEATURE_SPECIFICATION>
+- If steady-state design docs already exist under `docs/design/*.md`, inspect
+  those markdown files as continuity context.
+- Exclude the in-run working artifact `docs/design/solution-design.yaml` and
+  anything under `docs/changes/` from that continuity scan.
 
 Module-local generator context:
 Embedded directives for this step:
 <Structured design directives>
-{{INCLUDE:../../../../../../agent-assets/skills/structured-design/SKILL.md}}
+{{INCLUDE:skills/structured-design/SKILL.md}}
 </Structured design directives>
 
 
@@ -58,6 +62,14 @@ Embedded directives for this step:
   flow, use `interactions: []`.
 - Keep technology and runtime choices aligned with the stack manifest unless
   an upstream artifact explicitly justifies a refinement.
+- Use existing steady-state design docs under `docs/design/*.md` to preserve
+  stable component names, ownership boundaries, and decomposition when they
+  still fit the current architecture and feature spec.
+- If the new request or upstream artifacts require a real boundary change,
+  evolve the design deliberately instead of copying the old decomposition
+  blindly.
+- The current architecture and feature specification are authoritative over
+  older steady-state design docs when they conflict.
 
 Phase purpose:
 - Refine the architecture into explicit component responsibilities.
@@ -144,6 +156,10 @@ Context:
 <SOLUTION_DESIGN>
 {{RUNTIME_INCLUDE:docs/design/solution-design.yaml}}
 </SOLUTION_DESIGN>
+- If steady-state design docs already exist under `docs/design/*.md`, inspect
+  those markdown files as continuity context.
+- Exclude the in-run working artifact `docs/design/solution-design.yaml` and
+  anything under `docs/changes/` from that continuity scan.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -151,13 +167,17 @@ mechanical checks and do not re-run or duplicate those checks manually.
 Module-local judge context:
 Embedded directives for this step:
 <Structured review directives>
-{{INCLUDE:../../../../../../agent-assets/skills/structured-review/SKILL.md}}
+{{INCLUDE:skills/structured-review/SKILL.md}}
 </Structured review directives>
 
 
 - Review for responsibility overlap, weak or missing feature realization,
   invented interactions, inconsistent dependencies, and implementation-detail
   leakage that belongs to a later phase.
+- Review continuity with existing steady-state design docs when they exist.
+  Flag unjustified component renames, decomposition churn, or ownership drift,
+  but do not block deliberate evolution that is supported by the current
+  architecture and feature spec.
 
 Your job is to decide whether the generated solution design is phase-ready.
 

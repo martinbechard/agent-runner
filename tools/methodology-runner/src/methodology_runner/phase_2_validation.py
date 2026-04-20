@@ -9,7 +9,7 @@ from pathlib import Path
 import yaml
 
 
-EXPECTED_STACK_MANIFEST_TOP_LEVEL_KEYS = [
+EXPECTED_ARCHITECTURE_DESIGN_TOP_LEVEL_KEYS = [
     "components",
     "integration_points",
     "rationale",
@@ -78,8 +78,8 @@ def _detect_artifact_shape(artifact: object) -> str:
     if not isinstance(artifact, dict):
         return "invalid"
     actual_keys = list(artifact.keys())
-    if actual_keys == EXPECTED_STACK_MANIFEST_TOP_LEVEL_KEYS:
-        return "stack_manifest"
+    if actual_keys == EXPECTED_ARCHITECTURE_DESIGN_TOP_LEVEL_KEYS:
+        return "architecture_design"
     if {
         "components",
         "integration_points",
@@ -89,21 +89,21 @@ def _detect_artifact_shape(artifact: object) -> str:
     return "invalid"
 
 
-def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirements_inventory_path: Path) -> dict:
-    stack_manifest = _load_yaml(stack_manifest_path)
+def build_report(architecture_design_path: Path, feature_spec_path: Path, requirements_inventory_path: Path) -> dict:
+    architecture_design = _load_yaml(architecture_design_path)
     feature_spec = _load_yaml(feature_spec_path)
     requirements_inventory = _load_yaml(requirements_inventory_path)
 
     checks: list[dict] = []
 
-    actual_keys = list(stack_manifest.keys()) if isinstance(stack_manifest, dict) else []
-    artifact_shape = _detect_artifact_shape(stack_manifest)
+    actual_keys = list(architecture_design.keys()) if isinstance(architecture_design, dict) else []
+    artifact_shape = _detect_artifact_shape(architecture_design)
     checks.append(
         {
             "id": "top_level_keys",
             "status": "pass" if artifact_shape != "invalid" else "fail",
             "expected": {
-                "stack_manifest": EXPECTED_STACK_MANIFEST_TOP_LEVEL_KEYS,
+                "architecture_design": EXPECTED_ARCHITECTURE_DESIGN_TOP_LEVEL_KEYS,
                 "structured_architecture": [
                     "components",
                     "integration_points",
@@ -119,7 +119,7 @@ def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirement
     component_field_issues: list[dict] = []
     expertise_issues: list[dict] = []
     coherence_issues: list[dict] = []
-    for component in stack_manifest.get("components", []):
+    for component in architecture_design.get("components", []):
         component_id = component.get("id", "(missing-id)")
         if isinstance(component_id, str):
             component_ids.append(component_id)
@@ -168,7 +168,7 @@ def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirement
     feature_ids = [feature["id"] for feature in feature_spec.get("features", [])]
     coverage: dict[str, list[str]] = {feature_id: [] for feature_id in feature_ids}
     empty_features_served: list[str] = []
-    for component in stack_manifest.get("components", []):
+    for component in architecture_design.get("components", []):
         component_id = str(component.get("id", "(missing-id)"))
         features_served = component.get("features_served", [])
         if not features_served:
@@ -188,7 +188,7 @@ def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirement
 
     integration_ids: list[str] = []
     integration_issues: list[dict] = []
-    for integration_point in stack_manifest.get("integration_points", []):
+    for integration_point in architecture_design.get("integration_points", []):
         integration_id = integration_point.get("id", "(missing-id)")
         if isinstance(integration_id, str):
             integration_ids.append(integration_id)
@@ -219,7 +219,7 @@ def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirement
         }
     )
 
-    rationale = stack_manifest.get("rationale", "")
+    rationale = architecture_design.get("rationale", "")
     checks.append(
         {
             "id": "rationale",
@@ -250,7 +250,7 @@ def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirement
     failed = [check["id"] for check in checks if check["status"] != "pass"]
     return {
         "validator": "phase_2_validation",
-        "stack_manifest_path": str(stack_manifest_path),
+        "architecture_design_path": str(architecture_design_path),
         "feature_spec_path": str(feature_spec_path),
         "requirements_inventory_path": str(requirements_inventory_path),
         "overall_status": "pass" if not failed else "fail",
@@ -261,12 +261,12 @@ def build_report(stack_manifest_path: Path, feature_spec_path: Path, requirement
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
-        description="Run deterministic validation for PH-002 architecture stack manifests.",
+        description="Run deterministic validation for PH-002 architecture design artifacts.",
     )
     parser.add_argument(
-        "--stack-manifest",
-        default="docs/architecture/stack-manifest.yaml",
-        help="Path to the stack manifest YAML relative to cwd.",
+        "--architecture-design",
+        default="docs/architecture/architecture-design.yaml",
+        help="Path to the architecture design YAML relative to cwd.",
     )
     parser.add_argument(
         "--feature-spec",
@@ -282,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         report = build_report(
-            Path(args.stack_manifest),
+            Path(args.architecture_design),
             Path(args.feature_spec),
             Path(args.requirements_inventory),
         )

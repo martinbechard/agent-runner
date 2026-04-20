@@ -165,6 +165,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
         name, value = item.split("=", 1)
         placeholder_values[name] = value
 
+    path_mappings: dict[str, str] = {}
+    for item in args.path_map:
+        if "=" not in item:
+            _print_error_banner(
+                "R-INVALID-PATH-MAP",
+                f"invalid --path-map (expected PREFIX=ROOT): {item}",
+            )
+            return 2
+        prefix, root = item.split("=", 1)
+        if not prefix:
+            _print_error_banner(
+                "R-INVALID-PATH-MAP",
+                f"invalid --path-map prefix: {item}",
+            )
+            return 2
+        path_mappings[prefix] = root
+
     selected_prompt = args.only if args.only is not None else args.judge_only
 
     if args.variant is not None and args.only is None:
@@ -219,6 +236,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         variant_sequential=args.variant_sequential,
         fork_from_session=getattr(args, "fork_from_session", None),
         placeholder_values=placeholder_values,
+        path_mappings=path_mappings,
         variant=args.variant,
     )
 
@@ -378,6 +396,17 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Extra placeholder binding. May be repeated. Built-in values such "
             "as run_dir and project_dir are always supplied by prompt-runner."
+        ),
+    )
+    run_cmd.add_argument(
+        "--path-map",
+        action="append",
+        default=[],
+        metavar="PREFIX=ROOT",
+        help=(
+            "Prefix-based prompt path mapping. May be repeated. Example: "
+            "--path-map skills/=/abs/path/to/skills/ so {{INCLUDE:skills/x.md}} "
+            "resolves under that root."
         ),
     )
     run_cmd.add_argument(

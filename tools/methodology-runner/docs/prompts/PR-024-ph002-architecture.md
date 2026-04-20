@@ -25,7 +25,7 @@ feature specification and requirements, but do not invent extra scope.
 
 Keep it as small as the feature set allows.
 <Structured design directives>
-{{INCLUDE:../../../../../../agent-assets/skills/structured-design/SKILL.md}}
+{{INCLUDE:skills/structured-design/SKILL.md}}
 </Structured design directives>
 
 Requirements:
@@ -78,7 +78,7 @@ Focus on material defects only:
 
 Review rules:
 <Structured review directives>
-{{INCLUDE:../../../../../../agent-assets/skills/structured-review/SKILL.md}}
+{{INCLUDE:skills/structured-review/SKILL.md}}
 </Structured review directives>
 
 

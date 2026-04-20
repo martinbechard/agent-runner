@@ -280,7 +280,7 @@ Verify that:
 Current phase output: {output_path}
 Prior phase outputs:
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 2 (Architecture): docs/architecture/stack-manifest.yaml
+  Phase 2 (Architecture): docs/architecture/architecture-design.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each CMP-* component:
@@ -494,7 +494,7 @@ of an AI-driven software development methodology.
 
   Phase 0 (Requirements Inventory): docs/requirements/requirements-inventory.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
-  Phase 2 (Architecture): docs/architecture/stack-manifest.yaml
+  Phase 2 (Architecture): docs/architecture/architecture-design.yaml
   Phase 3 (Solution Design): docs/design/solution-design.yaml
   Phase 4 (Interface Contracts): docs/design/interface-contracts.yaml
   Phase 5 (Intelligent Simulations): docs/simulations/simulation-definitions.yaml

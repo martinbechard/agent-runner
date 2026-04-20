@@ -9,7 +9,7 @@ Output paths align with CD-002 Section 4.5 workspace layout::
 
     docs/requirements/requirements-inventory.yaml   # Phase 0
     docs/features/feature-specification.yaml        # Phase 1
-    docs/architecture/stack-manifest.yaml           # Phase 2 (NEW)
+    docs/architecture/architecture-design.yaml      # Phase 2
     docs/design/solution-design.yaml                # Phase 3
     docs/design/interface-contracts.yaml            # Phase 4
     docs/simulations/simulation-definitions.yaml    # Phase 5
@@ -47,7 +47,7 @@ _RAW_REQUIREMENTS_TEMPLATE = "{workspace}/docs/requirements/raw-requirements.md"
 _OUTPUT_PHASE_0 = "docs/requirements/requirements-inventory.yaml"
 _OUTPUT_PHASE_0_COVERAGE = "docs/requirements/requirements-inventory-coverage.yaml"
 _OUTPUT_PHASE_1 = "docs/features/feature-specification.yaml"
-_OUTPUT_PHASE_2 = "docs/architecture/stack-manifest.yaml"
+_OUTPUT_PHASE_2 = "docs/architecture/architecture-design.yaml"
 _OUTPUT_PHASE_3 = "docs/design/solution-design.yaml"
 _OUTPUT_PHASE_4 = "docs/design/interface-contracts.yaml"
 _OUTPUT_PHASE_5 = "docs/simulations/simulation-definitions.yaml"
@@ -391,7 +391,7 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
         "point."
     ),
     generation_instructions=(
-        "Read the feature specification and produce a stack manifest YAML\n"
+        "Read the feature specification and produce an architecture-design YAML\n"
         "file.  The file decomposes the enhancement into technology\n"
         "components and declares what knowledge each component needs.\n"
         "\n"
@@ -466,7 +466,7 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
     checklist_examples_good=[
         (
             "Every FT-* feature from Phase 1 appears in the features_served "
-            "list of at least one component in the stack manifest"
+            "list of at least one component in the architecture design"
         ),
         (
             "Every component has a non-empty expected_expertise list where "

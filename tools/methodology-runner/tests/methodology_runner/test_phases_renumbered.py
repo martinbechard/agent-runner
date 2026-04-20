@@ -29,9 +29,9 @@ def test_phase_numbers_match_order():
         assert phase.phase_number == expected_num
 
 
-def test_architecture_phase_outputs_stack_manifest():
+def test_architecture_phase_outputs_architecture_design():
     arch = get_phase("PH-002-architecture")
-    assert "stack-manifest" in arch.output_artifact_path
+    assert "architecture-design" in arch.output_artifact_path
     assert arch.output_format == "yaml"
     assert arch.predecessors == ["PH-001-feature-specification"]
 

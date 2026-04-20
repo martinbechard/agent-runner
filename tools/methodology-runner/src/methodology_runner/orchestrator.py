@@ -555,6 +555,7 @@ def _invoke_prompt_runner_library(
         judge_prelude=judge_prelude,
         include_project_organiser=False,
         placeholder_values=placeholder_values or {},
+        path_mappings=_phase_path_mappings(),
         run_id_override=run_id,
     )
 
@@ -655,6 +656,26 @@ def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
     if phase_config.phase_id == "PH-006-incremental-implementation":
         values["prompt_runner_command"] = "prompt-runner"
     return values
+
+
+def _resolve_bundled_skills_root() -> Path:
+    """Resolve the methodology-runner bundled skills root."""
+    package_root = Path(__file__).resolve().parent
+    candidates = [
+        package_root / "skills",
+        package_root.parent.parent / "skills",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _phase_path_mappings() -> dict[str, str]:
+    """Return prompt-runner root-prefix mappings for methodology prompts."""
+    return {
+        "skills/": str(_resolve_bundled_skills_root()),
+    }
 
 
 def _cross_ref_retry_guidance(result: CrossRefResult) -> str:

@@ -166,6 +166,14 @@ class RunConfig:
     placeholder_values: dict[str, str] = field(default_factory=dict)
     """Caller-supplied placeholder bindings applied in addition to
     built-in values such as run_dir and project_dir."""
+    path_mappings: dict[str, str] = field(default_factory=dict)
+    """Prefix-based path mappings for prompt-owned reference roots.
+
+    Keys are raw path prefixes such as ``skills/`` and values are concrete
+    root directories. When a prompt path starts with a configured prefix,
+    prompt-runner replaces that prefix with the mapped root before resolving
+    the file on disk.
+    """
     variant: str | None = None
     """When set, run only the named fork variant inside the selected fork
     prompt. Intended for targeted variant debugging."""
@@ -390,6 +398,7 @@ def build_initial_generator_message(
     generator_prelude: str | None = None,
     include_project_organiser: bool = True,
     source_file: Path | None = None,
+    path_mappings: dict[str, str] | None = None,
 ) -> str:
     sections: list[str] = []
 
@@ -426,7 +435,7 @@ def build_initial_generator_message(
 
     sections.append(
         "# Your task\n\n"
-        f"{_materialize_runtime_includes(pair.generation_prompt, worktree_dir, source_file)}"
+        f"{_materialize_runtime_includes(pair.generation_prompt, worktree_dir, source_file, path_mappings)}"
     )
     if include_project_organiser:
         sections.append(PROJECT_ORGANISER_INSTRUCTION)
@@ -500,6 +509,7 @@ def build_initial_judge_message(
     deterministic_validation: DeterministicValidationResult | None = None,
     judge_prelude: str | None = None,
     source_file: Path | None = None,
+    path_mappings: dict[str, str] | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
     deterministic_section = _format_deterministic_validation_section(
@@ -512,6 +522,7 @@ def build_initial_judge_message(
         pair.validation_prompt,
         worktree_dir,
         source_file,
+        path_mappings,
     )
     return (
         f"{prelude_block}"
@@ -537,12 +548,18 @@ def build_revision_generator_message(
     previous_artifact: str | None = None,
     include_project_organiser: bool = True,
     source_file: Path | None = None,
+    path_mappings: dict[str, str] | None = None,
 ) -> str:
     prelude_block = f"{generator_prelude}{_HORIZONTAL_RULE}" if generator_prelude else ""
     include_section = _format_included_files_section(pair, worktree_dir)
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
     rendered_original_task = (
-        _materialize_runtime_includes(original_task, worktree_dir, source_file)
+        _materialize_runtime_includes(
+            original_task,
+            worktree_dir,
+            source_file,
+            path_mappings,
+        )
         if original_task else None
     )
     task_block = (
@@ -569,6 +586,7 @@ def build_revision_generator_message(
             retry_prompt,
             worktree_dir,
             source_file,
+            path_mappings,
         )
         if pair.retry_mode == "append":
             retry_instruction_block = (
@@ -605,6 +623,7 @@ def build_revision_judge_message(
     judge_prelude: str | None = None,
     validation_prompt: str | None = None,
     source_file: Path | None = None,
+    path_mappings: dict[str, str] | None = None,
 ) -> str:
     files_section = _format_generator_files_section(generator_files or [])
     deterministic_section = _format_deterministic_validation_section(
@@ -614,7 +633,12 @@ def build_revision_judge_message(
     prelude_block = f"{judge_prelude}{_HORIZONTAL_RULE}" if judge_prelude else ""
     include_block = f"{include_section}{_HORIZONTAL_RULE}" if include_section else ""
     rendered_validation_prompt = (
-        _materialize_runtime_includes(validation_prompt, worktree_dir, source_file)
+        _materialize_runtime_includes(
+            validation_prompt,
+            worktree_dir,
+            source_file,
+            path_mappings,
+        )
         if validation_prompt else None
     )
     validation_block = (
@@ -1411,6 +1435,7 @@ def run_prompt(
                 generator_prelude=config.generator_prelude,
                 include_project_organiser=config.include_project_organiser,
                 source_file=source_file,
+                path_mappings=config.path_mappings,
             )
             if is_first
             else build_revision_generator_message(
@@ -1424,6 +1449,7 @@ def run_prompt(
                 ),
                 include_project_organiser=config.include_project_organiser,
                 source_file=source_file,
+                path_mappings=config.path_mappings,
             )
         )
         _write(
@@ -1502,6 +1528,7 @@ def run_prompt(
             worktree_dir=worktree_dir,
             source_file=source_file,
             iteration_number=iteration_number,
+            path_mappings=config.path_mappings,
         )
         if (
             deterministic_validation is not None
@@ -1542,6 +1569,7 @@ def run_prompt(
                 deterministic_validation=deterministic_validation,
                 judge_prelude=config.judge_prelude,
                 source_file=source_file,
+                path_mappings=config.path_mappings,
             )
             if is_first
             else build_revision_judge_message(
@@ -1552,6 +1580,7 @@ def run_prompt(
                     pair.validation_prompt if stateless_revisions else None
                 ),
                 source_file=source_file,
+                path_mappings=config.path_mappings,
             )
         )
         _write(
@@ -1719,6 +1748,7 @@ def _run_judge_only_prompt(
         worktree_dir=worktree_dir,
         source_file=source_file,
         iteration_number=iteration_number,
+        path_mappings=config.path_mappings,
     )
     if (
         deterministic_validation is not None
@@ -1744,6 +1774,7 @@ def _run_judge_only_prompt(
         deterministic_validation=deterministic_validation,
         judge_prelude=config.judge_prelude,
         source_file=source_file,
+        path_mappings=config.path_mappings,
     )
     _write(
         _iteration_prompt_input_path(
@@ -1840,8 +1871,31 @@ def _load_prior_artifact_from_disk(
     )
 
 
-def _resolve_required_file(path_text: str, worktree_dir: Path) -> Path:
-    candidate = Path(path_text)
+def _apply_path_mappings(
+    path_text: str,
+    path_mappings: dict[str, str] | None,
+) -> str:
+    if not path_mappings:
+        return path_text
+    best_prefix: str | None = None
+    for prefix in path_mappings:
+        if path_text == prefix.rstrip("/") or path_text.startswith(prefix):
+            if best_prefix is None or len(prefix) > len(best_prefix):
+                best_prefix = prefix
+    if best_prefix is None:
+        return path_text
+    root = path_mappings[best_prefix]
+    suffix = path_text[len(best_prefix):]
+    return str(Path(root) / suffix) if suffix else str(Path(root))
+
+
+def _resolve_required_file(
+    path_text: str,
+    worktree_dir: Path,
+    path_mappings: dict[str, str] | None = None,
+) -> Path:
+    mapped_path_text = _apply_path_mappings(path_text, path_mappings)
+    candidate = Path(mapped_path_text)
     if candidate.is_absolute():
         worktree_prefix = str(worktree_dir.resolve())
         raw = str(candidate)
@@ -1863,11 +1917,12 @@ def _resolve_deterministic_validation_script(
     pair: PromptPair,
     worktree_dir: Path,
     source_file: Path | None,
+    path_mappings: dict[str, str] | None = None,
 ) -> Path | None:
     if not pair.deterministic_validation:
         return None
     raw_path = pair.deterministic_validation[0]
-    candidate = _resolve_required_file(raw_path, worktree_dir)
+    candidate = _resolve_required_file(raw_path, worktree_dir, path_mappings)
     if candidate.exists():
         return candidate
     repo_candidate = Path(raw_path).resolve()
@@ -1880,10 +1935,14 @@ def _resolve_deterministic_validation_script(
     return candidate
 
 
-def _missing_required_files(pair: PromptPair, worktree_dir: Path) -> list[Path]:
+def _missing_required_files(
+    pair: PromptPair,
+    worktree_dir: Path,
+    path_mappings: dict[str, str] | None = None,
+) -> list[Path]:
     missing: list[Path] = []
     for raw_path in (*pair.required_files, *pair.include_files):
-        resolved = _resolve_required_file(raw_path, worktree_dir)
+        resolved = _resolve_required_file(raw_path, worktree_dir, path_mappings)
         if not resolved.exists():
             missing.append(resolved)
     return missing
@@ -1917,12 +1976,13 @@ def _render_inline_includes(
     context: dict[str, str],
     worktree_dir: Path,
     source_file: Path | None,
+    path_mappings: dict[str, str] | None = None,
 ) -> str:
     def replace(match: re.Match[str]) -> str:
         raw_target = match.group(1).strip()
         include_target = context.get(raw_target, raw_target)
         include_target = _render_placeholders(include_target, context)
-        resolved = _resolve_required_file(include_target, worktree_dir)
+        resolved = _resolve_required_file(include_target, worktree_dir, path_mappings)
         if not resolved.exists() and source_file is not None:
             prompt_relative = (source_file.parent / include_target).resolve()
             if prompt_relative.exists():
@@ -1954,10 +2014,11 @@ def _materialize_runtime_includes(
     text: str,
     worktree_dir: Path,
     source_file: Path | None,
+    path_mappings: dict[str, str] | None = None,
 ) -> str:
     def replace(match: re.Match[str]) -> str:
         raw_target = match.group(1).strip()
-        resolved = _resolve_required_file(raw_target, worktree_dir)
+        resolved = _resolve_required_file(raw_target, worktree_dir, path_mappings)
         if not resolved.exists() and source_file is not None:
             prompt_relative = (source_file.parent / raw_target).resolve()
             if prompt_relative.exists():
@@ -1977,6 +2038,7 @@ def _render_prompt_pair(
     context: dict[str, str],
     worktree_dir: Path,
     source_file: Path | None,
+    path_mappings: dict[str, str] | None = None,
 ) -> PromptPair:
     generation_prompt = _render_runtime_include_targets(
         _render_placeholders(pair.generation_prompt, context),
@@ -1995,18 +2057,21 @@ def _render_prompt_pair(
         context,
         worktree_dir,
         source_file,
+        path_mappings,
     )
     rendered_validation = _render_inline_includes(
         validation_prompt,
         context,
         worktree_dir,
         source_file,
+        path_mappings,
     )
     rendered_retry = _render_inline_includes(
         retry_prompt,
         context,
         worktree_dir,
         source_file,
+        path_mappings,
     )
     return PromptPair(
         index=pair.index,
@@ -2060,10 +2125,14 @@ def _pair_unresolved_placeholders(pair: PromptPair) -> list[str]:
     return sorted(names)
 
 
-def _optional_file_checks(pair: PromptPair, worktree_dir: Path) -> list[dict[str, str | bool]]:
+def _optional_file_checks(
+    pair: PromptPair,
+    worktree_dir: Path,
+    path_mappings: dict[str, str] | None = None,
+) -> list[dict[str, str | bool]]:
     checks: list[dict[str, str | bool]] = []
     for raw_path in pair.checks_files:
-        resolved = _resolve_required_file(raw_path, worktree_dir)
+        resolved = _resolve_required_file(raw_path, worktree_dir, path_mappings)
         checks.append(
             {
                 "path": raw_path,
@@ -2078,10 +2147,11 @@ def _write_optional_file_checks_trace(
     run_dir: Path,
     pair: PromptPair,
     worktree_dir: Path,
+    path_mappings: dict[str, str] | None = None,
 ) -> None:
     if not pair.checks_files:
         return
-    checks = _optional_file_checks(pair, worktree_dir)
+    checks = _optional_file_checks(pair, worktree_dir, path_mappings)
     missing_paths = [entry["path"] for entry in checks if entry["exists"] is False]
     warning_block = ""
     if missing_paths:
@@ -2107,6 +2177,7 @@ def _run_deterministic_validation(
     worktree_dir: Path,
     source_file: Path | None,
     iteration_number: int,
+    path_mappings: dict[str, str] | None = None,
 ) -> DeterministicValidationResult | None:
     if not pair.deterministic_validation:
         return None
@@ -2127,7 +2198,12 @@ def _run_deterministic_validation(
             *pair.deterministic_validation[1:],
         ]
     else:
-        script_path = _resolve_deterministic_validation_script(pair, worktree_dir, source_file)
+        script_path = _resolve_deterministic_validation_script(
+            pair,
+            worktree_dir,
+            source_file,
+            path_mappings,
+        )
         assert script_path is not None
         argv = [
             sys.executable,
@@ -2640,6 +2716,7 @@ def run_pipeline(
                 placeholder_context,
                 worktree_dir,
                 source_file,
+                config.path_mappings,
             )
 
             if config.only is not None and rendered_pair.index != config.only:
@@ -2721,9 +2798,18 @@ def run_pipeline(
 
             prompt_dir = _prompt_artifact_dir(run_dir, rendered_pair)
             prompt_dir.mkdir(parents=True, exist_ok=True)
-            _write_optional_file_checks_trace(run_dir, rendered_pair, worktree_dir)
+            _write_optional_file_checks_trace(
+                run_dir,
+                rendered_pair,
+                worktree_dir,
+                config.path_mappings,
+            )
 
-            missing_required = _missing_required_files(rendered_pair, worktree_dir)
+            missing_required = _missing_required_files(
+                rendered_pair,
+                worktree_dir,
+                config.path_mappings,
+            )
             if missing_required:
                 missing_lines = "\n".join(f"- {path}" for path in missing_required)
                 halt_reason = (

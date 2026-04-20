@@ -31,6 +31,9 @@ Context:
 <FEATURE_SPECIFICATION>
 {{INCLUDE:docs/features/feature-specification.yaml}}
 </FEATURE_SPECIFICATION>
+- If steady-state contract docs already exist under `docs/contracts/*.md`,
+  inspect those markdown files as continuity context.
+- Exclude anything under `docs/changes/` from that continuity scan.
 
 Module-local generator context:
 Embedded directives for this step:
@@ -42,6 +45,13 @@ Embedded directives for this step:
   and invariants.
 - Keep contract language at the interface boundary. Do not prescribe hidden
   implementation internals.
+- Use existing steady-state contract docs under `docs/contracts/*.md` to
+  preserve stable interface names, operation names, payload families, and
+  boundary language when they still fit the current solution design.
+- If the upstream solution design requires a real contract change, evolve the
+  contract set deliberately instead of copying the old interface shape blindly.
+- The current solution design and feature specification are authoritative over
+  older steady-state contract docs when they conflict.
 
 Phase purpose:
 - Define explicit contracts for each INT-* interaction.
@@ -129,6 +139,9 @@ Context:
 <INTERFACE_CONTRACTS>
 {{RUNTIME_INCLUDE:docs/design/interface-contracts.yaml}}
 </INTERFACE_CONTRACTS>
+- If steady-state contract docs already exist under `docs/contracts/*.md`,
+  inspect those markdown files as continuity context.
+- Exclude anything under `docs/changes/` from that continuity scan.
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
@@ -138,6 +151,10 @@ Module-local judge context:
 - Review for missing contracts, type holes, weak or missing error models,
   cross-contract inconsistency, and behavioral specs too weak to drive
   simulation.
+- Review continuity with existing steady-state contract docs when they exist.
+  Flag unjustified contract renames, operation churn, or boundary-language
+  drift, but do not block deliberate evolution that is supported by the
+  current solution design and feature spec.
 
 Your job is to decide whether the generated interface contracts are phase-ready.
 

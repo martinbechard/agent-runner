@@ -1,18 +1,22 @@
-# methodology-runner-skills
+# methodology-runner skills
 
-Baseline skill pack for the AI-driven development methodology.
+Authoring and reference material for methodology-runner skills.
 
-All active methodology skills live here, covering the methodology phases with a tech-agnostic generator/judge baseline.
+This directory is the bundled runtime location for methodology-runner skill
+content that is injected directly into phase prompts.
+
+The files in this directory remain useful as methodology-owned authoring
+context, shared discipline references, and historical skill-pack material.
 
 ## Spec
 
 [Skill-Driven Methodology Runner Design](../../docs/superpowers/specs/2026-04-09-skill-driven-methodology-runner-design.md)
 
-## Discovery
+## Runtime Packaging
 
-methodology-runner discovers skills by walking
-`<cwd>/tools/methodology-runner/skills/**/SKILL.md`. Run methodology-runner from the
-repo root and these skills are picked up automatically.
+The active phase prompts resolve these files directly from
+`tools/methodology-runner/skills/`. This avoids any runtime dependency on a
+sibling checkout such as `agent-assets`.
 
 ## Quick start
 
@@ -24,15 +28,27 @@ methodology-runner run \
   --workspace /tmp/test-release-smoke
 ```
 
-This uses repo-local discovery from `./tools/methodology-runner/skills/`. No symlinks or extra install step are required while developing in this repo.
+This exercises the packaged prompt/runtime path through the checked-in
+`methodology_runner` package.
 
-## Active skill list
+## Bundled Runtime Skill Resources
 
 | # | Skill ID | Role |
 |---|----------|------|
-| 1 | artifact-generator | Shared generator-prompt discipline for methodology artifacts. |
-| 2 | judge-creation | Shared judge-prompt discipline for methodology artifacts. |
-| 3 | traceability-discipline | Universal traceability rules: every artifact traces to a prior-phase element. |
+| 1 | structured-design | Inline prompt directives for architecture and solution-design generation. |
+| 2 | structured-review | Inline prompt directives for structured review and checklist-driven judging. |
+
+## Local Authoring Material
+
+The root `tools/methodology-runner/skills/` tree still contains methodology
+authoring/reference material such as:
+
+- `judge-creation`
+- `traceability-discipline`
+- `authoring-prelude.txt`
+- `AUTHORING-CONTEXT.md`
+
+These are not currently auto-discovered by the installed runtime.
 
 ## Structure
 
@@ -41,10 +57,13 @@ tools/methodology-runner/skills/
   README.md
   AUTHORING-CONTEXT.md
   authoring-prelude.txt
-  artifact-generator/SKILL.md
   judge-creation/SKILL.md
   traceability-discipline/SKILL.md
-  # phase-local rules now live in the prompt modules
+
+tools/methodology-runner/skills/
+  structured-design/SKILL.md
+  structured-review/SKILL.md
+  structured-review/references/generic-structured-document-checklist.md
 ```
 
 ## License

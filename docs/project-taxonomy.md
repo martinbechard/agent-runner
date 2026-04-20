@@ -7,7 +7,7 @@
 
 ## Conventions
 
-- **ID prefixes:** FR (functional requirement), TR (technical requirement), HLD (high-level design), CD (component design)
+- **ID prefixes:** FR (functional requirement), TR (technical requirement), HLD (high-level design), CD (component design), STR (strategy)
 - **ID format:** `<PREFIX>-<NNN>-<kebab-slug>.md` where NNN is 3-digit zero-padded (e.g. `FR-001-...`, `HLD-042-...`)
 - **Filename casing:**
   - Python modules: `snake_case.py`
@@ -202,16 +202,16 @@
 - **Mirrors:** `tools/methodology-runner/src/`
 
 ### tools/methodology-runner/skills/
-- **Purpose:** Methodology-owned skill-pack files that support methodology-runner execution and skill authoring. Use this path for methodology skill pack overview files and shared authoring guidance that belong to the methodology layer rather than to a generic plugin package.
-- **Signals:** methodology skill pack README, methodology skill authoring context, methodology skill authoring prelude, shared guidance for the methodology skill set.
+- **Purpose:** Methodology-owned skill-pack files that support methodology-runner execution and skill authoring. Use this path for bundled runtime prompt-resource skills, skill-pack overview files, and shared authoring guidance that belong to the methodology layer rather than to a generic plugin package.
+- **Signals:** methodology skill pack README, bundled runtime skill resource, prompt-injected skill content, methodology skill authoring context, methodology skill authoring prelude, shared guidance for the methodology skill set.
 - **Filename pattern:** fixed support filenames such as `README.md`, `AUTHORING-CONTEXT.md`, or `authoring-prelude.txt`.
 - **Example:** `tools/methodology-runner/skills/README.md`
 
 ### tools/methodology-runner/skills/<skill-name>/
-- **Purpose:** Canonical methodology skill definitions used by methodology-runner. Each skill lives in its own directory with a `SKILL.md` file and belongs to the methodology layer rather than to a repo-local plugin wrapper.
-- **Signals:** methodology skill definition, `SKILL.md`, phase-local or shared methodology discipline, skill loaded by methodology-runner, audience is methodology generator or judge agents.
+- **Purpose:** Canonical methodology skill definitions and bundled prompt-resource skills used by methodology-runner. Each skill lives in its own directory with a `SKILL.md` file and belongs to the methodology layer rather than to a repo-local plugin wrapper.
+- **Signals:** methodology skill definition, `SKILL.md`, phase-local or shared methodology discipline, prompt-injected bundled skill, audience is methodology generator or judge agents.
 - **Filename pattern:** `SKILL.md` inside `tools/methodology-runner/skills/<skill-name>/`.
-- **Example:** `tools/methodology-runner/skills/traceability-discipline/SKILL.md`
+- **Example:** `tools/methodology-runner/skills/structured-design/SKILL.md`
 
 ### tools/report/
 - **Purpose:** Root for the repository's cross-tool reporting utilities. Use this path for reporting-specific documentation and support files when they are not owned by prompt-runner or methodology-runner alone.
@@ -279,6 +279,12 @@
 - **Signals:** "review checklist", "review findings", "structured review", "issues found", "coverage check", "internal logic review", paired checklist/findings documents derived from a design, plan, prompt, or other structured artifact.
 - **Filename pattern:** `RVW-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the reviewed artifact plus the review output type.
 - **Example:** `RVW-001-active-design-stack-checklist.md`
+
+### docs/strategies/
+- **Purpose:** Durable repository or workflow strategies that define ongoing operating rules rather than one-off reviews or staged implementation plans. Use this path for canonical guidance about how the repository should manage recurring concerns such as file promotion, artifact retention, naming models, or multi-run workflow structure.
+- **Signals:** "strategy", "file management strategy", "promotion model", "steady-state vs change-specific", "operating model", "long-lived workflow rule", "this is how we will manage X over time".
+- **Filename pattern:** `STR-NNN-<slug>.md` where NNN is 3-digit zero-padded and slug identifies the strategy topic.
+- **Example:** `docs/strategies/STR-001-file-management-strategy.md`
 
 ### docs/testing/
 - **Purpose:** Implementation acceptance criteria and test plans — concrete, runnable checks that verify finished code matches a design spec. Not the design itself and not the test code; the layer in between.
@@ -391,6 +397,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-20 — docs/strategies/ added — durable operating guidance such as file-promotion and artifact-retention models needs a canonical home separate from one-off reviews and staged plans.
 - 2026-04-19 — tools/report/ added — the timeline report script, its tests, and its fixtures are cross-tool diagnostics and belong under a dedicated reporting tool instead of lingering in root `scripts/` and `tests/`.
 - 2026-04-18 — sample/ added — curated example bundles such as Hello World need one self-contained home instead of being split across docs and methodology fixtures.
 - 2026-04-18 — docs/plans/ extended — existing PLAN files already include migration and repo-change plans, so the taxonomy must explicitly allow staged reorganization and migration plans rather than only TDD implementation plans.

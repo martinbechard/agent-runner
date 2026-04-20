@@ -11,6 +11,7 @@ from prompt_runner.runner import (
     PROJECT_ORGANISER_INSTRUCTION,
     RUN_FILES_DIRNAME,
     PriorArtifact,
+    _missing_required_files,
     _render_prompt_pair,
     build_initial_generator_message,
     build_initial_judge_message,
@@ -426,6 +427,46 @@ def test_render_prompt_pair_inlines_include_relative_to_prompt_file(tmp_path: Pa
     )
 
     assert rendered.generation_prompt == "prompt relative include\n"
+
+
+def test_render_prompt_pair_inlines_include_from_mapped_root(tmp_path: Path):
+    worktree = _worktree(tmp_path)
+    skills_root = tmp_path / "bundled-skills"
+    source = skills_root / "structured-design" / "SKILL.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("mapped skill include\n", encoding="utf-8")
+    pair = _pair(1, "Mapped include", gen="{{INCLUDE:skills/structured-design/SKILL.md}}")
+
+    rendered = _render_prompt_pair(
+        pair,
+        {},
+        worktree,
+        None,
+        {"skills/": str(skills_root)},
+    )
+
+    assert rendered.generation_prompt == "mapped skill include\n"
+
+
+def test_missing_required_files_support_mapped_root(tmp_path: Path):
+    worktree = _worktree(tmp_path)
+    skills_root = tmp_path / "bundled-skills"
+    source = skills_root / "structured-review" / "SKILL.md"
+    source.parent.mkdir(parents=True, exist_ok=True)
+    source.write_text("review skill\n", encoding="utf-8")
+    pair = _pair(
+        1,
+        "Mapped required",
+        required_files=("skills/structured-review/SKILL.md",),
+    )
+
+    missing = _missing_required_files(
+        pair,
+        worktree,
+        {"skills/": str(skills_root)},
+    )
+
+    assert missing == []
 
 
 def test_include_files_are_front_loaded_in_revision_judge_message(tmp_path: Path):
