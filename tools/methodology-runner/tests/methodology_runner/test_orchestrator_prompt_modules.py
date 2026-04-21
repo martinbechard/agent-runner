@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import shlex
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -385,7 +386,7 @@ def test_run_pipeline_debug_writes_methodology_process_log(
     assert "[debug-trace] enabled depth=2" in text
 
 
-def test_selected_phase_run_sets_finished_at_when_scope_completes(
+def test_selected_phase_run_keeps_lifecycle_inside_lc001_when_full_methodology_is_not_done(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
@@ -446,11 +447,224 @@ def test_selected_phase_run_sets_finished_at_when_scope_completes(
     assert result.halted_early is False
     state = ProjectState.load(workspace / ".methodology-runner" / "state.json")
     assert state.current_phase is None
-    assert state.finished_at is not None
-    assert state.current_lifecycle_phase_id == "LC-002-change-record-preservation"
+    assert state.finished_at is None
+    assert state.current_lifecycle_phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
     methodology = next(
         phase
         for phase in state.lifecycle_phases
         if phase.phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
     )
-    assert methodology.status == PhaseStatus.COMPLETED
+    assert methodology.status == PhaseStatus.IN_PROGRESS
+
+
+def test_full_run_auto_finalizes_and_merges_into_main(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    repo = tmp_path / "hello-clock"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True)
+    subprocess.run(
+        ["git", "config", "user.email", "tester@example.com"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.name", "Tester"],
+        cwd=repo,
+        check=True,
+    )
+    subprocess.run(["git", "commit", "--allow-empty", "-m", "Initial empty commit"], cwd=repo, check=True)
+
+    worktrees = tmp_path / "worktrees"
+    worktrees.mkdir()
+    feature_worktree = worktrees / "change-001-hello-world"
+    subprocess.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "worktree",
+            "add",
+            str(feature_worktree),
+            "-b",
+            "change-001-hello-world",
+        ],
+        check=True,
+    )
+
+    req = tmp_path / "req.md"
+    req.write_text("# Requirements\nCreate hello world.\n", encoding="utf-8")
+    config = PipelineConfig(
+        requirements_path=req,
+        workspace_dir=feature_worktree,
+        backend="codex",
+    )
+
+    def fake_run_single_phase(
+        phase,
+        state,
+        workspace_dir,
+        pipeline_config,
+        claude_client=None,
+        cross_ref_only=False,
+    ):
+        phase_state = next(ps for ps in state.phases if ps.phase_id == phase.phase_id)
+        phase_state.status = PhaseStatus.COMPLETED
+        output = workspace_dir / phase.output_artifact_path
+        output.parent.mkdir(parents=True, exist_ok=True)
+
+        if phase.phase_id == "PH-000-requirements-inventory":
+            output.write_text("items: []\n", encoding="utf-8")
+            (workspace_dir / "docs/requirements/requirements-inventory-coverage.yaml").write_text(
+                "coverage_verdict:\n  verdict: PASS\n",
+                encoding="utf-8",
+            )
+        elif phase.phase_id == "PH-001-feature-specification":
+            output.write_text(
+                "features:\n"
+                "  - id: \"FT-001\"\n"
+                "    name: \"Command-Line Hello World Application\"\n"
+                "    description: \"Print Hello, world! from the command line.\"\n"
+                "    source_inventory_refs: [\"RI-001\"]\n"
+                "    acceptance_criteria:\n"
+                "      - id: \"AC-001-01\"\n"
+                "        description: \"The command prints Hello, world!.\"\n"
+                "    dependencies: []\n"
+                "cross_cutting_concerns: []\n"
+                "out_of_scope: []\n",
+                encoding="utf-8",
+            )
+        elif phase.phase_id == "PH-002-architecture":
+            output.write_text("components: []\ninteractions: []\n", encoding="utf-8")
+        elif phase.phase_id == "PH-003-solution-design":
+            output.write_text(
+                "components:\n"
+                "  - id: \"CMP-1\"\n"
+                "    name: \"Command-line application\"\n"
+                "    responsibility: \"Runs the public hello-world command.\"\n"
+                "    technology: \"Python 3\"\n"
+                "    feature_realization_map:\n"
+                "      FT-001: \"Implements the command-line behavior.\"\n"
+                "    dependencies: []\n"
+                "interactions: []\n",
+                encoding="utf-8",
+            )
+        elif phase.phase_id == "PH-004-interface-contracts":
+            output.write_text(
+                "contracts:\n"
+                "  - id: \"CTR-001\"\n"
+                "    name: \"Public Entry Contract\"\n"
+                "    interaction_ref: \"INT-001\"\n"
+                "    source_component: \"CMP-3\"\n"
+                "    target_component: \"CMP-1\"\n"
+                "    operations:\n"
+                "      - name: \"execute_public_entry_path\"\n"
+                "        description: \"Run the command-line application.\"\n"
+                "        request_schema:\n"
+                "          fields:\n"
+                "            - name: \"entry_command\"\n"
+                "              type: \"string\"\n"
+                "              required: true\n"
+                "              constraints: \"Must be python3 hello_world.py\"\n"
+                "        response_schema:\n"
+                "          fields:\n"
+                "            - name: \"stdout_text\"\n"
+                "              type: \"string\"\n"
+                "              required: true\n"
+                "              constraints: \"Must equal Hello, world!\\\\n\"\n"
+                "        error_types: []\n"
+                "    behavioral_specs:\n"
+                "      - precondition: \"A caller invokes the public command.\"\n"
+                "        postcondition: \"The exact stdout is observed.\"\n"
+                "        invariant: \"The command stays framework-free.\"\n",
+                encoding="utf-8",
+            )
+        elif phase.phase_id == "PH-005-intelligent-simulations":
+            output.write_text("simulations: []\n", encoding="utf-8")
+        elif phase.phase_id == "PH-006-incremental-implementation":
+            output.write_text("### Module\nimplementation-workflow\n", encoding="utf-8")
+            (workspace_dir / "docs/implementation/implementation-run-report.yaml").write_text(
+                "completion_status: \"completed\"\n",
+                encoding="utf-8",
+            )
+            (workspace_dir / "docs/implementation/prompt-3-final-verification-report.md").write_text(
+                "## Slice Result Summary\nAll checks passed.\n",
+                encoding="utf-8",
+            )
+            (workspace_dir / "hello_world.py").write_text(
+                "def main() -> None:\n    print(\"Hello, world!\")\n\n\nif __name__ == \"__main__\":\n    main()\n",
+                encoding="utf-8",
+            )
+            (workspace_dir / "README.md").write_text(
+                "# Hello World\n\nRun:\n\npython3 hello_world.py\n",
+                encoding="utf-8",
+            )
+            tests_dir = workspace_dir / "tests"
+            tests_dir.mkdir(exist_ok=True)
+            (tests_dir / "__init__.py").write_text("", encoding="utf-8")
+            (tests_dir / "test_cli.py").write_text(
+                "def test_cli() -> None:\n    assert True\n",
+                encoding="utf-8",
+            )
+            (tests_dir / "test_readme.py").write_text(
+                "def test_readme() -> None:\n    assert True\n",
+                encoding="utf-8",
+            )
+        elif phase.phase_id == "PH-007-verification-sweep":
+            output.write_text("coverage_summary:\n  satisfaction_percentage: 100.0\n", encoding="utf-8")
+
+        result = PhaseResult(
+            phase_id=phase.phase_id,
+            status=PhaseStatus.COMPLETED,
+            prompt_runner_file="prompt.md",
+            iteration_count=1,
+            wall_time_seconds=0.1,
+            prompt_runner_exit_code=0,
+            prompt_runner_success=True,
+            cross_ref_result=None,
+            error_message=None,
+        )
+        state.phase_results[phase.phase_id] = result
+        return result
+
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator._run_single_phase",
+        fake_run_single_phase,
+    )
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator.verify_end_to_end",
+        lambda **kwargs: SimpleNamespace(
+            passed=True,
+            issues=[],
+            traceability_gaps=[],
+            orphaned_elements=[],
+            coverage_summary={},
+        ),
+    )
+
+    result = run_pipeline(config, claude_client=object())
+
+    assert result.halted_early is False
+    assert not (feature_worktree / ".methodology-runner").exists()
+    assert not (feature_worktree / ".run-files").exists()
+    assert (repo / "hello_world.py").exists()
+    assert (repo / "README.md").exists()
+    assert (repo / "tests" / "test_cli.py").exists()
+    assert (
+        repo
+        / "docs"
+        / "changes"
+        / "change-001-hello-world"
+        / "analysis"
+        / "feature-specification.yaml"
+    ).exists()
+    assert (
+        repo / "docs" / "features" / "hello-clock-capabilities.md"
+    ).exists()
+    assert (
+        repo / "docs" / "design" / "hello-clock-design.md"
+    ).exists()
+    assert (
+        repo / "docs" / "contracts" / "hello-clock-contracts.md"
+    ).exists()

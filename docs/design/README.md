@@ -34,10 +34,10 @@ usually be read.
   - **BECAUSE:** Every methodology-specific design depends on the
     generic runner capabilities and concepts first.
 
-- **FILE: FILE-2** `CD-003-methodology-run.md`
-  - **SYNOPSIS:** Generic structure of one `MethodologyRun`, including
-    `run_dir`, `worktree_dir`, top-level run artifacts, and deterministic
-    run completion logic.
+- **FILE: FILE-2** `CD-002-methodology-runner.md`
+  - **SYNOPSIS:** Current component design for `methodology_runner`,
+    including PH-000 through PH-007 orchestration, lifecycle automation,
+    run-state persistence, and final git integration.
   - **DEPENDS-ON:** `FILE-1`
     - **BECAUSE:** Methodology orchestration uses `prompt_runner` and its
       surrounding runtime concepts.
@@ -107,9 +107,10 @@ question.
   - **BECAUSE:** Generic runner behavior should not be redefined in the
     methodology-specific documents.
 
-- **RULE: RULE-2** Read `CD-003-methodology-run.md` for questions about one run.
-  - **BECAUSE:** The generic run document is the authority for `run_dir`,
-    `worktree_dir`, run-level artifacts, and run completion logic.
+- **RULE: RULE-2** Read `CD-002-methodology-runner.md` for questions about one methodology-runner execution.
+  - **BECAUSE:** The methodology-runner component document is the authority for
+    the application worktree, run-level artifacts, phase sequencing, lifecycle
+    automation, and final integration behavior.
 
 - **RULE: RULE-3** Read `HLD-001-methodology-prompt-optimization.md` for questions about baseline and variant organization.
   - **BECAUSE:** The optimization document is the authority for how one

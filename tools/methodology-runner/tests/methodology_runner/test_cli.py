@@ -951,7 +951,8 @@ class TestCmdStatus:
         assert rc == EXIT_SUCCESS
         captured = capsys.readouterr()
         assert "Current lifecycle phase: LC-002-change-record-preservation" in captured.out
-        assert "remaining lifecycle phases are manual" in captured.out
+        assert "Methodology completed at: 2026-04-08T13:00:00Z" in captured.out
+        assert "Lifecycle finished at: 2026-04-08T13:00:00Z" in captured.out
         assert "Nested methodology phases are currently inactive" in captured.out
 
 
@@ -1057,10 +1058,9 @@ class TestCmdResume:
         assert captured_config[0].debug == 4
         assert captured_config[0].resume is True
 
-    def test_blocks_resume_after_methodology_boundary(
+    def test_resume_allows_automated_lifecycle_completion_after_methodology_boundary(
         self,
         tmp_path: Path,
-        capsys: pytest.CaptureFixture[str],
     ) -> None:
         workspace = tmp_path / "ws"
         workspace.mkdir()
@@ -1076,12 +1076,34 @@ class TestCmdResume:
         parser = _build_parser()
         args = parser.parse_args(["resume", str(workspace)])
 
-        rc = cmd_resume(args)
+        from methodology_runner.orchestrator import PipelineConfig, PipelineResult
 
-        assert rc == EXIT_USAGE_ERROR
-        captured = capsys.readouterr()
-        assert "Resume Blocked At Manual Lifecycle Phase" in captured.out
-        assert "LC-002-change-record-preservation" in captured.out
+        captured_config: list[PipelineConfig] = []
+        mock_result = PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        def capturing_run(config: PipelineConfig) -> PipelineResult:
+            captured_config.append(config)
+            return mock_result
+
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = capturing_run
+            try:
+                rc = cmd_resume(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert rc == EXIT_SUCCESS
+        assert captured_config
+        assert captured_config[0].resume is True
 
     def test_resume_banner_shows_selected_phases(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str],

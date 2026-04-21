@@ -85,27 +85,27 @@ LIFECYCLE_PHASE_DEFINITIONS: tuple[LifecyclePhaseDefinition, ...] = (
     LifecyclePhaseDefinition(
         phase_id="LC-002-change-record-preservation",
         phase_name="Change-Record Preservation",
-        execution_kind="manual",
+        execution_kind="automated",
     ),
     LifecyclePhaseDefinition(
         phase_id="LC-003-runner-state-archival",
         phase_name="Runner-State Archival",
-        execution_kind="manual",
+        execution_kind="automated",
     ),
     LifecyclePhaseDefinition(
         phase_id="LC-004-temporary-artifact-cleanup",
         phase_name="Temporary-Artifact Cleanup",
-        execution_kind="manual",
+        execution_kind="automated",
     ),
     LifecyclePhaseDefinition(
         phase_id="LC-005-steady-state-integration",
         phase_name="Steady-State Integration",
-        execution_kind="manual",
+        execution_kind="automated",
     ),
     LifecyclePhaseDefinition(
         phase_id="LC-006-final-review-and-history-integration",
         phase_name="Final Review and History Integration",
-        execution_kind="manual",
+        execution_kind="automated",
     ),
 )
 """Authoritative outer lifecycle phase order."""

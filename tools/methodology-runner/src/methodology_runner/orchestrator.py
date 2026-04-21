@@ -35,6 +35,7 @@ import subprocess
 import sys
 import threading
 import time
+import yaml
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -103,6 +104,75 @@ RAW_REQUIREMENTS_FILENAME = "raw-requirements.md"
 LOCK_FILENAME = "run.lock"
 """Workspace lock file — prevents concurrent methodology-runner instances
 on the same workspace. Uses fcntl.flock so the OS auto-releases on crash."""
+
+CHANGE_RECORD_ROOT = "docs/changes"
+"""Root for preserved per-change records."""
+
+STEADY_STATE_DOC_ROOTS = (
+    "docs/features",
+    "docs/design",
+    "docs/contracts",
+)
+"""Markdown doc roots that survive beyond one methodology run."""
+
+_CHANGE_RECORD_ARTIFACT_MAP: tuple[tuple[str, str], ...] = (
+    (f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}", "request/raw-requirements.md"),
+    ("docs/requirements/requirements-inventory.yaml", "analysis/requirements-inventory.yaml"),
+    (
+        "docs/requirements/requirements-inventory-coverage.yaml",
+        "analysis/requirements-inventory-coverage.yaml",
+    ),
+    ("docs/features/feature-specification.yaml", "analysis/feature-specification.yaml"),
+    ("docs/architecture/architecture-design.yaml", "analysis/architecture-design.yaml"),
+    ("docs/design/solution-design.yaml", "analysis/solution-design.yaml"),
+    ("docs/design/interface-contracts.yaml", "analysis/interface-contracts.yaml"),
+    ("docs/simulations/simulation-definitions.yaml", "analysis/simulation-definitions.yaml"),
+    ("docs/implementation/implementation-workflow.md", "execution/implementation-workflow.md"),
+    (
+        "docs/implementation/implementation-run-report.yaml",
+        "execution/implementation-run-report.yaml",
+    ),
+    (
+        "docs/implementation/prompt-3-final-verification-report.md",
+        "execution/prompt-3-final-verification-report.md",
+    ),
+    ("docs/verification/verification-report.yaml", "verification/verification-report.yaml"),
+)
+"""In-run artifacts promoted into docs/changes/<change-id>/..."""
+
+_RUNNER_STATE_ARTIFACT_MAP: tuple[tuple[str, str], ...] = (
+    (f"{METHODOLOGY_DIR}/{STATE_FILENAME}", "execution/methodology-state.json"),
+    (
+        f"{RUN_FILES_DIRNAME}/{METHODOLOGY_RUN_FILES_SUBDIR}/{SUMMARY_FILENAME}",
+        "execution/methodology-summary.txt",
+    ),
+)
+"""Runner-managed state we preserve before deleting workspace control data."""
+
+_TEMP_WORKING_PATHS: tuple[str, ...] = (
+    f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}",
+    "docs/requirements/requirements-inventory.yaml",
+    "docs/requirements/requirements-inventory-coverage.yaml",
+    "docs/features/feature-specification.yaml",
+    "docs/architecture/architecture-design.yaml",
+    "docs/design/solution-design.yaml",
+    "docs/design/interface-contracts.yaml",
+    "docs/simulations/simulation-definitions.yaml",
+    "docs/implementation/implementation-workflow.md",
+    "docs/implementation/implementation-run-report.yaml",
+    "docs/implementation/prompt-3-final-verification-report.md",
+    "docs/verification/verification-report.yaml",
+)
+"""Temporary phase-working files removed once preserved and integrated."""
+
+_FINAL_CLEANUP_PATHS: tuple[str, ...] = (
+    METHODOLOGY_DIR,
+    RUN_FILES_DIRNAME,
+    "cross-ref-logs",
+    "timeline.html",
+    "timeline-implementation-workflow.html",
+)
+"""Intermediate execution state removed before the final repo commit."""
 
 
 class WorkspaceLockError(RuntimeError):
@@ -243,6 +313,67 @@ def _git_commit(workspace: Path, message: str) -> str:
 def _git_diff(workspace: Path) -> str:
     """Return the diff of uncommitted changes in *workspace*."""
     return _git(workspace, "diff")
+
+
+def _git_status_porcelain(workspace: Path) -> str:
+    """Return porcelain git status for *workspace*."""
+    return _git(workspace, "status", "--porcelain")
+
+
+def _git_branch_exists(workspace: Path, branch: str) -> bool:
+    """Return whether *branch* exists locally."""
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", f"refs/heads/{branch}"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return result.returncode == 0
+
+
+def _git_current_branch(workspace: Path) -> str:
+    """Return the current git branch name for *workspace*."""
+    return _git(workspace, "branch", "--show-current")
+
+
+def _git_worktree_entries(workspace: Path) -> list[dict[str, str]]:
+    """Return parsed `git worktree list --porcelain` entries."""
+    output = _git(workspace, "worktree", "list", "--porcelain")
+    entries: list[dict[str, str]] = []
+    current: dict[str, str] = {}
+    for line in output.splitlines():
+        if not line:
+            if current:
+                entries.append(current)
+                current = {}
+            continue
+        key, _, value = line.partition(" ")
+        if key == "worktree":
+            current["path"] = value
+        elif key == "branch":
+            current["branch"] = value.removeprefix("refs/heads/")
+        else:
+            current[key] = value
+    if current:
+        entries.append(current)
+    return entries
+
+
+def _target_integration_branch(workspace: Path, source_branch: str) -> str:
+    """Choose the branch that should receive the finalized change."""
+    for candidate in ("main", "master"):
+        if candidate != source_branch and _git_branch_exists(workspace, candidate):
+            return candidate
+    return source_branch
+
+
+def _find_branch_worktree_path(workspace: Path, branch: str) -> Path | None:
+    """Return the path of an existing worktree that has *branch* checked out."""
+    for entry in _git_worktree_entries(workspace):
+        if entry.get("branch") == branch:
+            return Path(entry["path"]).resolve()
+    return None
 
 
 def _process_log_path(workspace: Path) -> Path:
@@ -508,8 +639,9 @@ def _finalize_lifecycle_after_methodology_run(
     *,
     halted_early: bool,
     in_scope_done: bool,
+    all_done: bool,
 ) -> None:
-    """Synchronize LC-001 and the manual boundary after PH-* execution."""
+    """Synchronize LC-001 and outer lifecycle progression after PH-* execution."""
     methodology = _find_lifecycle_phase_state(state, METHODOLOGY_LIFECYCLE_PHASE_ID)
     if halted_early:
         methodology.status = (
@@ -521,21 +653,341 @@ def _finalize_lifecycle_after_methodology_run(
         state.current_lifecycle_phase_id = methodology.phase_id
         return
 
-    if not in_scope_done:
+    if not in_scope_done or not all_done:
         methodology.status = PhaseStatus.IN_PROGRESS
         methodology.completed_at = None
         state.current_lifecycle_phase_id = methodology.phase_id
         return
 
     methodology.status = PhaseStatus.COMPLETED
-    methodology.completed_at = state.finished_at or _iso_now()
-    pending_manual = _pending_manual_lifecycle_phase_ids(state)
-    state.current_lifecycle_phase_id = pending_manual[0] if pending_manual else None
+    methodology.completed_at = _iso_now()
+    pending_next = [
+        phase.phase_id
+        for phase in state.lifecycle_phases
+        if phase.phase_id != METHODOLOGY_LIFECYCLE_PHASE_ID
+        and phase.status == PhaseStatus.PENDING
+    ]
+    state.current_lifecycle_phase_id = pending_next[0] if pending_next else None
 
 
 def _iso_now() -> str:
     """Return the current UTC time as an ISO 8601 string."""
     return datetime.now(timezone.utc).isoformat()
+
+
+def _change_record_root(workspace: Path, change_id: str) -> Path:
+    """Return docs/changes/<change-id> inside the application worktree."""
+    return workspace / CHANGE_RECORD_ROOT / change_id
+
+
+def _copy_preserved_artifact(src: Path, dest: Path) -> None:
+    """Copy one preserved artifact, creating parent directories as needed."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dest)
+
+
+def _slugify_doc_segment(value: str) -> str:
+    """Return a stable kebab-case segment for generated doc filenames."""
+    slug = re.sub(r"[^a-z0-9]+", "-", value.lower()).strip("-")
+    return slug or "artifact"
+
+
+def _project_doc_slug(workspace: Path) -> str:
+    """Return a stable project slug for current-state markdown docs."""
+    try:
+        common_dir = Path(_git(workspace, "rev-parse", "--git-common-dir")).resolve()
+        return _slugify_doc_segment(common_dir.parent.name)
+    except RuntimeError:
+        return _slugify_doc_segment(workspace.name)
+
+
+def _project_doc_title(workspace: Path) -> str:
+    """Return a readable project title derived from the project slug."""
+    return _project_doc_slug(workspace).replace("-", " ").title()
+
+
+def _load_yaml_document(path: Path) -> dict:
+    """Load a YAML document from *path* as a mapping."""
+    loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if not isinstance(loaded, dict):
+        raise RuntimeError(f"Expected YAML mapping in {path}")
+    return loaded
+
+
+def _render_features_markdown(
+    *,
+    project_title: str,
+    change_id: str,
+    feature_spec: dict,
+) -> str:
+    """Render the durable current-state feature markdown doc."""
+    lines = [
+        f"# {project_title} Capabilities",
+        "",
+        f"Updated from `{change_id}`.",
+        "",
+    ]
+
+    features = feature_spec.get("features", [])
+    if features:
+        lines.extend(["## Features", ""])
+        for feature in features:
+            lines.append(f"### {feature['id']} {feature['name']}")
+            lines.append("")
+            lines.append(feature["description"])
+            lines.append("")
+            dependencies = feature.get("dependencies") or []
+            lines.append(
+                "Dependencies: "
+                + (", ".join(dependencies) if dependencies else "None")
+            )
+            source_refs = feature.get("source_inventory_refs") or []
+            if source_refs:
+                lines.append("Source inventory refs: " + ", ".join(source_refs))
+            lines.append("")
+            lines.append("Acceptance Criteria")
+            for criterion in feature.get("acceptance_criteria", []):
+                lines.append(f"- `{criterion['id']}` {criterion['description']}")
+            lines.append("")
+
+    out_of_scope = feature_spec.get("out_of_scope", [])
+    if out_of_scope:
+        lines.extend(["## Qualitative Or Deferred Requirements", ""])
+        for item in out_of_scope:
+            lines.append(
+                f"- `{item['inventory_ref']}` {item['reason']}"
+            )
+        lines.append("")
+
+    cross_cutting = feature_spec.get("cross_cutting_concerns", [])
+    if cross_cutting:
+        lines.extend(["## Cross-Cutting Concerns", ""])
+        for concern in cross_cutting:
+            lines.append(f"### {concern['id']} {concern['name']}")
+            lines.append("")
+            lines.append(concern["description"])
+            affected = concern.get("affected_features") or []
+            if affected:
+                lines.append("")
+                lines.append("Affected features: " + ", ".join(affected))
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_design_markdown(
+    *,
+    project_title: str,
+    change_id: str,
+    solution_design: dict,
+) -> str:
+    """Render the durable current-state design markdown doc."""
+    lines = [
+        f"# {project_title} Design",
+        "",
+        f"Updated from `{change_id}`.",
+        "",
+    ]
+
+    components = solution_design.get("components", [])
+    if components:
+        lines.extend(["## Components", ""])
+        for component in components:
+            lines.append(f"### {component['id']} {component['name']}")
+            lines.append("")
+            lines.append(component["responsibility"])
+            lines.append("")
+            lines.append(f"Technology: {component['technology']}")
+            dependencies = component.get("dependencies") or []
+            lines.append(
+                "Dependencies: "
+                + (", ".join(dependencies) if dependencies else "None")
+            )
+            lines.append("")
+            lines.append("Feature Realization")
+            for feature_id, summary in (component.get("feature_realization_map") or {}).items():
+                lines.append(f"- `{feature_id}` {summary}")
+            lines.append("")
+
+    interactions = solution_design.get("interactions", [])
+    if interactions:
+        lines.extend(["## Interactions", ""])
+        for interaction in interactions:
+            lines.append(
+                f"### {interaction['id']} {interaction['source']} -> {interaction['target']}"
+            )
+            lines.append("")
+            lines.append(f"Protocol: {interaction['protocol']}")
+            lines.append("")
+            lines.append(interaction["data_exchanged"])
+            lines.append("")
+            lines.append(f"Triggered by: {interaction['triggered_by']}")
+            lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _render_contracts_markdown(
+    *,
+    project_title: str,
+    change_id: str,
+    contracts_doc: dict,
+) -> str:
+    """Render the durable current-state contract markdown doc."""
+    lines = [
+        f"# {project_title} Contracts",
+        "",
+        f"Updated from `{change_id}`.",
+        "",
+    ]
+
+    for contract in contracts_doc.get("contracts", []):
+        lines.append(f"## {contract['id']} {contract['name']}")
+        lines.append("")
+        lines.append(f"Interaction ref: `{contract['interaction_ref']}`")
+        lines.append("")
+        lines.append(
+            f"Source component: `{contract['source_component']}`  "
+            f"Target component: `{contract['target_component']}`"
+        )
+        lines.append("")
+        for operation in contract.get("operations", []):
+            lines.append(f"### Operation: {operation['name']}")
+            lines.append("")
+            lines.append(operation["description"])
+            lines.append("")
+            lines.append("#### Request Fields")
+            for field in operation.get("request_schema", {}).get("fields", []):
+                lines.append(
+                    f"- `{field['name']}` ({field['type']}, required={field['required']}): "
+                    f"{field['constraints']}"
+                )
+            lines.append("")
+            lines.append("#### Response Fields")
+            for field in operation.get("response_schema", {}).get("fields", []):
+                lines.append(
+                    f"- `{field['name']}` ({field['type']}, required={field['required']}): "
+                    f"{field['constraints']}"
+                )
+            errors = operation.get("error_types") or []
+            if errors:
+                lines.append("")
+                lines.append("#### Error Types")
+                for error in errors:
+                    lines.append(
+                        f"- `{error['name']}` ({error['http_status']}): {error['condition']}"
+                    )
+            lines.append("")
+        behavioral_specs = contract.get("behavioral_specs") or []
+        if behavioral_specs:
+            lines.append("### Behavioral Specs")
+            lines.append("")
+            for spec in behavioral_specs:
+                lines.append(f"- Precondition: {spec['precondition']}")
+                lines.append(f"- Postcondition: {spec['postcondition']}")
+                lines.append(f"- Invariant: {spec['invariant']}")
+                lines.append("")
+
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def _write_steady_state_docs(workspace: Path, state: ProjectState) -> None:
+    """Generate deterministic current-state markdown docs from preserved artifacts."""
+    change_root = _change_record_root(workspace, state.change_id or workspace.name)
+    analysis_root = change_root / "analysis"
+    project_slug = _project_doc_slug(workspace)
+    project_title = _project_doc_title(workspace)
+
+    feature_spec = _load_yaml_document(analysis_root / "feature-specification.yaml")
+    solution_design = _load_yaml_document(analysis_root / "solution-design.yaml")
+    contracts_doc = _load_yaml_document(analysis_root / "interface-contracts.yaml")
+
+    feature_doc = workspace / "docs" / "features" / f"{project_slug}-capabilities.md"
+    design_doc = workspace / "docs" / "design" / f"{project_slug}-design.md"
+    contracts_doc_path = workspace / "docs" / "contracts" / f"{project_slug}-contracts.md"
+
+    feature_doc.parent.mkdir(parents=True, exist_ok=True)
+    design_doc.parent.mkdir(parents=True, exist_ok=True)
+    contracts_doc_path.parent.mkdir(parents=True, exist_ok=True)
+
+    feature_doc.write_text(
+        _render_features_markdown(
+            project_title=project_title,
+            change_id=state.change_id or workspace.name,
+            feature_spec=feature_spec,
+        ),
+        encoding="utf-8",
+    )
+    design_doc.write_text(
+        _render_design_markdown(
+            project_title=project_title,
+            change_id=state.change_id or workspace.name,
+            solution_design=solution_design,
+        ),
+        encoding="utf-8",
+    )
+    contracts_doc_path.write_text(
+        _render_contracts_markdown(
+            project_title=project_title,
+            change_id=state.change_id or workspace.name,
+            contracts_doc=contracts_doc,
+        ),
+        encoding="utf-8",
+    )
+
+
+def _start_lifecycle_phase(
+    state: ProjectState,
+    workspace: Path,
+    phase_id: str,
+    *,
+    persist: bool = True,
+) -> None:
+    """Mark one lifecycle phase in progress and optionally persist state."""
+    lifecycle = _find_lifecycle_phase_state(state, phase_id)
+    lifecycle.status = PhaseStatus.IN_PROGRESS
+    if lifecycle.started_at is None:
+        lifecycle.started_at = _iso_now()
+    lifecycle.completed_at = None
+    state.current_lifecycle_phase_id = phase_id
+    if persist:
+        save_project_state(state, workspace)
+
+
+def _complete_lifecycle_phase(
+    state: ProjectState,
+    workspace: Path,
+    phase_id: str,
+    *,
+    persist: bool = True,
+) -> None:
+    """Mark one lifecycle phase completed and optionally persist state."""
+    lifecycle = _find_lifecycle_phase_state(state, phase_id)
+    lifecycle.status = PhaseStatus.COMPLETED
+    if lifecycle.started_at is None:
+        lifecycle.started_at = _iso_now()
+    lifecycle.completed_at = _iso_now()
+    state.current_lifecycle_phase_id = phase_id
+    if persist:
+        save_project_state(state, workspace)
+
+
+def _fail_lifecycle_phase(
+    state: ProjectState,
+    workspace: Path,
+    phase_id: str,
+    *,
+    persist: bool = True,
+) -> None:
+    """Mark one lifecycle phase failed and optionally persist state."""
+    lifecycle = _find_lifecycle_phase_state(state, phase_id)
+    lifecycle.status = PhaseStatus.FAILED
+    if lifecycle.started_at is None:
+        lifecycle.started_at = _iso_now()
+    lifecycle.completed_at = None
+    state.current_lifecycle_phase_id = phase_id
+    if persist:
+        save_project_state(state, workspace)
 
 
 # ---------------------------------------------------------------------------
@@ -591,6 +1043,124 @@ def _verify_phase_output_exists(
             f"prompt_runner_passed but its output artifact is missing: "
             f"{phase_config.output_artifact_path}"
         )
+    return None
+
+
+def _automate_completed_lifecycle(
+    state: ProjectState,
+    workspace: Path,
+) -> str | None:
+    """Execute LC-002 through LC-006 and return an error string on failure."""
+    change_id = state.change_id or workspace.name
+    change_root = _change_record_root(workspace, change_id)
+
+    # LC-002 Change-Record Preservation
+    _start_lifecycle_phase(
+        state, workspace, "LC-002-change-record-preservation", persist=True
+    )
+    for src_rel, dest_rel in _CHANGE_RECORD_ARTIFACT_MAP:
+        src = workspace / src_rel
+        if not src.exists():
+            _fail_lifecycle_phase(
+                state, workspace, "LC-002-change-record-preservation", persist=True
+            )
+            return f"Missing change-record source artifact: {src_rel}"
+        _copy_preserved_artifact(src, change_root / dest_rel)
+    _complete_lifecycle_phase(
+        state, workspace, "LC-002-change-record-preservation", persist=True
+    )
+
+    # LC-003 Runner-State Archival
+    _start_lifecycle_phase(
+        state, workspace, "LC-003-runner-state-archival", persist=True
+    )
+    for src_rel, dest_rel in _RUNNER_STATE_ARTIFACT_MAP:
+        src = workspace / src_rel
+        if src.exists():
+            _copy_preserved_artifact(src, change_root / dest_rel)
+    _complete_lifecycle_phase(
+        state, workspace, "LC-003-runner-state-archival", persist=True
+    )
+
+    # LC-004 Temporary-Artifact Cleanup
+    _start_lifecycle_phase(
+        state, workspace, "LC-004-temporary-artifact-cleanup", persist=True
+    )
+    for relpath in _TEMP_WORKING_PATHS:
+        (workspace / relpath).unlink(missing_ok=True)
+    _complete_lifecycle_phase(
+        state, workspace, "LC-004-temporary-artifact-cleanup", persist=True
+    )
+
+    # LC-005 Steady-State Integration
+    _start_lifecycle_phase(
+        state, workspace, "LC-005-steady-state-integration", persist=True
+    )
+    try:
+        _write_steady_state_docs(workspace, state)
+    except (FileNotFoundError, RuntimeError, yaml.YAMLError) as exc:
+        _fail_lifecycle_phase(
+            state, workspace, "LC-005-steady-state-integration", persist=True
+        )
+        return f"Steady-state integration failed: {exc}"
+    _complete_lifecycle_phase(
+        state, workspace, "LC-005-steady-state-integration", persist=True
+    )
+
+    # LC-006 Final Review And History Integration
+    _start_lifecycle_phase(
+        state, workspace, "LC-006-final-review-and-history-integration", persist=True
+    )
+    source_branch = _git_current_branch(workspace)
+    target_branch = _target_integration_branch(workspace, source_branch)
+
+    target_worktree = _find_branch_worktree_path(workspace, target_branch)
+    if target_worktree is None:
+        _fail_lifecycle_phase(
+            state, workspace, "LC-006-final-review-and-history-integration", persist=True
+        )
+        return f"No worktree found with target branch checked out: {target_branch}"
+
+    if target_worktree != workspace and _git_status_porcelain(target_worktree):
+        _fail_lifecycle_phase(
+            state, workspace, "LC-006-final-review-and-history-integration", persist=True
+        )
+        return f"Target worktree is not clean: {target_worktree}"
+
+    for relpath in _FINAL_CLEANUP_PATHS:
+        target = workspace / relpath
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        else:
+            target.unlink(missing_ok=True)
+
+    state.finished_at = _iso_now()
+    _complete_lifecycle_phase(
+        state,
+        workspace,
+        "LC-006-final-review-and-history-integration",
+        persist=False,
+    )
+    state.current_lifecycle_phase_id = None
+    final_state_path = change_root / "execution" / "final-lifecycle-state.json"
+    final_state_path.parent.mkdir(parents=True, exist_ok=True)
+    final_state_path.write_text(
+        json.dumps(state.to_dict(), indent=2, sort_keys=False) + "\n",
+        encoding="utf-8",
+    )
+
+    final_commit_message = f"Finalize lifecycle for {change_id}"
+    try:
+        _git_commit(workspace, final_commit_message)
+    except RuntimeError as exc:
+        return f"Final lifecycle commit failed on {source_branch}: {exc}"
+
+    if target_branch != source_branch:
+        try:
+            _git(target_worktree, "merge", "--squash", source_branch)
+            _git_commit(target_worktree, f"Apply {change_id}")
+        except RuntimeError as exc:
+            return f"Target branch integration failed: {exc}"
     return None
 
 
@@ -1111,8 +1681,13 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
         lines.append(f"Change ID:       {state.change_id}")
         if state.current_lifecycle_phase_id:
             lines.append(f"Current lifecycle phase: {state.current_lifecycle_phase_id}")
+        methodology = _find_lifecycle_phase_state(
+            state, METHODOLOGY_LIFECYCLE_PHASE_ID
+        )
+        if methodology.completed_at:
+            lines.append(f"Methodology completed at: {methodology.completed_at}")
         if state.finished_at:
-            lines.append(f"Methodology finished at: {state.finished_at}")
+            lines.append(f"Lifecycle finished at: {state.finished_at}")
 
     target_phase_ids = (
         list(result.selected_phase_ids)
@@ -1309,8 +1884,14 @@ def run_pipeline(
             if claude_client is None:
                 claude_client = make_client(config.backend)
 
-            _activate_methodology_execution_lifecycle(state)
-            save_project_state(state, workspace)
+            phase_results: list[PhaseResult] = []
+            halted_early = False
+            halt_reason: str | None = None
+            lifecycle_only_resume = (
+                config.resume
+                and state.current_lifecycle_phase_id is not None
+                and state.current_lifecycle_phase_id != METHODOLOGY_LIFECYCLE_PHASE_ID
+            )
 
             # ---- determine phases ----
             phases_to_run: list[PhaseConfig] = list(PHASES)
@@ -1320,73 +1901,75 @@ def run_pipeline(
                     for pid in normalize_phase_selection(config.phases_to_run)
                 ]
 
-            # ---- execute phases ----
-            phase_results: list[PhaseResult] = []
-            halted_early = False
-            halt_reason: str | None = None
+            if not lifecycle_only_resume:
+                _activate_methodology_execution_lifecycle(state)
+                save_project_state(state, workspace)
 
-            for phase in phases_to_run:
-                ps = _find_phase_state(state, phase.phase_id)
+                # ---- execute methodology phases ----
+                for phase in phases_to_run:
+                    ps = _find_phase_state(state, phase.phase_id)
 
-                # Resume: skip completed phases
-                if config.resume and ps.status in _COMPLETED_STATUSES:
-                    existing = state.phase_results.get(phase.phase_id)
-                    if existing is not None:
-                        phase_results.append(existing)
-                    continue
+                    # Resume: skip completed phases
+                    if config.resume and ps.status in _COMPLETED_STATUSES:
+                        existing = state.phase_results.get(phase.phase_id)
+                        if existing is not None:
+                            phase_results.append(existing)
+                        continue
 
-                # Resume: re-run cross-ref only if prompt-runner already passed
-                cross_ref_only = (
-                    config.resume
-                    and ps.status == PhaseStatus.PROMPT_RUNNER_PASSED
-                )
+                    # Resume: re-run cross-ref only if prompt-runner already passed
+                    cross_ref_only = (
+                        config.resume
+                        and ps.status == PhaseStatus.PROMPT_RUNNER_PASSED
+                    )
 
-                # Predecessor check: verify both status and artifact existence
-                if not cross_ref_only:
-                    err = _verify_predecessor_artifacts(phase, state, workspace)
-                    if err is not None:
-                        halted_early = True
-                        halt_reason = err
-                        break
+                    # Predecessor check: verify both status and artifact existence
+                    if not cross_ref_only:
+                        err = _verify_predecessor_artifacts(phase, state, workspace)
+                        if err is not None:
+                            halted_early = True
+                            halt_reason = err
+                            break
 
-                # Execute
-                result = _run_single_phase(
-                    phase,
-                    state,
-                    workspace,
-                    config,
-                    claude_client=claude_client,
-                    cross_ref_only=cross_ref_only,
-                )
-                phase_results.append(result)
+                    result = _run_single_phase(
+                        phase,
+                        state,
+                        workspace,
+                        config,
+                        claude_client=claude_client,
+                        cross_ref_only=cross_ref_only,
+                    )
+                    phase_results.append(result)
 
-                # Incremental summary: overwrite after each phase so a crash
-                # mid-pipeline still leaves a readable summary of progress.
-                write_summary(
-                    workspace,
-                    PipelineResult(
-                        workspace_dir=workspace,
-                        phase_results=list(phase_results),
-                        halted_early=False,
-                        halt_reason=None,
-                        end_to_end_result=None,
-                        wall_time_seconds=time.monotonic() - t0,
-                        execution_scope=state.execution_scope,
-                        selected_phase_ids=(
-                            list(state.selected_phase_ids)
-                            if state.selected_phase_ids is not None
-                            else None
+                    write_summary(
+                        workspace,
+                        PipelineResult(
+                            workspace_dir=workspace,
+                            phase_results=list(phase_results),
+                            halted_early=False,
+                            halt_reason=None,
+                            end_to_end_result=None,
+                            wall_time_seconds=time.monotonic() - t0,
+                            execution_scope=state.execution_scope,
+                            selected_phase_ids=(
+                                list(state.selected_phase_ids)
+                                if state.selected_phase_ids is not None
+                                else None
+                            ),
                         ),
-                    ),
-                )
+                    )
 
-                # Handle failure
-                if result.status in (PhaseStatus.FAILED, PhaseStatus.ESCALATED):
-                    policy = _effective_escalation_policy(config, phase)
-                    if policy != EscalationPolicy.FLAG_AND_CONTINUE:
-                        halted_early = True
-                        halt_reason = result.error_message
-                        break
+                    if result.status in (PhaseStatus.FAILED, PhaseStatus.ESCALATED):
+                        policy = _effective_escalation_policy(config, phase)
+                        if policy != EscalationPolicy.FLAG_AND_CONTINUE:
+                            halted_early = True
+                            halt_reason = result.error_message
+                            break
+            else:
+                phase_results = [
+                    state.phase_results[phase.phase_id]
+                    for phase in phases_to_run
+                    if phase.phase_id in state.phase_results
+                ]
                     # FLAG_AND_CONTINUE: keep going (subsequent phases may fail
                     # their predecessor check, which is correct behaviour)
 
@@ -1418,15 +2001,25 @@ def run_pipeline(
                         coverage_summary={},
                     )
 
-            # ---- finalise ----
-            state.finished_at = _iso_now() if in_scope_done and not halted_early else None
+            # ---- finalise methodology boundary ----
+            state.finished_at = None
             state.current_phase = None
             _finalize_lifecycle_after_methodology_run(
                 state,
                 halted_early=halted_early,
                 in_scope_done=in_scope_done,
+                all_done=all_done,
             )
             save_project_state(state, workspace)
+
+            lifecycle_error: str | None = None
+            if all_done and not halted_early:
+                lifecycle_error = _automate_completed_lifecycle(state, workspace)
+                if lifecycle_error is not None:
+                    halted_early = True
+                    halt_reason = lifecycle_error
+                else:
+                    state.current_lifecycle_phase_id = None
 
             wall_time = time.monotonic() - t0
             pipeline_result = PipelineResult(
@@ -1444,8 +2037,11 @@ def run_pipeline(
                 ),
             )
 
-            # Final summary with end-to-end results and halt status
-            write_summary(workspace, pipeline_result)
+            # Final summary with end-to-end results and halt status.
+            # If lifecycle finalization removed .run-files, keep the result
+            # in-memory/CLI only and avoid recreating runner-owned roots.
+            if (workspace / RUN_FILES_DIRNAME).exists():
+                write_summary(workspace, pipeline_result)
             return pipeline_result
         finally:
             lock.release()

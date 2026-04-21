@@ -174,8 +174,8 @@ This section defines the methodology-specific prompt modules above generic promp
     - **BECAUSE:** This is the current file that implements the baseline module.
   - **SUPPORTS:** Establish one trusted baseline run
     - **BECAUSE:** This module owns the full accepted reference run.
-  - **DEPENDS-ON:** `docs/design/components/CD-003-methodology-run.md`
-    - **BECAUSE:** The baseline module runs a generic methodology run whose detailed run structure lives in its own document.
+  - **DEPENDS-ON:** `docs/design/components/CD-002-methodology-runner.md`
+    - **BECAUSE:** The baseline module runs `methodology_runner`, whose current execution and lifecycle behavior lives in its component design.
   - **DEPENDS-ON:** `docs/design/high-level/HLD-001-methodology-prompt-optimization.md`
     - **BECAUSE:** The baseline module also assigns the `baseline` role inside the larger optimization exercise.
 

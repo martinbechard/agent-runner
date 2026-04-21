@@ -314,7 +314,8 @@ def _print_pipeline_result(result: object) -> None:
         sys.stdout.write(f"Halt reason:  {result.halt_reason}\n")
     sys.stdout.write(
         "Lifecycle:    outer lifecycle phases are tracked explicitly; "
-        f"automation currently covers {METHODOLOGY_LIFECYCLE_PHASE_ID} only.\n"
+        "automation covers "
+        f"{METHODOLOGY_LIFECYCLE_PHASE_ID} plus LC-002 through LC-006.\n"
     )
     sys.stdout.write("\n")
 
@@ -373,8 +374,11 @@ def cmd_status(args: argparse.Namespace) -> int:
         sys.stdout.write(f"Change ID:     {state.change_id}\n")
     sys.stdout.write(f"Requirements:  {state.requirements_path}\n")
     sys.stdout.write(f"Started at:    {state.started_at}\n")
+    methodology = _find_lifecycle_phase(state, METHODOLOGY_LIFECYCLE_PHASE_ID)
+    if methodology is not None and methodology.completed_at:
+        sys.stdout.write(f"Methodology completed at: {methodology.completed_at}\n")
     if state.finished_at:
-        sys.stdout.write(f"Methodology finished at: {state.finished_at}\n")
+        sys.stdout.write(f"Lifecycle finished at: {state.finished_at}\n")
     if state.current_lifecycle_phase_id:
         sys.stdout.write(
             f"Current lifecycle phase: {state.current_lifecycle_phase_id}\n"
@@ -391,9 +395,8 @@ def cmd_status(args: argparse.Namespace) -> int:
     pending_manual = _pending_manual_lifecycle_phase_ids(state)
     if pending_manual:
         sys.stdout.write(
-            "Automation boundary: methodology-runner automates only "
-            f"{METHODOLOGY_LIFECYCLE_PHASE_ID}; remaining lifecycle phases "
-            f"are manual: {', '.join(pending_manual)}\n\n"
+            "Automation boundary: some lifecycle phases remain manual: "
+            f"{', '.join(pending_manual)}\n\n"
         )
 
     sys.stdout.write(
@@ -466,13 +469,22 @@ def cmd_resume(args: argparse.Namespace) -> int:
         )
         return EXIT_USAGE_ERROR
 
-    if state.current_lifecycle_phase_id not in {None, METHODOLOGY_LIFECYCLE_PHASE_ID}:
+    current_lifecycle = (
+        _find_lifecycle_phase(state, state.current_lifecycle_phase_id)
+        if state.current_lifecycle_phase_id
+        else None
+    )
+    if (
+        current_lifecycle is not None
+        and current_lifecycle.execution_kind == "manual"
+        and state.current_lifecycle_phase_id != METHODOLOGY_LIFECYCLE_PHASE_ID
+    ):
         pending_manual = _pending_manual_lifecycle_phase_ids(state)
         _print_banner("Methodology Runner -- Resume Blocked At Manual Lifecycle Phase")
         sys.stdout.write(f"Workspace:    {workspace}\n")
         sys.stdout.write(
-            "Resume only automates the nested methodology sequence inside "
-            f"{METHODOLOGY_LIFECYCLE_PHASE_ID}.\n"
+            "Resume can automate lifecycle phases only when their execution "
+            "kind is automated.\n"
         )
         sys.stdout.write(
             f"Current lifecycle phase: {state.current_lifecycle_phase_id}\n"
