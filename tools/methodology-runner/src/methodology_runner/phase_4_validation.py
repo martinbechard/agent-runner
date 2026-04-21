@@ -50,6 +50,14 @@ def build_report(solution_design_path: Path, feature_spec_path: Path, contracts_
         for op in contract.get("operations", []):
             req_fields = op.get("request_schema", {}).get("fields", [])
             resp_fields = op.get("response_schema", {}).get("fields", [])
+            if not req_fields or not resp_fields:
+                schema_holes.append(
+                    {
+                        "contract_id": contract.get("id"),
+                        "operation": op.get("name"),
+                        "issue": "empty_schema_fields",
+                    }
+                )
             if _fields_have_holes(req_fields) or _fields_have_holes(resp_fields):
                 schema_holes.append({"contract_id": contract.get("id"), "operation": op.get("name")})
             if not op.get("error_types"):

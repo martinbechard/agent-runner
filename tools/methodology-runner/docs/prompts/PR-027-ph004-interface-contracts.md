@@ -83,7 +83,11 @@ contracts:
               required: true
               constraints: "..."
         response_schema:
-          fields: []
+          fields:
+            - name: "field_name"
+              type: "string"
+              required: true
+              constraints: "..."
         error_types:
           - name: "error_name"
             condition: "When this occurs"
@@ -113,7 +117,10 @@ Acceptance requirements:
   request_schema
   response_schema
   error_types
-- request_schema.fields and response_schema.fields must be explicit field lists.
+- request_schema.fields and response_schema.fields must be explicit non-empty
+  field lists.
+- Even for event-style or one-way interactions, model a concrete response
+  payload rather than leaving response_schema.fields empty.
 - Do not use type holes such as object, any, or unknown.
 - Every operation must define at least one error type unless the interaction is
   truly infallible and the contract makes that obvious.

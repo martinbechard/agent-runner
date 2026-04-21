@@ -179,6 +179,21 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "stderr_excerpt" in text
 
 
+def test_ph004_prompt_module_requires_non_empty_response_schemas() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-027-ph004-interface-contracts.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "response_schema:" in text
+    assert "fields: []" not in text
+    assert "response_schema.fields must be explicit non-empty" in text
+
+
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(
     tmp_path: Path,
     monkeypatch,
