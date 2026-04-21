@@ -31,6 +31,33 @@ def _load_yaml(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
+def _architecture_stack_features(architecture_components: list[dict]) -> set[str]:
+    """Return features supported by the architecture stack contract.
+
+    Current architecture components carry feature ownership in
+    ``features_served``. Older shapes sometimes stored feature ids directly in
+    ``supports`` as a list. Newer shapes use ``supports`` as a mapping for
+    inventory refs, so we must not iterate that mapping as if its keys were
+    feature ids.
+    """
+    features_served = {
+        feature
+        for component in architecture_components
+        for feature in component.get("features_served", [])
+        if isinstance(feature, str)
+    }
+    if features_served:
+        return features_served
+
+    legacy_supports = {
+        feature
+        for component in architecture_components
+        for feature in component.get("supports", [])
+        if isinstance(feature, str)
+    }
+    return legacy_supports
+
+
 def build_report(solution_design_path: Path, architecture_design_path: Path, feature_spec_path: Path) -> dict:
     design = _load_yaml(solution_design_path)
     architecture = _load_yaml(architecture_design_path)
@@ -95,17 +122,7 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
     if not architecture_components:
         architecture_components = architecture.get("components", [])
 
-    stack_features = {
-        feature
-        for component in architecture_components
-        for feature in component.get("supports", [])
-    }
-    if not stack_features:
-        stack_features = {
-            feature
-            for component in architecture_components
-            for feature in component.get("features_served", [])
-        }
+    stack_features = _architecture_stack_features(architecture_components)
     stack_alignment_failures = sorted(feature_ids - stack_features)
     checks.append({"id": "stack_alignment", "status": "pass" if not stack_alignment_failures else "fail", "details": stack_alignment_failures})
 

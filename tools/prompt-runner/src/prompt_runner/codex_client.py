@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import time
 import tomllib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,6 +29,13 @@ class CodexBinaryNotFound(Exception):
 
 
 _SESSION_RE = re.compile(r"session id:\s*([0-9a-fA-F-]{36})", re.IGNORECASE)
+_TRANSIENT_FAILURE_PATTERNS = (
+    "We're currently experiencing high demand",
+    "stream disconnected before completion",
+    "websocket closed by server before response.completed",
+)
+_MAX_TRANSIENT_RETRIES = 2
+_INITIAL_TRANSIENT_BACKOFF_SECONDS = 2.0
 
 NON_INTERACTIVE_PROMPT_PREFIX = (
     "You are being called from a headless pipeline. Your response IS the "
@@ -94,6 +102,31 @@ def _ensure_codex_on_path() -> None:
             "cannot find the 'codex' command on PATH. "
             "Install Codex and make sure 'codex' is on your PATH."
         )
+
+
+def _is_retryable_transient_codex_failure(stdout: str, stderr: str) -> bool:
+    combined = f"{stdout}\n{stderr}"
+    return any(pattern in combined for pattern in _TRANSIENT_FAILURE_PATTERNS)
+
+
+def _append_retry_notice(
+    call: ClaudeCall,
+    attempt: int,
+    backoff_seconds: float,
+) -> None:
+    notice = (
+        f"[prompt-runner] transient codex failure on attempt {attempt}; "
+        f"retrying in {backoff_seconds:.1f}s\n"
+    )
+    with open(call.stderr_log_path, "a", encoding="utf-8") as log:
+        log.write(notice)
+        log.flush()
+    _append_aggregate_log(
+        call.aggregate_log_path,
+        call.aggregate_log_prefix or call.stream_header,
+        "stderr",
+        notice,
+    )
 
 
 @dataclass
@@ -183,100 +216,122 @@ class RealCodexClient:
         self._prepare_log_paths(call)
         process_meta_path = self._process_meta_path(call)
 
-        proc = subprocess.Popen(
-            argv,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            encoding="utf-8",
-            bufsize=1,
-            cwd=str(call.worktree_dir),
-        )
-        write_spawn_metadata(
-            process_meta_path,
-            kind="backend-call",
-            pid=proc.pid,
-            argv=argv,
-            cwd=call.worktree_dir,
-            extra={
-                "agent_name": call.agent_name,
-                "agent_path": agent_path,
-                "agent_loaded": bool(call.agent_name),
-            },
-        )
-        assert proc.stdout is not None and proc.stderr is not None
+        for attempt in range(1, _MAX_TRANSIENT_RETRIES + 2):
+            if message_path.exists():
+                message_path.unlink()
 
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
+            proc = subprocess.Popen(
+                argv,
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                encoding="utf-8",
+                bufsize=1,
+                cwd=str(call.worktree_dir),
+            )
+            write_spawn_metadata(
+                process_meta_path,
+                kind="backend-call",
+                pid=proc.pid,
+                argv=argv,
+                cwd=call.worktree_dir,
+                extra={
+                    "agent_name": call.agent_name,
+                    "agent_path": agent_path,
+                    "agent_loaded": bool(call.agent_name),
+                    "attempt": attempt,
+                },
+            )
+            assert proc.stdout is not None and proc.stderr is not None
 
-        def drain_stdout() -> None:
-            assert proc.stdout is not None
-            with open(call.stdout_log_path, "a", encoding="utf-8") as log:
-                for chunk in proc.stdout:
-                    stdout_chunks.append(chunk)
-                    log.write(chunk)
-                    log.flush()
-                    _append_aggregate_log(
-                        call.aggregate_log_path,
-                        call.aggregate_log_prefix or call.stream_header,
-                        "stdout",
-                        chunk,
+            stdout_chunks: list[str] = []
+            stderr_chunks: list[str] = []
+
+            def drain_stdout() -> None:
+                assert proc.stdout is not None
+                with open(call.stdout_log_path, "a", encoding="utf-8") as log:
+                    for chunk in proc.stdout:
+                        stdout_chunks.append(chunk)
+                        log.write(chunk)
+                        log.flush()
+                        _append_aggregate_log(
+                            call.aggregate_log_path,
+                            call.aggregate_log_prefix or call.stream_header,
+                            "stdout",
+                            chunk,
+                        )
+                        if self.verbose:
+                            sys.stdout.write(chunk)
+                            sys.stdout.flush()
+
+            def drain_stderr() -> None:
+                assert proc.stderr is not None
+                with open(call.stderr_log_path, "a", encoding="utf-8") as log:
+                    for chunk in proc.stderr:
+                        stderr_chunks.append(chunk)
+                        log.write(chunk)
+                        log.flush()
+                        _append_aggregate_log(
+                            call.aggregate_log_path,
+                            call.aggregate_log_prefix or call.stream_header,
+                            "stderr",
+                            chunk,
+                        )
+                        if self.verbose:
+                            sys.stderr.write(chunk)
+                            sys.stderr.flush()
+
+            stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
+            stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
+            stdout_thread.start()
+            stderr_thread.start()
+            returncode = proc.wait()
+            stdout_thread.join()
+            stderr_thread.join()
+            mark_process_completed(
+                process_meta_path, returncode=returncode,
+            )
+            stdout = "".join(stdout_chunks)
+            stderr = "".join(stderr_chunks)
+
+            last_message = ""
+            if message_path.exists():
+                last_message = message_path.read_text(encoding="utf-8").strip()
+            if not last_message:
+                last_message = _extract_last_agent_message(stdout) or stdout.strip()
+
+            session_id = call.session_id
+            match = _SESSION_RE.search(stdout)
+            if match:
+                session_id = match.group(1)
+
+            response = ClaudeResponse(
+                stdout=last_message,
+                stderr=stderr,
+                returncode=returncode,
+                session_id=session_id,
+            )
+            if returncode == 0:
+                return response
+
+            if (
+                attempt <= _MAX_TRANSIENT_RETRIES
+                and _is_retryable_transient_codex_failure(last_message, stderr)
+            ):
+                backoff_seconds = _INITIAL_TRANSIENT_BACKOFF_SECONDS * (2 ** (attempt - 1))
+                _append_retry_notice(call, attempt, backoff_seconds)
+                if self.verbose:
+                    sys.stderr.write(
+                        f"[prompt-runner] retrying transient codex failure in {backoff_seconds:.1f}s\n"
                     )
-                    if self.verbose:
-                        sys.stdout.write(chunk)
-                        sys.stdout.flush()
+                    sys.stderr.flush()
+                time.sleep(backoff_seconds)
+                continue
 
-        def drain_stderr() -> None:
-            assert proc.stderr is not None
-            with open(call.stderr_log_path, "a", encoding="utf-8") as log:
-                for chunk in proc.stderr:
-                    stderr_chunks.append(chunk)
-                    log.write(chunk)
-                    log.flush()
-                    _append_aggregate_log(
-                        call.aggregate_log_path,
-                        call.aggregate_log_prefix or call.stream_header,
-                        "stderr",
-                        chunk,
-                    )
-                    if self.verbose:
-                        sys.stderr.write(chunk)
-                        sys.stderr.flush()
-
-        stdout_thread = threading.Thread(target=drain_stdout, daemon=True)
-        stderr_thread = threading.Thread(target=drain_stderr, daemon=True)
-        stdout_thread.start()
-        stderr_thread.start()
-        returncode = proc.wait()
-        stdout_thread.join()
-        stderr_thread.join()
-        mark_process_completed(
-            process_meta_path, returncode=returncode,
-        )
-        stdout = "".join(stdout_chunks)
-        stderr = "".join(stderr_chunks)
-
-        last_message = ""
-        if message_path.exists():
-            last_message = message_path.read_text(encoding="utf-8").strip()
-        if not last_message:
-            last_message = _extract_last_agent_message(stdout) or stdout.strip()
-
-        session_id = call.session_id
-        match = _SESSION_RE.search(stdout)
-        if match:
-            session_id = match.group(1)
-
-        response = ClaudeResponse(
-            stdout=last_message,
-            stderr=stderr,
-            returncode=returncode,
-            session_id=session_id,
-        )
-        if returncode != 0:
             raise ClaudeInvocationError(call, response)
-        return response
+
+        raise AssertionError("unreachable")
 
     @staticmethod
     def _build_argv(

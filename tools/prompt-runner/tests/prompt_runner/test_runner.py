@@ -1841,8 +1841,8 @@ def test_manifest_includes_wall_time(tmp_path: Path):
     assert _re.match(r"^\d{2}:\d{2}:\d{2}$", manifest["wall_time"])
 
 
-def test_r_claude_failed_halt_reason_includes_stderr_tail_and_log_paths(tmp_path: Path):
-    """R-CLAUDE-FAILED must include the stderr tail, partial output path, and log dir."""
+def test_r_backend_failed_halt_reason_includes_stderr_tail_and_log_paths(tmp_path: Path):
+    """R-BACKEND-FAILED must include the stderr tail, partial output path, and log dir."""
     pair = _pair(1, "Alpha")
     gen_ok = _pass_response("g1")
     judge_partial = ClaudeResponse(
@@ -1876,7 +1876,7 @@ def test_r_claude_failed_halt_reason_includes_stderr_tail_and_log_paths(tmp_path
     assert result.halted_early
     assert result.halt_reason is not None
     halt = result.halt_reason
-    assert "R-CLAUDE-FAILED" in halt
+    assert "R-BACKEND-FAILED" in halt
     # The stderr tail (last 20 lines, each indented by two spaces) should appear.
     assert "claude backend unreachable" in halt
     assert "stack frame 2" in halt

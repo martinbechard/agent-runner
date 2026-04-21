@@ -127,6 +127,42 @@ generate
     assert pairs[0].include_files == ("docs/request.md", "docs/context.md")
 
 
+def test_required_files_rejects_markdown_list_entries():
+    text = """## Prompt 1: Bad required paths
+
+### Required Files
+
+- `docs/request.md`
+
+### Generation Prompt
+
+generate
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_text(text)
+    err = exc_info.value
+    assert err.error_id == "E-BAD-PATH-ENTRY"
+    assert "Required Files entries must be bare paths" in err.message
+
+
+def test_checks_files_rejects_code_formatted_entries():
+    text = """## Prompt 1: Bad check paths
+
+### Checks Files
+
+`docs/summary.txt`
+
+### Generation Prompt
+
+generate
+"""
+    with pytest.raises(ParseError) as exc_info:
+        parse_text(text)
+    err = exc_info.value
+    assert err.error_id == "E-BAD-PATH-ENTRY"
+    assert "Checks Files entries must be bare paths" in err.message
+
+
 def test_retry_prompt_section_is_parsed_with_default_replace_mode():
     text = """## Prompt 1: Needs retry
 
@@ -415,6 +451,7 @@ def test_error_ids_are_stable():
         "E-NO-GENERATION",
         "E-BAD-SECTION-ORDER",
         "E-DUPLICATE-SECTION",
+        "E-BAD-PATH-ENTRY",
         "E-UNKNOWN-SUBSECTION",
         "E-NO-VARIANTS",
     )

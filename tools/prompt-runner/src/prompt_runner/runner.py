@@ -87,7 +87,7 @@ def _session_id(logical_label: str) -> str:
     return str(uuid.uuid5(_SESSION_NAMESPACE, logical_label))
 
 
-# Number of stderr lines to include in R-CLAUDE-FAILED halt reasons.
+# Number of stderr lines to include in R-BACKEND-FAILED halt reasons.
 STDERR_TAIL_LINES = 20
 
 
@@ -2917,14 +2917,14 @@ def run_pipeline(
                     halt_reason=halt_reason,
                 )
             except ClaudeInvocationError as err:
-                halt_reason = _format_claude_failed_halt_reason(
+                halt_reason = _format_backend_failed_halt_reason(
                     rendered_pair,
                     err,
                     run_dir,
                 )
                 _emit_progress(
                     f"{_progress_prefix(started_at)} "
-                    f"run halt R-CLAUDE-FAILED prompt {rendered_pair.index}"
+                    f"run halt R-BACKEND-FAILED prompt {rendered_pair.index}"
                 )
                 _finalise(
                     run_dir,
@@ -3014,15 +3014,15 @@ def run_pipeline(
             os.environ["PROMPT_RUNNER_PROCESS_LOG"] = previous_process_log_env
 
 
-def _format_claude_failed_halt_reason(
+def _format_backend_failed_halt_reason(
     pair: PromptPair, err: ClaudeInvocationError, run_dir: Path,
 ) -> str:
-    """Build a multi-line R-CLAUDE-FAILED halt reason per CD-001 §11.2."""
+    """Build a multi-line R-BACKEND-FAILED halt reason per CD-001 §11.2."""
     partial_md_path = _iteration_history_path(run_dir, pair, 1)
     module_log_path = _module_log_path(run_dir, pair)
     stderr_tail = _tail_lines(err.response.stderr, STDERR_TAIL_LINES)
     return (
-        f"R-CLAUDE-FAILED: prompt {pair.index} \"{pair.title}\" "
+        f"R-BACKEND-FAILED: prompt {pair.index} \"{pair.title}\" "
         f"{err.call.stream_header} exited with status "
         f"{err.response.returncode}.\n"
         f"\n"

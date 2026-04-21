@@ -57,17 +57,45 @@ Important implementation discipline:
   `docs/implementation/implementation-run-report.yaml` as evidence for child
   prompt success or failure.
 - Each child prompt must follow TDD discipline:
-  1. write or tighten a failing test when a new behavior is introduced
-  2. implement the smallest code change that makes that test pass
-  3. run the relevant tests and record the result in the prompt output
+  1. write or tighten the test that defines the new or stricter behavior
+  2. run the exact test command for that slice and record a failing result
+     before the corresponding implementation change
+  3. implement the smallest code change that makes that same exact test
+     command pass
+  4. rerun that same exact test command and record the passing result
 - Keep each child prompt small enough that a failure is local and obvious.
 - Do not create separate planning tables when the same information can be
   expressed directly as prompt order and prompt instructions.
+- Once a child prompt chooses a concrete command string, preserve that exact
+  command spelling everywhere it is reused in that prompt, in later final
+  verification steps, and in the supervisor report. Do not substitute an
+  equivalent command variant such as changing dotted unittest module paths into
+  slash paths or replacing a targeted test command with a broader discover
+  command.
 
 Output contract:
 - Write one prompt-runner markdown file at
   docs/implementation/implementation-workflow.md.
 - The file must be a valid prompt-runner workflow with a file-level module.
+- Use the exact canonical prompt-runner heading structure used by the
+  prompt-runner parser:
+  - `### Module`
+  - next non-empty line exactly `implementation-workflow`
+  - `## Prompt 1: ...`
+  - `### Required Files` when needed
+  - `### Checks Files` when needed
+  - `### Generation Prompt`
+  - `### Validation Prompt`
+- In `### Required Files` and `### Checks Files`, write one bare relative path
+  per non-empty line.
+- Do not format path entries as markdown bullets or code spans. For example,
+  write `docs/features/feature-specification.yaml`, not
+  `- \`docs/features/feature-specification.yaml\``.
+- Do not invent alternate child-workflow heading shapes such as:
+  - `### Prompt`
+  - `#### Slug`
+  - `#### Generation Prompt`
+  - `#### Validation Prompt`
 - The workflow must contain at least:
   - one implementation prompt that introduces the first executable slice
   - one later implementation prompt that extends or completes the system
@@ -76,29 +104,47 @@ Output contract:
   Prompt.
 - Each implementation child prompt must:
   - name the concrete project files it is expected to create or update
-  - require relevant tests to be run in the same prompt
-  - require an explicit generator response section that reports commands run
-    and their observed outcomes
+  - require the same exact relevant test command to be run before and after
+    the implementation change in the same prompt
+  - require an explicit generator response structure with exactly these
+    section headings:
+    - `## Files Created Or Updated`
+    - `## Command Reports`
+    - `## Slice Result Summary`
+  - require every command report to preserve:
+    - the exact command string as executed
+    - full observed stdout
+    - full observed stderr
+    - exact exit code
   - stay grounded in FT-* / AC-* / CMP-* / CTR-* / SIM-* references when they
     materially affect the slice
 - Each child prompt that runs commands must define a concrete response format
-  that explicitly lists:
-  - files created or updated
-  - commands run in that prompt
-  - observed outcome for each command
-  - brief slice result summary
+  that uses exactly:
+  - a `## Files Created Or Updated` section listing files only
+  - a `## Command Reports` section with one plain-text command-report block per
+    command, not markdown headings, using these exact fields:
+    - `Command: <exact command string>`
+    - `Stdout:`
+    - fenced code block containing the full observed stdout
+    - `Stderr:`
+    - fenced code block containing the full observed stderr
+    - `Exit Code: <integer>`
+  - a `## Slice Result Summary` section with a brief slice outcome summary
 - The final verification child prompt must use the same explicit command-report
-  format for its verification commands.
+  format for its verification commands and must preserve the exact command
+  strings it requires.
 
 Required child-workflow shape:
-- begin with a file-level module block whose slug is
-  `implementation-workflow`
+- begin with exactly:
+  - a line `### Module`
+  - then the next non-empty line `implementation-workflow`
 - define at least two prompt sections
 - for each prompt section, include:
+  - a heading exactly `## Prompt N: Title`
   - required files when they materially matter
   - checks files when the slice writes a durable artifact
-  - a generation prompt
-  - a validation prompt
+  - a heading exactly `### Generation Prompt`
+  - a heading exactly `### Validation Prompt`
 - for each implementation child prompt, make the validation prompt review only:
   - the prompt's own generator response text
   - the files produced by that child prompt
@@ -110,14 +156,35 @@ Required child-workflow shape:
 Acceptance requirements:
 - The file must be valid markdown parseable by prompt-runner.
 - The file must begin with a file-level `### Module` block.
-- The module slug must be `implementation-workflow`.
+- The next non-empty line after `### Module` must be exactly
+  `implementation-workflow`.
 - The workflow must contain at least 2 prompts.
-- At least one implementation prompt must explicitly require a failing or
-  tightened test before code changes.
-- At least one implementation prompt must explicitly run tests after code
-  changes.
+- Each child prompt heading must use the exact form
+  `## Prompt N: Title`.
+- Child prompt subsections must use the exact canonical form:
+  `### Required Files`, `### Checks Files`,
+  `### Generation Prompt`, and `### Validation Prompt`.
+- Each `### Required Files` or `### Checks Files` section must use bare
+  relative path lines only, with no markdown bullets and no backticks around
+  the path values.
+- At least one implementation prompt must explicitly require the test-defining
+  change to be followed by a failing test run before code changes.
+- At least one implementation prompt must explicitly require a failing run of
+  the same exact test command before code changes and a passing rerun of that
+  same exact test command after code changes.
+- No child prompt may weaken that TDD rule with wording such as
+  `failing or tightened-test ...`; the workflow must require a real failing run
+  of the same exact command before the implementation change.
 - The final prompt must explicitly run the full verification commands for the
-  implemented system.
+  implemented system and preserve those exact command strings.
+- The workflow must require command evidence that includes stdout, stderr, and
+  exit code details rather than only pass/fail summaries.
+- The workflow must not use condensed command-result bullets such as
+  ``- `python3 -m unittest tests.test_cli` -> OK`` in place of the required
+  `## Command Reports` structure.
+- The workflow must not introduce extra markdown headings inside the response
+  template under `## Command Reports`, such as `### Command Report 1`; use
+  plain text labels like `Command Report 1` instead.
 - The workflow must stay grounded in the upstream artifacts. Do not invent
   unrelated files, frameworks, or infrastructure.
 - Do not create any files other than docs/implementation/implementation-workflow.md.
@@ -232,6 +299,9 @@ Context:
 Use this prompt-runner command base:
 `{{prompt_runner_command}}`
 
+Current methodology backend:
+`{{methodology_backend}}`
+
 Current project worktree:
 `{{run_dir}}`
 
@@ -243,20 +313,27 @@ Execution rules:
   evidence for the child workflow. Remove it before invoking the child
   workflow, then regenerate it from the actual child-run artifacts at the end
   of this prompt.
+- Always parse the child workflow first with the exact supported parse command:
+  `{{prompt_runner_command}} parse docs/implementation/implementation-workflow.md`
 - If the child workflow already has useful progress in this worktree, resume
   it with:
-  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --run-dir {{run_dir}} --resume {{run_dir}} --no-project-organiser`
+  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --backend {{methodology_backend}} --run-dir {{run_dir}} --resume {{run_dir}} --no-project-organiser`
 - Otherwise run it fresh with:
-  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --run-dir {{run_dir}} --no-project-organiser`
-- Always parse the child workflow first:
-  `{{prompt_runner_command}} parse docs/implementation/implementation-workflow.md --no-project-organiser`
+  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --backend {{methodology_backend}} --run-dir {{run_dir}} --no-project-organiser`
 - Do not fabricate child-run outcomes. Base the report only on artifacts the
   child run actually produced in this worktree.
+- Preserve the exact command strings observed in the child run. Do not rewrite
+  dotted Python module paths into slash paths, replace targeted test commands
+  with broader alternatives, or collapse multiple verification commands into a
+  generic summary.
 - The child workflow is allowed to create or update real project files such as
   source code, tests, and README content.
 - The child workflow should not rely on repository-level file-placement
   instructions when running inside this workspace, because the child prompts
   are operating on fixed, already-declared project paths.
+- For each recorded command, preserve enough observed output to support later
+  truthful verification. Include stdout and stderr excerpts, even when one of
+  them is empty.
 
 Execution report schema:
 ```yaml
@@ -273,8 +350,10 @@ prompt_results:
 files_changed:
   - "relative/path"
 test_commands_observed:
-  - command: "pytest -q"
+  - command: "python3 -m unittest tests.test_cli"
     exit_code: 0
+    stdout_excerpt: "Ran 1 test in 0.01s\\n\\nOK"
+    stderr_excerpt: ""
 next_action: "none"
 ```
 
@@ -299,6 +378,15 @@ Acceptance requirements:
 - The report must reflect the actual child run outcome in this worktree.
 - If completion_status is `completed`, every prompt_results verdict must be `pass`.
 - If completion_status is `halted`, halt_reason must explain what halted.
+- Each `test_commands_observed` row must preserve the exact command string as
+  executed in the child run and include `stdout_excerpt` and `stderr_excerpt`
+  alongside the exit code.
+- If the child workflow required the same exact test command before and after a
+  change, the report must preserve both of those runs with the same command
+  spelling.
+- If the final child prompt required specific final verification commands, the
+  report must preserve those same exact command strings rather than equivalent
+  substitutes.
 - Do not create any files other than docs/implementation/implementation-run-report.yaml.
 - Write the full file contents to docs/implementation/implementation-run-report.yaml.
 
@@ -341,7 +429,13 @@ Focus your semantic review on these failure modes:
      child-run artifacts.
 3. Missing execution evidence:
    - Flag reports that hide materially relevant changed files or test commands.
-4. Misleading next action:
+4. Normalized command drift:
+   - Flag reports that replace exact child-run command strings with equivalent
+     but different commands.
+5. Missing stdout/stderr evidence:
+   - Flag reports that do not preserve enough stdout/stderr detail to support
+     truthful later verification.
+6. Misleading next action:
    - Flag `next_action` values that do not match the real child-run state.
 
 Review instructions:

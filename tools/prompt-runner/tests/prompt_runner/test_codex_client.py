@@ -246,6 +246,40 @@ def test_nonzero_exit_raises_with_partial_message(monkeypatch, tmp_path: Path):
     assert exc_info.value.response.stderr == "boom\n"
 
 
+def test_retries_transient_high_demand_failure(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
+    sleeps: list[float] = []
+    attempts = {"count": 0}
+
+    def fake_sleep(seconds: float) -> None:
+        sleeps.append(seconds)
+
+    def fake_popen(argv, **kwargs):
+        attempts["count"] += 1
+        message_path = Path(argv[argv.index("--output-last-message") + 1])
+        if attempts["count"] == 1:
+            return _FakePopen(
+                stdout=(
+                    '{"type":"turn.started"}\n'
+                    '{"type":"error","message":"We\'re currently experiencing high demand, which may cause temporary errors."}\n'
+                    '{"type":"turn.failed","error":{"message":"We\'re currently experiencing high demand, which may cause temporary errors."}}\n'
+                ),
+                returncode=1,
+            )
+        message_path.write_text("artifact body\n", encoding="utf-8")
+        return _FakePopen(stdout='{"type":"turn.completed"}\n')
+
+    monkeypatch.setattr("time.sleep", fake_sleep)
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    client = RealCodexClient()
+    response = client.call(_call(tmp_path, new_session=True))
+    assert response.stdout == "artifact body"
+    assert attempts["count"] == 2
+    assert sleeps == [2.0]
+    stderr_log = (tmp_path / "stderr.log").read_text(encoding="utf-8")
+    assert "transient codex failure on attempt 1" in stderr_log
+
+
 def test_creates_stdout_and_stderr_logs_before_completion(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
 

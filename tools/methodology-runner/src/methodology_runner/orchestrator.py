@@ -29,6 +29,7 @@ from __future__ import annotations
 import json
 import re
 import fcntl
+import shlex
 import shutil
 import subprocess
 import sys
@@ -646,7 +647,10 @@ def _resolve_phase_prompt_module_path(phase_config: PhaseConfig) -> Path:
     )
 
 
-def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
+def _phase_placeholder_values(
+    phase_config: PhaseConfig,
+    config: PipelineConfig,
+) -> dict[str, str]:
     """Return prompt-runner placeholder bindings for a phase."""
     values: dict[str, str] = {}
     if phase_config.phase_id == "PH-000-requirements-inventory":
@@ -654,7 +658,12 @@ def _phase_placeholder_values(phase_config: PhaseConfig) -> dict[str, str]:
             f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}"
         )
     if phase_config.phase_id == "PH-006-incremental-implementation":
-        values["prompt_runner_command"] = "prompt-runner"
+        prompt_runner_src = _resolve_prompt_runner_src_root()
+        values["prompt_runner_command"] = (
+            f"PYTHONPATH={shlex.quote(str(prompt_runner_src))} "
+            f"{shlex.quote(sys.executable)} -m prompt_runner"
+        )
+        values["methodology_backend"] = config.backend
     return values
 
 
@@ -664,6 +673,19 @@ def _resolve_bundled_skills_root() -> Path:
     candidates = [
         package_root / "skills",
         package_root.parent.parent / "skills",
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    return candidates[0]
+
+
+def _resolve_prompt_runner_src_root() -> Path:
+    """Resolve the prompt-runner source root for PH-006 shell commands."""
+    package_root = Path(__file__).resolve().parent
+    candidates = [
+        package_root.parents[2] / "prompt-runner" / "src",
+        package_root / "prompt_runner",
     ]
     for candidate in candidates:
         if candidate.exists():
@@ -790,7 +812,7 @@ def _run_single_phase(
     policy = _effective_escalation_policy(config, phase_config)
     max_retries = config.max_cross_ref_retries
     iteration_count = 0
-    placeholder_values = _phase_placeholder_values(phase_config)
+    placeholder_values = _phase_placeholder_values(phase_config, config)
 
     # ------------------------------------------------------------------
     # Steps 1-6: prompt-runner against the checked-in prompt module

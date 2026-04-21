@@ -1,6 +1,8 @@
 """Tests for methodology-runner prompt-module execution path."""
 from __future__ import annotations
 
+import shlex
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -15,6 +17,7 @@ from methodology_runner.orchestrator import (
     _phase_path_mappings,
     _phase_placeholder_values,
     _resolve_bundled_skills_root,
+    _resolve_prompt_runner_src_root,
     _resolve_phase_prompt_module_path,
     _invoke_prompt_runner_library,
     run_pipeline,
@@ -139,10 +142,40 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
 
 def test_phase_placeholder_values_include_ph006_prompt_runner_command() -> None:
     phase = get_phase("PH-006-incremental-implementation")
-    values = _phase_placeholder_values(phase)
+    config = PipelineConfig(
+        requirements_path=Path("req.md"),
+        workspace_dir=Path("workspace"),
+        backend="codex",
+    )
+    values = _phase_placeholder_values(phase, config)
 
     assert "prompt_runner_command" in values
-    assert values["prompt_runner_command"] == "prompt-runner"
+    expected_src = _resolve_prompt_runner_src_root()
+    assert values["prompt_runner_command"] == (
+        f"PYTHONPATH={shlex.quote(str(expected_src))} "
+        f"{shlex.quote(sys.executable)} -m prompt_runner"
+    )
+    assert values["methodology_backend"] == "codex"
+
+
+def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-029-ph006-incremental-implementation.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "same exact test command" in text
+    assert "failing or tightened-test outcome" not in text
+    assert "failing or tightened-test" in text
+    assert "## Command Reports" in text
+    assert "plain-text command-report block" in text
+    assert "### Command Report 1" in text
+    assert "stdout_excerpt" in text
+    assert "stderr_excerpt" in text
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(

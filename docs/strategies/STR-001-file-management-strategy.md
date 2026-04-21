@@ -8,15 +8,16 @@ Define:
 - the current live file layout used by `methodology-runner`
 - the boundary between steady-state application files, change-specific kept
   records, and runner-managed intermediate state
-- the recommended post-run handling for repeated feature and fix work on the
-  same application
+- the recommended lifecycle-phase model for repeated feature and fix work on
+  the same application
 
 ## STR-001-2 Scope
 
 This document separates two things that must not be conflated:
 
 1. Current implementation behavior in the checked-in runner and prompt modules.
-2. Recommended after-run promotion and retention policy for application work.
+2. Recommended change-lifecycle phase model for application work in and around
+   one methodology run.
 
 It is a file-management strategy, not a claim that every recommended path is
 already implemented by the runner.
@@ -96,7 +97,7 @@ The current prompt modules do not directly reference `.run-files/...` or
 
 ## STR-001-8 Current Prompt Paths
 
-| Raw Path | In-Run Path Template | Root Row | Current Role | Current Status | Recommended Post-Run Handling |
+| Raw Path | In-Run Path Template | Root Row | Current Role | Current Status | Recommended Lifecycle Handling |
 |---|---|---:|---|---|---|
 | `../../../skills/structured-design/SKILL.md` | `~/dev/agent-runner/tools/methodology-runner/skills/structured-design/SKILL.md` | 1 | Bundled methodology reference resource | Active and consistent | Keep in tool repo |
 | `../../../skills/structured-review/SKILL.md` | `~/dev/agent-runner/tools/methodology-runner/skills/structured-review/SKILL.md` | 1 | Bundled methodology reference resource | Active and consistent | Keep in tool repo |
@@ -115,14 +116,14 @@ The current prompt modules do not directly reference `.run-files/...` or
 
 ## STR-001-9 Current Runner-Managed Roots
 
-| Row | Root | In-Run Root Template | Current Contents | Current Lifecycle | Recommended Post-Run Handling |
+| Row | Root | In-Run Root Template | Current Contents | Current Lifecycle | Recommended Lifecycle Handling |
 |---:|---|---|---|---|---|
 | 3 | Methodology control state root | `<application worktree>/.methodology-runner/` | `run.lock`, `state.json`, `process.log` | Live runner control state during and after the run | Archive or discard after the run; do not treat as canonical application state |
 | 4 | Shared execution artifact root | `<application worktree>/.run-files/` | phase-scoped methodology artifacts, prompt-runner histories, module logs, generated summaries, execution evidence | Live runner execution artifacts during and after the run | Archive or discard after the run; do not treat as canonical application state |
 
 ## STR-001-10 Current Runner-Managed Paths
 
-| Path | In-Run Path Template | Root Row | Current Role | Current Status | Recommended Post-Run Handling |
+| Path | In-Run Path Template | Root Row | Current Role | Current Status | Recommended Lifecycle Handling |
 |---|---|---:|---|---|---|
 | `.methodology-runner/run.lock` | `<application worktree>/.methodology-runner/run.lock` | 3 | Per-worktree concurrency lock | Active and authoritative | Remove when the run is not active; do not promote into permanent application docs |
 | `.methodology-runner/state.json` | `<application worktree>/.methodology-runner/state.json` | 3 | Live methodology phase state used by status and resume | Active and authoritative | Archive only if historical run state is needed; otherwise discard |
@@ -199,39 +200,64 @@ Examples:
 | `package.json`, `pyproject.toml`, config files | same canonical path | Commit through git as the new configuration state |
 | `assets/...`, `migrations/...`, similar subtrees | same canonical path | Commit through git as the new steady-state project content |
 
-## STR-001-13 Recommended Post-Run Promotion Policy
+## STR-001-13 Recommended Change Lifecycle Phases
 
-After a successful run, treat the working paths inside `docs/` as temporary
-phase-artifact names, not automatically as the final persistent names.
+This strategy treats the full application-change workflow as one lifecycle made
+of explicit phases.
 
-Recommended split:
+The current methodology phases `PH-000` through `PH-007` are real phases inside
+that larger lifecycle. The surrounding preparation, preservation, cleanup,
+integration, and history work are also phases. They are not fake "pre" or
+"post" procedures.
 
-- `docs/changes/<change-id>/...`
-  - keep change-specific reasoning, execution, and verification records here
-- steady-state markdown docs outside `docs/changes/`
-  - these files are current by default because they live in the canonical docs
-    tree
-  - write them in markdown using the `structured-design` skill
-  - name them by stable subject, not by methodology phase
-  - examples:
-    - `docs/features/<capability-or-workflow>.md`
-    - `docs/design/<component-or-boundary>.md`
-    - `docs/contracts/<interface-or-protocol>.md`
-- `src/...`, `tests/...`, configs, assets, migrations
-  - keep these at their canonical steady-state paths and integrate them through
-    git
-- `.methodology-runner/...` and `.run-files/...`
-  - treat these as runner-managed intermediate state and execution evidence,
-    not as canonical application artifacts
+Recommended lifecycle:
 
-This split avoids three different failure modes:
+1. `LC-000 Change Preparation`
+   - create one git branch or worktree for one change
+   - choose the `change id`
+   - choose the source request file for the run
+2. `LC-001 Methodology Execution`
+   - run `methodology-runner` in the application worktree
+   - this phase contains the current methodology sub-phases:
+     - `PH-000 Requirements Inventory`
+     - `PH-001 Feature Specification`
+     - `PH-002 Architecture`
+     - `PH-003 Solution Design`
+     - `PH-004 Interface Contracts`
+     - `PH-005 Intelligent Simulations`
+     - `PH-006 Incremental Implementation`
+     - `PH-007 Verification Sweep`
+   - this phase may update canonical steady-state code, tests, and config
+     files in place and may also write temporary working artifacts under
+     `docs/`
+3. `LC-002 Change-Record Preservation`
+   - copy the kept reasoning, execution, and verification artifacts into
+     `docs/changes/<change-id>/...`
+4. `LC-003 Runner-State Archival`
+   - archive or discard `.methodology-runner/...` and `.run-files/...`
+   - treat them as runner-managed intermediate state and execution evidence,
+     not as canonical application artifacts
+5. `LC-004 Temporary-Artifact Cleanup`
+   - remove the temporary phase-working files at their in-run names after their
+     kept contents have been preserved under `docs/changes/<change-id>/...`
+6. `LC-005 Steady-State Integration`
+   - keep `src/...`, `tests/...`, configs, assets, and migrations at their
+     canonical steady-state paths
+   - write or update the common steady-state markdown docs outside
+     `docs/changes/`
+7. `LC-006 Final Review And History Integration`
+   - review the resulting application state and promoted documentation set
+   - commit the combined worktree changes
+   - merge the worktree branch back into the application repo history
+
+This lifecycle avoids three different failure modes:
 
 1. losing per-change reasoning because a later run overwrites it
 2. treating temporary phase YAML filenames as if they were the durable
    application docs
 3. polluting the permanent repo tree with runner control state and raw run logs
 
-## STR-001-13A Steady-State Doc Naming And Decomposition Rules
+## STR-001-13A Lifecycle Phase LC-005 Steady-State Doc Naming And Decomposition Rules
 
 Permanent docs outside `docs/changes/` should follow these rules:
 
@@ -256,10 +282,11 @@ still subject-based. Example steady-state paths:
 - `docs/design/console-application.md`
 - `docs/contracts/stdout-output.md`
 
-## STR-001-13B Continuity Inputs For Later Runs
+## STR-001-13B Lifecycle Phase LC-001 Continuity Inputs For Later Runs
 
 When steady-state markdown docs already exist outside `docs/changes/`, later
-runs should use the relevant folder as continuity context during phase authoring.
+runs should use the relevant folder as continuity context during `LC-001`
+phase authoring.
 
 Rules:
 
@@ -285,35 +312,25 @@ Prompt-contract implication:
 - the phase should reuse stable current-state names and decomposition unless
   the new request or upstream artifacts justify a deliberate change
 
-## STR-001-14 Git Integration Model
+## STR-001-14 Lifecycle Phase To Git And Worktree Mapping
 
-Recommended workflow:
+The recommended lifecycle phases map onto git and worktree actions like this:
 
-1. Create one git branch or git worktree for one change.
-2. Run methodology-runner in that application worktree.
-3. Let the run update canonical steady-state code, test, and config paths in place:
-   - `src/...`
-   - `tests/...`
-   - config files
-4. Promote any change-specific kept records into:
-   - `docs/changes/<change-id>/...`
-5. Archive or discard:
-   - `.methodology-runner/...`
-   - `.run-files/...`
-6. Remove the temporary phase-working files at their in-run names after their
-   kept contents have been preserved under `docs/changes/<change-id>/...`.
-7. Review the resulting application state and promoted change record set.
-8. Integrate the change into the common steady-state markdown docs outside
-   `docs/changes/` by writing or updating the subject-based docs with the
-   `structured-design` skill:
-   - `docs/features/<capability-or-workflow>.md`
-   - `docs/design/<component-or-boundary>.md`
-   - `docs/contracts/<interface-or-protocol>.md`
-   During this step, inspect any existing steady-state docs in those folders
-   and integrate the new change into them rather than rewriting the current
-   view from scratch.
-9. Review and commit the combined worktree changes.
-10. Merge the worktree branch back into the application repo history.
+| Lifecycle Phase | Main Action | Git And Worktree Effect |
+|---|---|---|
+| `LC-000 Change Preparation` | create one branch or worktree for one change | establishes the isolated application worktree that will hold the run |
+| `LC-001 Methodology Execution` | run `methodology-runner` | updates canonical code, tests, and config files in place; writes temporary phase artifacts under `docs/`; writes runner state under `.methodology-runner/` and `.run-files/` |
+| `LC-002 Change-Record Preservation` | promote kept records into `docs/changes/<change-id>/...` | materializes the permanent change dossier in the worktree before commit |
+| `LC-003 Runner-State Archival` | archive or discard `.methodology-runner/...` and `.run-files/...` | removes runner-owned state from the set of canonical files to keep |
+| `LC-004 Temporary-Artifact Cleanup` | remove temporary working phase files | leaves only canonical steady-state files plus kept records |
+| `LC-005 Steady-State Integration` | update subject-based markdown docs outside `docs/changes/` | integrates the change into the common current-state docs that later runs should inspect |
+| `LC-006 Final Review And History Integration` | review, commit, and merge | turns the resulting worktree state into permanent repo history |
+
+Current automation boundary:
+
+- current `methodology-runner` directly automates `LC-001`
+- `LC-000` and `LC-002` through `LC-006` are still strategy-defined lifecycle
+  phases and are not yet fully automated by `methodology-runner`
 
 ## STR-001-15 Runtime Placeholders And Code References
 
@@ -338,7 +355,10 @@ Recommended workflow:
   - `.run-files/...` for execution artifacts and summaries
 - Stable working filenames are safe during a run because each run should have
   its own application worktree.
-- The naming problem starts only when files are kept permanently after the run.
+- The full application-change lifecycle includes explicit phases before and
+  after the current `methodology-runner` implementation boundary.
+- The naming problem starts when the lifecycle moves from `LC-001 Methodology
+  Execution` into the preservation, cleanup, integration, and history phases.
 - The durable split should be:
   - canonical steady-state application files at their normal paths
   - change-specific kept records under `docs/changes/<change-id>/...`
@@ -489,42 +509,49 @@ The same run also creates runner-managed intermediate files at:
 No retry-guidance file is created in Run 1 because this example fixes the
 retry count at zero.
 
-#### Git Operations During Run 1
+#### Lifecycle Phases During Run 1
 
-The git operations for Run 1 are:
+Run 1 instantiates the lifecycle phases like this:
 
-1. Start from a clean worktree at:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world`
-2. Let methodology-runner create and modify files in place.
-3. Review the resulting steady-state application files:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/app.py`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/README.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/tests/test_app.py`
-4. Promote the kept change-specific records into concrete permanent paths:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/request/raw-requirements.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/requirements-inventory.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/requirements-inventory-coverage.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/feature-specification.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/architecture-design.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/solution-design.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/interface-contracts.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/simulation-definitions.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/execution/implementation-workflow.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/execution/implementation-run-report.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/verification/verification-report.yaml`
-5. Archive or discard the runner-managed state:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/.methodology-runner/`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/.run-files/`
-6. Remove the temporary working phase files at their in-run names because
-   their kept contents now exist under `docs/changes/`.
-7. Review the resulting application state and promoted change record set.
-8. Integrate the change into the common steady-state markdown docs with the
-   `structured-design` skill at these exact paths:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/features/console-display.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/design/console-application.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/contracts/stdout-output.md`
-9. Commit the kept files on `change-001-hello-world`.
-10. Merge `change-001-hello-world` back into `main`.
+- `LC-000 Change Preparation`
+  - Start from a clean worktree at:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world`
+- `LC-001 Methodology Execution`
+  - Let `methodology-runner` create and modify files in place.
+- `LC-002 Change-Record Preservation`
+  - Promote the kept change-specific records into concrete permanent paths:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/request/raw-requirements.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/requirements-inventory.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/requirements-inventory-coverage.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/feature-specification.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/architecture-design.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/solution-design.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/interface-contracts.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/analysis/simulation-definitions.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/execution/implementation-workflow.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/execution/implementation-run-report.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/changes/change-001/verification/verification-report.yaml`
+- `LC-003 Runner-State Archival`
+  - Archive or discard the runner-managed state:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/.methodology-runner/`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/.run-files/`
+- `LC-004 Temporary-Artifact Cleanup`
+  - Remove the temporary working phase files at their in-run names because
+    their kept contents now exist under `docs/changes/`.
+- `LC-005 Steady-State Integration`
+  - Integrate the change into the common steady-state markdown docs with the
+    `structured-design` skill at these exact paths:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/features/console-display.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/design/console-application.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/contracts/stdout-output.md`
+- `LC-006 Final Review And History Integration`
+  - Review the resulting steady-state application files:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/app.py`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/README.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/tests/test_app.py`
+  - Review the resulting application state and promoted change record set.
+  - Commit the kept files on `change-001-hello-world`.
+  - Merge `change-001-hello-world` back into `main`.
 
 After the merge, the application repo at
 `/Users/martinbechard/dev/hello-clock` contains these committed files:
@@ -635,57 +662,64 @@ The same run again creates runner-managed intermediate files at:
 No retry-guidance file is created in Run 2 because this example fixes the
 retry count at zero.
 
-#### Git Operations During Run 2
+#### Lifecycle Phases During Run 2
 
-The git operations for Run 2 are:
+Run 2 instantiates the lifecycle phases like this:
 
-1. Start from the Run 1 committed state in the new worktree at:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime`
-2. Let methodology-runner modify the steady-state application files in place:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/app.py`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/README.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/tests/test_app.py`
-3. Let methodology-runner create fresh working phase files again under:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/`
-4. Promote the kept records into concrete permanent paths:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/request/raw-requirements.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/requirements-inventory.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/requirements-inventory-coverage.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/feature-specification.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/architecture-design.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/solution-design.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/interface-contracts.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/simulation-definitions.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/execution/implementation-workflow.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/execution/implementation-run-report.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/verification/verification-report.yaml`
-5. Archive or discard:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/.methodology-runner/`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/.run-files/`
-6. Remove only these temporary phase-working files:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/raw-requirements.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/requirements-inventory.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/requirements-inventory-coverage.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/feature-specification.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/architecture/architecture-design.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/solution-design.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/interface-contracts.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/simulations/simulation-definitions.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/implementation/implementation-workflow.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/implementation/implementation-run-report.yaml`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/verification/verification-report.yaml`
-   Do not remove these steady-state markdown docs:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/console-display.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/console-application.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/contracts/stdout-output.md`
-7. Review the resulting application state and promoted change record set.
-8. Integrate the change into the common steady-state markdown docs with the
-   `structured-design` skill at these exact paths:
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/console-display.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/console-application.md`
-   - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/contracts/stdout-output.md`
-9. Commit the kept files on `change-002-add-datetime`.
-10. Merge `change-002-add-datetime` back into `main`.
+- `LC-000 Change Preparation`
+  - Start from the Run 1 committed state in the new worktree at:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime`
+- `LC-001 Methodology Execution`
+  - Let `methodology-runner` modify the steady-state application files in place:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/app.py`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/README.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/tests/test_app.py`
+  - Let `methodology-runner` create fresh working phase files again under:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/`
+- `LC-002 Change-Record Preservation`
+  - Promote the kept records into concrete permanent paths:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/request/raw-requirements.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/requirements-inventory.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/requirements-inventory-coverage.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/feature-specification.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/architecture-design.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/solution-design.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/interface-contracts.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/analysis/simulation-definitions.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/execution/implementation-workflow.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/execution/implementation-run-report.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/changes/change-002/verification/verification-report.yaml`
+- `LC-003 Runner-State Archival`
+  - Archive or discard:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/.methodology-runner/`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/.run-files/`
+- `LC-004 Temporary-Artifact Cleanup`
+  - Remove only these temporary phase-working files:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/raw-requirements.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/requirements-inventory.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/requirements-inventory-coverage.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/feature-specification.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/architecture/architecture-design.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/solution-design.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/interface-contracts.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/simulations/simulation-definitions.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/implementation/implementation-workflow.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/implementation/implementation-run-report.yaml`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/verification/verification-report.yaml`
+  - Do not remove these steady-state markdown docs:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/console-display.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/console-application.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/contracts/stdout-output.md`
+- `LC-005 Steady-State Integration`
+  - Integrate the change into the common steady-state markdown docs with the
+    `structured-design` skill at these exact paths:
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/console-display.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/console-application.md`
+    - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/contracts/stdout-output.md`
+- `LC-006 Final Review And History Integration`
+  - Review the resulting application state and promoted change record set.
+  - Commit the kept files on `change-002-add-datetime`.
+  - Merge `change-002-add-datetime` back into `main`.
 
 After the merge, the application repo at
 `/Users/martinbechard/dev/hello-clock` contains:
@@ -816,3 +850,118 @@ The code migration should proceed in this order:
      source-tree and editable-install use is supported by the current
      path-mapping model; non-editable package-distribution support still needs
      a deliberate packaging pass.
+
+## STR-001-19 Lifecycle-Phase Adjustment Changes
+
+The migration plan above covers the earlier path, prompt, and continuity work.
+That work is already executed or under test and should not be reopened here.
+
+This section covers the additional changes required because `STR-001-13` and
+`STR-001-14` now define explicit lifecycle phases around the current
+methodology phases.
+
+### STR-001-19A Phase-Model Decision
+
+- `LC-*` are first-class lifecycle phases.
+- `PH-*` remain first-class methodology phases.
+- `PH-*` stay nested inside `LC-001 Methodology Execution`.
+- Do not describe `LC-000` or `LC-002` through `LC-006` as "pre-run" or
+  "post-run" procedures in any authoritative surface. They are lifecycle
+  phases.
+- Do not renumber or flatten `PH-*` in this change set. Keep the current
+  methodology phase IDs stable unless a later deliberate migration replaces the
+  two-layer model with one flat phase namespace.
+
+### STR-001-19B Required Changes
+
+1. Phase taxonomy and naming surfaces
+   - Add one authoritative statement in code-facing and user-facing status
+     surfaces that there are two phase layers:
+     - lifecycle phases `LC-000` through `LC-006`
+     - methodology phases `PH-000` through `PH-007` nested inside `LC-001`
+   - Replace ambiguous wording such as "before the run", "after the run", and
+     similar pseudo-phase language in status and reporting output with the
+     actual lifecycle phase names.
+
+2. Persisted state model
+   - Extend the persisted state model so it can represent lifecycle phase
+     progress alongside the current methodology phase progress.
+   - Minimum new state concepts:
+     - `current_lifecycle_phase_id`
+     - `lifecycle_phases`
+     - `change_id`
+     - nested methodology phase state only while `LC-001` is active
+   - Preserve the current `PH-*` state model. The lifecycle layer wraps it; it
+     does not replace it.
+
+3. Orchestrator boundary
+   - Redefine the current methodology orchestrator as the implementation engine
+     for `LC-001 Methodology Execution`.
+   - Add an outer lifecycle coordinator or an explicit manual-phase contract for
+     `LC-000` and `LC-002` through `LC-006`.
+   - Completion of a full application-change lifecycle must no longer mean only
+     completion of `PH-007`. It must mean completion of `LC-006`.
+
+4. CLI and resume semantics
+   - Update CLI commands and summaries so they say whether they operate on
+     lifecycle phases, methodology phases, or both.
+   - `resume` inside `LC-001` should continue to resume methodology execution.
+   - `resume` after `LC-001` must either:
+     - understand the remaining lifecycle phases, or
+     - explicitly report that those phases remain manual and are outside the
+       current automation boundary.
+   - `status` output should render the lifecycle layer first and show the
+     methodology sub-phase only when `LC-001` is active.
+
+5. Reporting and timeline model
+   - Update summary, timeline, and any phase tables so they render:
+     - `LC-*` as the outer lifecycle sequence
+     - `PH-*` as the nested methodology sequence under `LC-001`
+   - Artifact ownership should name both layers when relevant:
+     - owning lifecycle phase
+     - owning methodology phase when the artifact is created inside `LC-001`
+
+6. Documentation and example alignment
+   - Keep `STR-001` and related strategy/review documents keyed to the
+     lifecycle-phase model.
+   - Update any remaining docs or review artifacts that still use "post-run"
+     language for `LC-002` through `LC-006`.
+   - Keep the worked examples as lifecycle traces, not as a second competing
+     workflow.
+
+7. Tests
+   - Add tests for:
+     - lifecycle state serialization
+     - lifecycle-plus-methodology status rendering
+     - resume behavior at the `LC-001` boundary and after `LC-001`
+     - report and timeline rendering for nested phases
+     - explicit manual-versus-automated boundary handling for `LC-000` and
+       `LC-002` through `LC-006`
+
+### STR-001-19C Likely Code Touch Points
+
+- `tools/methodology-runner/src/methodology_runner/models.py`
+  - extend persisted state types for lifecycle phase tracking
+- `tools/methodology-runner/src/methodology_runner/orchestrator.py`
+  - define the automation boundary and nested phase ownership clearly
+- `tools/methodology-runner/src/methodology_runner/cli.py`
+  - update command semantics and status/resume messaging
+- `tools/report/scripts/run-timeline.py`
+  - render lifecycle phases and nested methodology phases
+- `tools/methodology-runner/tests/...`
+  - add lifecycle-state, CLI, orchestrator, and rendering coverage
+
+### STR-001-19D Rollout Order
+
+1. Documentation and naming surfaces
+   - make the lifecycle-phase model explicit everywhere first
+2. State and reporting layer
+   - add lifecycle phase tracking and nested rendering
+3. CLI semantics
+   - make `status`, `resume`, and summaries lifecycle-aware
+4. Optional automation expansion
+   - automate `LC-000` and `LC-002` through `LC-006` only after the lifecycle
+     model is visible and testable in the state and reporting layers
+
+Until step 4 is implemented, the tool should say the outer lifecycle phases are
+real phases with a partial-manual execution boundary, not invisible procedures.

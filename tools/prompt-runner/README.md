@@ -181,6 +181,8 @@ Each non-empty line is treated as a path that must exist before the generator ru
 
 - If any required file is missing, prompt-runner halts before making a backend call.
 - `Required Files` only checks existence. It does not inject file contents into the prompt.
+- Each entry must be a bare path line such as `docs/request.md`.
+- Do not write markdown bullets such as `- docs/request.md` or code-formatted lines such as `` `docs/request.md` `` in path metadata sections.
 
 ### Include Files
 
@@ -190,6 +192,8 @@ contents should be injected into both the generator and judge prompts.
 Use this when replay, judge-only, or resume flows need the exact contents in
 the prompt itself rather than relying on a later tool read.
 
+- Each entry must be a bare path line such as `docs/context.md`.
+
 ### Checks Files
 
 Each non-empty line is treated as a path whose existence should be recorded without failing the prompt.
@@ -197,6 +201,7 @@ The results are appended to the module's `module.log`; prompt-runner does not cr
 
 - Missing check files are logged as warnings in `module.log`.
 - `Checks Files` only records presence. It does not inject file contents into the prompt.
+- Each entry must be a bare path line such as `docs/summary.txt`.
 
 ### Deterministic Validation
 
@@ -291,6 +296,7 @@ revision-only guidance should appear only on retries.
 - `E-NO-GENERATION` — a prompt or variant pair has no generation subsection.
 - `E-BAD-SECTION-ORDER` — a subsection appears in the wrong order.
 - `E-DUPLICATE-SECTION` — a subsection appears more than once in one prompt pair.
+- `E-BAD-PATH-ENTRY` — a path metadata section contains a markdown list item or code-formatted path instead of a bare path line.
 - `E-UNKNOWN-SUBSECTION` — an unrecognized reserved-level subsection heading was found.
 - `E-NO-VARIANTS` — a `[VARIANTS]` prompt contains no `### Variant ...` subsections.
 

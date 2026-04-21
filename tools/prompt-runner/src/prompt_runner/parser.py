@@ -20,6 +20,7 @@ ERROR_IDS = (
     "E-NO-GENERATION",
     "E-BAD-SECTION-ORDER",
     "E-DUPLICATE-SECTION",
+    "E-BAD-PATH-ENTRY",
     "E-UNKNOWN-SUBSECTION",
     "E-NO-VARIANTS",
 )
@@ -148,6 +149,7 @@ _RETRY_MODE_RE = re.compile(
     r"^retry prompt(?:\s*\[(replace|append|prepend)\])?$",
     re.IGNORECASE,
 )
+_MARKDOWN_LIST_RE = re.compile(r"^(?:[-+*]|\d+\.)\s+")
 
 
 def _extract_directives(raw_title: str) -> tuple[str, str | None, str | None]:
@@ -770,18 +772,67 @@ def _assign_section(
         pair.retry_mode = retry_mode or "replace"
         return
     if section == _REQUIRED:
-        pair.required_files = [line.strip() for line in body_lines if line.strip()]
+        pair.required_files = _parse_path_section_entries(
+            pair=pair,
+            section=section,
+            body_lines=body_lines,
+            heading_line=heading_line,
+        )
         return
     if section == _INCLUDE:
-        pair.include_files = [line.strip() for line in body_lines if line.strip()]
+        pair.include_files = _parse_path_section_entries(
+            pair=pair,
+            section=section,
+            body_lines=body_lines,
+            heading_line=heading_line,
+        )
         return
     if section == _CHECKS:
-        pair.checks_files = [line.strip() for line in body_lines if line.strip()]
+        pair.checks_files = _parse_path_section_entries(
+            pair=pair,
+            section=section,
+            body_lines=body_lines,
+            heading_line=heading_line,
+        )
         return
     if section == _DETERMINISTIC:
         pair.deterministic_validation = [line.strip() for line in body_lines if line.strip()]
         return
     raise AssertionError(f"Unhandled section {section}")
+
+
+def _parse_path_section_entries(
+    pair: _Accumulator,
+    section: str,
+    body_lines: list[str],
+    heading_line: int,
+) -> list[str]:
+    entries: list[str] = []
+    section_name = _display_name(section)
+    for offset, raw_line in enumerate(body_lines, start=1):
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if _MARKDOWN_LIST_RE.match(stripped):
+            raise ParseError(
+                "E-BAD-PATH-ENTRY",
+                (
+                    f'Prompt {pair.index} "{pair.title}" line {heading_line + offset}: '
+                    f'{section_name} entries must be bare paths, not markdown list items: '
+                    f"{stripped}"
+                ),
+            )
+        if stripped.startswith("`") and stripped.endswith("`") and len(stripped) >= 2:
+            raise ParseError(
+                "E-BAD-PATH-ENTRY",
+                (
+                    f'Prompt {pair.index} "{pair.title}" line {heading_line + offset}: '
+                    f'{section_name} entries must be bare paths, not code-formatted values: '
+                    f"{stripped}"
+                ),
+            )
+        entries.append(stripped)
+    return entries
 
 
 def _normalize_prompt_subsection(raw_heading: str) -> tuple[str | None, str | None]:

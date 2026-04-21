@@ -9,7 +9,44 @@ import yaml
 
 
 _WORKFLOW_MODULE_RE = re.compile(r"^### Module\s*$", re.MULTILINE)
-_PROMPT_HEADING_RE = re.compile(r"^## Prompt\b", re.MULTILINE)
+_PROMPT_HEADING_RE = re.compile(r"^##\s+Prompt\b", re.MULTILINE)
+_LEVEL3_RE = re.compile(r"^###\s+(.+?)\s*$")
+_MARKDOWN_LIST_RE = re.compile(r"^(?:[-+*]|\d+\.)\s+")
+_LOOSE_TDD_RE = re.compile(r"failing\s+or\s+tighten(?:ed|ing)?[-\s]test")
+
+
+def _bad_path_metadata_entries(text: str) -> list[dict]:
+    lines = text.splitlines()
+    active_section: str | None = None
+    bad_entries: list[dict] = []
+    for line_number, raw_line in enumerate(lines, start=1):
+        heading_match = _LEVEL3_RE.match(raw_line)
+        if heading_match is not None:
+            normalized = " ".join(heading_match.group(1).strip().lower().split())
+            if normalized in {"required files", "checks files", "include files"}:
+                active_section = heading_match.group(1).strip()
+            else:
+                active_section = None
+            continue
+        if raw_line.startswith("## "):
+            active_section = None
+            continue
+        if active_section is None:
+            continue
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+        if _MARKDOWN_LIST_RE.match(stripped) or (
+            stripped.startswith("`") and stripped.endswith("`") and len(stripped) >= 2
+        ):
+            bad_entries.append(
+                {
+                    "line": line_number,
+                    "section": active_section,
+                    "entry": stripped,
+                }
+            )
+    return bad_entries
 
 
 def _load_yaml(path: Path):
@@ -18,6 +55,7 @@ def _load_yaml(path: Path):
 
 def _validate_workflow_prompt(path: Path) -> dict:
     text = path.read_text(encoding="utf-8")
+    lower_text = text.lower()
     checks: list[dict] = []
 
     checks.append(
@@ -64,10 +102,37 @@ def _validate_workflow_prompt(path: Path) -> dict:
     )
     checks.append(
         {
+            "id": "forbidden_loose_tdd_phrase",
+            "status": "fail" if _LOOSE_TDD_RE.search(lower_text) else "pass",
+        }
+    )
+    checks.append(
+        {
             "id": "test_execution_signal",
             "status": (
                 "pass"
-                if ("pytest" in text or "run the relevant tests" in text.lower())
+                if (
+                    "pytest" in lower_text
+                    or "python3 -m unittest" in lower_text
+                    or "python -m unittest" in lower_text
+                    or "run the relevant tests" in lower_text
+                    or "run the relevant test command" in lower_text
+                    or "run both the automated test command" in lower_text
+                )
+                else "fail"
+            ),
+        }
+    )
+    checks.append(
+        {
+            "id": "command_outcome_detail_signal",
+            "status": (
+                "pass"
+                if (
+                    "stdout" in lower_text
+                    and "stderr" in lower_text
+                    and "exit code" in lower_text
+                )
                 else "fail"
             ),
         }
@@ -81,6 +146,14 @@ def _validate_workflow_prompt(path: Path) -> dict:
                 or "full verification" in text.lower()
                 else "fail"
             ),
+        }
+    )
+    bad_path_entries = _bad_path_metadata_entries(text)
+    checks.append(
+        {
+            "id": "path_metadata_entries_plain",
+            "status": "pass" if not bad_path_entries else "fail",
+            "details": bad_path_entries,
         }
     )
 
@@ -194,7 +267,15 @@ def _validate_run_report(workflow_prompt_path: Path, run_report_path: Path) -> d
     if tests_ok:
         bad_tests = []
         for row in tests:
-            missing = sorted({"command", "exit_code"} - set(row.keys()))
+            missing = sorted(
+                {
+                    "command",
+                    "exit_code",
+                    "stdout_excerpt",
+                    "stderr_excerpt",
+                }
+                - set(row.keys())
+            )
             if missing:
                 bad_tests.append({"command": row.get("command"), "missing": missing})
         checks.append(
