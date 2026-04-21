@@ -39,6 +39,16 @@ VERDICT_INSTRUCTION = (
     "VERDICT: pass, VERDICT: revise, or VERDICT: escalate. "
     "Do not write anything after that line."
 )
+SELECTION_VERDICT_INSTRUCTION = (
+    "End your response with one of the following exact forms:\n"
+    "VERDICT: select\n"
+    "SELECTED_VARIANT: <variant-name>\n"
+    "RATIONALE: <one-line rationale>\n"
+    "or\n"
+    "VERDICT: escalate\n"
+    "RATIONALE: <one-line rationale>\n"
+    "Do not write anything after those lines."
+)
 ANTI_ANCHORING_CLAUSE = (
     "Below is the revised artifact. Re-evaluate every checklist item against "
     "this current version. Items you previously failed may now pass, and items "
@@ -52,18 +62,30 @@ REVISION_GENERATOR_PREAMBLE = (
     "the complete revised artifact, with no commentary before or after it."
 )
 PROJECT_ORGANISER_INSTRUCTION = (
-    "If this task involves producing files on disk: before writing any new "
-    "file, determine its path with the repository's file-placement helper. "
-    "Prefer the dedicated `project_organiser` custom agent / "
-    "`project-organiser` sub-agent when the runtime supports it, because that "
-    "keeps taxonomy context isolated. If the dedicated agent is unavailable, "
-    "consult `docs/project-taxonomy.md` directly. Use the resulting path as "
-    "the exact file path for your file-writing action. If this runtime does "
-    "not expose a named file-write tool, use shell commands or the available "
-    "file-edit mechanism to create or update the file directly. Do not guess "
-    "paths from the project layout and do not rely on an external Claude CLI "
-    "wrapper. If this task is purely text output (no files), ignore this "
-    "instruction."
+    "If this task involves producing files on disk: treat any exact "
+    "repository-relative file path named by the prompt as authoritative. "
+    "Use that exact path directly and do not invoke the repository "
+    "file-placement helper for that file. Do not invoke the file-placement "
+    "helper for edits to existing files. Use the repository file-placement "
+    "helper only when you need to create a new repository file and the prompt "
+    "does not already specify its exact path. For that case, prefer the "
+    "dedicated `project_organiser` custom agent / `project-organiser` "
+    "sub-agent when the runtime supports it, because that keeps taxonomy "
+    "context isolated. If the dedicated agent is unavailable, consult "
+    "`docs/project-taxonomy.md` directly. Use the resulting path as the exact "
+    "file path for your file-writing action. Runner-owned temporary files "
+    "under explicitly provided temp paths such as `.run-files/` are exempt "
+    "from taxonomy lookup. If this runtime does not expose a named file-write "
+    "tool, use shell commands or the available file-edit mechanism to create "
+    "or update the file directly. Do not guess paths from the project layout "
+    "and do not rely on an external Claude CLI wrapper. If this task is "
+    "purely text output (no files), ignore this instruction."
+)
+SHELL_PORTABILITY_INSTRUCTION = (
+    "When using shell commands in this runtime, assume zsh-compatible syntax. "
+    "If you need to capture an exit code in a variable, do not assign to the "
+    "name `status` because zsh reserves it as a read-only variable. Use a "
+    "different name such as `rc`."
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
 RUN_FILES_DIRNAME = ".run-files"
@@ -310,6 +332,9 @@ class VariantResult:
     run_dir: Path
     worktree_dir: Path
     summary: str  # content of summary.txt, or empty if not found
+    final_verdict: str = ""
+    changed_files: tuple[Path, ...] = ()
+    deleted_files: tuple[Path, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -319,6 +344,15 @@ class ForkResult:
     fork_index: int
     fork_title: str
     variant_results: list[VariantResult]
+    selected_variant: str | None = None
+    selector_rationale: str = ""
+
+
+@dataclass(frozen=True)
+class SelectionDecision:
+    verdict: str
+    selected_variant: str | None
+    rationale: str
 
 
 @dataclass(frozen=True)
@@ -437,6 +471,7 @@ def build_initial_generator_message(
         "# Your task\n\n"
         f"{_materialize_runtime_includes(pair.generation_prompt, worktree_dir, source_file, path_mappings)}"
     )
+    sections.append(SHELL_PORTABILITY_INSTRUCTION)
     if include_project_organiser:
         sections.append(PROJECT_ORGANISER_INSTRUCTION)
 
@@ -535,6 +570,8 @@ def build_initial_judge_message(
         f"{_HORIZONTAL_RULE}"
         f"{deterministic_section}"
         f"{_HORIZONTAL_RULE}"
+        f"{SHELL_PORTABILITY_INSTRUCTION}"
+        f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
 
@@ -609,6 +646,7 @@ def build_revision_generator_message(
         f"{previous_artifact_block}"
         f"{retry_instruction_block}"
     )
+    msg += f"{_HORIZONTAL_RULE}{SHELL_PORTABILITY_INSTRUCTION}"
     if include_project_organiser:
         msg += f"{_HORIZONTAL_RULE}{PROJECT_ORGANISER_INSTRUCTION}"
     return msg
@@ -656,6 +694,8 @@ def build_revision_judge_message(
         f"{_HORIZONTAL_RULE}"
         f"{deterministic_section}"
         f"{_HORIZONTAL_RULE}"
+        f"{SHELL_PORTABILITY_INSTRUCTION}"
+        f"{_HORIZONTAL_RULE}"
         f"{VERDICT_INSTRUCTION}"
     )
 
@@ -697,6 +737,41 @@ def _prompt_artifact_dir(run_dir: Path, pair: PromptPair) -> Path:
 
 def _prompt_history_dir(run_dir: Path, pair: PromptPair) -> Path:
     return _module_dir(run_dir, pair) / "history" / _prompt_file_stem(pair)
+
+
+def _fork_representative_pair(fork: ForkPoint) -> PromptPair:
+    for variant in fork.variants:
+        if variant.pairs:
+            return variant.pairs[0]
+    raise ValueError(f"fork {fork.index} has no variant prompt pairs")
+
+
+def _selection_prompt_stem(fork: ForkPoint) -> str:
+    return f"prompt-{fork.index:02d}"
+
+
+def _selection_dir(run_dir: Path, fork: ForkPoint) -> Path:
+    return _module_dir(run_dir, _fork_representative_pair(fork)) / (
+        f"{_selection_prompt_stem(fork)}.selection"
+    )
+
+
+def _selected_variant_path(run_dir: Path, fork: ForkPoint) -> Path:
+    return _module_dir(run_dir, _fork_representative_pair(fork)) / (
+        f"{_selection_prompt_stem(fork)}.selected-variant.txt"
+    )
+
+
+def _selected_files_path(run_dir: Path, fork: ForkPoint) -> Path:
+    return _module_dir(run_dir, _fork_representative_pair(fork)) / (
+        f"{_selection_prompt_stem(fork)}.selected-files.txt"
+    )
+
+
+def _selector_decision_path(run_dir: Path, fork: ForkPoint) -> Path:
+    return _module_dir(run_dir, _fork_representative_pair(fork)) / (
+        f"{_selection_prompt_stem(fork)}.selector-decision.md"
+    )
 
 
 def _iteration_history_path(
@@ -1059,6 +1134,33 @@ def _restore_worktree_from_snapshot(
         dest = worktree_dir / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, dest)
+
+
+def _diff_worktree_state(
+    worktree_dir: Path,
+    snapshot_dir: Path,
+    extra_excluded_roots: tuple[Path, ...] = (),
+) -> tuple[list[Path], list[Path]]:
+    """Return (changed_files, deleted_files) relative to snapshot_dir."""
+    snapshot_mtimes: dict[Path, int] = {}
+    current_mtimes: dict[Path, int] = {}
+    if snapshot_dir.exists():
+        for rel, mtime in _iter_worktree_files(snapshot_dir, extra_excluded_roots):
+            snapshot_mtimes[rel] = mtime
+    for rel, mtime in _iter_worktree_files(worktree_dir, extra_excluded_roots):
+        current_mtimes[rel] = mtime
+
+    changed: list[Path] = []
+    for rel, mtime in current_mtimes.items():
+        previous = snapshot_mtimes.get(rel)
+        if previous is None or previous != mtime:
+            changed.append(rel)
+    deleted = sorted(rel for rel in snapshot_mtimes if rel not in current_mtimes)
+    return sorted(changed), deleted
+
+
+def _write_json(path: Path, payload: object) -> None:
+    _write(path, json.dumps(payload, indent=2) + "\n")
 
 
 def _excluded_run_roots(worktree_dir: Path, run_dir: Path) -> tuple[Path, ...]:
@@ -2108,6 +2210,65 @@ def _render_prompt_pair(
     )
 
 
+def _render_fork_point(
+    fork: ForkPoint,
+    context: dict[str, str],
+    worktree_dir: Path,
+    source_file: Path | None,
+    path_mappings: dict[str, str] | None = None,
+) -> ForkPoint:
+    rendered_variants: list[VariantPrompt] = []
+    for variant in fork.variants:
+        rendered_variants.append(
+            VariantPrompt(
+                variant_name=_render_placeholders(variant.variant_name, context),
+                variant_title=_render_placeholders(variant.variant_title, context),
+                pairs=[
+                    _render_prompt_pair(
+                        pair,
+                        context,
+                        worktree_dir,
+                        source_file,
+                        path_mappings,
+                    )
+                    for pair in variant.pairs
+                ],
+            )
+        )
+
+    selector_prompt = _render_inline_includes(
+        _render_runtime_include_targets(
+            _render_placeholders(fork.selector_prompt, context),
+            context,
+        ),
+        context,
+        worktree_dir,
+        source_file,
+        path_mappings,
+    )
+    selector_retry_prompt = _render_inline_includes(
+        _render_runtime_include_targets(
+            _render_placeholders(fork.selector_retry_prompt, context),
+            context,
+        ),
+        context,
+        worktree_dir,
+        source_file,
+        path_mappings,
+    )
+    return ForkPoint(
+        index=fork.index,
+        title=_render_placeholders(fork.title, context),
+        heading_line=fork.heading_line,
+        variants=rendered_variants,
+        selector_prompt=selector_prompt,
+        selector_retry_prompt=selector_retry_prompt,
+        selection_include_files=tuple(
+            _render_placeholders(path, context) for path in fork.selection_include_files
+        ),
+    )
+
+
 def _pair_unresolved_placeholders(pair: PromptPair) -> list[str]:
     names: set[str] = set()
     text_fields = [
@@ -2353,6 +2514,163 @@ def _copy_worktree_for_variant(src_workspace: Path, dest_workspace: Path) -> Non
     shutil.copytree(src_workspace, dest_workspace, ignore=_ignore, symlinks=False)
 
 
+def _variant_summary_path(
+    variant_run_dir: Path,
+    variant_pairs: list[PromptPair],
+) -> Path:
+    expected = _summary_output_path(variant_run_dir, list(variant_pairs), [])
+    if expected.exists():
+        return expected
+    root_summary = _run_files_dir(variant_run_dir) / "summary.txt"
+    if root_summary.exists():
+        return root_summary
+    module_summaries = sorted(_run_files_dir(variant_run_dir).glob("*/summary.txt"))
+    if module_summaries:
+        return module_summaries[0]
+    return expected
+
+
+def _variant_final_verdict(variant_run_dir: Path) -> str:
+    manifest_path = _run_files_dir(variant_run_dir) / "manifest.json"
+    if manifest_path.exists():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("halt_reason"):
+            return Verdict.ESCALATE.value
+    return Verdict.PASS.value
+
+
+def _build_selector_dossier(
+    fork: ForkPoint,
+    variant_results: list[VariantResult],
+) -> str:
+    sections: list[str] = []
+    for result in variant_results:
+        lines = [
+            f"## Variant {result.variant_name}: {result.variant_title}",
+            f"Exit code: {result.exit_code}",
+            f"Final verdict: {result.final_verdict or 'unknown'}",
+            "",
+            "Changed files:",
+        ]
+        if result.changed_files:
+            lines.extend(f"- {path}" for path in result.changed_files)
+        else:
+            lines.append("- (none)")
+        lines.append("")
+        lines.append("Deleted files:")
+        if result.deleted_files:
+            lines.extend(f"- {path}" for path in result.deleted_files)
+        else:
+            lines.append("- (none)")
+        if result.summary.strip():
+            lines.extend(["", "Summary:", result.summary.strip()])
+        for include_path in fork.selection_include_files:
+            target = result.worktree_dir / include_path
+            lines.extend(["", f"File: {include_path}"])
+            if target.exists():
+                lines.extend(
+                    [
+                        "```text",
+                        target.read_text(encoding="utf-8").rstrip(),
+                        "```",
+                    ]
+                )
+            else:
+                lines.append("(missing)")
+        sections.append("\n".join(lines))
+    return "\n\n".join(sections)
+
+
+def _build_selector_message(
+    *,
+    fork: ForkPoint,
+    dossier: str,
+    retry_feedback: str = "",
+    judge_prelude: str | None = None,
+) -> str:
+    sections: list[str] = []
+    valid_variants = "\n".join(f"- {variant.variant_name}" for variant in fork.variants)
+    if judge_prelude:
+        sections.append(judge_prelude)
+    sections.append(fork.selector_prompt)
+    sections.append(
+        "# Selector Output Rules\n\n"
+        "When you emit `SELECTED_VARIANT`, use exactly one of these canonical "
+        "variant keys:\n"
+        f"{valid_variants}"
+    )
+    sections.append("# Candidate Variants\n\n" + dossier)
+    if retry_feedback:
+        sections.append(
+            "# Previous invalid selector response\n\n"
+            f"{retry_feedback}"
+        )
+        if fork.selector_retry_prompt:
+            sections.append(fork.selector_retry_prompt)
+    sections.append(SELECTION_VERDICT_INSTRUCTION)
+    return _HORIZONTAL_RULE.join(section.strip() for section in sections if section.strip())
+
+
+def _parse_selection_decision(text: str) -> SelectionDecision:
+    verdict_match = re.search(
+        r"^VERDICT:\s*(select|escalate)\s*$",
+        text,
+        re.MULTILINE | re.IGNORECASE,
+    )
+    if verdict_match is None:
+        raise ValueError("selector response is missing a valid VERDICT line")
+    verdict = verdict_match.group(1).lower()
+    selected_variant: str | None = None
+    if verdict == "select":
+        selected_match = re.search(
+            r"^SELECTED_VARIANT:\s*(.+?)\s*$",
+            text,
+            re.MULTILINE,
+        )
+        if selected_match is None or not selected_match.group(1).strip():
+            raise ValueError("selector response is missing SELECTED_VARIANT")
+        selected_variant = selected_match.group(1).strip()
+    rationale_match = re.search(r"^RATIONALE:\s*(.+?)\s*$", text, re.MULTILINE)
+    rationale = rationale_match.group(1).strip() if rationale_match else ""
+    return SelectionDecision(
+        verdict=verdict,
+        selected_variant=selected_variant,
+        rationale=rationale,
+    )
+
+
+def _promote_variant_to_parent(
+    *,
+    parent_worktree_dir: Path,
+    variant_result: VariantResult,
+) -> None:
+    for rel in variant_result.deleted_files:
+        target = parent_worktree_dir / rel
+        if target.exists():
+            target.unlink()
+    for rel in variant_result.changed_files:
+        src = variant_result.worktree_dir / rel
+        dest = parent_worktree_dir / rel
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(src, dest)
+
+
+def _load_selection_prior_artifact(
+    run_dir: Path,
+    fork: ForkPoint,
+) -> PriorArtifact | None:
+    selected_variant_file = _selected_variant_path(run_dir, fork)
+    selected_files_file = _selected_files_path(run_dir, fork)
+    if not selected_variant_file.exists() or not selected_files_file.exists():
+        return None
+    files = [
+        Path(line)
+        for line in selected_files_file.read_text(encoding="utf-8").splitlines()
+        if line.strip()
+    ]
+    return PriorArtifact(title=fork.title, files=files)
+
+
 def _run_fork_point(
     fork: ForkPoint,
     fork_index_in_run: int,
@@ -2361,8 +2679,10 @@ def _run_fork_point(
     worktree_dir: Path,
     config: RunConfig,
     source_file: Path,
+    claude_client: ClaudeClient,
+    run_id: str,
     fork_from_session: str = "",
-) -> ForkResult:
+) -> tuple[ForkResult, PriorArtifact | None, str | None]:
     """Execute all variants of a fork point and return their aggregated results.
 
     For each variant:
@@ -2374,6 +2694,7 @@ def _run_fork_point(
     run_files_dir = _run_files_dir(run_dir)
     fork_slug = f"fork-{fork.index:02d}-{_slugify(fork.title)}"
     comparison_path = run_files_dir / f"{fork_slug}.comparison.txt"
+    selection_enabled = bool(fork.selector_prompt.strip())
 
     selected_variants = fork.variants
     if config.variant is not None:
@@ -2387,11 +2708,136 @@ def _run_fork_point(
                 f"'{config.variant}'"
             )
 
-    procs: list[tuple[VariantPrompt, Path, subprocess.Popen[bytes]]] = []
+    procs: list[tuple[VariantPrompt, Path, list[PromptPair], subprocess.Popen[bytes]]] = []
+    selection_dir = _selection_dir(run_dir, fork) if selection_enabled else None
+    baseline_dir = selection_dir / "baseline" if selection_dir is not None else None
+    if selection_dir is not None:
+        if selection_dir.exists():
+            shutil.rmtree(selection_dir)
+        selection_dir.mkdir(parents=True, exist_ok=True)
+        assert baseline_dir is not None
+        _snapshot_worktree(worktree_dir, baseline_dir)
+        _write_json(
+            selection_dir / "baseline-manifest.json",
+            {
+                "fork_index": fork.index,
+                "fork_title": fork.title,
+                "variants": [variant.variant_name for variant in selected_variants],
+            },
+        )
+
+    def collect_variant_result(
+        variant: VariantPrompt,
+        variant_run_dir: Path,
+        synthetic_pairs: list[PromptPair],
+        proc: subprocess.Popen[str],
+    ) -> VariantResult:
+        stdout_path = _run_files_dir(variant_run_dir) / "child.stdout.log"
+        stderr_path = _run_files_dir(variant_run_dir) / "child.stderr.log"
+        stdout_path.parent.mkdir(parents=True, exist_ok=True)
+        stderr_path.parent.mkdir(parents=True, exist_ok=True)
+
+        def drain_stdout() -> None:
+            assert proc.stdout is not None
+            with open(stdout_path, "a", encoding="utf-8") as log:
+                try:
+                    for chunk in proc.stdout:
+                        log.write(chunk)
+                        log.flush()
+                        _append_process_log(
+                            run_dir,
+                            f"variant-child prompt={fork.index} variant={variant.variant_name} stdout",
+                            chunk,
+                        )
+                except ValueError:
+                    return
+
+        def drain_stderr() -> None:
+            assert proc.stderr is not None
+            with open(stderr_path, "a", encoding="utf-8") as log:
+                try:
+                    for chunk in proc.stderr:
+                        log.write(chunk)
+                        log.flush()
+                        _append_process_log(
+                            run_dir,
+                            f"variant-child prompt={fork.index} variant={variant.variant_name} stderr",
+                            chunk,
+                        )
+                except ValueError:
+                    return
+
+        t_out = threading.Thread(target=drain_stdout, daemon=True)
+        t_err = threading.Thread(target=drain_stderr, daemon=True)
+        t_out.start()
+        t_err.start()
+        proc.wait()
+        t_out.join()
+        t_err.join()
+        exit_code = proc.returncode
+        mark_process_completed(
+            _run_files_dir(variant_run_dir) / "child-process.json",
+            returncode=exit_code,
+        )
+        summary_path = _variant_summary_path(variant_run_dir, synthetic_pairs)
+        summary = (
+            summary_path.read_text(encoding="utf-8")
+            if summary_path.exists()
+            else ""
+        )
+        changed_files: list[Path] = []
+        deleted_files: list[Path] = []
+        if selection_enabled:
+            assert baseline_dir is not None
+            changed_files, deleted_files = _diff_worktree_state(
+                variant_run_dir,
+                baseline_dir,
+            )
+        final_verdict = (
+            Verdict.ESCALATE.value if exit_code != 0 else _variant_final_verdict(variant_run_dir)
+        )
+        result = VariantResult(
+            variant_name=variant.variant_name,
+            variant_title=variant.variant_title,
+            exit_code=exit_code,
+            run_dir=variant_run_dir,
+            worktree_dir=variant_run_dir,
+            summary=summary,
+            final_verdict=final_verdict,
+            changed_files=tuple(changed_files),
+            deleted_files=tuple(deleted_files),
+        )
+        if selection_enabled:
+            assert selection_dir is not None
+            variant_dir = selection_dir / "variants" / _slugify(variant.variant_name)
+            _write_json(
+                variant_dir / "result.json",
+                {
+                    "variant_name": variant.variant_name,
+                    "variant_title": variant.variant_title,
+                    "exit_code": exit_code,
+                    "final_verdict": final_verdict,
+                    "summary_path": str(summary_path),
+                    "changed_files": [str(path) for path in changed_files],
+                    "deleted_files": [str(path) for path in deleted_files],
+                },
+            )
+            _write(
+                variant_dir / "changed-paths.txt",
+                "\n".join(str(path) for path in changed_files)
+                + ("\n" if changed_files else ""),
+            )
+        return result
+
+    variant_results: list[VariantResult] = []
 
     for variant in selected_variants:
-        variant_slug = f".variant-{fork.index:02d}-{_slugify(variant.variant_name)}"
-        variant_run_dir = run_dir / variant_slug
+        variant_slug = _slugify(variant.variant_name)
+        if selection_enabled:
+            assert selection_dir is not None
+            variant_run_dir = selection_dir / "variants" / variant_slug / "workspace"
+        else:
+            variant_run_dir = run_dir / f".variant-{fork.index:02d}-{variant_slug}"
 
         # Copy the worktree into the variant directory.
         _copy_worktree_for_variant(worktree_dir, variant_run_dir)
@@ -2404,7 +2850,9 @@ def _run_fork_point(
         tail_pairs: list[PromptPair] = [
             item for item in items_after if isinstance(item, PromptPair)
         ]
-        synthetic_pairs = list(variant.pairs) + tail_pairs
+        synthetic_pairs = list(variant.pairs)
+        if not selection_enabled:
+            synthetic_pairs += tail_pairs
         synthetic_md = _serialize_pairs_to_md(synthetic_pairs)
 
         temp_md_path = _run_files_dir(variant_run_dir) / "synthetic-prompt.md"
@@ -2454,73 +2902,29 @@ def _run_fork_point(
             argv=[str(part) for part in cmd],
             cwd=variant_run_dir,
         )
-        procs.append((variant, variant_run_dir, proc))
+        procs.append((variant, variant_run_dir, synthetic_pairs, proc))
 
         if config.variant_sequential:
-            proc.communicate()
+            variant_results.append(
+                collect_variant_result(
+                    variant,
+                    variant_run_dir,
+                    synthetic_pairs,
+                    proc,
+                )
+            )
+            procs.pop()
 
     # Wait for all subprocesses.
-    variant_results: list[VariantResult] = []
-    for variant, variant_run_dir, proc in procs:
-        stdout_path = _run_files_dir(variant_run_dir) / "child.stdout.log"
-        stderr_path = _run_files_dir(variant_run_dir) / "child.stderr.log"
-        stdout_path.parent.mkdir(parents=True, exist_ok=True)
-        stderr_path.parent.mkdir(parents=True, exist_ok=True)
-        stdout_chunks: list[str] = []
-        stderr_chunks: list[str] = []
-
-        def drain_stdout() -> None:
-            assert proc.stdout is not None
-            with open(stdout_path, "a", encoding="utf-8") as log:
-                for chunk in proc.stdout:
-                    stdout_chunks.append(chunk)
-                    log.write(chunk)
-                    log.flush()
-                    _append_process_log(
-                        run_dir,
-                        f"variant-child prompt={fork.index} variant={variant.variant_name} stdout",
-                        chunk,
-                    )
-
-        def drain_stderr() -> None:
-            assert proc.stderr is not None
-            with open(stderr_path, "a", encoding="utf-8") as log:
-                for chunk in proc.stderr:
-                    stderr_chunks.append(chunk)
-                    log.write(chunk)
-                    log.flush()
-                    _append_process_log(
-                        run_dir,
-                        f"variant-child prompt={fork.index} variant={variant.variant_name} stderr",
-                        chunk,
-                    )
-
-        t_out = threading.Thread(target=drain_stdout, daemon=True)
-        t_err = threading.Thread(target=drain_stderr, daemon=True)
-        t_out.start()
-        t_err.start()
-        proc.wait()
-        t_out.join()
-        t_err.join()
-        exit_code = proc.returncode
-        mark_process_completed(
-            _run_files_dir(variant_run_dir) / "child-process.json",
-            returncode=exit_code,
+    for variant, variant_run_dir, synthetic_pairs, proc in procs:
+        variant_results.append(
+            collect_variant_result(
+                variant,
+                variant_run_dir,
+                synthetic_pairs,
+                proc,
+            )
         )
-        summary_path = _run_files_dir(variant_run_dir) / "summary.txt"
-        summary = (
-            summary_path.read_text(encoding="utf-8")
-            if summary_path.exists()
-            else ""
-        )
-        variant_results.append(VariantResult(
-            variant_name=variant.variant_name,
-            variant_title=variant.variant_title,
-            exit_code=exit_code,
-            run_dir=variant_run_dir,
-            worktree_dir=variant_run_dir,
-            summary=summary,
-        ))
 
     # Write a comparison report.
     comparison_lines: list[str] = [
@@ -2573,6 +2977,14 @@ def _run_fork_point(
             comparison_lines.append("    summary   :")
             for ln in summary_lines:
                 comparison_lines.append(f"      {ln}")
+        if vr.changed_files:
+            comparison_lines.append("    changed   :")
+            for path in vr.changed_files:
+                comparison_lines.append(f"      {path}")
+        if vr.deleted_files:
+            comparison_lines.append("    deleted   :")
+            for path in vr.deleted_files:
+                comparison_lines.append(f"      {path}")
 
         # Files created in the variant worktree.
         if vr.worktree_dir.exists():
@@ -2590,10 +3002,179 @@ def _run_fork_point(
 
     _write(comparison_path, "\n".join(comparison_lines) + "\n")
 
-    return ForkResult(
-        fork_index=fork.index,
-        fork_title=fork.title,
-        variant_results=variant_results,
+    if not selection_enabled:
+        return (
+            ForkResult(
+                fork_index=fork.index,
+                fork_title=fork.title,
+                variant_results=variant_results,
+            ),
+            None,
+            None,
+        )
+
+    assert selection_dir is not None
+    selector_dir = selection_dir / "selector"
+    selector_dir.mkdir(parents=True, exist_ok=True)
+    dossier = _build_selector_dossier(fork, variant_results)
+    _write(selector_dir / "selector-dossier.md", dossier + ("\n" if dossier else ""))
+    selector_pair = PromptPair(
+        index=fork.index,
+        title=fork.title,
+        generation_prompt="",
+        validation_prompt=fork.selector_prompt,
+        retry_prompt="",
+        heading_line=fork.heading_line,
+        generation_line=0,
+        validation_line=0,
+        retry_line=0,
+        module_slug=_fork_representative_pair(fork).module_slug,
+    )
+    selector_session = _session_id(f"selector-fork-{fork.index}-{run_id}")
+    invalid_feedback = ""
+    decision: SelectionDecision | None = None
+    selector_response_text = ""
+
+    for attempt in range(1, config.max_iterations + 1):
+        selector_message = _build_selector_message(
+            fork=fork,
+            dossier=dossier,
+            retry_feedback=invalid_feedback,
+            judge_prelude=config.judge_prelude,
+        )
+        _write(selector_dir / "selector-prompt.md", selector_message)
+        _write(
+            _iteration_prompt_input_path(
+                run_dir, selector_pair, attempt, validation=True,
+            ),
+            selector_message,
+        )
+        selector_call = _make_call(
+            prompt=selector_message,
+            session_id=selector_session,
+            new_session=(attempt == 1 or config.backend == "codex"),
+            model=config.model,
+            effort=config.default_effort,
+            module_log_path=_module_log_path(run_dir, selector_pair),
+            iteration=attempt,
+            role="judge",
+            pair=selector_pair,
+            worktree_dir=worktree_dir,
+            run_dir=run_dir,
+        )
+        response = _call_or_persist_partial(
+            claude_client,
+            selector_call,
+            selector_dir / "selector-response.md",
+        )
+        selector_response_text = response.stdout
+        try:
+            decision = _parse_selection_decision(response.stdout)
+            if decision.verdict == "select":
+                selected_result = next(
+                    (
+                        result
+                        for result in variant_results
+                        if result.variant_name == decision.selected_variant
+                    ),
+                    None,
+                )
+                if selected_result is None:
+                    raise ValueError(
+                        f"selector chose unknown variant '{decision.selected_variant}'"
+                    )
+                if selected_result.final_verdict != Verdict.PASS.value:
+                    raise ValueError(
+                        f"selector chose variant '{decision.selected_variant}' "
+                        "that did not finish with pass"
+                    )
+            break
+        except ValueError as err:
+            invalid_feedback = (
+                f"{response.stdout.rstrip()}\n\n"
+                f"Invalid selector output: {err}"
+            )
+            decision = None
+            if attempt >= config.max_iterations:
+                halt_reason = (
+                    f"R-INVALID-SELECTION: prompt {fork.index} \"{fork.title}\" "
+                    f"did not produce a valid selector decision."
+                )
+                return (
+                    ForkResult(
+                        fork_index=fork.index,
+                        fork_title=fork.title,
+                        variant_results=variant_results,
+                    ),
+                    None,
+                    halt_reason,
+                )
+
+    assert decision is not None
+    _write(selector_dir / "selector-response.md", selector_response_text)
+    _write_json(
+        selector_dir / "decision.json",
+        {
+            "verdict": decision.verdict,
+            "selected_variant": decision.selected_variant,
+            "rationale": decision.rationale,
+        },
+    )
+
+    if decision.verdict == "escalate":
+        halt_reason = (
+            f"selection fork {fork.index} escalated"
+            + (f": {decision.rationale}" if decision.rationale else "")
+        )
+        return (
+            ForkResult(
+                fork_index=fork.index,
+                fork_title=fork.title,
+                variant_results=variant_results,
+                selected_variant=None,
+                selector_rationale=decision.rationale,
+            ),
+            None,
+            halt_reason,
+        )
+
+    selected_result = next(
+        result for result in variant_results if result.variant_name == decision.selected_variant
+    )
+    _promote_variant_to_parent(
+        parent_worktree_dir=worktree_dir,
+        variant_result=selected_result,
+    )
+    _write(_selected_variant_path(run_dir, fork), f"{selected_result.variant_name}\n")
+    _write(
+        _selected_files_path(run_dir, fork),
+        "\n".join(str(path) for path in selected_result.changed_files)
+        + ("\n" if selected_result.changed_files else ""),
+    )
+    _write(
+        _selector_decision_path(run_dir, fork),
+        f"VERDICT: {decision.verdict}\n"
+        f"SELECTED_VARIANT: {selected_result.variant_name}\n"
+        f"RATIONALE: {decision.rationale}\n",
+    )
+    _write(
+        selection_dir / "selection-summary.md",
+        f"Selected variant: {selected_result.variant_name}\n"
+        f"Rationale: {decision.rationale}\n",
+    )
+    return (
+        ForkResult(
+            fork_index=fork.index,
+            fork_title=fork.title,
+            variant_results=variant_results,
+            selected_variant=selected_result.variant_name,
+            selector_rationale=decision.rationale,
+        ),
+        PriorArtifact(
+            title=fork.title,
+            files=list(selected_result.changed_files),
+        ),
+        None,
     )
 
 
@@ -2670,16 +3251,37 @@ def run_pipeline(
         for item_index, item in enumerate(pairs):
             # --- ForkPoint handling ---
             if isinstance(item, ForkPoint):
-                fork = item
+                fork = _render_fork_point(
+                    item,
+                    placeholder_context,
+                    worktree_dir,
+                    source_file,
+                    config.path_mappings,
+                )
                 if config.only is not None and config.only != fork.index:
                     continue
+                if still_skipping and fork.selector_prompt:
+                    prior_artifact = _load_selection_prior_artifact(run_dir, fork)
+                    if prior_artifact is not None:
+                        prior_artifacts.append(prior_artifact)
+                        print(
+                            f"[resume] skipping selection fork {fork.index} "
+                            f"'{fork.title}' — already selected",
+                            flush=True,
+                        )
+                        _emit_progress(
+                            f"{_progress_prefix(started_at)} "
+                            f"fork {fork.index} resume-skip selected"
+                        )
+                        continue
+                    still_skipping = False
                 items_after = pairs[item_index + 1:]
                 print(
                     f"[fork] prompt {fork.index} '{fork.title}' — "
                     f"spawning {len(fork.variants)} variant(s)",
                     flush=True,
                 )
-                fork_result = _run_fork_point(
+                fork_result, fork_prior_artifact, fork_halt_reason = _run_fork_point(
                     fork=fork,
                     fork_index_in_run=item_index,
                     items_after=items_after,
@@ -2687,9 +3289,38 @@ def run_pipeline(
                     worktree_dir=worktree_dir,
                     config=config,
                     source_file=source_file,
+                    claude_client=claude_client,
+                    run_id=run_id,
                     fork_from_session=last_session_id,
                 )
                 fork_results.append(fork_result)
+                if fork_halt_reason is not None:
+                    _emit_progress(
+                        f"{_progress_prefix(started_at)} "
+                        f"run halt {fork_halt_reason}"
+                    )
+                    _finalise(
+                        run_dir,
+                        source_file,
+                        config,
+                        run_id,
+                        pairs,
+                        prompt_results,
+                        started_at=started_at,
+                        halted_early=True,
+                        halt_reason=fork_halt_reason,
+                        fork_results=fork_results,
+                    )
+                    return PipelineResult(
+                        prompt_results,
+                        halted_early=True,
+                        halt_reason=fork_halt_reason,
+                        fork_results=fork_results,
+                    )
+                if fork.selector_prompt:
+                    if fork_prior_artifact is not None:
+                        prior_artifacts.append(fork_prior_artifact)
+                    continue
                 _finalise(
                     run_dir,
                     source_file,
@@ -3003,9 +3634,24 @@ def run_pipeline(
             f"{_progress_prefix(started_at)} "
             f"run complete {run_id}"
         )
-        _finalise(run_dir, source_file, config, run_id, pairs, prompt_results,
-                  started_at=started_at, halted_early=False, halt_reason=None)
-        return PipelineResult(prompt_results, halted_early=False, halt_reason=None)
+        _finalise(
+            run_dir,
+            source_file,
+            config,
+            run_id,
+            pairs,
+            prompt_results,
+            started_at=started_at,
+            halted_early=False,
+            halt_reason=None,
+            fork_results=fork_results,
+        )
+        return PipelineResult(
+            prompt_results,
+            halted_early=False,
+            halt_reason=None,
+            fork_results=fork_results,
+        )
     finally:
         debug_trace.__exit__(None, None, None)
         if previous_process_log_env is None:
@@ -3128,8 +3774,11 @@ def _format_summary(
     for item in pairs:
         if isinstance(item, ForkPoint):
             fork = item
+            fork_label = "[fork]"
+            if fork.selector_prompt:
+                fork_label = "[fork-select]"
             lines.append(
-                f"  {fork.index:02d}  fork-{fork.index:02d}-{_slugify(fork.title):<34s}  [fork]"
+                f"  {fork.index:02d}  fork-{fork.index:02d}-{_slugify(fork.title):<34s}  {fork_label}"
             )
             if fork_results:
                 for fr in fork_results:
@@ -3138,6 +3787,10 @@ def _format_summary(
                             vstatus = "ok" if vr.exit_code == 0 else f"exit {vr.exit_code}"
                             lines.append(
                                 f"        variant-{vr.variant_name}  {vr.variant_title}  {vstatus}"
+                            )
+                        if fr.selected_variant is not None:
+                            lines.append(
+                                f"        selected={fr.selected_variant}  {fr.selector_rationale}".rstrip()
                             )
         else:
             pair: PromptPair = item  # type: ignore[assignment]

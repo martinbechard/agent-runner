@@ -1,4 +1,5 @@
 """Tests for fork-point variant execution."""
+import json
 import subprocess
 from pathlib import Path
 from unittest.mock import MagicMock
@@ -92,6 +93,59 @@ gen 2b
 val 2b
 
 ## Prompt 3: Final
+
+### Generation Prompt
+
+gen 3
+
+### Validation Prompt
+
+val 3
+"""
+
+
+INPUT_WITH_SELECTION = """\
+## Prompt 1: Setup
+
+### Generation Prompt
+
+gen 1
+
+### Validation Prompt
+
+val 1
+
+## Prompt 2: Choose UI [VARIANTS] [SELECT]
+
+### Variant A: Bold layout
+
+#### Generation Prompt
+
+gen 2a
+
+#### Validation Prompt
+
+val 2a
+
+### Variant B: Quiet layout
+
+#### Generation Prompt
+
+gen 2b
+
+#### Validation Prompt
+
+val 2b
+
+### Selection Include Files
+
+ui.txt
+
+### Selector Prompt
+
+Select the best UI variant.
+
+## Prompt 3: Finalize
 
 ### Generation Prompt
 
@@ -355,6 +409,96 @@ def test_fork_point_runs_only_selected_variant(tmp_path: Path):
     assert variant_b.exists()
 
 
+def test_selection_fork_promotes_selected_variant_and_continues(tmp_path: Path, monkeypatch):
+    import prompt_runner.runner as _runner
+
+    items = parse_text(INPUT_WITH_SELECTION)
+    worktree = _worktree(tmp_path)
+    (worktree / "marker.txt").write_text("original")
+    (worktree / "ui.txt").write_text("baseline\n")
+
+    def fake_popen(cmd, **kwargs):
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.returncode = 0
+        proc.wait.return_value = 0
+        proc.communicate.return_value = ("", "")
+        proc.stdout = []
+        proc.stderr = []
+        for i, arg in enumerate(cmd):
+            if arg == "--run-dir" and i + 1 < len(cmd):
+                run_dir = Path(cmd[i + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                _run_files(run_dir).mkdir(parents=True, exist_ok=True)
+                synthetic = (_run_files(run_dir) / "synthetic-prompt.md").read_text(encoding="utf-8")
+                if "gen 2a" in synthetic:
+                    variant_name = "A"
+                    ui_body = "Variant A\n"
+                else:
+                    variant_name = "B"
+                    ui_body = "Variant B\n"
+                (run_dir / "ui.txt").write_text(ui_body, encoding="utf-8")
+                (_run_files(run_dir) / "summary.txt").write_text(
+                    f"Prompt Runner — Run Summary\nStatus: completed\nVariant: {variant_name}\n",
+                    encoding="utf-8",
+                )
+                (_run_files(run_dir) / "manifest.json").write_text(
+                    json.dumps({"halt_reason": None}),
+                    encoding="utf-8",
+                )
+                break
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(_runner, "_git_is_worktree", lambda *_args, **_kwargs: False)
+
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+        ClaudeResponse(
+            stdout="VERDICT: select\nSELECTED_VARIANT: B\nRATIONALE: Stronger composition.\n",
+            stderr="",
+            returncode=0,
+        ),
+        ClaudeResponse(stdout="artifact 3", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+    ])
+
+    result = run_pipeline(
+        pairs=items,
+        run_dir=tmp_path / "run",
+        config=RunConfig(max_iterations=3),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        worktree_dir=worktree,
+    )
+
+    assert not result.halted_early
+    assert len(result.prompt_results) == 2
+    assert [r.pair.index for r in result.prompt_results] == [1, 3]
+    assert len(result.fork_results) == 1
+    assert result.fork_results[0].selected_variant == "B"
+    assert (worktree / "ui.txt").read_text(encoding="utf-8") == "Variant B\n"
+
+    selection_dir = (
+        _run_files(tmp_path / "run") / "setup" / "prompt-02.selection"
+    )
+    assert (selection_dir / "selector" / "decision.json").exists()
+    selector_prompt = (selection_dir / "selector" / "selector-prompt.md").read_text(
+        encoding="utf-8"
+    )
+    assert "use exactly one of these canonical variant keys" in selector_prompt
+    assert "- A" in selector_prompt
+    assert "- B" in selector_prompt
+    assert "gen 3" not in (
+        selection_dir / "variants" / "a" / "workspace" / ".run-files" / "synthetic-prompt.md"
+    ).read_text(encoding="utf-8")
+    assert "gen 3" not in (
+        selection_dir / "variants" / "b" / "workspace" / ".run-files" / "synthetic-prompt.md"
+    ).read_text(encoding="utf-8")
+    assert (_run_files(tmp_path / "run") / "setup" / "prompt-02.selected-variant.txt").exists()
+
+
 def test_model_override_used_in_make_call(tmp_path: Path):
     """When pair has model_override, it's used instead of config.model."""
     from prompt_runner.runner import _make_call
@@ -430,6 +574,62 @@ def test_variant_sequential_flag_accepted(tmp_path: Path):
 
     cfg2 = RunConfig()
     assert cfg2.variant_sequential is False
+
+
+def test_variant_sequential_does_not_preconsume_child_pipes(tmp_path: Path, monkeypatch):
+    import prompt_runner.runner as _runner
+
+    items = parse_text(INPUT_WITH_FORK)
+    worktree = _worktree(tmp_path)
+    communicate_calls = 0
+
+    def fake_popen(cmd, **kwargs):
+        nonlocal communicate_calls
+        proc = MagicMock()
+        proc.pid = 12345
+        proc.returncode = 0
+        proc.wait.return_value = 0
+
+        def fake_communicate():
+            nonlocal communicate_calls
+            communicate_calls += 1
+            return ("", "")
+
+        proc.communicate.side_effect = fake_communicate
+        proc.stdout = []
+        proc.stderr = []
+        for i, arg in enumerate(cmd):
+            if arg == "--run-dir" and i + 1 < len(cmd):
+                run_dir = Path(cmd[i + 1])
+                run_dir.mkdir(parents=True, exist_ok=True)
+                _run_files(run_dir).mkdir(parents=True, exist_ok=True)
+                (_run_files(run_dir) / "summary.txt").write_text(
+                    "Prompt Runner — Run Summary\nStatus: completed\n"
+                )
+                (_run_files(run_dir) / "manifest.json").write_text(
+                    json.dumps({"halt_reason": None})
+                )
+                break
+        return proc
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(_runner, "_git_is_worktree", lambda *_args, **_kwargs: False)
+
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(stdout="artifact 1", stderr="", returncode=0),
+        ClaudeResponse(stdout="VERDICT: pass", stderr="", returncode=0),
+    ])
+
+    run_pipeline(
+        pairs=items,
+        run_dir=tmp_path / "run",
+        config=RunConfig(max_iterations=3, variant_sequential=True),
+        claude_client=client,
+        source_file=tmp_path / "src.md",
+        worktree_dir=worktree,
+    )
+
+    assert communicate_calls == 0
 
 
 def test_comparison_report_contains_variant_names(tmp_path: Path):

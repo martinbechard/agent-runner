@@ -9,6 +9,7 @@ from prompt_runner.runner import (
     ANTI_ANCHORING_CLAUSE,
     REVISION_GENERATOR_PREAMBLE,
     PROJECT_ORGANISER_INSTRUCTION,
+    SHELL_PORTABILITY_INSTRUCTION,
     RUN_FILES_DIRNAME,
     PriorArtifact,
     _missing_required_files,
@@ -152,11 +153,24 @@ def test_initial_generator_message_can_skip_organiser_instruction(tmp_path: Path
     assert "project-organiser" not in msg
 
 
+def test_project_organiser_instruction_exempts_exact_paths_and_existing_edits():
+    assert "treat any exact repository-relative file path named by the prompt as authoritative" in PROJECT_ORGANISER_INSTRUCTION
+    assert "Do not invoke the file-placement helper for edits to existing files." in PROJECT_ORGANISER_INSTRUCTION
+    assert "`.run-files/`" in PROJECT_ORGANISER_INSTRUCTION
+
+
+def test_shell_portability_instruction_warns_about_zsh_status():
+    assert "zsh-compatible syntax" in SHELL_PORTABILITY_INSTRUCTION
+    assert "do not assign to the name `status`" in SHELL_PORTABILITY_INSTRUCTION
+    assert "`rc`" in SHELL_PORTABILITY_INSTRUCTION
+
+
 def test_revision_generator_message_includes_organiser_instruction(tmp_path: Path):
     msg = build_revision_generator_message(_pair(1, "X"), "feedback text", tmp_path)
     assert "feedback text" in msg
     assert "<REQUIRED_CHANGES>" in msg
     assert "project-organiser" in msg
+    assert "zsh-compatible syntax" in msg
 
 
 def test_revision_generator_message_can_skip_organiser_instruction(tmp_path: Path):
@@ -168,6 +182,7 @@ def test_revision_generator_message_can_skip_organiser_instruction(tmp_path: Pat
     )
     assert "feedback text" in msg
     assert "project-organiser" not in msg
+    assert "zsh-compatible syntax" in msg
 
 
 def test_revision_generator_message_can_be_self_contained(tmp_path: Path):
@@ -182,6 +197,23 @@ def test_revision_generator_message_can_be_self_contained(tmp_path: Path):
     assert "old artifact body" in msg
     assert "feedback text" in msg
     assert "The judge found the following issues that MUST be applied" in msg
+
+
+def test_initial_judge_message_includes_shell_portability_instruction(tmp_path: Path):
+    msg = build_initial_judge_message(_pair(1, "Judge"), "artifact", tmp_path)
+    assert "zsh-compatible syntax" in msg
+    assert "do not assign to the name `status`" in msg
+
+
+def test_revision_judge_message_includes_shell_portability_instruction(tmp_path: Path):
+    msg = build_revision_judge_message(
+        _pair(1, "Judge"),
+        "artifact",
+        tmp_path,
+        validation_prompt="validate this",
+    )
+    assert "zsh-compatible syntax" in msg
+    assert "do not assign to the name `status`" in msg
 
 
 def test_revision_generator_message_replaces_default_retry_instruction(tmp_path: Path):

@@ -241,3 +241,45 @@ single val
     assert fork.variants[0].pairs[0].model_override == "claude-haiku-4-5-20251001"
     assert fork.variants[0].pairs[1].model_override == "claude-opus-4-6"
     assert fork.variants[1].pairs[0].model_override is None
+
+
+def test_selection_fork_parses_selector_sections():
+    text = """## Prompt 1: Choose UI [VARIANTS] [SELECT]
+
+### Variant A: Bold
+
+#### Generation Prompt
+
+gen a
+
+#### Validation Prompt
+
+val a
+
+### Variant B: Quiet
+
+#### Generation Prompt
+
+gen b
+
+#### Validation Prompt
+
+val b
+
+### Selection Include Files
+
+ui.txt
+
+### Selector Prompt
+
+Pick the strongest variant.
+
+### Selector Retry Prompt
+
+Return a valid winner.
+"""
+    items = parse_text(text)
+    assert isinstance(items[0], ForkPoint)
+    assert items[0].selector_prompt == "Pick the strongest variant."
+    assert items[0].selector_retry_prompt == "Return a valid winner."
+    assert items[0].selection_include_files == ("ui.txt",)

@@ -67,6 +67,9 @@ class ForkPoint:
     title: str
     heading_line: int
     variants: list[VariantPrompt]
+    selector_prompt: str = ""
+    selector_retry_prompt: str = ""
+    selection_include_files: tuple[str, ...] = ()
 
 
 class ParseError(Exception):
@@ -130,6 +133,7 @@ _HEADING_RE = re.compile(
 )
 _INTERACTIVE_RE = re.compile(r"\s*\[interactive\]\s*$", re.IGNORECASE)
 _VARIANTS_RE = re.compile(r"\s*\[variants\]\s*$", re.IGNORECASE)
+_SELECT_RE = re.compile(r"\s*\[select\]\s*$", re.IGNORECASE)
 _MODEL_RE = re.compile(r"\[MODEL:([^\]]+)\]", re.IGNORECASE)
 _EFFORT_RE = re.compile(r"\[EFFORT:([^\]]+)\]", re.IGNORECASE)
 _VARIANT_HEADING_RE = re.compile(r"^###\s+Variant\s+(\S+?)\s*:\s*(.+?)\s*$")
@@ -145,6 +149,9 @@ _CHECKS = "checks"
 _DETERMINISTIC = "deterministic"
 _RETRY = "retry"
 _MODULE = "module"
+_SELECTION_INCLUDE = "selection_include"
+_SELECTOR_PROMPT = "selector_prompt"
+_SELECTOR_RETRY = "selector_retry"
 _RETRY_MODE_RE = re.compile(
     r"^retry prompt(?:\s*\[(replace|append|prepend)\])?$",
     re.IGNORECASE,
@@ -189,29 +196,44 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
             continue
 
         raw_title = heading_match.group(1).strip()
-        interactive_match = _INTERACTIVE_RE.search(raw_title)
-        variants_match = _VARIANTS_RE.search(raw_title)
         line_number = cursor + 1
 
-        if interactive_match is not None and variants_match is not None:
+        stripped_title = raw_title
+        interactive = False
+        variants_enabled = False
+        selection_enabled = False
+        while True:
+            if _INTERACTIVE_RE.search(stripped_title) is not None:
+                interactive = True
+                stripped_title = _INTERACTIVE_RE.sub("", stripped_title).rstrip()
+                continue
+            if _SELECT_RE.search(stripped_title) is not None:
+                selection_enabled = True
+                stripped_title = _SELECT_RE.sub("", stripped_title).rstrip()
+                continue
+            if _VARIANTS_RE.search(stripped_title) is not None:
+                variants_enabled = True
+                stripped_title = _VARIANTS_RE.sub("", stripped_title).rstrip()
+                continue
+            break
+
+        if interactive and variants_enabled:
             raise ParseError(
                 "E-BAD-SECTION-ORDER",
                 f"Prompt heading at line {line_number}: "
                 f"[interactive] and [VARIANTS] cannot appear on the same heading.",
             )
+        if selection_enabled and not variants_enabled:
+            raise ParseError(
+                "E-BAD-SECTION-ORDER",
+                f"Prompt heading at line {line_number}: "
+                f"[SELECT] requires [VARIANTS] on the same heading.",
+            )
 
         next_prompt = _find_next_prompt_heading(lines, cursor + 1)
 
-        if variants_match is not None:
-            title_without_variants = raw_title[:variants_match.start()].rstrip()
-            interactive_m2 = _INTERACTIVE_RE.search(title_without_variants)
-            if interactive_m2 is not None:
-                raise ParseError(
-                    "E-BAD-SECTION-ORDER",
-                    f"Prompt heading at line {line_number}: "
-                    f"[interactive] and [VARIANTS] cannot appear on the same heading.",
-                )
-            title, _, _ = _extract_directives(title_without_variants)
+        if variants_enabled:
+            title, _, _ = _extract_directives(stripped_title)
             items.append(_parse_variants_prompt(
                 lines=lines,
                 start=cursor + 1,
@@ -219,15 +241,10 @@ def parse_text(text: str) -> list[PromptPair | ForkPoint]:
                 index=len(items) + 1,
                 title=title or _UNTITLED,
                 heading_line=line_number,
+                selection_enabled=selection_enabled,
             ))
         else:
-            if interactive_match is not None:
-                title_without_interactive = raw_title[:interactive_match.start()].rstrip()
-                title, model_override, effort_override = _extract_directives(title_without_interactive)
-                interactive = True
-            else:
-                title, model_override, effort_override = _extract_directives(raw_title)
-                interactive = False
+            title, model_override, effort_override = _extract_directives(stripped_title)
             items.append(_parse_normal_prompt(
                 lines=lines,
                 start=cursor + 1,
@@ -355,6 +372,9 @@ def _apply_file_module_scope(
             title=item.title,
             heading_line=item.heading_line,
             variants=scoped_variants,
+            selector_prompt=item.selector_prompt,
+            selector_retry_prompt=item.selector_retry_prompt,
+            selection_include_files=item.selection_include_files,
         ))
 
     return scoped_items
@@ -508,6 +528,7 @@ def _parse_variants_prompt(
     index: int,
     title: str,
     heading_line: int,
+    selection_enabled: bool = False,
 ) -> ForkPoint:
     variants: list[VariantPrompt] = []
     cursor = start
@@ -515,13 +536,15 @@ def _parse_variants_prompt(
     while cursor < end:
         variant_match = _VARIANT_HEADING_RE.match(lines[cursor])
         if variant_match is None:
+            if _LEVEL3_RE.match(lines[cursor]) is not None:
+                break
             cursor += 1
             continue
 
         variant_name = variant_match.group(1)
         raw_variant_title = variant_match.group(2)
         variant_title, variant_model, variant_effort = _extract_directives(raw_variant_title)
-        next_variant = _find_next_variant_heading(lines, cursor + 1, end)
+        next_variant = _find_next_variant_boundary(lines, cursor + 1, end)
         pairs = _parse_variant_pairs(
             lines=lines,
             start=cursor + 1,
@@ -538,11 +561,34 @@ def _parse_variants_prompt(
         ))
         cursor = next_variant
 
+    selector_prompt = ""
+    selector_retry_prompt = ""
+    selection_include_files: tuple[str, ...] = ()
+    if selection_enabled:
+        (
+            selection_include_files,
+            selector_prompt,
+            selector_retry_prompt,
+        ) = _parse_selection_sections(
+            lines=lines,
+            start=cursor,
+            end=end,
+            index=index,
+            title=title,
+            heading_line=heading_line,
+        )
+
     if not variants:
         raise ParseError(
             "E-NO-VARIANTS",
             f'Prompt {index} "{title}" (line {heading_line}): '
             f"[VARIANTS] requires at least one \"### Variant X: <title>\" subsection.",
+        )
+    if selection_enabled and not selector_prompt:
+        raise ParseError(
+            "E-NO-GENERATION",
+            f'Prompt {index} "{title}" (line {heading_line}): '
+            f"[SELECT] requires a \"### Selector Prompt\" subsection.",
         )
 
     return ForkPoint(
@@ -550,12 +596,126 @@ def _parse_variants_prompt(
         title=title,
         heading_line=heading_line,
         variants=variants,
+        selector_prompt=selector_prompt,
+        selector_retry_prompt=selector_retry_prompt,
+        selection_include_files=selection_include_files,
     )
 
 
-def _find_next_variant_heading(lines: list[str], start: int, end: int) -> int:
+def _parse_selection_sections(
+    lines: list[str],
+    start: int,
+    end: int,
+    index: int,
+    title: str,
+    heading_line: int,
+) -> tuple[tuple[str, ...], str, str]:
+    cursor = start
+    seen_sections: set[str] = set()
+    selection_include_files: tuple[str, ...] = ()
+    selector_prompt = ""
+    selector_retry_prompt = ""
+
+    while cursor < end:
+        level3_match = _LEVEL3_RE.match(lines[cursor])
+        if level3_match is None:
+            cursor += 1
+            continue
+
+        section = _normalize_selection_subsection(level3_match.group(1))
+        if section is None:
+            raise ParseError(
+                "E-UNKNOWN-SUBSECTION",
+                _format_unknown_subsection(
+                    index=index,
+                    title=title,
+                    heading_line=heading_line,
+                    subsection_line=cursor + 1,
+                    raw_heading=level3_match.group(1),
+                    expected_level="###",
+                ),
+            )
+        if section in seen_sections:
+            raise ParseError(
+                "E-DUPLICATE-SECTION",
+                _format_duplicate_section(
+                    index=index,
+                    title=title,
+                    heading_line=heading_line,
+                    subsection_line=cursor + 1,
+                    section_name=_display_selection_name(section),
+                    expected_level="###",
+                ),
+            )
+
+        body_lines, cursor = _collect_section_body(
+            lines=lines,
+            start=cursor + 1,
+            end=end,
+            boundary_predicate=lambda idx: _LEVEL3_RE.match(lines[idx]) is not None,
+        )
+        seen_sections.add(section)
+        body_text = "\n".join(body_lines)
+        if section == _SELECTION_INCLUDE:
+            entries: list[str] = []
+            for offset, raw_line in enumerate(body_lines, start=1):
+                stripped = raw_line.strip()
+                if not stripped:
+                    continue
+                if _MARKDOWN_LIST_RE.match(stripped):
+                    raise ParseError(
+                        "E-BAD-PATH-ENTRY",
+                        (
+                            f'Prompt {index} "{title}" line {heading_line + offset}: '
+                            "Selection Include Files entries must be bare paths, "
+                            f"not markdown list items: {stripped}"
+                        ),
+                    )
+                if stripped.startswith("`") and stripped.endswith("`") and len(stripped) >= 2:
+                    raise ParseError(
+                        "E-BAD-PATH-ENTRY",
+                        (
+                            f'Prompt {index} "{title}" line {heading_line + offset}: '
+                            "Selection Include Files entries must be bare paths, "
+                            f"not code-formatted values: {stripped}"
+                        ),
+                    )
+                entries.append(stripped)
+            selection_include_files = tuple(entries)
+        elif section == _SELECTOR_PROMPT:
+            selector_prompt = body_text
+        elif section == _SELECTOR_RETRY:
+            selector_retry_prompt = body_text
+
+    return selection_include_files, selector_prompt, selector_retry_prompt
+
+
+def _normalize_selection_subsection(raw_heading: str) -> str | None:
+    normalized = " ".join(raw_heading.strip().lower().split())
+    if normalized == "selection include files":
+        return _SELECTION_INCLUDE
+    if normalized == "selector prompt":
+        return _SELECTOR_PROMPT
+    if normalized == "selector retry prompt":
+        return _SELECTOR_RETRY
+    return None
+
+
+def _display_selection_name(section: str) -> str:
+    if section == _SELECTION_INCLUDE:
+        return "Selection Include Files"
+    if section == _SELECTOR_PROMPT:
+        return "Selector Prompt"
+    if section == _SELECTOR_RETRY:
+        return "Selector Retry Prompt"
+    return section
+
+
+def _find_next_variant_boundary(lines: list[str], start: int, end: int) -> int:
     for idx in range(start, end):
         if _VARIANT_HEADING_RE.match(lines[idx]) is not None:
+            return idx
+        if _LEVEL3_RE.match(lines[idx]) is not None:
             return idx
     return end
 

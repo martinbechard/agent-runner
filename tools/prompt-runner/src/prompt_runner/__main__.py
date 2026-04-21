@@ -55,8 +55,15 @@ def _format_pair_summary(pair: PromptPair, full: bool) -> str:
 
 
 def _format_fork_summary(fork: ForkPoint) -> str:
+    heading = "═══ Prompt {index}: {title} [VARIANTS]".format(
+        index=fork.index,
+        title=fork.title,
+    )
+    if fork.selector_prompt:
+        heading += " [SELECT]"
+    heading += " ═══"
     lines = [
-        f"═══ Prompt {fork.index}: {fork.title} [VARIANTS] ═══",
+        heading,
         f"  heading line: {fork.heading_line}",
         f"  variants: {len(fork.variants)}",
     ]
@@ -65,6 +72,8 @@ def _format_fork_summary(fork: ForkPoint) -> str:
             f"  - {variant.variant_name}: {variant.variant_title} "
             f"({len(variant.pairs)} pair{'s' if len(variant.pairs) != 1 else ''})"
         )
+    if fork.selector_prompt:
+        lines.append(f"  selector prompt: {len(fork.selector_prompt.splitlines())} lines")
     return "\n".join(lines)
 
 
