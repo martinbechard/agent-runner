@@ -62,6 +62,63 @@ class InputRole(Enum):
     UPSTREAM_TRACEABILITY = "upstream_traceability"
 
 
+@dataclass(frozen=True)
+class LifecyclePhaseDefinition:
+    """Static definition for one outer lifecycle phase."""
+
+    phase_id: str
+    phase_name: str
+    execution_kind: str
+
+
+LIFECYCLE_PHASE_DEFINITIONS: tuple[LifecyclePhaseDefinition, ...] = (
+    LifecyclePhaseDefinition(
+        phase_id="LC-000-change-preparation",
+        phase_name="Change Preparation",
+        execution_kind="manual",
+    ),
+    LifecyclePhaseDefinition(
+        phase_id="LC-001-methodology-execution",
+        phase_name="Methodology Execution",
+        execution_kind="automated",
+    ),
+    LifecyclePhaseDefinition(
+        phase_id="LC-002-change-record-preservation",
+        phase_name="Change-Record Preservation",
+        execution_kind="manual",
+    ),
+    LifecyclePhaseDefinition(
+        phase_id="LC-003-runner-state-archival",
+        phase_name="Runner-State Archival",
+        execution_kind="manual",
+    ),
+    LifecyclePhaseDefinition(
+        phase_id="LC-004-temporary-artifact-cleanup",
+        phase_name="Temporary-Artifact Cleanup",
+        execution_kind="manual",
+    ),
+    LifecyclePhaseDefinition(
+        phase_id="LC-005-steady-state-integration",
+        phase_name="Steady-State Integration",
+        execution_kind="manual",
+    ),
+    LifecyclePhaseDefinition(
+        phase_id="LC-006-final-review-and-history-integration",
+        phase_name="Final Review and History Integration",
+        execution_kind="manual",
+    ),
+)
+"""Authoritative outer lifecycle phase order."""
+
+LIFECYCLE_PHASE_MAP: dict[str, LifecyclePhaseDefinition] = {
+    phase.phase_id: phase for phase in LIFECYCLE_PHASE_DEFINITIONS
+}
+"""Lookup table for lifecycle phase metadata."""
+
+METHODOLOGY_LIFECYCLE_PHASE_ID = "LC-001-methodology-execution"
+"""Lifecycle phase that contains the nested PH-* methodology sequence."""
+
+
 # ---------------------------------------------------------------------------
 # Configuration types  (frozen -- static per-project)
 # ---------------------------------------------------------------------------
@@ -484,6 +541,46 @@ class PhaseState:
         )
 
 
+@dataclass
+class LifecyclePhaseState:
+    """Mutable tracking state for one outer lifecycle phase."""
+
+    phase_id: str
+    phase_name: str
+    status: PhaseStatus
+    started_at: str | None
+    completed_at: str | None
+    execution_kind: str = "manual"
+
+    def to_dict(self) -> dict:
+        return {
+            "phase_id": self.phase_id,
+            "phase_name": self.phase_name,
+            "status": self.status.value,
+            "started_at": self.started_at,
+            "completed_at": self.completed_at,
+            "execution_kind": self.execution_kind,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> LifecyclePhaseState:
+        definition = LIFECYCLE_PHASE_MAP.get(d["phase_id"])
+        return cls(
+            phase_id=d["phase_id"],
+            phase_name=d.get(
+                "phase_name",
+                definition.phase_name if definition is not None else d["phase_id"],
+            ),
+            status=PhaseStatus(d["status"]),
+            started_at=d.get("started_at"),
+            completed_at=d.get("completed_at"),
+            execution_kind=d.get(
+                "execution_kind",
+                definition.execution_kind if definition is not None else "manual",
+            ),
+        )
+
+
 @dataclass(frozen=True)
 class PhaseResult:
     """Frozen outcome of executing one phase (prompt-runner + cross-ref).
@@ -584,9 +681,31 @@ class ProjectState:
     backend: str = "codex"
     execution_scope: str = "all-phases"
     selected_phase_ids: list[str] | None = None
+    change_id: str | None = None
     finished_at: str | None = None
     current_phase: str | None = None
+    current_lifecycle_phase_id: str | None = None
+    lifecycle_phases: list[LifecyclePhaseState] = field(default_factory=list)
     phases: list[PhaseState] = field(default_factory=list)
+
+    def __post_init__(self) -> None:
+        if self.change_id is None:
+            self.change_id = self.workspace_dir.name
+        if self.lifecycle_phases:
+            self.lifecycle_phases = _normalize_lifecycle_phase_states(
+                self.lifecycle_phases
+            )
+        else:
+            self.lifecycle_phases = _derive_lifecycle_phase_states(
+                started_at=self.started_at,
+                finished_at=self.finished_at,
+                current_phase=self.current_phase,
+                phases=self.phases,
+            )
+        if self.current_lifecycle_phase_id is None:
+            self.current_lifecycle_phase_id = _derive_current_lifecycle_phase_id(
+                self.lifecycle_phases
+            )
 
     # -- serialisation -------------------------------------------------------
 
@@ -608,8 +727,11 @@ class ProjectState:
                 if self.selected_phase_ids is not None
                 else None
             ),
+            "change_id": self.change_id,
             "finished_at": self.finished_at,
             "current_phase": self.current_phase,
+            "current_lifecycle_phase_id": self.current_lifecycle_phase_id,
+            "lifecycle_phases": [p.to_dict() for p in self.lifecycle_phases],
             "phases": [p.to_dict() for p in self.phases],
         }
 
@@ -633,8 +755,14 @@ class ProjectState:
                 if d.get("selected_phase_ids") is not None
                 else None
             ),
+            change_id=d.get("change_id"),
             finished_at=d.get("finished_at"),
             current_phase=d.get("current_phase"),
+            current_lifecycle_phase_id=d.get("current_lifecycle_phase_id"),
+            lifecycle_phases=[
+                LifecyclePhaseState.from_dict(p)
+                for p in d.get("lifecycle_phases", [])
+            ],
             phases=[
                 PhaseState.from_dict(p)
                 for p in d.get("phases", [])
@@ -657,3 +785,112 @@ class ProjectState:
         """Read project state from a JSON file at *path*."""
         raw = json.loads(path.read_text(encoding="utf-8"))
         return cls.from_dict(raw)
+
+
+def _derive_lifecycle_phase_states(
+    *,
+    started_at: str | None,
+    finished_at: str | None,
+    current_phase: str | None,
+    phases: list[PhaseState],
+) -> list[LifecyclePhaseState]:
+    """Backfill lifecycle state for older state.json payloads."""
+    methodology_failure: PhaseStatus | None = None
+    if any(phase.status == PhaseStatus.ESCALATED for phase in phases):
+        methodology_failure = PhaseStatus.ESCALATED
+    elif any(phase.status == PhaseStatus.FAILED for phase in phases):
+        methodology_failure = PhaseStatus.FAILED
+
+    methodology_has_activity = bool(started_at)
+    if current_phase and current_phase.startswith("PH-"):
+        methodology_has_activity = True
+    if not methodology_has_activity:
+        methodology_has_activity = any(
+            phase.status != PhaseStatus.PENDING for phase in phases
+        )
+
+    methodology_completed = bool(finished_at)
+    if not methodology_completed and phases:
+        methodology_completed = all(
+            phase.status in {PhaseStatus.COMPLETED, PhaseStatus.CROSS_REF_PASSED}
+            for phase in phases
+        )
+
+    lifecycle_phases: list[LifecyclePhaseState] = []
+    for definition in LIFECYCLE_PHASE_DEFINITIONS:
+        status = PhaseStatus.PENDING
+        phase_started_at: str | None = None
+        phase_completed_at: str | None = None
+
+        if definition.phase_id == "LC-000-change-preparation":
+            if methodology_has_activity:
+                status = PhaseStatus.COMPLETED
+                phase_started_at = started_at
+                phase_completed_at = started_at
+        elif definition.phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID:
+            if methodology_failure is not None:
+                status = methodology_failure
+                phase_started_at = started_at
+            elif methodology_completed:
+                status = PhaseStatus.COMPLETED
+                phase_started_at = started_at
+                phase_completed_at = finished_at
+            elif methodology_has_activity:
+                status = PhaseStatus.IN_PROGRESS
+                phase_started_at = started_at
+
+        lifecycle_phases.append(
+            LifecyclePhaseState(
+                phase_id=definition.phase_id,
+                phase_name=definition.phase_name,
+                status=status,
+                started_at=phase_started_at,
+                completed_at=phase_completed_at,
+                execution_kind=definition.execution_kind,
+            )
+        )
+
+    return lifecycle_phases
+
+
+def _normalize_lifecycle_phase_states(
+    states: list[LifecyclePhaseState],
+) -> list[LifecyclePhaseState]:
+    """Ensure lifecycle state contains every known lifecycle phase in order."""
+    provided = {state.phase_id: state for state in states}
+    normalized: list[LifecyclePhaseState] = []
+    for definition in LIFECYCLE_PHASE_DEFINITIONS:
+        state = provided.get(definition.phase_id)
+        if state is None:
+            state = LifecyclePhaseState(
+                phase_id=definition.phase_id,
+                phase_name=definition.phase_name,
+                status=PhaseStatus.PENDING,
+                started_at=None,
+                completed_at=None,
+                execution_kind=definition.execution_kind,
+            )
+        elif (
+            state.phase_name != definition.phase_name
+            or state.execution_kind != definition.execution_kind
+        ):
+            state = LifecyclePhaseState(
+                phase_id=state.phase_id,
+                phase_name=definition.phase_name,
+                status=state.status,
+                started_at=state.started_at,
+                completed_at=state.completed_at,
+                execution_kind=definition.execution_kind,
+            )
+        normalized.append(state)
+    return normalized
+
+
+def _derive_current_lifecycle_phase_id(
+    lifecycle_phases: list[LifecyclePhaseState],
+) -> str | None:
+    """Return the next active lifecycle phase from the ordered state list."""
+    for phase in lifecycle_phases:
+        if phase.status not in {PhaseStatus.COMPLETED, PhaseStatus.SKIPPED}:
+            return phase.phase_id
+    return lifecycle_phases[-1].phase_id if lifecycle_phases else None

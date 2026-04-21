@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from methodology_runner.models import (
+    METHODOLOGY_LIFECYCLE_PHASE_ID,
     PhaseResult,
     PhaseState,
     PhaseStatus,
@@ -431,3 +432,10 @@ def test_selected_phase_run_sets_finished_at_when_scope_completes(
     state = ProjectState.load(workspace / ".methodology-runner" / "state.json")
     assert state.current_phase is None
     assert state.finished_at is not None
+    assert state.current_lifecycle_phase_id == "LC-002-change-record-preservation"
+    methodology = next(
+        phase
+        for phase in state.lifecycle_phases
+        if phase.phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
+    )
+    assert methodology.status == PhaseStatus.COMPLETED

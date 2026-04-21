@@ -26,6 +26,7 @@ from pathlib import Path
 
 from .models import (
     EscalationPolicy,
+    METHODOLOGY_LIFECYCLE_PHASE_ID,
     PhaseStatus,
     ProjectState,
 )
@@ -112,6 +113,23 @@ def _any_escalated(phase_results: list | dict) -> bool:
     return any(pr.status == PhaseStatus.ESCALATED for pr in items)
 
 
+def _find_lifecycle_phase(state: ProjectState, phase_id: str):
+    """Return one lifecycle phase state by ID."""
+    for lifecycle_phase in state.lifecycle_phases:
+        if lifecycle_phase.phase_id == phase_id:
+            return lifecycle_phase
+    return None
+
+
+def _pending_manual_lifecycle_phase_ids(state: ProjectState) -> list[str]:
+    """Return pending manual lifecycle phases from the current state."""
+    return [
+        phase.phase_id
+        for phase in state.lifecycle_phases
+        if phase.execution_kind == "manual" and phase.status == PhaseStatus.PENDING
+    ]
+
+
 def _format_duration(seconds: float) -> str:
     """Format seconds as a human-readable duration."""
     if seconds < 60:
@@ -151,6 +169,20 @@ def _reset_phase_selection(
                 ps.cross_ref_result_path = None
         for rid in ids_to_reset:
             state.phase_results.pop(rid, None)
+        methodology = _find_lifecycle_phase(state, METHODOLOGY_LIFECYCLE_PHASE_ID)
+        if methodology is not None:
+            methodology.status = PhaseStatus.PENDING
+            methodology.started_at = None
+            methodology.completed_at = None
+        for lifecycle_phase in state.lifecycle_phases:
+            if lifecycle_phase.phase_id == "LC-000-change-preparation":
+                continue
+            if lifecycle_phase.phase_id != METHODOLOGY_LIFECYCLE_PHASE_ID:
+                lifecycle_phase.status = PhaseStatus.PENDING
+                lifecycle_phase.started_at = None
+                lifecycle_phase.completed_at = None
+        state.current_phase = None
+        state.current_lifecycle_phase_id = METHODOLOGY_LIFECYCLE_PHASE_ID
         state.finished_at = None
         save_project_state(state, workspace)
 
@@ -280,6 +312,10 @@ def _print_pipeline_result(result: object) -> None:
     sys.stdout.write(f"Halted early: {result.halted_early}\n")
     if result.halt_reason:
         sys.stdout.write(f"Halt reason:  {result.halt_reason}\n")
+    sys.stdout.write(
+        "Lifecycle:    outer lifecycle phases are tracked explicitly; "
+        f"automation currently covers {METHODOLOGY_LIFECYCLE_PHASE_ID} only.\n"
+    )
     sys.stdout.write("\n")
 
     _print_phase_table(result.phase_results)
@@ -333,29 +369,65 @@ def cmd_status(args: argparse.Namespace) -> int:
 
     _print_banner("Methodology Runner -- Project Status")
     sys.stdout.write(f"Workspace:     {state.workspace_dir}\n")
+    if state.change_id:
+        sys.stdout.write(f"Change ID:     {state.change_id}\n")
     sys.stdout.write(f"Requirements:  {state.requirements_path}\n")
     sys.stdout.write(f"Started at:    {state.started_at}\n")
     if state.finished_at:
-        sys.stdout.write(f"Finished at:   {state.finished_at}\n")
-    if state.current_phase:
-        sys.stdout.write(f"Current phase: {state.current_phase}\n")
+        sys.stdout.write(f"Methodology finished at: {state.finished_at}\n")
+    if state.current_lifecycle_phase_id:
+        sys.stdout.write(
+            f"Current lifecycle phase: {state.current_lifecycle_phase_id}\n"
+        )
+    if (
+        state.current_lifecycle_phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
+        and state.current_phase
+    ):
+        sys.stdout.write(f"Current methodology phase: {state.current_phase}\n")
     if state.model:
         sys.stdout.write(f"Model:         {state.model}\n")
     sys.stdout.write("\n")
 
-    # Phase state table
-    sys.stdout.write(f"{'Phase ID':<40} {'Status':<30} {'Retries':>8}\n")
-    sys.stdout.write(f"{'-' * 40} {'-' * 30} {'-' * 8}\n")
-
-    for ps in state.phases:
-        label = _STATUS_LABELS.get(ps.status, ps.status.value)
+    pending_manual = _pending_manual_lifecycle_phase_ids(state)
+    if pending_manual:
         sys.stdout.write(
-            f"{ps.phase_id:<40} {label:<30} {ps.cross_ref_retries:>8}\n"
+            "Automation boundary: methodology-runner automates only "
+            f"{METHODOLOGY_LIFECYCLE_PHASE_ID}; remaining lifecycle phases "
+            f"are manual: {', '.join(pending_manual)}\n\n"
         )
 
-    # Phase results (if any)
+    sys.stdout.write(
+        f"{'Lifecycle Phase ID':<45} {'Status':<30} {'Exec':<10}\n"
+    )
+    sys.stdout.write(f"{'-' * 45} {'-' * 30} {'-' * 10}\n")
+    for lifecycle_phase in state.lifecycle_phases:
+        label = _STATUS_LABELS.get(
+            lifecycle_phase.status,
+            lifecycle_phase.status.value,
+        )
+        sys.stdout.write(
+            f"{lifecycle_phase.phase_id:<45} "
+            f"{label:<30} "
+            f"{lifecycle_phase.execution_kind:<10}\n"
+        )
+
+    if state.current_lifecycle_phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID:
+        sys.stdout.write("\nNested methodology phases under LC-001:\n")
+        sys.stdout.write(f"{'Phase ID':<40} {'Status':<30} {'Retries':>8}\n")
+        sys.stdout.write(f"{'-' * 40} {'-' * 30} {'-' * 8}\n")
+        for ps in state.phases:
+            label = _STATUS_LABELS.get(ps.status, ps.status.value)
+            sys.stdout.write(
+                f"{ps.phase_id:<40} {label:<30} {ps.cross_ref_retries:>8}\n"
+            )
+    else:
+        sys.stdout.write(
+            "\nNested methodology phases are currently inactive because "
+            f"{METHODOLOGY_LIFECYCLE_PHASE_ID} is not the active lifecycle phase.\n"
+        )
+
     if state.phase_results:
-        sys.stdout.write("\nCompleted phase results:\n")
+        sys.stdout.write("\nCompleted phase results (methodology):\n")
         for phase_id, pr in state.phase_results.items():
             xref_status = ""
             if pr.cross_ref_result is not None:
@@ -392,6 +464,25 @@ def cmd_resume(args: argparse.Namespace) -> int:
             f"No state file found in workspace: {workspace}\n"
             "Cannot resume a project that has not been started."
         )
+        return EXIT_USAGE_ERROR
+
+    if state.current_lifecycle_phase_id not in {None, METHODOLOGY_LIFECYCLE_PHASE_ID}:
+        pending_manual = _pending_manual_lifecycle_phase_ids(state)
+        _print_banner("Methodology Runner -- Resume Blocked At Manual Lifecycle Phase")
+        sys.stdout.write(f"Workspace:    {workspace}\n")
+        sys.stdout.write(
+            "Resume only automates the nested methodology sequence inside "
+            f"{METHODOLOGY_LIFECYCLE_PHASE_ID}.\n"
+        )
+        sys.stdout.write(
+            f"Current lifecycle phase: {state.current_lifecycle_phase_id}\n"
+        )
+        if pending_manual:
+            sys.stdout.write("Remaining manual lifecycle phases:\n")
+            for lifecycle_phase_id in pending_manual:
+                sys.stdout.write(f"  - {lifecycle_phase_id}\n")
+        sys.stdout.write(f"\n{BANNER_RULE}\n")
+        sys.stdout.flush()
         return EXIT_USAGE_ERROR
 
     # Pre-flight checks for external dependencies
@@ -450,8 +541,12 @@ def cmd_resume(args: argparse.Namespace) -> int:
     _print_banner("Methodology Runner -- Resuming pipeline")
     sys.stdout.write(f"Workspace:    {workspace}\n")
     sys.stdout.write(f"Requirements: {state.requirements_path}\n")
+    sys.stdout.write(
+        f"Lifecycle:    resuming nested methodology phases inside "
+        f"{METHODOLOGY_LIFECYCLE_PHASE_ID}\n"
+    )
     if phases_to_run is None:
-        sys.stdout.write("Phases:       all\n")
+        sys.stdout.write("Phases:       all incomplete methodology phases\n")
     else:
         sys.stdout.write(f"Phases:       {', '.join(phases_to_run)}\n")
     if config.model:

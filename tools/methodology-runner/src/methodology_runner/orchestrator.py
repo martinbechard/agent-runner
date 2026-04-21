@@ -44,6 +44,7 @@ from typing import TYPE_CHECKING
 from .models import (
     CrossRefResult,
     EscalationPolicy,
+    METHODOLOGY_LIFECYCLE_PHASE_ID,
     PhaseResult,
     PhaseState,
     PhaseStatus,
@@ -456,6 +457,80 @@ def _find_phase_state(state: ProjectState, phase_id: str) -> PhaseState:
         if ps.phase_id == phase_id:
             return ps
     raise ValueError(f"Phase {phase_id} not found in project state")
+
+
+def _find_lifecycle_phase_state(
+    state: ProjectState,
+    phase_id: str,
+) -> "LifecyclePhaseState":
+    """Locate the LifecyclePhaseState for *phase_id* within *state*."""
+    from .models import LifecyclePhaseState
+
+    for lifecycle_phase in state.lifecycle_phases:
+        if lifecycle_phase.phase_id == phase_id:
+            return lifecycle_phase
+    raise ValueError(f"Lifecycle phase {phase_id} not found in project state")
+
+
+def _pending_manual_lifecycle_phase_ids(state: ProjectState) -> list[str]:
+    """Return manual lifecycle phases that remain after automated execution."""
+    return [
+        phase.phase_id
+        for phase in state.lifecycle_phases
+        if (
+            phase.phase_id != METHODOLOGY_LIFECYCLE_PHASE_ID
+            and phase.execution_kind == "manual"
+            and phase.status == PhaseStatus.PENDING
+        )
+    ]
+
+
+def _activate_methodology_execution_lifecycle(state: ProjectState) -> None:
+    """Mark LC-000 complete and LC-001 active before PH-* execution starts."""
+    started_at = state.started_at or _iso_now()
+    preparation = _find_lifecycle_phase_state(state, "LC-000-change-preparation")
+    if preparation.status == PhaseStatus.PENDING:
+        preparation.status = PhaseStatus.COMPLETED
+        preparation.started_at = started_at
+        preparation.completed_at = started_at
+
+    methodology = _find_lifecycle_phase_state(state, METHODOLOGY_LIFECYCLE_PHASE_ID)
+    if methodology.status != PhaseStatus.COMPLETED:
+        methodology.status = PhaseStatus.IN_PROGRESS
+        if methodology.started_at is None:
+            methodology.started_at = started_at
+        methodology.completed_at = None
+        state.current_lifecycle_phase_id = methodology.phase_id
+
+
+def _finalize_lifecycle_after_methodology_run(
+    state: ProjectState,
+    *,
+    halted_early: bool,
+    in_scope_done: bool,
+) -> None:
+    """Synchronize LC-001 and the manual boundary after PH-* execution."""
+    methodology = _find_lifecycle_phase_state(state, METHODOLOGY_LIFECYCLE_PHASE_ID)
+    if halted_early:
+        methodology.status = (
+            PhaseStatus.ESCALATED
+            if any(ps.status == PhaseStatus.ESCALATED for ps in state.phases)
+            else PhaseStatus.FAILED
+        )
+        methodology.completed_at = None
+        state.current_lifecycle_phase_id = methodology.phase_id
+        return
+
+    if not in_scope_done:
+        methodology.status = PhaseStatus.IN_PROGRESS
+        methodology.completed_at = None
+        state.current_lifecycle_phase_id = methodology.phase_id
+        return
+
+    methodology.status = PhaseStatus.COMPLETED
+    methodology.completed_at = state.finished_at or _iso_now()
+    pending_manual = _pending_manual_lifecycle_phase_ids(state)
+    state.current_lifecycle_phase_id = pending_manual[0] if pending_manual else None
 
 
 def _iso_now() -> str:
@@ -1031,6 +1106,13 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
         lines.append("Execution scope: all phases")
     if result.halt_reason:
         lines.append(f"Halt reason:     {result.halt_reason}")
+    state = load_project_state(workspace)
+    if state is not None:
+        lines.append(f"Change ID:       {state.change_id}")
+        if state.current_lifecycle_phase_id:
+            lines.append(f"Current lifecycle phase: {state.current_lifecycle_phase_id}")
+        if state.finished_at:
+            lines.append(f"Methodology finished at: {state.finished_at}")
 
     target_phase_ids = (
         list(result.selected_phase_ids)
@@ -1045,6 +1127,46 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
         f"Phases completed in scope: {completed_count}/{len(target_phase_ids)}"
     )
     lines.append("")
+    if state is not None:
+        lines.append("-" * 60)
+        lines.append("Lifecycle Phases")
+        lines.append("-" * 60)
+        for lifecycle_phase in state.lifecycle_phases:
+            lines.append(
+                "  "
+                f"{lifecycle_phase.phase_id} ({lifecycle_phase.phase_name})"
+            )
+            lines.append(
+                "    "
+                f"Status:         {lifecycle_phase.status.value}"
+            )
+            lines.append(
+                "    "
+                f"Execution kind: {lifecycle_phase.execution_kind}"
+            )
+            if lifecycle_phase.started_at:
+                lines.append(
+                    "    "
+                    f"Started at:     {lifecycle_phase.started_at}"
+                )
+            if lifecycle_phase.completed_at:
+                lines.append(
+                    "    "
+                    f"Completed at:   {lifecycle_phase.completed_at}"
+                )
+        pending_manual = _pending_manual_lifecycle_phase_ids(state)
+        lines.append("")
+        if pending_manual:
+            lines.append(
+                "Automation boundary: methodology-runner automates only "
+                f"{METHODOLOGY_LIFECYCLE_PHASE_ID}; remaining lifecycle phases "
+                f"stay manual: {', '.join(pending_manual)}"
+            )
+        else:
+            lines.append(
+                "Automation boundary: no manual lifecycle phases remain pending."
+            )
+        lines.append("")
     lines.append("-" * 60)
     lines.append("Phase Results")
     lines.append("-" * 60)
@@ -1187,6 +1309,9 @@ def run_pipeline(
             if claude_client is None:
                 claude_client = make_client(config.backend)
 
+            _activate_methodology_execution_lifecycle(state)
+            save_project_state(state, workspace)
+
             # ---- determine phases ----
             phases_to_run: list[PhaseConfig] = list(PHASES)
             if config.phases_to_run is not None:
@@ -1296,6 +1421,11 @@ def run_pipeline(
             # ---- finalise ----
             state.finished_at = _iso_now() if in_scope_done and not halted_early else None
             state.current_phase = None
+            _finalize_lifecycle_after_methodology_run(
+                state,
+                halted_early=halted_early,
+                in_scope_done=in_scope_done,
+            )
             save_project_state(state, workspace)
 
             wall_time = time.monotonic() - t0

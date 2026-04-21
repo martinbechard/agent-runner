@@ -34,6 +34,7 @@ from methodology_runner.cli import (
 )
 from methodology_runner.models import (
     CrossRefResult,
+    METHODOLOGY_LIFECYCLE_PHASE_ID,
     PhaseResult,
     PhaseState,
     PhaseStatus,
@@ -228,6 +229,54 @@ class TestLoadState:
         assert loaded is not None
         assert loaded.workspace_dir == saved.workspace_dir
         assert loaded.started_at == saved.started_at
+
+    def test_backfills_lifecycle_state_for_legacy_state_json(
+        self,
+        tmp_path: Path,
+    ) -> None:
+        state_path = tmp_path / ".methodology-runner" / "state.json"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(
+            json.dumps(
+                {
+                    "workspace_dir": str(tmp_path),
+                    "requirements_path": str(
+                        tmp_path / "docs" / "requirements" / "raw-requirements.md"
+                    ),
+                    "phase_results": {},
+                    "started_at": "2026-04-08T12:00:00Z",
+                    "git_initialized": True,
+                    "finished_at": "2026-04-08T13:00:00Z",
+                    "current_phase": None,
+                    "phases": [
+                        {
+                            "phase_id": "PH-000-requirements-inventory",
+                            "status": "completed",
+                            "started_at": "2026-04-08T12:00:00Z",
+                            "completed_at": "2026-04-08T12:05:00Z",
+                            "prompt_file": None,
+                            "cross_ref_result_path": None,
+                            "cross_ref_retries": 0,
+                            "git_commit": None,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        loaded = _load_state(tmp_path)
+
+        assert loaded is not None
+        assert loaded.change_id == tmp_path.name
+        assert len(loaded.lifecycle_phases) == 7
+        assert loaded.current_lifecycle_phase_id == "LC-002-change-record-preservation"
+        methodology = next(
+            phase
+            for phase in loaded.lifecycle_phases
+            if phase.phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
+        )
+        assert methodology.status == PhaseStatus.COMPLETED
 
 
 # ---------------------------------------------------------------------------
@@ -876,6 +925,35 @@ class TestCmdStatus:
         captured = capsys.readouterr()
         assert "claude-opus-4-6" in captured.out
 
+    def test_shows_lifecycle_boundary_when_methodology_is_complete(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        state = _make_project_state(workspace)
+        state.finished_at = "2026-04-08T13:00:00Z"
+        state.current_lifecycle_phase_id = "LC-002-change-record-preservation"
+        methodology = next(
+            phase
+            for phase in state.lifecycle_phases
+            if phase.phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
+        )
+        methodology.status = PhaseStatus.COMPLETED
+        methodology.completed_at = "2026-04-08T13:00:00Z"
+        state.save(workspace / ".methodology-runner" / "state.json")
+
+        parser = _build_parser()
+        args = parser.parse_args(["status", str(workspace)])
+        rc = cmd_status(args)
+
+        assert rc == EXIT_SUCCESS
+        captured = capsys.readouterr()
+        assert "Current lifecycle phase: LC-002-change-record-preservation" in captured.out
+        assert "remaining lifecycle phases are manual" in captured.out
+        assert "Nested methodology phases are currently inactive" in captured.out
+
 
 # ---------------------------------------------------------------------------
 # Tests: cmd_resume
@@ -978,6 +1056,32 @@ class TestCmdResume:
 
         assert captured_config[0].debug == 4
         assert captured_config[0].resume is True
+
+    def test_blocks_resume_after_methodology_boundary(
+        self,
+        tmp_path: Path,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        state = _make_project_state(workspace, model="saved-model")
+        state.current_lifecycle_phase_id = "LC-002-change-record-preservation"
+        methodology = next(
+            phase
+            for phase in state.lifecycle_phases
+            if phase.phase_id == METHODOLOGY_LIFECYCLE_PHASE_ID
+        )
+        methodology.status = PhaseStatus.COMPLETED
+        state.save(workspace / ".methodology-runner" / "state.json")
+        parser = _build_parser()
+        args = parser.parse_args(["resume", str(workspace)])
+
+        rc = cmd_resume(args)
+
+        assert rc == EXIT_USAGE_ERROR
+        captured = capsys.readouterr()
+        assert "Resume Blocked At Manual Lifecycle Phase" in captured.out
+        assert "LC-002-change-record-preservation" in captured.out
 
     def test_resume_banner_shows_selected_phases(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str],

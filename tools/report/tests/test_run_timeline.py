@@ -618,7 +618,17 @@ def test_load_report_document_supports_current_methodology_workspace_layout(tmp_
                         "completed_at": "2026-04-19T05:14:23.049138+00:00",
                         "cross_ref_result_path": str(cross_ref_path),
                     }
-                ]
+                ],
+                "lifecycle_phases": [
+                    {
+                        "phase_id": "LC-001-methodology-execution",
+                        "phase_name": "Methodology Execution",
+                        "status": "completed",
+                        "started_at": "2026-04-19T05:11:00.000000+00:00",
+                        "completed_at": "2026-04-19T05:14:23.049138+00:00",
+                        "execution_kind": "automated",
+                    }
+                ],
             }
         ),
         encoding="utf-8",
@@ -630,6 +640,7 @@ def test_load_report_document_supports_current_methodology_workspace_layout(tmp_
     assert len(document.timelines) == 1
     timeline = document.timelines[0]
     assert timeline.phase_id == "PH-000-requirements-inventory"
+    assert timeline.lifecycle_phase_id == "LC-001-methodology-execution"
     assert [step.name for step in timeline.steps] == [
         "prompt-01-produce-requirements-inventory / iter 01 generator",
         "prompt-01-produce-requirements-inventory / iter 01 deterministic validation",

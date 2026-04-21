@@ -150,6 +150,7 @@ class Step:
 class PhaseTimeline:
     phase_id: str
     phase_number: int
+    lifecycle_phase_id: str = ""
     steps: list[Step] = field(default_factory=list)
     drilldown_links: list[tuple[str, str]] = field(default_factory=list)
 
@@ -1055,6 +1056,11 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
     run_files_dir = workspace / ".run-files"
     if state_path.exists() and run_files_dir.exists():
         state = json.loads(state_path.read_text(encoding="utf-8"))
+        lifecycle_phase_id = ""
+        for lifecycle_phase in state.get("lifecycle_phases", []):
+            if lifecycle_phase.get("phase_id") == "LC-001-methodology-execution":
+                lifecycle_phase_id = "LC-001-methodology-execution"
+                break
         timelines: list[PhaseTimeline] = []
         for phase_meta in state.get("phases", []):
             phase_id = phase_meta.get("phase_id", "")
@@ -1094,6 +1100,7 @@ def parse_workspace(workspace: Path) -> list[PhaseTimeline]:
                 PhaseTimeline(
                     phase_id=phase_id,
                     phase_number=phase_number,
+                    lifecycle_phase_id=lifecycle_phase_id,
                     steps=steps,
                 )
             )
@@ -2650,7 +2657,7 @@ def render_html(
             rows.append(
                 f'<tr class="phase-header is-collapsible" onclick="toggleGroup(\'{phase_group_id}\', \'{phase_toggle_id}\')"><td colspan="8">'
                 f'<span class="phase-toggle" id="{phase_toggle_id}" aria-hidden="true">▸</span>'
-                f'<strong>{tl.phase_id}</strong> — {tl.total_str}'
+                f'<strong>{_escape_html(tl.lifecycle_phase_id + " > ") if tl.lifecycle_phase_id else ""}{_escape_html(tl.phase_id)}</strong> — {tl.total_str}'
                 f' — ${tl.total_cost:.2f}'
                 f'{drilldown_html}'
                 f'</td></tr>'
