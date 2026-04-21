@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import re
 import shutil
+import subprocess
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +84,116 @@ def _resolve_workspace(workspace_arg: str | None, requirements_path: Path) -> Pa
     if workspace_arg is not None:
         return Path(workspace_arg).resolve()
     return _auto_workspace(requirements_path).resolve()
+
+
+def _git(args: list[str], *, cwd: Path) -> str:
+    """Run a git command and return stripped stdout."""
+    result = subprocess.run(
+        ["git", *args],
+        cwd=cwd,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr.strip() or result.stdout.strip())
+    return result.stdout.strip()
+
+
+def _derive_change_branch_name(
+    requirements_path: Path,
+    change_id: str | None,
+    explicit_branch_name: str | None,
+) -> str:
+    """Return the branch name for one change run."""
+    if explicit_branch_name:
+        return explicit_branch_name
+    stem_slug = _slugify(requirements_path.stem)
+    if change_id is None:
+        return stem_slug
+    if stem_slug.startswith(change_id):
+        return stem_slug
+    if stem_slug:
+        return f"{change_id}-{stem_slug}"
+    return change_id
+
+
+def _default_change_worktree(
+    application_repo: Path,
+    branch_name: str,
+) -> Path:
+    """Return the default sibling worktree path for one change branch."""
+    return (
+        application_repo.parent
+        / f"{application_repo.name}-worktrees"
+        / branch_name
+    )
+
+
+def _prepare_application_worktree(
+    *,
+    application_repo: Path,
+    requirements_path: Path,
+    workspace_arg: str | None,
+    change_id: str | None,
+    branch_name_arg: str | None,
+) -> tuple[Path, str]:
+    """Create or reuse the application worktree for one change run."""
+    repo = application_repo.resolve()
+    if not repo.exists():
+        raise RuntimeError(f"Application repo not found: {repo}")
+    try:
+        repo_root = Path(_git(["rev-parse", "--show-toplevel"], cwd=repo)).resolve()
+    except RuntimeError as exc:
+        raise RuntimeError(f"Application repo is not a git checkout: {repo}") from exc
+
+    if _git(["status", "--porcelain"], cwd=repo_root):
+        raise RuntimeError(
+            f"Application repo checkout is not clean: {repo_root}"
+        )
+
+    branch_name = _derive_change_branch_name(
+        requirements_path,
+        change_id,
+        branch_name_arg,
+    )
+    workspace = (
+        Path(workspace_arg).resolve()
+        if workspace_arg is not None
+        else _default_change_worktree(repo_root, branch_name).resolve()
+    )
+
+    if workspace.exists():
+        if not (workspace / ".git").exists() and not (workspace / ".git").is_file():
+            raise RuntimeError(
+                f"Requested workspace exists but is not a git worktree: {workspace}"
+            )
+        current_branch = _git(["branch", "--show-current"], cwd=workspace)
+        if current_branch != branch_name:
+            raise RuntimeError(
+                "Requested workspace already exists on a different branch: "
+                f"{workspace} (current={current_branch}, expected={branch_name})"
+            )
+        return workspace, branch_name
+
+    workspace.parent.mkdir(parents=True, exist_ok=True)
+    existing_branches = {
+        line.removeprefix("* ").strip()
+        for line in _git(["branch", "--list"], cwd=repo_root).splitlines()
+        if line.strip()
+    }
+    worktree_args = ["worktree", "add", str(workspace)]
+    if branch_name in existing_branches:
+        worktree_args.append(branch_name)
+    else:
+        worktree_args.extend(["-b", branch_name])
+    try:
+        _git(worktree_args, cwd=repo_root)
+    except RuntimeError as exc:
+        raise RuntimeError(
+            f"Could not create application worktree {workspace}: {exc}"
+        ) from exc
+    return workspace, branch_name
 
 
 def _print_banner(title: str) -> None:
@@ -230,7 +341,21 @@ def cmd_run(args: argparse.Namespace) -> int:
         _print_error(backend_err)
         return EXIT_USAGE_ERROR
 
-    workspace = _resolve_workspace(args.workspace, requirements_path)
+    try:
+        if args.application_repo is not None:
+            workspace, branch_name = _prepare_application_worktree(
+                application_repo=Path(args.application_repo),
+                requirements_path=requirements_path,
+                workspace_arg=args.workspace,
+                change_id=args.change_id,
+                branch_name_arg=args.branch_name,
+            )
+        else:
+            workspace = _resolve_workspace(args.workspace, requirements_path)
+            branch_name = None
+    except RuntimeError as exc:
+        _print_error(str(exc))
+        return EXIT_USAGE_ERROR
 
     # Late import so --help works even without prompt-runner installed.
     try:
@@ -278,6 +403,9 @@ def cmd_run(args: argparse.Namespace) -> int:
 
     _print_banner("Methodology Runner -- Starting pipeline")
     sys.stdout.write(f"Requirements: {requirements_path}\n")
+    if args.application_repo is not None:
+        sys.stdout.write(f"Application:  {Path(args.application_repo).resolve()}\n")
+        sys.stdout.write(f"Branch:       {branch_name}\n")
     sys.stdout.write(f"Workspace:    {workspace}\n")
     if phases_to_run is None:
         sys.stdout.write("Phases:       all\n")
@@ -679,8 +807,33 @@ def _build_parser() -> argparse.ArgumentParser:
         "--workspace",
         default=None,
         help=(
-            "Workspace directory. "
-            "Default: ./runs/<timestamp>-<slugified-requirements-name>/"
+            "Workspace directory. When --application-repo is set, this is the "
+            "change worktree path to create or reuse. Otherwise it defaults to "
+            "./runs/<timestamp>-<slugified-requirements-name>/."
+        ),
+    )
+    run_cmd.add_argument(
+        "--application-repo",
+        default=None,
+        help=(
+            "Application repository checkout. When provided, methodology-runner "
+            "creates or reuses a git worktree for this change before execution."
+        ),
+    )
+    run_cmd.add_argument(
+        "--change-id",
+        default=None,
+        help=(
+            "Stable change identifier used to derive the branch/worktree name "
+            "when --application-repo is provided."
+        ),
+    )
+    run_cmd.add_argument(
+        "--branch-name",
+        default=None,
+        help=(
+            "Explicit branch name to use with --application-repo. Defaults to "
+            "the requirements filename stem, optionally prefixed by --change-id."
         ),
     )
     run_cmd.add_argument(

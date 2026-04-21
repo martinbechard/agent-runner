@@ -362,6 +362,9 @@ class TestBuildParser:
         args = parser.parse_args(["run", "req.md"])
         assert args.requirements_file == "req.md"
         assert args.workspace is None
+        assert args.application_repo is None
+        assert args.change_id is None
+        assert args.branch_name is None
         assert args.backend is None
         assert args.model is None
         assert args.max_iterations is None
@@ -375,6 +378,9 @@ class TestBuildParser:
         args = parser.parse_args([
             "run", "req.md",
             "--workspace", "/tmp/ws",
+            "--application-repo", "/tmp/app",
+            "--change-id", "change-002",
+            "--branch-name", "change-002-add-datetime",
             "--model", "opus",
             "--max-iterations", "5",
             "--debug", "4",
@@ -384,6 +390,9 @@ class TestBuildParser:
             "--max-cross-ref-retries", "3",
         ])
         assert args.workspace == "/tmp/ws"
+        assert args.application_repo == "/tmp/app"
+        assert args.change_id == "change-002"
+        assert args.branch_name == "change-002-add-datetime"
         assert args.model == "opus"
         assert args.max_iterations == 5
         assert args.debug == 4
@@ -505,6 +514,57 @@ class TestCmdRun:
                 orch_mod.run_pipeline = original_run
 
         assert captured_config[0].backend == "codex"
+
+    def test_run_prepares_application_worktree_when_repo_requested(self, tmp_path: Path) -> None:
+        req = tmp_path / "change-002-add-datetime.md"
+        req.write_text("# Requirements\n", encoding="utf-8")
+        parser = _build_parser()
+        args = parser.parse_args([
+            "run",
+            str(req),
+            "--application-repo",
+            str(tmp_path / "app"),
+            "--change-id",
+            "change-002",
+            "--branch-name",
+            "change-002-add-datetime",
+        ])
+
+        from methodology_runner.orchestrator import PipelineConfig, PipelineResult
+
+        prepared_workspace = tmp_path / "app-worktrees" / "change-002-add-datetime"
+        captured_config: list[PipelineConfig] = []
+        mock_result = PipelineResult(
+            workspace_dir=prepared_workspace,
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        def capturing_run(config: PipelineConfig) -> PipelineResult:
+            captured_config.append(config)
+            return mock_result
+
+        with (
+            patch("methodology_runner.cli.check_backend_cli", return_value=None),
+            patch(
+                "methodology_runner.cli._prepare_application_worktree",
+                return_value=(prepared_workspace, "change-002-add-datetime"),
+            ) as mock_prepare,
+        ):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = capturing_run
+            try:
+                rc = cmd_run(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert rc == EXIT_SUCCESS
+        mock_prepare.assert_called_once()
+        assert captured_config[0].workspace_dir == prepared_workspace
 
     def test_successful_run(self, tmp_path: Path) -> None:
         req = tmp_path / "req.md"
