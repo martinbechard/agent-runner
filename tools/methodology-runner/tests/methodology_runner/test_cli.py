@@ -25,6 +25,7 @@ from methodology_runner.cli import (
     _load_state,
     _print_phase_table,
     _print_pipeline_result,
+    _reset_phase_selection,
     _slugify,
     cmd_reset,
     cmd_resume,
@@ -1401,6 +1402,30 @@ class TestCmdReset:
         assert "Phase Reset" in captured.out
         assert "PH-004-interface-contracts" in captured.out
         assert "PH-006-incremental-implementation" in captured.out
+
+    def test_reset_cleanup_removes_partial_change_record_root(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        state = _make_project_state(workspace)
+        state.change_id = "change-002-add-datetime"
+        state_dir = workspace / ".methodology-runner"
+        state.save(state_dir / "state.json")
+
+        change_root = workspace / "docs" / "changes" / state.change_id / "execution"
+        change_root.mkdir(parents=True, exist_ok=True)
+        (change_root / "implementation-workflow.md").write_text("stale\n", encoding="utf-8")
+
+        ids_to_reset = _reset_phase_selection(
+            workspace,
+            "PH-006-incremental-implementation",
+            cleanup_files=True,
+        )
+
+        assert ids_to_reset == [
+            "PH-006-incremental-implementation",
+            "PH-007-verification-sweep",
+        ]
+        assert not (workspace / "docs" / "changes" / state.change_id).exists()
 
 
 # ---------------------------------------------------------------------------

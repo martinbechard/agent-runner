@@ -83,6 +83,10 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** Prompt 2 must write only evidence that the child run actually produced.
   - **BECAUSE:** PH-007 depends on this report as implementation evidence. Fabricated completion or invented command history would corrupt final verification.
 
+- **RULE: RULE-6A** Downstream implementation prompts may refine behavior compatibly
+  - **SYNOPSIS:** The child workflow may add practical implementation or verification constraints needed to realize the approved solution, but it must not contradict upstream approved artifacts or weaken them by broadening away from required behavior.
+  - **BECAUSE:** PH-006 is where the methodology converges from approved design into executable slices, so more specificity is expected; the defect is contradiction or loss of required semantics.
+
 ## 4. Workflow
 
 This section describes the phase steps.
@@ -116,7 +120,7 @@ This section describes the phase steps.
           - **SYNOPSIS:** Prompt 1 embeds the approved design, contracts, simulations, and feature specification inline in `Context` with `{{INCLUDE:...}}`.
           - **BECAUSE:** The workflow-authoring prompt should begin with its task and then present the upstream inputs where it uses them.
       - **PROMPT:** `Judge`
-        - **SYNOPSIS:** Reviews the workflow for executability, TDD cadence, slice size, traceability, and final-verification coverage.
+        - **SYNOPSIS:** Reviews the workflow for executability, TDD cadence, slice size, traceability, semantic compatibility with upstream artifacts, and final-verification coverage.
         - **BECAUSE:** The workflow must be phase-ready before any child run starts.
         - **RULE:** Just-in-time artifact embedding
           - **SYNOPSIS:** Prompt 1's judge embeds the current child workflow inline in `Context` with `{{RUNTIME_INCLUDE:docs/implementation/implementation-workflow.md}}`.
@@ -161,6 +165,10 @@ This section states the main limits on the phase.
 - **RULE: RULE-7** No abstract planning drift
   - **SYNOPSIS:** The child workflow must not degrade into another implementation-plan artifact.
   - **BECAUSE:** PH-006 is supposed to start real implementation work.
+
+- **RULE: RULE-7A** No contradiction or unsupported exclusion of upstream-required behavior
+  - **SYNOPSIS:** The workflow may become more specific than upstream artifacts, but it must not add a constraint that rules out behavior the upstream artifacts require, and it must not broaden a required behavior into something semantically weaker.
+  - **BECAUSE:** PH-006 needs room to converge on runnable slices while still preserving the approved feature, contract, and simulation meaning.
 
 - **RULE: RULE-8** No fake child-run completion
   - **SYNOPSIS:** The run report must not claim completed status, passed prompts, changed files, or observed test commands that the child run did not produce.

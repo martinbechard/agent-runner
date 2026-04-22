@@ -71,6 +71,11 @@ Verification discipline:
   underlying claim explicitly.
 - If exact runtime output matters, preserve that exact observed output in the
   evidence notes rather than paraphrasing it.
+- Downstream verification may use concrete implementation-aware checks, but do
+  not mark behavior unsatisfied solely because of a more specific formatting
+  preference unless the upstream approved artifacts require that detail or the
+  missing detail changes the requirement's meaning. A compatible refinement is
+  allowed; contradiction or unsupported exclusion is not.
 
 Output schema to satisfy:
 verification_commands:
@@ -176,6 +181,13 @@ Focus your semantic review on these failure modes:
 7. Evidence contradiction:
    - Flag rows whose evidence notes contradict the exact observed command
      outputs, test assertions, or implementation files.
+8. Upstream semantic contradiction or unsupported exclusion:
+   - Flag verification that either:
+     - treats an upstream-required behavior as unsatisfied because of a
+       downstream-only formatting/detail preference that the approved artifacts
+       do not require
+     - or broadens the claimed requirement so far that the report no longer
+       verifies the actual approved behavior.
 
 Review instructions:
 - Treat this phase as final verification of the real implemented workspace.

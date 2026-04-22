@@ -1282,14 +1282,24 @@ def _materialize_generator_artifact(
     created_files: list[Path],
     generator_stdout: str,
 ) -> str:
-    """Prefer on-disk artifact text for single-file Codex generations.
+    """Prefer substantive generator text; fall back to single-file contents.
 
     Codex may end a file-writing turn with a short status message such as
     ``PASS`` or other commentary, even when it successfully wrote the real
     artifact to disk. For prompts that create exactly one text file, the file
-    contents are the most faithful artifact to hand to the judge and to persist
-    as the final artifact for later prompts.
+    contents are a useful fallback, but only when the returned generator text
+    is trivial. If Codex returns a real structured artifact in stdout, that
+    artifact must be preserved for judge validation rather than being replaced
+    with the created file's contents.
     """
+    stripped = generator_stdout.strip()
+    if stripped and stripped.lower() not in {
+        "pass",
+        "ok",
+        "done",
+        "success",
+    }:
+        return generator_stdout
     if backend != "codex" or len(created_files) != 1:
         return generator_stdout
     target = worktree_dir / created_files[0]
@@ -1377,8 +1387,7 @@ def _run_interactive_prompt(
     excluded_roots = _excluded_run_roots(worktree_dir, run_dir)
     snapshot_dir = prompt_dir / "snapshot-pre"
     use_git_tracking = _using_git_change_tracking(worktree_dir, run_dir)
-    if not use_git_tracking:
-        _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
+    _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
 
     # Build the mission text: prior-artifact context + the pair's
     # generation prompt. We use the same message builder as the
@@ -1437,8 +1446,6 @@ def _run_interactive_prompt(
 
     # Capture files the session created
     created_files = (
-        _git_status_paths(worktree_dir, excluded_roots)
-        if use_git_tracking else
         _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
     )
     if use_git_tracking and _git_has_changes(worktree_dir, excluded_roots):
@@ -1515,8 +1522,7 @@ def run_prompt(
     # to find out which files the prompt's generator created. Artifacts stay
     # in place across revise and escalate outcomes; cleanup is an explicit
     # caller concern rather than an implicit prompt-runner side effect.
-    if not use_git_tracking:
-        _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
+    _snapshot_worktree(worktree_dir, snapshot_dir, excluded_roots)
 
     iterations: list[IterationResult] = []
     gen_response: ClaudeResponse | None = None
@@ -1613,8 +1619,6 @@ def run_prompt(
         # judge so it knows exactly which files to inspect, rather than
         # having to discover them via Glob.
         files_so_far = (
-            _git_status_paths(worktree_dir, excluded_roots)
-            if use_git_tracking else
             _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
         )
         artifact_text = _materialize_generator_artifact(
@@ -1747,8 +1751,6 @@ def run_prompt(
         final_verdict = Verdict.ESCALATE
 
     created_files = (
-        _git_status_paths(worktree_dir, excluded_roots)
-        if use_git_tracking else
         _diff_worktree_since_snapshot(worktree_dir, snapshot_dir, excluded_roots)
     )
     if (

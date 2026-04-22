@@ -1,4 +1,5 @@
 import hashlib
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -815,7 +816,7 @@ def test_git_tracked_prompt_run_does_not_create_snapshot_dir(tmp_path: Path):
     )
 
     prompt_dir = _module_dir(run_dir, "Alpha")
-    assert not (prompt_dir / "snapshot-pre").exists()
+    assert (prompt_dir / "snapshot-pre").exists()
     assert (prompt_dir / "module.log").exists()
 
 
@@ -1298,6 +1299,110 @@ def test_codex_prefers_single_written_file_contents_as_artifact(tmp_path: Path):
     )
     assert result.iterations[-1].generator_output == "artifact from file\n"
     assert "artifact from file" in client.received[1].prompt
+
+
+def test_codex_preserves_substantive_generator_stdout_for_single_written_file(
+    tmp_path: Path,
+):
+    pair = _pair(1, "Alpha", gen="Write docs/out.txt", val="Check docs/out.txt")
+    worktree = _worktree(tmp_path)
+    structured_artifact = (
+        "## Files Created Or Updated\n"
+        "docs/out.txt\n\n"
+        "## Command Reports\n"
+        "Command Report 1\n"
+        "Command: echo hi\n"
+        "Stdout:\n```text\nhi\n```\n"
+        "Stderr:\n```text\n\n```\n"
+        "Exit Code: 0\n\n"
+        "## Slice Result Summary\n"
+        "Updated docs/out.txt.\n"
+    )
+
+    class WritingClient:
+        def __init__(self):
+            self.received = []
+
+        def call(self, call):
+            self.received.append(call)
+            if "generator" in call.stream_header:
+                out = call.worktree_dir / "docs" / "out.txt"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text("artifact from file\n", encoding="utf-8")
+                return ClaudeResponse(
+                    stdout=structured_artifact, stderr="", returncode=0,
+                )
+            return _judge_pass()
+
+    client = WritingClient()
+    result = run_prompt(
+        pair=pair, prior_artifacts=[], run_dir=tmp_path / "run",
+        config=RunConfig(backend="codex"), claude_client=client, run_id="myrun",
+        worktree_dir=worktree,
+    )
+    assert result.iterations[-1].generator_output == structured_artifact
+    assert structured_artifact in client.received[1].prompt
+
+
+def test_git_tracked_prompt_only_reports_files_changed_during_current_prompt(
+    tmp_path: Path,
+):
+    pair = _pair(1, "Alpha", gen="Write docs/out.txt", val="Check docs/out.txt")
+    worktree = _worktree(tmp_path)
+    run_dir = tmp_path / "run"
+
+    subprocess.run(["git", "init"], cwd=worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Prompt Runner Tests"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "prompt-runner-tests@example.com"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+    )
+    (worktree / "unrelated.txt").write_text("baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "."], cwd=worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "commit", "-m", "baseline"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+    )
+
+    # Leave an unrelated dirty file in the worktree before the prompt starts.
+    (worktree / "unrelated.txt").write_text("dirty before prompt\n", encoding="utf-8")
+
+    class WritingClient:
+        def __init__(self):
+            self.received = []
+
+        def call(self, call):
+            self.received.append(call)
+            if "generator" in call.stream_header:
+                out = call.worktree_dir / "docs" / "out.txt"
+                out.parent.mkdir(parents=True, exist_ok=True)
+                out.write_text("artifact from file\n", encoding="utf-8")
+                return ClaudeResponse(stdout="PASS", stderr="", returncode=0)
+            return _judge_pass()
+
+    client = WritingClient()
+    result = run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=run_dir,
+        config=RunConfig(backend="codex"),
+        claude_client=client,
+        run_id="myrun",
+        worktree_dir=worktree,
+    )
+
+    assert result.created_files == [Path("docs/out.txt")]
+    assert "docs/out.txt" in client.received[1].prompt
+    assert "unrelated.txt" not in client.received[1].prompt
 
 
 def test_run_pipeline_honours_explicit_worktree_dir(tmp_path: Path):

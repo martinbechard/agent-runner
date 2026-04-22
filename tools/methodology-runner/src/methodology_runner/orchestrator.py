@@ -132,10 +132,6 @@ _CHANGE_RECORD_ARTIFACT_MAP: tuple[tuple[str, str], ...] = (
         "docs/implementation/implementation-run-report.yaml",
         "execution/implementation-run-report.yaml",
     ),
-    (
-        "docs/implementation/prompt-3-final-verification-report.md",
-        "execution/prompt-3-final-verification-report.md",
-    ),
     ("docs/verification/verification-report.yaml", "verification/verification-report.yaml"),
 )
 """In-run artifacts promoted into docs/changes/<change-id>/..."""
@@ -160,7 +156,6 @@ _TEMP_WORKING_PATHS: tuple[str, ...] = (
     "docs/simulations/simulation-definitions.yaml",
     "docs/implementation/implementation-workflow.md",
     "docs/implementation/implementation-run-report.yaml",
-    "docs/implementation/prompt-3-final-verification-report.md",
     "docs/verification/verification-report.yaml",
 )
 """Temporary phase-working files removed once preserved and integrated."""

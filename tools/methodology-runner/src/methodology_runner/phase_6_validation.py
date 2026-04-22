@@ -13,6 +13,7 @@ _PROMPT_HEADING_RE = re.compile(r"^##\s+Prompt\b", re.MULTILINE)
 _LEVEL3_RE = re.compile(r"^###\s+(.+?)\s*$")
 _MARKDOWN_LIST_RE = re.compile(r"^(?:[-+*]|\d+\.)\s+")
 _LOOSE_TDD_RE = re.compile(r"failing\s+or\s+tighten(?:ed|ing)?[-\s]test")
+_ASSUMED_BASELINE_RE = re.compile(r"from the current .+? behavior", re.IGNORECASE)
 
 
 def _bad_path_metadata_entries(text: str) -> list[dict]:
@@ -104,6 +105,12 @@ def _validate_workflow_prompt(path: Path) -> dict:
         {
             "id": "forbidden_loose_tdd_phrase",
             "status": "fail" if _LOOSE_TDD_RE.search(lower_text) else "pass",
+        }
+    )
+    checks.append(
+        {
+            "id": "forbidden_assumed_baseline_phrase",
+            "status": "fail" if _ASSUMED_BASELINE_RE.search(text) else "pass",
         }
     )
     checks.append(

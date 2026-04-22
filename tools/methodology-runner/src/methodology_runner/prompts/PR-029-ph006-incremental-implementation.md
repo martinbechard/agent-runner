@@ -179,12 +179,35 @@ Acceptance requirements:
   implemented system and preserve those exact command strings.
 - The workflow must require command evidence that includes stdout, stderr, and
   exit code details rather than only pass/fail summaries.
+- For any slice involving datetime or date-and-time behavior, the child prompt
+  itself must explicitly require the same upstream semantic behavior. When the
+  upstream artifacts require a runtime-generated current local date-and-time
+  line, the child prompt must preserve that exact semantic requirement rather
+  than broadening it to a generic timestamp-only output. The child prompt must
+  still explicitly forbid tighter rendering assertions
+  such as a literal `T`, ISO-only formatting, an exact separator, an explicit
+  timezone offset, a non-`None` tzinfo requirement, or another exact
+  rendering/detail requirement unless the upstream artifacts explicitly require
+  them.
+- Each child prompt must describe the target slice directly and must not frame
+  it as moving `from the current ... behavior` unless the named upstream
+  artifacts explicitly guarantee that exact baseline state.
 - The workflow must not use condensed command-result bullets such as
   ``- `python3 -m unittest tests.test_cli` -> OK`` in place of the required
   `## Command Reports` structure.
 - The workflow must not introduce extra markdown headings inside the response
   template under `## Command Reports`, such as `### Command Report 1`; use
   plain text labels like `Command Report 1` instead.
+- The workflow must not claim a fixed baseline runtime state unless upstream
+  artifacts explicitly guarantee it or the same prompt iteration captures that
+  baseline directly with command evidence. Do not write child prompts that
+  invent history such as `the current behavior is greeting-only` when that
+  exact baseline is not proven.
+- When upstream artifacts require runtime-generated datetime or timestamp
+  output, the workflow must preserve that semantic contract and must not
+  tighten it into a stricter rendering rule such as a required literal `T`,
+  ISO-only formatting, or another exact separator/detail unless the upstream
+  artifacts explicitly require that formatting.
 - The workflow must stay grounded in the upstream artifacts. Do not invent
   unrelated files, frameworks, or infrastructure.
 - Do not create any files other than docs/implementation/implementation-workflow.md.
@@ -242,7 +265,21 @@ Focus your semantic review on these failure modes:
 4. Traceability gaps:
    - Flag child prompts whose implementation work is not materially grounded in
      the upstream FT-* / AC-* / CMP-* / CTR-* / SIM-* artifacts.
-5. Missing final verification:
+5. Invented baseline state:
+   - Flag child prompts that claim a fixed pre-change runtime state in the
+     form `from the current ... behavior` when that exact baseline is not
+     guaranteed by the named upstream artifacts.
+6. Upstream semantic contradiction or unsupported exclusion:
+   - Flag child prompts that either:
+     - broaden a required upstream behavior into something semantically weaker,
+       such as replacing a required current local date-and-time line with a
+       generic timestamp-only output
+     - or add a downstream constraint that excludes behavior the upstream
+       artifacts still allow, such as requiring a literal `T`, ISO-only
+       formatting, an exact separator, an explicit timezone offset, a
+       non-`None` tzinfo requirement, or another exact rendering/detail rule
+       that upstream artifacts do not require.
+7. Missing final verification:
    - Flag workflows that do not end with a prompt that runs the full
      verification commands against the completed implementation.
 
@@ -320,12 +357,25 @@ Execution rules:
   `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --backend {{methodology_backend}} --run-dir {{run_dir}} --resume {{run_dir}} --no-project-organiser`
 - Otherwise run it fresh with:
   `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --backend {{methodology_backend}} --run-dir {{run_dir}} --no-project-organiser`
+- After that first invocation, inspect the resulting child summary, halt
+  reason, and live project files. If the child run halted but the live
+  child-workflow state has already corrected the reported blocker or the child
+  history indicates the truthful next action is to resume from the halted
+  prompt, resume the child workflow again before finalizing this supervisor
+  report.
+- Do not finalize this supervisor report from a stale halted child snapshot
+  when the live child-workflow state has already moved past that blocker and
+  can still be resumed truthfully.
 - Do not fabricate child-run outcomes. Base the report only on artifacts the
   child run actually produced in this worktree.
 - Preserve the exact command strings observed in the child run. Do not rewrite
   dotted Python module paths into slash paths, replace targeted test commands
   with broader alternatives, or collapse multiple verification commands into a
   generic summary.
+- Do not narrate a pre-change baseline that is not proven by the actual
+  child-run evidence. If the child workflow used retries or resume mode,
+  describe only the exact commands and observed outputs captured in the child
+  run rather than claiming an earlier untouched baseline state.
 - The child workflow is allowed to create or update real project files such as
   source code, tests, and README content.
 - The child workflow should not rely on repository-level file-placement
@@ -334,6 +384,17 @@ Execution rules:
 - For each recorded command, preserve enough observed output to support later
   truthful verification. Include stdout and stderr excerpts, even when one of
   them is empty.
+- If the execution backend does not expose a trustworthy stdout/stderr split
+  for a recorded command and only a combined observed transcript is available,
+  preserve that transcript truthfully in exactly one of `stdout_excerpt` or
+  `stderr_excerpt`, leave the other excerpt empty, and do not invent a split
+  that the backend did not provide.
+- When the upstream contract requires a runtime-generated datetime or
+  timestamp, preserve that same semantic requirement in the report evidence.
+  Do not upgrade it into a stricter formatting claim such as a required
+  literal `T`, ISO-only rendering, an explicit timezone offset, or a
+  non-`None` tzinfo requirement unless the upstream artifacts explicitly
+  require that format.
 
 Execution report schema:
 ```yaml
@@ -376,11 +437,19 @@ Acceptance requirements:
   completed
   halted
 - The report must reflect the actual child run outcome in this worktree.
+- If the first child invocation halts but a truthful follow-up resume is
+  required by the live child-workflow state, the report must reflect the
+  outcome after that follow-up resume rather than preserving the stale
+  intermediate halt as the final result.
 - If completion_status is `completed`, every prompt_results verdict must be `pass`.
 - If completion_status is `halted`, halt_reason must explain what halted.
 - Each `test_commands_observed` row must preserve the exact command string as
   executed in the child run and include `stdout_excerpt` and `stderr_excerpt`
   alongside the exit code.
+- A `test_commands_observed` row may preserve the full observed command
+  transcript in exactly one excerpt field with the other left empty when the
+  backend-observed stream split is unavailable, but it must not fabricate or
+  reshuffle output between the two fields.
 - If the child workflow required the same exact test command before and after a
   change, the report must preserve both of those runs with the same command
   spelling.
@@ -437,10 +506,18 @@ Focus your semantic review on these failure modes:
      truthful later verification.
 6. Misleading next action:
    - Flag `next_action` values that do not match the real child-run state.
+7. Stale halted snapshot:
+   - Flag reports that stop at a halted child summary even though the live
+     child-workflow state or the child history shows the correct next action
+     is to resume and continue from the halted prompt.
 
 Review instructions:
 - Treat this prompt as an execution-supervision layer.
 - Pass only if the child run completed and the report states that accurately.
+- If the child run halted but the report itself shows that the truthful next
+  action is to resume and the live child-workflow state has already corrected
+  the blocker, use `revise` rather than `escalate` so the generator can resume
+  the child workflow and update the report.
 - If the child run halted, do not pretend success. Escalate unless the report
 - itself is merely inaccurate.
 - Do not request wording polish or alternate phrasing unless the current

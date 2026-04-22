@@ -75,6 +75,10 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** A requirement must not be marked `satisfied` when the evidence is only stylistic, interpretive, or indirectly suggestive.
   - **BECAUSE:** Final verification has to rely on concrete evidence, not hopeful reading of qualitative phrases.
 
+- **RULE: RULE-6A** Verification may add compatible operational specificity
+  - **SYNOPSIS:** PH-007 may use concrete verification commands and implementation-aware checks, but it must not treat a requirement as unsatisfied merely because the implementation is more or less specifically rendered than a downstream preference unless that detail is required by approved upstream artifacts or changes the requirement's meaning.
+  - **BECAUSE:** Final verification has to assess the real implemented workspace, which often requires concrete checks; the defect is contradiction with upstream intent, not the mere presence of extra downstream detail.
+
 ## 4. Workflow
 
 This section describes the phase steps.
@@ -108,7 +112,7 @@ This section describes the phase steps.
           - **SYNOPSIS:** The generator and judge embed the requirements inventory, feature specification, implementation workflow, and implementation run report inline in `Context` with `{{INCLUDE:...}}`.
           - **BECAUSE:** Final verification should begin with the verification task and then present the upstream evidence where that task uses it.
       - **PROMPT:** `Judge`
-        - **SYNOPSIS:** Reviews the report for truthfulness, evidence quality, honest coverage, and unsupported satisfaction claims.
+        - **SYNOPSIS:** Reviews the report for truthfulness, evidence quality, honest coverage, unsupported satisfaction claims, and contradiction with upstream-approved semantics.
         - **BECAUSE:** The final report must not overstate what was actually verified.
         - **RULE:** Just-in-time artifact embedding
           - **SYNOPSIS:** The judge embeds the current verification report inline in `Context` with `{{RUNTIME_INCLUDE:docs/verification/verification-report.yaml}}`.
@@ -142,6 +146,10 @@ This section states the main limits on the phase.
 - **RULE: RULE-9** No contradiction with observed evidence
   - **SYNOPSIS:** Evidence notes must not contradict exact command outputs, test assertions, or file contents.
   - **BECAUSE:** Final verification is only useful if it agrees with the actual workspace evidence.
+
+- **RULE: RULE-9A** No contradiction with upstream-approved behavior
+  - **SYNOPSIS:** Verification may rely on more concrete checks than upstream artifacts, but it must not fail or downgrade behavior that still satisfies the approved upstream requirement meaning.
+  - **BECAUSE:** The verification phase should preserve approved intent while still using practical concrete checks against the implemented workspace.
 
 ## 6. Output Shape
 

@@ -435,7 +435,15 @@ Verify that:
   truthful final verification.
 - Verify the support report at
   docs/implementation/implementation-run-report.yaml, if present, is consistent
-  with the workflow and actual child-run artifacts.\
+  with the workflow and actual child-run artifacts.
+- When the report preserves a command transcript entirely in stdout_excerpt or
+  stderr_excerpt because the execution backend did not expose a trustworthy
+  stream split, treat that as acceptable so long as the transcript is
+  truthful, complete enough for downstream verification, and not fabricated.\
+- Treat added downstream implementation specificity as acceptable when it
+  remains compatible with upstream-approved behavior. Flag only contradiction,
+  unsupported exclusion of upstream-required behavior, or broadening that no
+  longer preserves the upstream semantic requirement.\
 """,
 
     # ------------------------------------------------------------------
@@ -543,6 +551,14 @@ evidence, or any intermediate element that is orphaned.
   requirement_results rows.
 - The implementation workflow and run report must align with the verification
   evidence cited in Phase 7.
+- Do not fail only because a Phase 6 or Phase 7 command transcript is kept
+  wholly in stdout_excerpt or stderr_excerpt when the backend did not provide a
+  trustworthy stream split. Flag only fabricated, contradictory, or materially
+  incomplete command evidence.
+- Treat added downstream implementation or verification specificity as
+  acceptable when it remains compatible with upstream-approved behavior. Flag
+  only contradiction, unsupported exclusion of upstream-required behavior, or
+  broadening that no longer preserves the upstream semantic requirement.
 - No phase's output may contradict another phase's output.
 
 ## Instructions

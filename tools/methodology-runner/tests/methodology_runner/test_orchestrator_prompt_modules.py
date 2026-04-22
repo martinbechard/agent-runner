@@ -178,6 +178,18 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "### Command Report 1" in text
     assert "stdout_excerpt" in text
     assert "stderr_excerpt" in text
+    assert "must not claim a fixed baseline runtime state" in text
+    assert "from the current ... behavior" in text
+    assert "required literal `T`" in text
+    assert "ISO-only formatting" in text
+    assert "date-and-time line" in text
+    assert "generic timestamp-only output" in text
+    assert "non-`None` tzinfo requirement" in text
+    assert "Upstream semantic contradiction or unsupported exclusion" in text
+    assert "does not expose a trustworthy stdout/stderr split" in text
+    assert "exactly one of `stdout_excerpt` or" in text
+    assert "stale halted child snapshot" in text
+    assert "resume the child workflow again" in text
 
 
 def test_ph004_prompt_module_requires_non_empty_response_schemas() -> None:
@@ -193,6 +205,22 @@ def test_ph004_prompt_module_requires_non_empty_response_schemas() -> None:
     assert "response_schema:" in text
     assert "fields: []" not in text
     assert "response_schema.fields must be explicit non-empty" in text
+
+
+def test_ph007_prompt_module_uses_compatibility_not_overconstraint() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-030-ph007-verification-sweep.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "A compatible refinement is" in text
+    assert "contradiction or unsupported exclusion is not" in text
+    assert "more specific formatting" in text
+    assert "Upstream semantic contradiction or unsupported exclusion" in text
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(
@@ -586,10 +614,6 @@ def test_full_run_auto_finalizes_and_merges_into_main(
             output.write_text("### Module\nimplementation-workflow\n", encoding="utf-8")
             (workspace_dir / "docs/implementation/implementation-run-report.yaml").write_text(
                 "completion_status: \"completed\"\n",
-                encoding="utf-8",
-            )
-            (workspace_dir / "docs/implementation/prompt-3-final-verification-report.md").write_text(
-                "## Slice Result Summary\nAll checks passed.\n",
                 encoding="utf-8",
             )
             (workspace_dir / "hello_world.py").write_text(

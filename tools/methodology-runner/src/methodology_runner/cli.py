@@ -263,7 +263,7 @@ def _reset_phase_selection(
 ) -> list[str]:
     """Reset one phase plus downstream phases, optionally deleting artifacts."""
     from .phases import PHASE_MAP
-    from .orchestrator import save_project_state
+    from .orchestrator import _change_record_root, save_project_state
 
     ids_to_reset = _downstream_phase_ids(phase_id)
     state = _load_state(workspace)
@@ -304,6 +304,11 @@ def _reset_phase_selection(
                 (workspace / relpath).unlink(missing_ok=True)
             shutil.rmtree(
                 _phase_run_artifact_dir(workspace, phase.phase_number),
+                ignore_errors=True,
+            )
+        if state is not None:
+            shutil.rmtree(
+                _change_record_root(workspace, state.change_id or workspace.name),
                 ignore_errors=True,
             )
 

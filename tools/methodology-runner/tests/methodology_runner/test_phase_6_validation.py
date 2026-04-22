@@ -251,3 +251,44 @@ next_action: "none"
         check for check in run_report_check["checks"] if check["id"] == "test_commands_shape"
     )
     assert commands_shape["status"] == "fail"
+
+
+def test_phase_6_validation_rejects_assumed_baseline_wording(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Add Runtime Datetime Output
+
+### Generation Prompt
+
+Implement the slice from the current greeting-only behavior to the required
+greeting-plus-runtime-datetime behavior. Run python3 -m unittest tests.test_cli
+before code changes and record stdout, stderr, and exit code.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow)
+    assert report["overall_status"] == "fail"
+    workflow_check = next(check for check in report["checks"] if check["id"] == "workflow_prompt")
+    baseline_check = next(
+        check for check in workflow_check["checks"] if check["id"] == "forbidden_assumed_baseline_phrase"
+    )
+    assert baseline_check["status"] == "fail"

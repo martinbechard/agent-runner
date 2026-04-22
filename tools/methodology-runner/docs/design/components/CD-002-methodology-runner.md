@@ -24,6 +24,10 @@ application repository.*
   - **SYNOPSIS:** This document describes the live implementation in `models.py`, `phases.py`, `orchestrator.py`, `cross_reference.py`, and `cli.py`.
   - **BECAUSE:** Readers need one accurate source of truth for how the runner behaves today.
 
+- **RULE: RULE-4** Cross-phase review uses compatibility, not a ban on added specificity.
+  - **SYNOPSIS:** Downstream phases may add practical implementation and verification constraints as the solution becomes concrete, but they must not contradict upstream approved requirements or exclude behavior that upstream artifacts explicitly require.
+  - **BECAUSE:** The methodology has to converge on an executable solution, so downstream artifacts are expected to become more specific; the defect is contradiction or unsupported exclusion, not specificity by itself.
+
 ## 3. Definitions
 
 - **ENTITY: ENTITY-1** `ApplicationWorktree`
@@ -140,6 +144,9 @@ application repository.*
 - **MODULE: MODULE-4** `cross_reference.py`
   - **SYNOPSIS:** Verifies per-phase and end-to-end consistency after prompt-runner produces artifacts.
   - **BECAUSE:** The methodology requires a second layer of traceability checks beyond the prompt module's internal judge and deterministic validator.
+  - **RULE:** Compatibility-focused review
+    - **SYNOPSIS:** Cross-reference should reject contradiction, fabricated evidence, and unsupported exclusion of upstream-required behavior, but it should not fail an artifact merely because downstream implementation or verification became more concrete.
+    - **BECAUSE:** The methodology is supposed to narrow toward a practical solution over time while preserving upstream intent.
 
 - **MODULE: MODULE-5** `cli.py`
   - **SYNOPSIS:** Exposes `run`, `resume`, `status`, and `reset`.
