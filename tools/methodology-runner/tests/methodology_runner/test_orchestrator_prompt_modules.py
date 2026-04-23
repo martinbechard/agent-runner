@@ -186,6 +186,9 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "generic timestamp-only output" in text
     assert "non-`None` tzinfo requirement" in text
     assert "Upstream semantic contradiction or unsupported exclusion" in text
+    assert "arbitrary non-empty text as sufficient" in text
+    assert "date-and-time-bearing value from the same run" in text
+    assert "Weak datetime semantic verification" in text
     assert "does not expose a trustworthy stdout/stderr split" in text
     assert "exactly one of `stdout_excerpt` or" in text
     assert "stale halted child snapshot" in text

@@ -184,6 +184,11 @@ Acceptance requirements:
   upstream artifacts require a runtime-generated current local date-and-time
   line, the child prompt must preserve that exact semantic requirement rather
   than broadening it to a generic timestamp-only output. The child prompt must
+  require a test that proves a date-and-time-bearing value from the same run;
+  it must not accept arbitrary non-empty text as sufficient. A compatible
+  practical refinement such as standard-library parsing or another non-brittle
+  semantic check is allowed.
+  The child prompt must
   still explicitly forbid tighter rendering assertions
   such as a literal `T`, ISO-only formatting, an exact separator, an explicit
   timezone offset, a non-`None` tzinfo requirement, or another exact
@@ -279,7 +284,11 @@ Focus your semantic review on these failure modes:
        formatting, an exact separator, an explicit timezone offset, a
        non-`None` tzinfo requirement, or another exact rendering/detail rule
        that upstream artifacts do not require.
-7. Missing final verification:
+7. Weak datetime semantic verification:
+   - Flag child prompts whose datetime/date-and-time test contract would accept
+     arbitrary non-empty text instead of verifying a date-and-time-bearing
+     value from the same run.
+8. Missing final verification:
    - Flag workflows that do not end with a prompt that runs the full
      verification commands against the completed implementation.
 

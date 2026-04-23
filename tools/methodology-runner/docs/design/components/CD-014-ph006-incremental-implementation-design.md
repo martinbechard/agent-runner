@@ -170,6 +170,10 @@ This section states the main limits on the phase.
   - **SYNOPSIS:** The workflow may become more specific than upstream artifacts, but it must not add a constraint that rules out behavior the upstream artifacts require, and it must not broaden a required behavior into something semantically weaker.
   - **BECAUSE:** PH-006 needs room to converge on runnable slices while still preserving the approved feature, contract, and simulation meaning.
 
+- **RULE: RULE-7B** Datetime/date-and-time slices must verify semantic datetime behavior, not mere non-empty text
+  - **SYNOPSIS:** When a slice implements a required current date-and-time output, its test contract must prove a date-and-time-bearing value from the same run rather than accepting arbitrary non-empty text.
+  - **BECAUSE:** A non-empty second line is too weak to prove the upstream semantic requirement, but a compatible practical refinement such as standard-library parsing is allowed.
+
 - **RULE: RULE-8** No fake child-run completion
   - **SYNOPSIS:** The run report must not claim completed status, passed prompts, changed files, or observed test commands that the child run did not produce.
   - **BECAUSE:** PH-007 depends on PH-006 evidence.
