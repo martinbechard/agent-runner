@@ -551,6 +551,12 @@ evidence, or any intermediate element that is orphaned.
   requirement_results rows.
 - The implementation workflow and run report must align with the verification
   evidence cited in Phase 7.
+- Treat exact runtime-generated clock values, timestamp strings, and test-run
+  elapsed durations as volatile unless upstream approved artifacts explicitly
+  require those exact literals. Do not fail a truthful Phase 7 rerun merely
+  because those volatile values differ from preserved Phase 6 outputs.
+- Do not treat methodology-internal validator or self-check commands as
+  implementation evidence for RI traceability, coverage, or final verification.
 - Do not fail only because a Phase 6 or Phase 7 command transcript is kept
   wholly in stdout_excerpt or stderr_excerpt when the backend did not provide a
   trustworthy stream split. Flag only fabricated, contradictory, or materially

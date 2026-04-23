@@ -79,6 +79,10 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** PH-007 may use concrete verification commands and implementation-aware checks, but it must not treat a requirement as unsatisfied merely because the implementation is more or less specifically rendered than a downstream preference unless that detail is required by approved upstream artifacts or changes the requirement's meaning.
   - **BECAUSE:** Final verification has to assess the real implemented workspace, which often requires concrete checks; the defect is contradiction with upstream intent, not the mere presence of extra downstream detail.
 
+- **RULE: RULE-6B** Volatile runtime literals are not durable requirement evidence by default
+  - **SYNOPSIS:** Current clock values, timestamp strings, and test-run elapsed durations should be summarized semantically unless the upstream approved artifacts explicitly require those exact literals.
+  - **BECAUSE:** PH-007 may rerun verification commands later than PH-006, so truthful later evidence can differ in volatile values while still proving the same behavior.
+
 ## 4. Workflow
 
 This section describes the phase steps.
@@ -150,6 +154,10 @@ This section states the main limits on the phase.
 - **RULE: RULE-9A** No contradiction with upstream-approved behavior
   - **SYNOPSIS:** Verification may rely on more concrete checks than upstream artifacts, but it must not fail or downgrade behavior that still satisfies the approved upstream requirement meaning.
   - **BECAUSE:** The verification phase should preserve approved intent while still using practical concrete checks against the implemented workspace.
+
+- **RULE: RULE-9B** No methodology self-validation leakage into workspace evidence
+  - **SYNOPSIS:** PH-007 validator/self-check commands are methodology-internal checks and must not be recorded as product verification commands or requirement evidence.
+  - **BECAUSE:** Final verification should describe the implemented workspace, not the runner's own package-health checks.
 
 ## 6. Output Shape
 

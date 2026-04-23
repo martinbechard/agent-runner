@@ -221,6 +221,10 @@ def test_ph007_prompt_module_uses_compatibility_not_overconstraint() -> None:
     assert "contradiction or unsupported exclusion is not" in text
     assert "more specific formatting" in text
     assert "Upstream semantic contradiction or unsupported exclusion" in text
+    assert "runtime-volatile" in text
+    assert "methodology_runner.phase_7_validation" in text
+    assert "Volatile-literal overreach" in text
+    assert "Methodology self-validation leakage" in text
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(

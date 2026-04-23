@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from pathlib import Path
 
 import yaml
@@ -9,6 +10,46 @@ import yaml
 
 def _load_yaml(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+_METHODOLOGY_SELF_VALIDATION_MARKERS = (
+    "methodology_runner.phase_7_validation",
+)
+
+
+def _iter_prompt_blocks(workflow_text: str) -> list[str]:
+    matches = list(
+        re.finditer(r"(?m)^## Prompt \d+: .+$", workflow_text)
+    )
+    if not matches:
+        return []
+    blocks: list[str] = []
+    for index, match in enumerate(matches):
+        start = match.start()
+        end = matches[index + 1].start() if index + 1 < len(matches) else len(workflow_text)
+        blocks.append(workflow_text[start:end])
+    return blocks
+
+
+def _workflow_has_final_verification_prompt(workflow_text: str) -> bool:
+    prompt_blocks = _iter_prompt_blocks(workflow_text)
+    if not prompt_blocks:
+        return False
+    last_prompt = prompt_blocks[-1].lower()
+    indicators = (
+        "final verification",
+        "full verification",
+        "verification commands",
+        "prompt-3-final-verification-report.md",
+        "preserve the final command evidence",
+    )
+    return any(indicator in last_prompt for indicator in indicators)
+
+
+def _is_methodology_self_validation_command(command: object) -> bool:
+    if not isinstance(command, str):
+        return False
+    return any(marker in command for marker in _METHODOLOGY_SELF_VALIDATION_MARKERS)
 
 
 def build_report(
@@ -40,15 +81,25 @@ def build_report(
 
     command_rows = report.get("verification_commands", [])
     command_issues = []
+    self_validation_commands = []
     for row in command_rows:
         missing = sorted({"command", "exit_code", "purpose", "evidence"} - set(row.keys()))
         if missing:
             command_issues.append({"command": row.get("command"), "missing": missing})
+        if _is_methodology_self_validation_command(row.get("command")):
+            self_validation_commands.append(row.get("command"))
     checks.append(
         {
             "id": "verification_commands_shape",
             "status": "pass" if not command_issues else "fail",
             "details": command_issues,
+        }
+    )
+    checks.append(
+        {
+            "id": "verification_commands_workspace_scope",
+            "status": "pass" if not self_validation_commands else "fail",
+            "details": self_validation_commands,
         }
     )
 
@@ -61,7 +112,7 @@ def build_report(
         }
     )
 
-    if "Final Verification" not in implementation_workflow and "final verification" not in implementation_workflow.lower():
+    if not _workflow_has_final_verification_prompt(implementation_workflow):
         checks.append({"id": "workflow_final_verification_prompt", "status": "fail"})
     else:
         checks.append({"id": "workflow_final_verification_prompt", "status": "pass"})

@@ -71,6 +71,18 @@ Verification discipline:
   underlying claim explicitly.
 - If exact runtime output matters, preserve that exact observed output in the
   evidence notes rather than paraphrasing it.
+- When an output is inherently runtime-volatile, such as a current date/time
+  value or a test runner elapsed duration, record the semantically relevant
+  behavior rather than binding requirement satisfaction to one exact literal
+  unless the upstream approved artifacts explicitly require that literal.
+- If you rerun a verification command in Phase 7 and the command output
+  contains volatile values, do not claim that the rerun reproduces the exact
+  transient literals seen in Phase 6. State the truthful current observation
+  and summarize the stable behavior it proves.
+- `verification_commands` and `requirement_results[*].evidence.commands` are
+  for real workspace verification commands only. Do not include methodology-
+  internal validator or self-check commands such as
+  `python -m methodology_runner.phase_7_validation`.
 - Downstream verification may use concrete implementation-aware checks, but do
   not mark behavior unsatisfied solely because of a more specific formatting
   preference unless the upstream approved artifacts require that detail or the
@@ -188,6 +200,13 @@ Focus your semantic review on these failure modes:
        do not require
      - or broadens the claimed requirement so far that the report no longer
        verifies the actual approved behavior.
+9. Volatile-literal overreach:
+   - Flag reports that treat exact runtime-generated clock values, timestamp
+     strings, or test-run durations as durable requirement evidence when the
+     upstream artifacts do not require those exact literals.
+10. Methodology self-validation leakage:
+   - Flag reports that include methodology-internal validator/self-check
+     commands in `verification_commands` or `requirement_results[*].evidence.commands`.
 
 Review instructions:
 - Treat this phase as final verification of the real implemented workspace.
