@@ -272,33 +272,97 @@ def _write_current_module_run(module_dir: Path, prompt_slug: str = "prompt-01-de
     fixture_log = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
     module_dir.mkdir(parents=True, exist_ok=True)
     (module_dir / "module.log").write_text("", encoding="utf-8")
+    prompt_id = "-".join(prompt_slug.split("-")[:2])
 
     (module_dir / f"{prompt_slug}.final-verdict.txt").write_text("VERDICT: pass\n", encoding="utf-8")
     (module_dir / f"{prompt_slug}.files-created.txt").write_text("docs/out.txt\n", encoding="utf-8")
-    (module_dir / "prompt-01.iter-01-generator.stdout.log").write_text(
+    (module_dir / f"{prompt_id}.iter-01-generator.stdout.log").write_text(
         fixture_log.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (module_dir / "prompt-01.iter-01-generator.stderr.log").write_text("", encoding="utf-8")
-    (module_dir / "prompt-01.iter-01-deterministic-validation.stdout.log").write_text(
+    (module_dir / f"{prompt_id}.iter-01-generator.stderr.log").write_text("", encoding="utf-8")
+    (module_dir / f"{prompt_id}.iter-01-deterministic-validation.stdout.log").write_text(
         json.dumps({"validator": "demo", "overall_status": "pass"}) + "\n",
         encoding="utf-8",
     )
-    (module_dir / "prompt-01.iter-01-deterministic-validation.stderr.log").write_text("", encoding="utf-8")
-    (module_dir / "prompt-01.iter-01-deterministic-validation.proc.json").write_text(
+    (module_dir / f"{prompt_id}.iter-01-deterministic-validation.stderr.log").write_text("", encoding="utf-8")
+    (module_dir / f"{prompt_id}.iter-01-deterministic-validation.proc.json").write_text(
         json.dumps({"exit_code": 0}),
         encoding="utf-8",
     )
-    (module_dir / "prompt-01.iter-01-judge.stdout.log").write_text(
+    (module_dir / f"{prompt_id}.iter-01-judge.stdout.log").write_text(
         fixture_log.read_text(encoding="utf-8"),
         encoding="utf-8",
     )
-    (module_dir / "prompt-01.iter-01-judge.stderr.log").write_text("", encoding="utf-8")
+    (module_dir / f"{prompt_id}.iter-01-judge.stderr.log").write_text("", encoding="utf-8")
 
-    history_dir = module_dir / "history" / "prompt-01"
+    history_dir = module_dir / "history" / prompt_id
     history_dir.mkdir(parents=True, exist_ok=True)
     (history_dir / "iter-01-prompt.md").write_text("Generator prompt body", encoding="utf-8")
     (history_dir / "iter-01-validation-prompt.md").write_text("Judge prompt body", encoding="utf-8")
+
+
+def _write_selection_module_run(module_dir: Path) -> None:
+    fixture_log = Path(__file__).resolve().parent / "fixtures" / "codex-json-generator.stdout.jsonl"
+    module_dir.mkdir(parents=True, exist_ok=True)
+    (module_dir / "module.log").write_text("", encoding="utf-8")
+
+    selector_log = module_dir / "prompt-01.iter-01-judge.stdout.log"
+    selector_log.write_text(
+        "\n".join(
+            [
+                '{"type":"thread.started","thread_id":"selector"}',
+                '{"type":"turn.started"}',
+                '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"VERDICT: select\\nSELECTED_VARIANT: B\\nRATIONALE: Variant B is cleaner."}}',
+                '{"type":"turn.completed","usage":{"input_tokens":1000,"cached_input_tokens":200,"output_tokens":55}}',
+            ]
+        ) + "\n",
+        encoding="utf-8",
+    )
+    selector_log.with_name("prompt-01.iter-01-judge.stderr.log").write_text("", encoding="utf-8")
+    (module_dir / "history" / "prompt-01").mkdir(parents=True, exist_ok=True)
+    (module_dir / "history" / "prompt-01" / "iter-01-validation-prompt.md").write_text(
+        "Select the best variant.",
+        encoding="utf-8",
+    )
+    (module_dir / "prompt-01.selected-variant.txt").write_text("B\n", encoding="utf-8")
+    (module_dir / "prompt-01.selector-decision.md").write_text(
+        "VERDICT: select\n"
+        "SELECTED_VARIANT: B\n"
+        "RATIONALE: Variant B is cleaner.\n",
+        encoding="utf-8",
+    )
+
+    selection_dir = module_dir / "prompt-01.selection"
+    selection_dir.mkdir(parents=True, exist_ok=True)
+    (selection_dir / "selection-summary.md").write_text(
+        "Selected variant: B\nRationale: Variant B is cleaner.\n",
+        encoding="utf-8",
+    )
+
+    for variant_name, variant_title in (("A", "Bold layout"), ("B", "Quiet layout")):
+        variant_root = selection_dir / "variants" / variant_name.lower()
+        variant_root.mkdir(parents=True, exist_ok=True)
+        (variant_root / "result.json").write_text(
+            json.dumps(
+                {
+                    "variant_name": variant_name,
+                    "variant_title": variant_title,
+                }
+            ),
+            encoding="utf-8",
+        )
+        child_run_files = variant_root / "workspace" / ".run-files"
+        child_module = child_run_files / "choose-ui"
+        _write_current_module_run(
+            child_module,
+            prompt_slug=f"prompt-01-{variant_title.lower().replace(' ', '-')}",
+        )
+
+    _write_current_module_run(
+        module_dir,
+        prompt_slug="prompt-02-record-selected-design",
+    )
 
 
 def test_parse_comparison_manifest_collapses_shared_prefix(tmp_path):
@@ -457,6 +521,47 @@ VERDICT: pass
     doc = module.load_report_document(manifest)
     assert doc.run_title == "Adapter Check"
     assert len(doc.fork_sections) == 1
+
+
+def test_parse_prompt_runner_module_includes_selection_fork_and_selected_variant(tmp_path):
+    module = _load_module()
+    module_dir = tmp_path / "choose-ui"
+    _write_selection_module_run(module_dir)
+
+    shared_steps, fork_sections = module.parse_prompt_runner_run(module_dir)
+
+    assert len(shared_steps) == 3
+    assert all(step.name.startswith("prompt-02-record-selected-design") for step in shared_steps)
+    assert len(fork_sections) == 1
+    fork = fork_sections[0]
+    assert fork.fork_index == 1
+    assert fork.selected_variant == "B"
+    assert fork.selector_rationale == "Variant B is cleaner."
+    assert len(fork.selector_steps) == 1
+    assert fork.selector_steps[0].name.startswith("prompt-01 / iter 01 judge")
+    assert sorted(fork.variants) == ["variant-a", "variant-b"]
+    assert fork.variant_titles["variant-a"] == "Bold layout"
+    assert fork.variant_titles["variant-b"] == "Quiet layout"
+
+
+def test_render_html_shows_selector_and_selected_variant_for_selection_fork(tmp_path):
+    module = _load_module()
+    module_dir = tmp_path / "choose-ui"
+    _write_selection_module_run(module_dir)
+
+    doc = module.load_report_document(module_dir)
+    html = module.render_html(doc)
+
+    assert "selected=B" in html
+    assert "Variant B is cleaner." in html
+    assert "<strong>Selector</strong>" in html
+    assert "select</span>" in html
+    assert "Variant B: Quiet layout (selected)" in html
+    assert "toggleGroup('fork-01'" in html
+    assert "toggleGroup('fork-01-selector'" in html
+    assert "toggleGroup('fork-01-variant-a'" in html
+    assert 'data-groups="fork-01"' in html
+    assert 'data-groups="fork-01 fork-01-variant-a"' in html
 
 
 def test_render_html_includes_elapsed_start_and_links_columns(tmp_path):
@@ -682,7 +787,7 @@ def test_render_html_collapses_phases_by_default(tmp_path):
 
     assert "toggleGroup(" in html
     assert 'phase-toggle' in html
-    assert 'data-group="phase-000"' in html
+    assert 'data-groups="phase-000"' in html
 
 
 def test_main_writes_parent_and_child_reports_for_ph006_nested_run(tmp_path):

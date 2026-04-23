@@ -177,6 +177,10 @@ class ForkSection:
     fork_index: int
     fork_title: str
     variants: dict[str, list[Step]]  # variant_name -> steps
+    variant_titles: dict[str, str] = field(default_factory=dict)
+    selector_steps: list[Step] = field(default_factory=list)
+    selected_variant: str = ""
+    selector_rationale: str = ""
 
 
 @dataclass
@@ -747,6 +751,7 @@ def _parse_prompt_module_dir(
 
     steps: list[Step] = []
     prompt_names = _prompt_name_map_from_module_dir(module_dir)
+    seen_judge_logs: set[Path] = set()
     generator_logs = sorted(module_dir.glob("prompt-*.iter-*-generator.stdout.log"))
     for iter_log in generator_logs:
         match = re.match(r"^(prompt-\d+)\.iter-(\d+)-generator\.stdout\.log$", iter_log.name)
@@ -784,6 +789,7 @@ def _parse_prompt_module_dir(
         judge_log = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-judge.stdout.log")
         judge_stderr = iter_log.with_name(f"{prompt_id}.iter-{iter_num}-judge.stderr.log")
         if judge_log.exists():
+            seen_judge_logs.add(judge_log.resolve())
             step = _file_step(
                 f"{step_prefix} / iter {iter_num} judge",
                 judge_stderr if judge_stderr.exists() else judge_log,
@@ -793,9 +799,160 @@ def _parse_prompt_module_dir(
             if step:
                 steps.append(step)
 
+    for judge_log in sorted(module_dir.glob("prompt-*.iter-*-judge.stdout.log")):
+        resolved = judge_log.resolve()
+        if resolved in seen_judge_logs:
+            continue
+        match = re.match(r"^(prompt-\d+)\.iter-(\d+)-judge\.stdout\.log$", judge_log.name)
+        if not match:
+            continue
+        prompt_id = match.group(1)
+        iter_num = match.group(2)
+        prompt_name = prompt_names.get(prompt_id, prompt_id)
+        step_prefix = f"{prefix}{prompt_name}" if prefix else prompt_name
+        judge_stderr = judge_log.with_name(f"{prompt_id}.iter-{iter_num}-judge.stderr.log")
+        step = _file_step(
+            f"{step_prefix} / iter {iter_num} judge",
+            judge_stderr if judge_stderr.exists() else judge_log,
+            judge_log,
+            judge_log,
+        )
+        if step:
+            steps.append(step)
+
     _backfill_prompts_from_history(module_dir, steps)
     _apply_codex_model_fallback(steps, module_dir.parent.parent)
     return steps
+
+
+def _module_run_started_at(module_dir: Path) -> datetime | None:
+    manifest_path = module_dir.parent / "manifest.json"
+    if not manifest_path.exists():
+        return None
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    return _parse_iso_datetime(manifest.get("started_at"))
+
+
+def _normalize_variant_key(raw: str) -> str:
+    slug = re.sub(r"[^a-z0-9]+", "-", raw.lower()).strip("-")
+    if slug.startswith("variant-"):
+        return slug
+    return f"variant-{slug}" if slug else "variant"
+
+
+def _parse_selection_rationale(selector_decision_path: Path) -> str:
+    try:
+        content = selector_decision_path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    match = re.search(r"^RATIONALE:\s*(.+?)\s*$", content, re.MULTILINE)
+    return match.group(1).strip() if match else ""
+
+
+def _parse_selection_forks_from_module_dir(
+    module_dir: Path,
+) -> tuple[list[ForkSection], set[str]]:
+    prompt_names = _prompt_name_map_from_module_dir(module_dir)
+    fork_sections: list[ForkSection] = []
+    consumed_prompt_ids: set[str] = set()
+
+    for selection_dir in sorted(module_dir.glob("prompt-*.selection")):
+        if not selection_dir.is_dir():
+            continue
+        match = re.match(r"^(prompt-\d+)\.selection$", selection_dir.name)
+        if not match:
+            continue
+        prompt_id = match.group(1)
+        consumed_prompt_ids.add(prompt_id)
+
+        try:
+            fork_index = int(prompt_id.split("-")[1])
+        except (IndexError, ValueError):
+            fork_index = 0
+        fork_title = prompt_names.get(prompt_id, prompt_id)
+
+        selector_steps = [
+            step for step in _parse_prompt_module_dir(module_dir)
+            if step.name.startswith(fork_title) and "judge" in step.name.lower()
+        ]
+        if selector_steps:
+            _normalize_step_sequence(
+                selector_steps,
+                start_anchor=_module_run_started_at(module_dir),
+            )
+
+        selected_variant_path = module_dir / f"{prompt_id}.selected-variant.txt"
+        selected_variant = ""
+        if selected_variant_path.exists():
+            try:
+                selected_variant = selected_variant_path.read_text(encoding="utf-8").strip()
+            except OSError:
+                selected_variant = ""
+
+        selector_decision_path = module_dir / f"{prompt_id}.selector-decision.md"
+        selector_rationale = (
+            _parse_selection_rationale(selector_decision_path)
+            if selector_decision_path.exists()
+            else ""
+        )
+
+        variants: dict[str, list[Step]] = {}
+        variant_titles: dict[str, str] = {}
+        variants_dir = selection_dir / "variants"
+        if variants_dir.exists():
+            for variant_dir in sorted(variants_dir.iterdir()):
+                if not variant_dir.is_dir():
+                    continue
+                result_path = variant_dir / "result.json"
+                variant_name = variant_dir.name
+                variant_title = variant_dir.name
+                if result_path.exists():
+                    try:
+                        result = json.loads(result_path.read_text(encoding="utf-8"))
+                    except (OSError, json.JSONDecodeError):
+                        result = {}
+                    variant_name = str(result.get("variant_name") or variant_name)
+                    variant_title = str(result.get("variant_title") or variant_name)
+
+                variant_key = _normalize_variant_key(variant_name)
+                workspace_run_files = variant_dir / "workspace" / ".run-files"
+                child_modules = [
+                    child for child in sorted(workspace_run_files.iterdir())
+                    if child.is_dir()
+                    and child.name != "backend-state"
+                    and child.name != "history"
+                    and (child / "module.log").exists()
+                ] if workspace_run_files.exists() else []
+                if not child_modules:
+                    continue
+                child_module = child_modules[0]
+                variant_steps = _parse_prompt_module_dir(child_module)
+                if not variant_steps:
+                    continue
+                _normalize_step_sequence(
+                    variant_steps,
+                    start_anchor=_module_run_started_at(child_module),
+                )
+                variants[variant_key] = variant_steps
+                variant_titles[variant_key] = variant_title
+
+        if variants or selector_steps:
+            fork_sections.append(
+                ForkSection(
+                    fork_index=fork_index,
+                    fork_title=fork_title,
+                    variants=variants,
+                    variant_titles=variant_titles,
+                    selector_steps=selector_steps,
+                    selected_variant=selected_variant,
+                    selector_rationale=selector_rationale,
+                )
+            )
+
+    return fork_sections, consumed_prompt_ids
 
 
 # ---------------------------------------------------------------------------
@@ -1220,10 +1377,19 @@ def parse_prompt_runner_run(run_dir: Path) -> tuple[list[Step], list[ForkSection
     fork_sections: list[ForkSection] = []
     run_started_at: datetime | None = None
 
-    if any(run_dir.glob("prompt-*.iter-*-generator.stdout.log")):
+    if (
+        any(run_dir.glob("prompt-*.iter-*-generator.stdout.log"))
+        or any(run_dir.glob("prompt-*.iter-*-judge.stdout.log"))
+    ):
         shared_steps = _parse_prompt_module_dir(run_dir)
+        fork_sections, consumed_prompt_ids = _parse_selection_forks_from_module_dir(run_dir)
+        if consumed_prompt_ids:
+            shared_steps = [
+                step for step in shared_steps
+                if not any(step.name.startswith(prompt_id) for prompt_id in consumed_prompt_ids)
+            ]
         if shared_steps:
-            _normalize_step_sequence(shared_steps)
+            _normalize_step_sequence(shared_steps, start_anchor=_module_run_started_at(run_dir))
         return shared_steps, fork_sections
 
     # Shared pre-fork steps from top-level logs/
@@ -2335,7 +2501,7 @@ def _render_steps_rows(
     popups: list[str],
     report_started_at: datetime,
     row_class: str = "",
-    group_id: str | None = None,
+    group_ids: tuple[str, ...] = (),
     group_hidden: bool = False,
 ) -> int:
     """Render step rows into rows/popups lists, returns updated step_counter."""
@@ -2386,8 +2552,8 @@ def _render_steps_rows(
             )
         else:
             row_attrs = f' class="{tr_cls}"'
-        if group_id:
-            row_attrs += f' data-group="{group_id}"'
+        if group_ids:
+            row_attrs += f' data-groups="{" ".join(group_ids)}"'
         if group_hidden:
             row_attrs += ' style="display:none"'
         rows.append(
@@ -2412,8 +2578,8 @@ def _render_steps_rows(
                 f' style="display:none"'
                 f' data-open="0"'
             )
-            if group_id:
-                detail_attrs += f' data-group="{group_id}"'
+            if group_ids:
+                detail_attrs += f' data-groups="{" ".join(group_ids)}"'
             rows.append(
                 f'<tr{detail_attrs}><td colspan="8">{detail_html}</td></tr>'
             )
@@ -2484,7 +2650,7 @@ def _steps_verdict(steps: list[Step]) -> str:
     import re
     for step in reversed(steps):
         if step.detail and "judge" in step.name.lower() and step.detail.output_text:
-            m = re.search(r'VERDICT:\s*(pass|revise|escalate)', step.detail.output_text, re.IGNORECASE)
+            m = re.search(r'VERDICT:\s*(pass|revise|escalate|select)', step.detail.output_text, re.IGNORECASE)
             if m:
                 return m.group(1).lower()
     return "—"
@@ -2535,13 +2701,59 @@ def _render_fork_section(
     report_started_at: datetime,
 ) -> int:
     """Render a fork section: comparison table + per-variant detail."""
+    fork_group_id = f"fork-{fork.fork_index:02d}"
+    fork_toggle_id = f"{fork_group_id}-toggle"
+    selected_note = ""
+    if fork.selected_variant:
+        selected_note = f' <span class="variant-metrics">selected={fork.selected_variant}'
+        if fork.selector_rationale:
+            selected_note += f" | {fork.selector_rationale}"
+        selected_note += "</span>"
 
     # --- Fork header ---
     rows.append(
-        f'<tr class="fork-header"><td colspan="8">'
+        f'<tr class="fork-header is-collapsible" onclick="toggleGroup(\'{fork_group_id}\', \'{fork_toggle_id}\')"><td colspan="8">'
+        f'<span class="fork-toggle is-open" id="{fork_toggle_id}" aria-hidden="true">▾</span>'
         f'<strong>Fork {fork.fork_index}: {fork.fork_title}</strong>'
+        f'{selected_note}'
         f'</td></tr>'
     )
+
+    if fork.selector_steps:
+        selector_group_id = f"{fork_group_id}-selector"
+        selector_toggle_id = f"{selector_group_id}-toggle"
+        dur = _steps_duration_seconds(fork.selector_steps)
+        dur_str = _fmt_duration(dur)
+        cost = _steps_cost(fork.selector_steps)
+        turns = _steps_turns(fork.selector_steps)
+        out_tok = _steps_output_tokens(fork.selector_steps)
+        verdict = _steps_verdict(fork.selector_steps)
+        verdict_cls = "verdict-pass" if verdict == "pass" else (
+            "verdict-fail" if verdict in ("fail", "revise", "escalate") else ""
+        )
+        rows.append(
+            f'<tr class="variant-header selector-header is-collapsible" data-groups="{fork_group_id}" onclick="toggleGroup(\'{selector_group_id}\', \'{selector_toggle_id}\');event.stopPropagation()"><td colspan="8">'
+            f'<span class="variant-toggle is-open" id="{selector_toggle_id}" aria-hidden="true">▾</span>'
+            f'<strong>Selector</strong>'
+            f' <span class="variant-metrics">'
+            f'{turns} turns'
+            f' | Output: {out_tok:,}'
+            f' | {dur_str}'
+            f' | ${cost:.2f}'
+            f' | <span class="{verdict_cls}">{verdict}</span>'
+            f'</span>'
+            f'</td></tr>'
+        )
+        step_counter = _render_steps_rows(
+            fork.selector_steps,
+            grand_total,
+            step_counter,
+            rows,
+            popups,
+            report_started_at,
+            row_class="selector-step",
+            group_ids=(fork_group_id, selector_group_id),
+        )
 
     # --- Per-variant detail sections ---
     variant_names = sorted(fork.variants.keys())
@@ -2549,6 +2761,12 @@ def _render_fork_section(
     for vname in variant_names:
         vsteps = fork.variants[vname]
         label = vname.replace("variant-", "").upper()
+        title = fork.variant_titles.get(vname, "").strip()
+        heading = f"Variant {label}"
+        if title and title.lower() != label.lower():
+            heading += f": {title}"
+        if fork.selected_variant and _normalize_variant_key(fork.selected_variant) == vname:
+            heading += " (selected)"
         dur = _steps_duration_seconds(vsteps)
         dur_str = _fmt_duration(dur)
         cost = _steps_cost(vsteps)
@@ -2572,9 +2790,12 @@ def _render_fork_section(
 
         variant_css = "".join(c if c.isalnum() else "-" for c in vname.lower()).strip("-")
         variant_cls = f"in-variant variant-{variant_css}"
+        variant_group_id = f"{fork_group_id}-{variant_css}"
+        variant_toggle_id = f"{variant_group_id}-toggle"
         rows.append(
-            f'<tr class="variant-header {variant_cls}"><td colspan="8">'
-            f'<strong>Variant {label}</strong>'
+            f'<tr class="variant-header {variant_cls} is-collapsible" data-groups="{fork_group_id}" onclick="toggleGroup(\'{variant_group_id}\', \'{variant_toggle_id}\');event.stopPropagation()"><td colspan="8">'
+            f'<span class="variant-toggle is-open" id="{variant_toggle_id}" aria-hidden="true">▾</span>'
+            f'<strong>{heading}</strong>'
             f' <span class="variant-metrics">'
             f'{turns} turns'
             f' | Think: {tot_think:,}'
@@ -2591,6 +2812,7 @@ def _render_fork_section(
         step_counter = _render_steps_rows(
             vsteps, grand_total, step_counter, rows, popups, report_started_at,
             row_class=variant_cls,
+            group_ids=(fork_group_id, variant_group_id),
         )
 
     return step_counter
@@ -2664,7 +2886,7 @@ def render_html(
             )
             step_counter = _render_steps_rows(
                 tl.steps, grand_total, step_counter, rows, popups, report_started_at,
-                group_id=phase_group_id, group_hidden=True,
+                group_ids=(phase_group_id,), group_hidden=True,
             )
     else:
         # Prompt-runner mode: steps and fork sections interleaved
@@ -2719,6 +2941,16 @@ def render_html(
     transition: transform 0.12s ease;
   }}
   .phase-toggle.is-open {{ transform: rotate(90deg); }}
+  .fork-toggle {{
+    display: inline-block; width: 1.1em; margin-right: 6px; color: #2c5e8f;
+    transition: transform 0.12s ease;
+  }}
+  .fork-toggle.is-open {{ transform: rotate(90deg); }}
+  .variant-toggle {{
+    display: inline-block; width: 1.1em; margin-right: 6px; color: #666;
+    transition: transform 0.12s ease;
+  }}
+  .variant-toggle.is-open {{ transform: rotate(90deg); }}
   .step-time {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.9em; }}
   .step-cost {{ width: 7%; text-align: right; font-family: monospace; font-size: 0.85em; color: #666; }}
   .step-size {{ width: 6%; text-align: right; font-family: monospace; font-size: 0.85em; color: #888; }}
@@ -2749,12 +2981,16 @@ def render_html(
     background: #d8e8f5; padding: 8px 12px; font-size: 1.05em;
     border-top: 3px solid #4a90d9;
   }}
+  tr.fork-header.is-collapsible {{ cursor: pointer; }}
+  tr.fork-header.is-collapsible:hover td {{ background: #cfe1f1; }}
   .verdict-pass {{ color: #27ae60; font-weight: bold; }}
   .verdict-fail {{ color: #e74c3c; font-weight: bold; }}
   tr.variant-header td {{
     background: #f0f4f8; padding: 8px 12px 8px 24px; font-size: 0.95em;
     border-top: 2px solid #b0c8e0; color: #444;
   }}
+  tr.variant-header.is-collapsible {{ cursor: pointer; }}
+  tr.variant-header.is-collapsible:hover td {{ background: #e8eef5; }}
   .variant-metrics {{
     font-size: 0.85em; color: #555; font-family: monospace;
   }}
@@ -2841,33 +3077,38 @@ function showPopup(id) {{
 function hidePopup(id) {{
   document.getElementById(id).style.display = 'none';
 }}
-function toggleGroup(groupId, toggleId) {{
-  var rows = document.querySelectorAll('[data-group="' + groupId + '"]');
-  if (!rows.length) return;
-  var willOpen = true;
-  for (var i = 0; i < rows.length; i++) {{
-    var row = rows[i];
-    if (!row.classList.contains('detail-row')) {{
-      willOpen = row.style.display === 'none';
-      break;
-    }}
+function groupIsOpen(groupId) {{
+  var toggle = document.getElementById(groupId + '-toggle');
+  if (!toggle) return true;
+  return toggle.classList.contains('is-open');
+}}
+function rowGroups(row) {{
+  var raw = row.getAttribute('data-groups');
+  if (!raw) return [];
+  return raw.split(/\s+/).filter(Boolean);
+}}
+function shouldRowBeVisible(row) {{
+  var groups = rowGroups(row);
+  for (var i = 0; i < groups.length; i++) {{
+    if (!groupIsOpen(groups[i])) return false;
   }}
-  rows.forEach(function(row) {{
-    if (willOpen) {{
-      if (row.classList.contains('detail-row')) {{
-        row.style.display = row.dataset.open === '1' ? 'table-row' : 'none';
-      }} else {{
-        row.style.display = 'table-row';
-      }}
-    }} else {{
-      row.style.display = 'none';
-    }}
+  if (row.classList.contains('detail-row')) {{
+    return row.dataset.open === '1';
+  }}
+  return true;
+}}
+function refreshGroupVisibility() {{
+  document.querySelectorAll('tr[data-groups]').forEach(function(row) {{
+    row.style.display = shouldRowBeVisible(row) ? 'table-row' : 'none';
   }});
+}}
+function toggleGroup(groupId, toggleId) {{
   var toggle = document.getElementById(toggleId);
   if (toggle) {{
-    if (willOpen) toggle.classList.add('is-open');
-    else toggle.classList.remove('is-open');
+    if (toggle.classList.contains('is-open')) toggle.classList.remove('is-open');
+    else toggle.classList.add('is-open');
   }}
+  refreshGroupVisibility();
 }}
 function toggleStepDetail(rowId, toggleId) {{
   var row = document.getElementById(rowId);
@@ -2875,14 +3116,13 @@ function toggleStepDetail(rowId, toggleId) {{
   var toggle = document.getElementById(toggleId);
   var isOpen = row.style.display !== 'none';
   if (isOpen) {{
-    row.style.display = 'none';
     row.dataset.open = '0';
     if (toggle) toggle.classList.remove('is-open');
   }} else {{
-    row.style.display = 'table-row';
     row.dataset.open = '1';
     if (toggle) toggle.classList.add('is-open');
   }}
+  refreshGroupVisibility();
 }}
 function toggleView(uid) {{
   var el = document.getElementById(uid);
@@ -2991,6 +3231,7 @@ document.addEventListener('DOMContentLoaded', function() {{
       }});
     }}
   }} catch(e) {{}}
+  refreshGroupVisibility();
 }});
 document.addEventListener('keydown', function(e) {{
   if (e.key === 'Escape') {{
