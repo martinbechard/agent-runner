@@ -79,6 +79,17 @@ Important interpretation:
   concrete.
 - Do not forbid user-facing command shapes that the contract explicitly permits;
   forbid only implementation-internal detail that is not part of the contract.
+- For contractually dynamic success outputs such as current date/time, do not
+  freeze one exact runtime literal in successful or boundary-valid fixtures.
+- For those same dynamic success outputs, do not use pseudo-runtime placeholder
+  text such as `<current timestamp>` or `<YYYY-MM-DD ...>` as if it were a
+  realistic observed value.
+- Instead, model dynamic success output with the contract's own format exemplar
+  text in the response fields and use assertions to carry the required
+  digit-shape, zero-padding, or pattern checks.
+- For malformed dynamic-output branches, you may use synthetic observed output
+  strings that concretely show the format defect the contract names, but keep
+  them focused on the defect rather than one arbitrary clock instant.
 
 Output schema to satisfy:
 simulations:
@@ -221,6 +232,12 @@ Review instructions:
   contract's own error condition and avoids implementation internals.
 - Do not require implementation-specific filenames, module names, or option
   syntax unless the contract itself explicitly requires them.
+- For contractually dynamic outputs such as current date/time, accept
+  contract-format exemplars plus regex or pattern assertions as the correct
+  success-case representation.
+- Flag successful or boundary-valid dynamic-output scenarios that either freeze
+  one exact runtime literal or use fake placeholder text as if it were a real
+  observed value.
 - Do not request wording polish or alternative sample values unless the current
   choices are misleading or contract-inconsistent.
 - If you find issues, cite exact SIM-* / CTR-* IDs.

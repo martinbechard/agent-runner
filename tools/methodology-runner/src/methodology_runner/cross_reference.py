@@ -369,13 +369,22 @@ edge_case scenario.
 ### 3. Consistency
 Verify that:
 - All SIM-NNN IDs are unique.
-- Scenario inputs match the contract's request_schema field structure.
+- Scenario `request` payloads match the contract's request_schema field
+  structure.
+- Additional synthetic contract-surface setup outside `request` is allowed only
+  when it mirrors a declared error branch, comparison context, or observed
+  boundary result already justified by the contract.
 - Expected outputs match the contract's response_schema structure.
 - Error path scenarios trigger error types defined in the contract.
 
 ### 4. Integration
 - Verify simulations do not embed implementation-specific knowledge
-  (internal IDs, timestamps, database details).
+  (internal IDs, exact runtime timestamp literals, database details).
+- For contractually dynamic outputs such as current date/time, accept
+  contract-format exemplars plus regex/pattern assertions. Do not require one
+  fixed runtime sample value.
+- Do not treat pseudo-runtime placeholder text such as `<current timestamp>` as
+  realistic boundary-valid observed output.
 - Verify scenario data is realistic given contract constraints.\
 """,
 

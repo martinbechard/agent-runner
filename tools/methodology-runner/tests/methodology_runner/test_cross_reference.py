@@ -744,6 +744,10 @@ class TestPhaseCrossRefChecks:
     def test_phase_5_references_phase_4(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-005-intelligent-simulations"]
         assert "interface-contracts.yaml" in t
+        assert "contract-format exemplars" in t
+        assert "pseudo-runtime placeholder" in t
+        assert "Scenario `request` payloads match" in t
+        assert "synthetic contract-surface setup" in t
 
     def test_phase_6_references_phases_1_through_5(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-006-incremental-implementation"]

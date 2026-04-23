@@ -195,6 +195,23 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "resume the child workflow again" in text
 
 
+def test_ph005_prompt_module_handles_dynamic_outputs_without_literal_or_fake_samples() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-028-ph005-intelligent-simulations.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "do not\n  freeze one exact runtime literal" in text
+    assert "pseudo-runtime placeholder" in text
+    assert "contract's own format exemplar" in text
+    assert "regex or pattern assertions" in text
+    assert "one arbitrary clock instant" in text
+
+
 def test_ph004_prompt_module_requires_non_empty_response_schemas() -> None:
     prompt_path = (
         Path(__file__).resolve().parents[2]

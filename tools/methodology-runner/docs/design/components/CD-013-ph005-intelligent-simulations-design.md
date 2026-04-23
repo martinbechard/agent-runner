@@ -109,6 +109,9 @@ This section describes the phase steps.
       - **RULE:** Concrete invocation examples when contracts make them concrete
         - **SYNOPSIS:** When a contract already makes the invocation boundary concrete enough for a realistic example, the generator must use a realistic concrete command string or argv value rather than an abstract placeholder token.
         - **BECAUSE:** Cross-reference and downstream implementation planning need simulations grounded in the same invocation surface the contracts already declare.
+      - **RULE:** Dynamic success outputs use format exemplars plus assertions
+        - **SYNOPSIS:** For contractually dynamic success outputs such as current date/time, the generator must not freeze one exact runtime literal and must not use fake placeholder text as if it were a real observed value. It should instead use the contract's own format exemplar text in the response fields and let assertions carry the exact pattern requirements.
+        - **BECAUSE:** PH-005 must stay at the contract layer for dynamic values without inventing one arbitrary runtime sample or authoring unrealistic placeholder output.
     - **AGENT:** `Judge Agent`
       - **SYNOPSIS:** Embedded judge definition in the PH-005 module.
       - **BECAUSE:** The judge setup is fixed for this phase.
@@ -123,6 +126,9 @@ This section describes the phase steps.
       - **RULE:** Placeholder invocations are only allowed when the contract stays abstract
         - **SYNOPSIS:** The judge must accept placeholder command or argv values only when the contract does not already support a realistic concrete invocation example.
         - **BECAUSE:** PH-005 should not pass simulations that avoid choosing concrete values where the interface contract already makes the invocation surface concrete enough to do so faithfully.
+      - **RULE:** Dynamic success outputs must be modeled semantically
+        - **SYNOPSIS:** The judge must accept contract-format exemplars plus regex or pattern assertions for dynamic success outputs such as current date/time, and must reject both exact runtime literals and fake placeholder text when they are presented as successful observed values.
+        - **BECAUSE:** PH-005 should preserve dynamic contract meaning without leaking one transient runtime sample or authoring unrealistic success fixtures.
     - **PROMPT-PAIR: Prompt 1**
       - **PROMPT:** `Generator`
         - **SYNOPSIS:** Reads the interface contracts and feature spec and
@@ -188,11 +194,28 @@ This section states the main limits on the phase.
   - **BECAUSE:** Simulations are a contract layer, not an implementation
     layer.
 
+- **RULE: RULE-5A** No volatile-literal or fake-placeholder success fixtures
+  - **SYNOPSIS:** For contractually dynamic outputs such as current date/time,
+    success and boundary-valid scenarios must not use one exact runtime literal
+    and must not use fake placeholder strings as if they were real observed
+    output.
+  - **BECAUSE:** Dynamic outputs must remain contract-faithful without becoming
+    either implementation-specific or unrealistic.
+
 - **RULE: RULE-6** No thin scenarios
   - **SYNOPSIS:** Assertions must check meaningful response content, not only
     trivial status flags or presence checks.
   - **BECAUSE:** Later verification depends on simulations that exercise real
     semantics.
+
+- **RULE: RULE-6A** Synthetic setup must stay at the contract surface
+  - **SYNOPSIS:** Scenario inputs may include synthetic setup outside the raw
+    request payload only when that setup mirrors a declared error branch,
+    comparison context, or observed boundary result already justified by the
+    contract.
+  - **BECAUSE:** PH-005 sometimes needs contract-surface scaffolding to model
+    mismatch or observed-output violations, but it must not smuggle in
+    implementation internals.
 
 - **RULE: RULE-7** One fixed prompt module
   - **SYNOPSIS:** `PH-005` must use the predefined prompt module instead of
