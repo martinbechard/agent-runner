@@ -15,6 +15,21 @@ REQUIRED_COMPONENT_FIELDS = [
     "technology",
     "feature_realization_map",
     "dependencies",
+    "processing_functions",
+    "ui_surfaces",
+]
+REQUIRED_PROCESSING_FUNCTION_FIELDS = [
+    "name",
+    "purpose",
+    "triggered_by_features",
+    "examples",
+]
+REQUIRED_PROCESSING_EXAMPLE_FIELDS = ["name", "input", "output"]
+REQUIRED_UI_SURFACE_FIELDS = [
+    "name",
+    "purpose",
+    "triggered_by_features",
+    "html_mockup",
 ]
 REQUIRED_INTERACTION_FIELDS = [
     "id",
@@ -58,6 +73,11 @@ def _architecture_stack_features(architecture_components: list[dict]) -> set[str
     return legacy_supports
 
 
+def _has_html_markup(value) -> bool:
+    """Return whether a value looks like a non-empty HTML fragment."""
+    return isinstance(value, str) and "<" in value and ">" in value and bool(value.strip())
+
+
 def build_report(solution_design_path: Path, architecture_design_path: Path, feature_spec_path: Path) -> dict:
     design = _load_yaml(solution_design_path)
     architecture = _load_yaml(architecture_design_path)
@@ -74,6 +94,8 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
 
     missing_component_fields = []
     orphan_components = []
+    processing_function_issues = []
+    ui_surface_issues = []
     covered_features = set()
     for component in components:
         missing = [field for field in REQUIRED_COMPONENT_FIELDS if field not in component]
@@ -84,8 +106,113 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
             orphan_components.append(component.get("id"))
         else:
             covered_features.update(frm.keys())
+        processing_functions = component.get("processing_functions", [])
+        if not isinstance(processing_functions, list):
+            processing_function_issues.append(
+                {
+                    "component_id": component.get("id"),
+                    "issue": "processing_functions_must_be_list",
+                }
+            )
+            processing_functions = []
+        for index, function in enumerate(processing_functions):
+            function_name = function.get("name") if isinstance(function, dict) else None
+            if not isinstance(function, dict):
+                processing_function_issues.append(
+                    {
+                        "component_id": component.get("id"),
+                        "function_index": index,
+                        "issue": "processing_function_must_be_mapping",
+                    }
+                )
+                continue
+            missing_function_fields = [
+                field for field in REQUIRED_PROCESSING_FUNCTION_FIELDS if field not in function
+            ]
+            if missing_function_fields:
+                processing_function_issues.append(
+                    {
+                        "component_id": component.get("id"),
+                        "function": function_name,
+                        "issue": "missing_processing_function_fields",
+                        "missing_fields": missing_function_fields,
+                    }
+                )
+            examples = function.get("examples", [])
+            if not isinstance(examples, list) or not examples:
+                processing_function_issues.append(
+                    {
+                        "component_id": component.get("id"),
+                        "function": function_name,
+                        "issue": "missing_processing_function_examples",
+                    }
+                )
+                continue
+            for example_index, example in enumerate(examples):
+                if not isinstance(example, dict):
+                    processing_function_issues.append(
+                        {
+                            "component_id": component.get("id"),
+                            "function": function_name,
+                            "example_index": example_index,
+                            "issue": "processing_example_must_be_mapping",
+                        }
+                    )
+                    continue
+                missing_example_fields = [
+                    field for field in REQUIRED_PROCESSING_EXAMPLE_FIELDS if field not in example
+                ]
+                if missing_example_fields:
+                    processing_function_issues.append(
+                        {
+                            "component_id": component.get("id"),
+                            "function": function_name,
+                            "example": example.get("name"),
+                            "issue": "missing_processing_example_fields",
+                            "missing_fields": missing_example_fields,
+                        }
+                    )
+        ui_surfaces = component.get("ui_surfaces", [])
+        if not isinstance(ui_surfaces, list):
+            ui_surface_issues.append(
+                {"component_id": component.get("id"), "issue": "ui_surfaces_must_be_list"}
+            )
+            ui_surfaces = []
+        for index, surface in enumerate(ui_surfaces):
+            surface_name = surface.get("name") if isinstance(surface, dict) else None
+            if not isinstance(surface, dict):
+                ui_surface_issues.append(
+                    {
+                        "component_id": component.get("id"),
+                        "ui_index": index,
+                        "issue": "ui_surface_must_be_mapping",
+                    }
+                )
+                continue
+            missing_surface_fields = [
+                field for field in REQUIRED_UI_SURFACE_FIELDS if field not in surface
+            ]
+            if missing_surface_fields:
+                ui_surface_issues.append(
+                    {
+                        "component_id": component.get("id"),
+                        "ui_surface": surface_name,
+                        "issue": "missing_ui_surface_fields",
+                        "missing_fields": missing_surface_fields,
+                    }
+                )
+            if not _has_html_markup(surface.get("html_mockup")):
+                ui_surface_issues.append(
+                    {
+                        "component_id": component.get("id"),
+                        "ui_surface": surface_name,
+                        "issue": "missing_html_mockup",
+                    }
+                )
     checks.append({"id": "component_required_fields", "status": "pass" if not missing_component_fields else "fail", "details": missing_component_fields})
     checks.append({"id": "orphan_components", "status": "pass" if not orphan_components else "fail", "details": orphan_components})
+    checks.append({"id": "processing_function_examples", "status": "pass" if not processing_function_issues else "fail", "details": processing_function_issues})
+    checks.append({"id": "ui_html_mockups", "status": "pass" if not ui_surface_issues else "fail", "details": ui_surface_issues})
 
     uncovered_features = sorted(feature_ids - covered_features)
     checks.append({"id": "feature_coverage", "status": "pass" if not uncovered_features else "fail", "uncovered_features": uncovered_features})

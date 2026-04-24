@@ -88,7 +88,59 @@ def _load_yaml(path: Path):
     return yaml.safe_load(path.read_text(encoding="utf-8"))
 
 
-def _validate_workflow_prompt(path: Path) -> dict:
+def _as_dict_list(value) -> list[dict]:
+    """Return mapping items from a YAML list-like value."""
+    if not isinstance(value, list):
+        return []
+    return [item for item in value if isinstance(item, dict)]
+
+
+def _simulation_artifact_usage_check(
+    workflow_text: str,
+    simulations_path: Path | None,
+) -> dict | None:
+    """Check that generated workflows name declared simulation artifacts."""
+    if simulations_path is None:
+        return None
+    if not simulations_path.exists():
+        return {
+            "id": "simulation_artifact_usage_signal",
+            "status": "fail",
+            "issue": "simulations_file_missing",
+            "path": str(simulations_path),
+        }
+    simulations_doc = _load_yaml(simulations_path) or {}
+    simulations = _as_dict_list(simulations_doc.get("simulations", []))
+    simulation_ids: list[str] = []
+    artifact_paths: list[str] = []
+    for simulation in simulations:
+        simulation_id = simulation.get("id")
+        if isinstance(simulation_id, str) and simulation_id.strip():
+            simulation_ids.append(simulation_id)
+        for artifact in _as_dict_list(simulation.get("artifacts", [])):
+            artifact_path = artifact.get("path")
+            if isinstance(artifact_path, str) and artifact_path.strip():
+                artifact_paths.append(artifact_path)
+    if not simulation_ids and not artifact_paths:
+        return {
+            "id": "simulation_artifact_usage_signal",
+            "status": "pass",
+            "simulation_ids": [],
+            "artifact_paths": [],
+        }
+    missing_ids = sorted(sim_id for sim_id in simulation_ids if sim_id not in workflow_text)
+    missing_paths = sorted(path for path in artifact_paths if path not in workflow_text)
+    return {
+        "id": "simulation_artifact_usage_signal",
+        "status": "pass" if not missing_ids and not missing_paths else "fail",
+        "simulation_ids": sorted(simulation_ids),
+        "artifact_paths": sorted(artifact_paths),
+        "missing_simulation_ids": missing_ids,
+        "missing_artifact_paths": missing_paths,
+    }
+
+
+def _validate_workflow_prompt(path: Path, simulations_path: Path | None = None) -> dict:
     text = path.read_text(encoding="utf-8")
     lower_text = text.lower()
     checks: list[dict] = []
@@ -203,6 +255,9 @@ def _validate_workflow_prompt(path: Path) -> dict:
             "details": bad_path_entries,
         }
     )
+    simulation_artifact_check = _simulation_artifact_usage_check(text, simulations_path)
+    if simulation_artifact_check is not None:
+        checks.append(simulation_artifact_check)
 
     failed = [check["id"] for check in checks if check["status"] != "pass"]
     return {
@@ -403,8 +458,9 @@ def build_report(
     workflow_prompt_path: Path,
     run_report_path: Path | None = None,
     check_run_report: bool = False,
+    simulations_path: Path | None = None,
 ) -> dict:
-    checks = [_validate_workflow_prompt(workflow_prompt_path)]
+    checks = [_validate_workflow_prompt(workflow_prompt_path, simulations_path)]
     if check_run_report:
         assert run_report_path is not None
         checks.append(_validate_run_report(workflow_prompt_path, run_report_path))
@@ -427,6 +483,11 @@ def main(argv: list[str] | None = None) -> int:
         "--run-report",
         default="docs/implementation/implementation-run-report.yaml",
     )
+    parser.add_argument(
+        "--simulations",
+        default=None,
+        help="Optional PH-005 simulation definitions for artifact usage checks.",
+    )
     parser.add_argument("--check-run-report", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -434,6 +495,7 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.workflow_prompt),
             Path(args.run_report),
             check_run_report=args.check_run_report,
+            simulations_path=Path(args.simulations) if args.simulations else None,
         )
     except Exception as exc:
         print(

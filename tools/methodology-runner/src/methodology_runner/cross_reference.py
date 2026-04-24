@@ -300,12 +300,18 @@ Verify that:
 - Every CMP-NNN in a dependencies list exists as a component.
 - Every INT-NNN source and target reference existing CMP-NNN IDs.
 - If CMP-A depends on CMP-B, at least one INT-* exists between them.
+- Every specified processing function includes at least one example with both
+  input and output values.
+- Every specified UI surface includes an HTML mockup rather than prose-only UI
+  description.
 
 ### 4. Integration
 - Flag orphan components (not in any feature_realization_map and not a
   dependency of any other component).
 - Flag god components (in more than 60% of features).
-- Verify every dependency edge has a corresponding INT-* interaction.\
+- Verify every dependency edge has a corresponding INT-* interaction.
+- Verify processing examples and UI mockups are specific enough for downstream
+  interface contracts and implementation slices.\
 """,
 
     # ------------------------------------------------------------------
@@ -352,40 +358,47 @@ Verify that:
 
 Current phase output: {output_path}
 Prior phase outputs:
+  Phase 2 (Architecture): docs/architecture/architecture-design.yaml
   Phase 1 (Feature Specification): docs/features/feature-specification.yaml
   Phase 4 (Interface Contracts): docs/design/interface-contracts.yaml
 
 ### 1. Traceability
 Read {output_path}.  For each SIM-* simulation:
-- Verify contract_ref points to an existing CTR-NNN in Phase 4.
-Flag any SIM-* with a missing or incorrect contract_ref.
+- Verify component_ref points to an existing CMP-NNN in Phase 2.
+- Verify interface.contract_refs point to existing CTR-NNN IDs in Phase 4.
+Flag any SIM-* with a missing or incorrect component_ref or contract reference.
 
 ### 2. Coverage
-Read docs/design/interface-contracts.yaml.  Collect all CTR-NNN IDs.
-For each CTR-NNN, verify at least one SIM-* has a matching contract_ref.
-Also verify each SIM has at least one happy_path, one error_path, and one
-edge_case scenario.
+Read docs/architecture/architecture-design.yaml. Collect all CMP-NNN components
+where simulation_target is true. For each target component, verify at least one
+SIM-* has a matching component_ref. Verify no SIM-* targets a component whose
+simulation_target is false.
 
 ### 3. Consistency
 Verify that:
 - All SIM-NNN IDs are unique.
-- Scenario `request` payloads match the contract's request_schema field
-  structure.
-- Additional synthetic contract-surface setup outside `request` is allowed only
-  when it mirrors a declared error branch, comparison context, or observed
-  boundary result already justified by the contract.
-- Expected outputs match the contract's response_schema structure.
-- Error path scenarios trigger error types defined in the contract.
+- Every SIM-* has an explicit language interface with language, kind, path,
+  symbol, and contract_refs.
+- Every SIM-* has an implementation path, symbol, implements value, behavior
+  model, integration_scenarios, and compile_commands.
+- Every SIM-* has usage instructions that explain how PH-006 should import,
+  configure, start, fill in, call, or retire the simulation.
+- Every SIM-* lists the created simulation artifacts with path, role,
+  description, and phase_6_usage values.
+- The implementation names or imports the declared interface in a way the
+  compile/check command can verify.
+- The artifact does not use the legacy contract_ref/scenario_bank shape as the
+  primary simulation structure.
 
 ### 4. Integration
-- Verify simulations do not embed implementation-specific knowledge
-  (internal IDs, exact runtime timestamp literals, database details).
-- For contractually dynamic outputs such as current date/time, accept
-  contract-format exemplars plus regex/pattern assertions. Do not require one
-  fixed runtime sample value.
-- Do not treat pseudo-runtime placeholder text such as `<current timestamp>` as
-  realistic boundary-valid observed output.
-- Verify scenario data is realistic given contract constraints.\
+- Verify simulations model system components, not documentation, verification,
+  or test-suite components.
+- Verify simulation behavior is appropriate for the integration points and
+  contracts attached to the simulated component.
+- Verify declared compile_commands are meaningful mechanical checks rather than
+  no-op commands.
+- Verify simulations do not invent unsupported frameworks, services, or hidden
+  implementation details.\
 """,
 
     # ------------------------------------------------------------------
@@ -417,6 +430,12 @@ For each child prompt in the workflow:
 - Flag missing features, contracts, or simulation-backed behaviors only if
   their downstream implementation meaning is not already covered by one or more
   other child prompts.
+- If PH-005 declares component simulations, verify the workflow either consumes
+  those simulations through their explicit interfaces or replaces them with real
+  implementations that satisfy the same interfaces.
+- If PH-005 declares simulation artifacts, verify the workflow names the
+  relevant SIM-* IDs and artifact paths and follows the declared usage
+  instructions for gradual implementation and gradual integration.
 - Verify the workflow ends with a final verification prompt over the assembled
   implementation.
 
@@ -436,6 +455,12 @@ Verify that:
   copy instead of the current worktree.
 - The workflow does not drift back into requirements, architecture, or design
   authoring.
+- The workflow does not treat PH-005 simulations as test-suite simulations;
+  simulations are component stubs that can be used by tests or implementation
+  slices through declared interfaces.
+- The workflow does not invent a separate simulation integration mechanism when
+  PH-005 already declares usage instructions, configuration, startup, imports,
+  commands, URLs, skeleton references, or retirement steps.
 - The workflow requires delivered code to follow project-local best practices,
   including meaningful file-level, type-level, and function-level comments or
   docstrings where appropriate.
@@ -550,7 +575,8 @@ evidence, or any intermediate element that is orphaned.
 ### 1. Traceability
 - Every RI-* must reach at least one verification-evidence row through the full chain.
 - Every FT-* must be realized by at least one CMP-*.
-- Every CTR-* must have at least one SIM-*.
+- Every architecture component with simulation_target: true must have at
+  least one SIM-* component stub.
 - The Phase 6 workflow must end with final verification and the Phase 6 run
   report must describe a truthful child-run outcome.
 

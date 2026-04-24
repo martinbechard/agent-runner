@@ -176,6 +176,16 @@ Context:
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
+Value and fidelity standard:
+- Judge whether the report proves the implemented workspace satisfies the
+  original request as represented by <REQUIREMENTS_INVENTORY> and
+  <FEATURE_SPECIFICATION>.
+- Verification evidence is valuable only when it materially supports the exact
+  requirement meaning, including its qualifiers, scope boundaries, and delivery
+  quality expectations.
+- Do not reward methodology self-validation, generic passing commands, or
+  evidence volume that does not prove the requested software behavior.
+
 Your job is to decide whether the final verification report is truthful and
 phase-ready.
 

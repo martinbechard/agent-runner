@@ -892,7 +892,8 @@ How to detect:
    - RI-* → FT-* via feature specification's source_inventory_refs
    - FT-*/AC-* → CMP-* via solution design's feature_realization_map
    - CMP-* interactions → CTR-* via interface contracts' interaction_ref
-   - CTR-* → SIM-* via simulation definitions' contract_ref
+   - CMP-* → SIM-* via simulation definitions' component_ref
+   - CTR-* → SIM-* via simulation definitions' interface.contract_refs
    - AC-* → UT-*/IT-* via implementation plan's acceptance_criterion_ref
    - AC-* → E2E-* via verification report's acceptance_criteria_refs
 3. At each link, verify the referenced element exists in the target phase's artifact.

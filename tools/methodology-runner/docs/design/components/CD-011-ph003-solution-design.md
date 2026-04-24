@@ -132,6 +132,18 @@ This design explains how `PH-003` works from start to finish.
     unnecessary boundaries.
   - **BECAUSE:** Later contract design depends on real interaction scope.
 
+- **RULE: RULE-7A** Processing functions need examples
+  - **SYNOPSIS:** Every specified processing function includes at least one
+    concrete example with both `input` and `output` values.
+  - **BECAUSE:** Later contract and implementation phases need concrete
+    behavior examples, not only abstract operation names.
+
+- **RULE: RULE-7B** UI surfaces need HTML mockups
+  - **SYNOPSIS:** Every specified UI surface includes an `html_mockup` HTML
+    fragment that shows representative structure and visible content.
+  - **BECAUSE:** UI implementation needs a concrete target that can be carried
+    into contracts and implementation slices.
+
 ## 6. Output Shape
 
 - **ENTITY: ENTITY-1** Top-level output shape
@@ -148,6 +160,8 @@ This design explains how `PH-003` works from start to finish.
     - `technology`
     - `feature_realization_map`
     - `dependencies`
+    - `processing_functions`
+    - `ui_surfaces`
   - **BECAUSE:** Those are the fields downstream phases rely on.
 
 ## 7. Definition Of Good
@@ -171,6 +185,12 @@ This design explains how `PH-003` works from start to finish.
     help downstream contracts and implementation.
   - **BECAUSE:** Later phases depend on a clear component split.
 
+- **RULE: RULE-10A** Concrete function and UI elaboration
+  - **SYNOPSIS:** Processing functions include example cases, and UI surfaces
+    include HTML mockups whenever they are declared.
+  - **BECAUSE:** These concrete examples improve downstream fidelity without
+    changing architecture boundaries.
+
 - **RULE: RULE-11** Deterministic and judge checks both pass
   - **SYNOPSIS:** The phase passes only if the deterministic validator passes
     and the judge returns `VERDICT: pass`.
@@ -187,3 +207,9 @@ This design explains how `PH-003` works from start to finish.
   - **SYNOPSIS:** Run the phase on a one-module architecture and confirm the
     solution design does not invent extra components or fake interactions.
   - **BECAUSE:** The phase must refine the architecture, not redesign it.
+
+- **TEST CASE: TC-3** Processing and UI concreteness
+  - **SYNOPSIS:** Validate that declared processing functions require
+    input/output examples and declared UI surfaces require HTML mockups.
+  - **BECAUSE:** The added fields should be mechanically enforced instead of
+    relying only on semantic review.

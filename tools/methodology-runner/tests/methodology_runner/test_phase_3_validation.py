@@ -25,6 +25,21 @@ def test_build_report_accepts_system_shape_components_for_stack_alignment(tmp_pa
                         "FT-001": "Provides the hello-world runtime behavior.",
                     },
                     "dependencies": [],
+                    "processing_functions": [
+                        {
+                            "name": "render_hello_world",
+                            "purpose": "Formats the greeting output.",
+                            "triggered_by_features": ["FT-001"],
+                            "examples": [
+                                {
+                                    "name": "default greeting",
+                                    "input": {},
+                                    "output": {"stdout": "Hello, world!\n"},
+                                }
+                            ],
+                        }
+                    ],
+                    "ui_surfaces": [],
                 }
             ],
             "interactions": [],
@@ -86,6 +101,21 @@ def test_build_report_prefers_features_served_when_supports_is_mapping(tmp_path:
                         "FT-001": "Provides the hello-world runtime behavior.",
                     },
                     "dependencies": [],
+                    "processing_functions": [
+                        {
+                            "name": "render_hello_world",
+                            "purpose": "Formats the greeting output.",
+                            "triggered_by_features": ["FT-001"],
+                            "examples": [
+                                {
+                                    "name": "default greeting",
+                                    "input": {},
+                                    "output": {"stdout": "Hello, world!\n"},
+                                }
+                            ],
+                        }
+                    ],
+                    "ui_surfaces": [],
                 },
                 {
                     "id": "CMP-002",
@@ -99,6 +129,8 @@ def test_build_report_prefers_features_served_when_supports_is_mapping(tmp_path:
                         "FT-002": "Documents how to run the CLI application.",
                     },
                     "dependencies": ["CMP-001"],
+                    "processing_functions": [],
+                    "ui_surfaces": [],
                 },
                 {
                     "id": "CMP-003",
@@ -113,6 +145,21 @@ def test_build_report_prefers_features_served_when_supports_is_mapping(tmp_path:
                         "FT-003": "Checks the observed stdout output.",
                     },
                     "dependencies": ["CMP-001"],
+                    "processing_functions": [
+                        {
+                            "name": "assert_cli_output",
+                            "purpose": "Compares observed stdout with the expected greeting.",
+                            "triggered_by_features": ["FT-003"],
+                            "examples": [
+                                {
+                                    "name": "matching stdout",
+                                    "input": {"stdout": "Hello, world!\n"},
+                                    "output": {"result": "pass"},
+                                }
+                            ],
+                        }
+                    ],
+                    "ui_surfaces": [],
                 },
             ],
             "interactions": [
@@ -185,3 +232,94 @@ def test_build_report_prefers_features_served_when_supports_is_mapping(tmp_path:
     assert report["overall_status"] == "pass"
     failed = {check["id"] for check in report["checks"] if check["status"] != "pass"}
     assert "stack_alignment" not in failed
+
+
+def test_build_report_rejects_processing_function_without_examples(tmp_path: Path):
+    solution_design = tmp_path / "docs" / "design" / "solution-design.yaml"
+    _write_yaml(
+        solution_design,
+        {
+            "components": [
+                {
+                    "id": "CMP-001",
+                    "name": "Processor",
+                    "responsibility": "Owns request processing.",
+                    "technology": "Python 3",
+                    "feature_realization_map": {
+                        "FT-001": "Processes the request.",
+                    },
+                    "dependencies": [],
+                    "processing_functions": [
+                        {
+                            "name": "process_request",
+                            "purpose": "Transforms a request into a response.",
+                            "triggered_by_features": ["FT-001"],
+                            "examples": [
+                                {
+                                    "name": "missing output",
+                                    "input": {"name": "Ada"},
+                                }
+                            ],
+                        }
+                    ],
+                    "ui_surfaces": [],
+                }
+            ],
+            "interactions": [],
+        },
+    )
+    architecture_design = tmp_path / "docs" / "architecture" / "architecture-design.yaml"
+    _write_yaml(
+        architecture_design,
+        {"components": [{"id": "CMP-001", "features_served": ["FT-001"]}]},
+    )
+    feature_spec = tmp_path / "docs" / "features" / "feature-specification.yaml"
+    _write_yaml(feature_spec, {"features": [{"id": "FT-001", "name": "Processing"}]})
+
+    report = build_report(solution_design, architecture_design, feature_spec)
+
+    assert report["overall_status"] == "fail"
+    assert "processing_function_examples" in report["failed_checks"]
+
+
+def test_build_report_rejects_ui_surface_without_html_mockup(tmp_path: Path):
+    solution_design = tmp_path / "docs" / "design" / "solution-design.yaml"
+    _write_yaml(
+        solution_design,
+        {
+            "components": [
+                {
+                    "id": "CMP-001",
+                    "name": "Web UI",
+                    "responsibility": "Owns the user-facing screen.",
+                    "technology": "HTML",
+                    "feature_realization_map": {
+                        "FT-001": "Shows the greeting screen.",
+                    },
+                    "dependencies": [],
+                    "processing_functions": [],
+                    "ui_surfaces": [
+                        {
+                            "name": "Greeting screen",
+                            "purpose": "Displays the greeting to the user.",
+                            "triggered_by_features": ["FT-001"],
+                            "html_mockup": "Greeting text only",
+                        }
+                    ],
+                }
+            ],
+            "interactions": [],
+        },
+    )
+    architecture_design = tmp_path / "docs" / "architecture" / "architecture-design.yaml"
+    _write_yaml(
+        architecture_design,
+        {"components": [{"id": "CMP-001", "features_served": ["FT-001"]}]},
+    )
+    feature_spec = tmp_path / "docs" / "features" / "feature-specification.yaml"
+    _write_yaml(feature_spec, {"features": [{"id": "FT-001", "name": "Web UI"}]})
+
+    report = build_report(solution_design, architecture_design, feature_spec)
+
+    assert report["overall_status"] == "fail"
+    assert "ui_html_mockups" in report["failed_checks"]

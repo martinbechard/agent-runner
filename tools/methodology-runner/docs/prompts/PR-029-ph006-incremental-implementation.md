@@ -16,6 +16,8 @@ docs/design/solution-design.yaml
 python-module:methodology_runner.phase_6_validation
 --workflow-prompt
 docs/implementation/implementation-workflow.md
+--simulations
+docs/simulations/simulation-definitions.yaml
 
 ### Generation Prompt
 
@@ -51,6 +53,25 @@ Important implementation discipline:
   abstract specification layer.
 - The child workflow must produce real code, tests, and project files in the
   project worktree.
+- Treat PH-005 simulations as component stubs with explicit language interfaces,
+  not as simulations of test suites. Child prompts may use those stubs to focus
+  integration tests while dependent components are still unbuilt.
+- Treat each PH-005 simulation's `artifacts` list and `usage` block as the
+  authoritative handoff for gradual implementation. When `simulations` is an
+  empty list, no simulation-backed integration slice is required. When
+  simulations exist, child prompts must name the relevant SIM-* IDs and
+  simulation artifact paths they consume, configure, run, fill in, or retire.
+- For skeleton simulations, use the declared direct source reference as the
+  implementation target that will be filled out or replaced. For stubs, mocks,
+  fakes, adapters, or service simulations, use the declared usage instructions,
+  configuration, startup steps, import path, command, or URL rather than
+  inventing a new integration mechanism.
+- When a slice consumes a simulated component, require the code or test to use
+  the declared PH-005 interface through dependency injection, an API, a library,
+  a service boundary, a command boundary, or the project-local equivalent.
+- When a slice replaces a simulated component with a real implementation, require
+  the same interface and relevant integration checks to prove the real component
+  can substitute for the simulation.
 - The child workflow must evaluate each child prompt only against that prompt's
   own generator text and the concrete project files it creates or updates.
   It must not rely on any parent-phase execution report such as
@@ -117,6 +138,9 @@ Output contract:
   Prompt.
 - Each implementation child prompt must:
   - name the concrete project files it is expected to create or update
+  - name any SIM-* component stub, interface path, implementation path,
+    usage instructions, created simulation artifact paths, and compile command
+    it consumes, configures, fills in, or retires
   - require the same exact relevant test command to be run before and after
     the implementation change in the same prompt
   - require changed code to include appropriate file-level, type-level, and
@@ -189,6 +213,13 @@ Acceptance requirements:
   the path values.
 - At least one implementation prompt must explicitly require the test-defining
   change to be followed by a failing test run before code changes.
+- When PH-005 declares component simulations, at least one implementation prompt
+  must use or retire a declared simulation through its explicit interface rather
+  than treating the simulation as a test-suite artifact.
+- When PH-005 declares simulation artifacts, the child workflow must list the
+  relevant SIM-* IDs and artifact paths from `artifacts`, and must follow the
+  corresponding `usage` instructions for imports, dependency injection,
+  configuration, startup, commands, URLs, skeleton fill-in, or retirement.
 - At least one implementation prompt must explicitly require a failing run of
   the same exact test command before code changes and a passing rerun of that
   same exact test command after code changes.
@@ -273,6 +304,15 @@ Context:
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
+Value and fidelity standard:
+- Judge whether executing the workflow would produce real software changes that
+  satisfy the requested behavior carried by the upstream artifacts.
+- A child prompt is valuable only if it creates or verifies concrete code,
+  tests, docs, or project files needed to deliver the requested software.
+- Do not reward prompts that only create more planning artifacts, compliance
+  prose, or generic test activity that does not materially improve delivery
+  fidelity.
+
 Your job is to decide whether the child implementation workflow is phase-ready.
 
 Review method:
@@ -333,6 +373,17 @@ Focus your semantic review on these failure modes:
    - Flag workflows for application deliverables that do not require README
      setup and operation entries such as prerequisites, setup, configuration,
      run/start commands, test/verification commands, and operating notes.
+12. Simulation misuse:
+   - Flag workflows that treat PH-005 simulations as test-suite simulations
+     instead of component stubs with explicit interfaces.
+   - Flag workflows that ignore declared simulation interfaces when building a
+     consumer component or replacing a simulated component with a real one.
+   - Flag workflows that ignore the PH-005 `artifacts` list or `usage`
+     instructions when simulations exist.
+   - Flag workflows that invent a different integration mechanism instead of
+     using the declared skeleton reference, dependency-injection binding,
+     configuration, startup command, import path, service URL, or retirement
+     instruction.
 
 Review instructions:
 - Treat this phase as workflow authoring for real implementation, not as a
@@ -369,6 +420,8 @@ docs/implementation/implementation-workflow.md
 python-module:methodology_runner.phase_6_validation
 --workflow-prompt
 docs/implementation/implementation-workflow.md
+--simulations
+docs/simulations/simulation-definitions.yaml
 --run-report
 docs/implementation/implementation-run-report.yaml
 --check-run-report
@@ -525,6 +578,16 @@ Context:
 
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
+
+Value and fidelity standard:
+- Judge whether the report gives a truthful, useful execution record for final
+  verification of the requested software.
+- A report entry is valuable only if it preserves concrete evidence that helps
+  PH-007 decide what was changed, what was tested, and whether the child
+  workflow actually completed.
+- Do not reward verbose but unverifiable reporting, normalized command
+  summaries that lose exact evidence, or success claims that are detached from
+  the real child-run outcome.
 
 Your job is to decide whether the child implementation workflow has been run
 successfully and reported truthfully.

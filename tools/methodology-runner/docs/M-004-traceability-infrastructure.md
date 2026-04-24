@@ -78,12 +78,12 @@ element_type_registry:
         prefix: "SIM"
         artifact_path: "docs/simulations/simulation-definitions.yaml"
         collection_path: "$.simulations"
-        id_field: "simulation_id"
-      - name: "scenario"
-        prefix: "SC"
+        id_field: "id"
+      - name: "integration_scenario"
+        prefix: "SCN"
         artifact_path: "docs/simulations/simulation-definitions.yaml"
-        collection_path: "$.simulations[*].scenario_bank"
-        id_field: "scenario_id"
+        collection_path: "$.simulations[*].integration_scenarios"
+        id_field: "id"
 
   - phase: 5
     types:

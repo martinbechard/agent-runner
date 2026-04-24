@@ -153,6 +153,17 @@ Context:
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
+Value and fidelity standard:
+- Judge whether the contracts preserve the requested behavior carried by
+  <FEATURE_SPECIFICATION> and make the <SOLUTION_DESIGN> interactions precise
+  enough for simulations and implementation.
+- A contract detail is valuable only if it clarifies a real boundary behavior,
+  payload, failure mode, or invariant that a consumer, simulated component, or
+  implementation must honor.
+- Do not reward exhaustive-looking schemas, operations, or error lists that add
+  unsupported scope, hidden implementation internals, or detail that no
+  downstream phase can use.
+
 Module-local judge context:
 
 - Review for missing contracts, type holes, weak or missing error models,

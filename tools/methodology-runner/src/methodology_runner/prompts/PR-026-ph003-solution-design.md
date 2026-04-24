@@ -51,6 +51,14 @@ Embedded directives for this step:
 - Give each component one clear ownership statement. Avoid overlapping or
   mixed responsibilities.
 - Map each feature only to the components that materially realize it.
+- For every component, declare `processing_functions` and `ui_surfaces`. Use
+  an empty list when the component has no processing functions or UI surfaces.
+- For every specified processing function, include at least one concrete
+  example with both `input` and `output` values. Use `input: {}` for
+  no-argument functions or commands, but still provide a concrete `output`.
+- For every specified UI surface, include an `html_mockup` field containing an
+  HTML fragment that shows the steady-state user interface structure and
+  representative visible content.
 - Add interactions for every real dependency handoff that crosses component
   boundaries, including human-mediated handoffs that the architecture treats
   as real integration points.
@@ -95,6 +103,22 @@ components:
     feature_realization_map:
       FT-NNN: "How this component contributes"
     dependencies: ["CMP-NNN", "..."]
+    processing_functions:
+      - name: "function_or_operation_name"
+        purpose: "What this processing function computes or transforms"
+        triggered_by_features: ["FT-NNN", "..."]
+        examples:
+          - name: "example name"
+            input: {}
+            output: {}
+    ui_surfaces:
+      - name: "UI surface name"
+        purpose: "What user-facing interaction this UI owns"
+        triggered_by_features: ["FT-NNN", "..."]
+        html_mockup: |
+          <main>
+            <h1>Representative UI heading</h1>
+          </main>
 interactions:
   - id: "INT-NNN"
     source: "CMP-NNN"
@@ -115,6 +139,25 @@ Acceptance requirements:
   technology
   feature_realization_map
   dependencies
+  processing_functions
+  ui_surfaces
+- Every `processing_functions` value must be a list. Each item must contain:
+  name
+  purpose
+  triggered_by_features
+  examples
+- Every processing function `examples` list must be non-empty. Each example
+  must contain:
+  name
+  input
+  output
+- Every `ui_surfaces` value must be a list. Each item must contain:
+  name
+  purpose
+  triggered_by_features
+  html_mockup
+- Every UI `html_mockup` must contain HTML markup. Do not describe a UI in
+  prose only.
 - Every FT-* from docs/features/feature-specification.yaml must appear in at
   least one component's feature_realization_map.
 - feature_realization_map values must explain the component's contribution and
@@ -164,6 +207,18 @@ Context:
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
+Value and fidelity standard:
+- Judge whether the solution design preserves the requested behavior carried by
+  <FEATURE_SPECIFICATION> while refining <ARCHITECTURE_DESIGN> into ownership
+  and interaction decisions that downstream contracts and implementation can
+  use.
+- A design element is valuable only if it clarifies responsibility,
+  dependency, or feature realization in a way that affects contracts,
+  simulations, implementation, or verification.
+- Do not reward decomposition, interactions, or naming churn that looks
+  elaborate but does not improve fidelity to the original request or downstream
+  delivery.
+
 Module-local judge context:
 Embedded directives for this step:
 <Structured review directives>
@@ -172,8 +227,9 @@ Embedded directives for this step:
 
 
 - Review for responsibility overlap, weak or missing feature realization,
-  invented interactions, inconsistent dependencies, and implementation-detail
-  leakage that belongs to a later phase.
+  missing processing-function examples, missing UI HTML mockups, invented
+  interactions, inconsistent dependencies, and implementation-detail leakage
+  that belongs to a later phase.
 - Review continuity with existing steady-state design docs when they exist.
   Flag unjustified component renames, decomposition churn, or ownership drift,
   but do not block deliberate evolution that is supported by the current
@@ -184,7 +240,7 @@ Your job is to decide whether the generated solution design is phase-ready.
 Review method:
 - Iterate through components in CMP-* order.
 - For each component, review responsibility, technology, feature_realization_map,
-  and dependencies together.
+  dependencies, processing_functions, and ui_surfaces together.
 - Then iterate through interactions in INT-* order.
 - Before flagging any feature realization, interaction, or ownership boundary
   as missing, check whether that same downstream-actionable meaning is already
@@ -203,20 +259,28 @@ Focus your semantic review on these failure modes:
 3. Unnecessary decomposition:
    - Flag components or interactions that materially complicate the design
      without improving ownership clarity or downstream implementation choices.
-4. Missing interactions:
+4. Missing processing examples:
+   - Flag any specified processing function that lacks at least one concrete
+     example with both input and output values.
+   - Do not flag `input: {}` for a no-argument function or command when the
+     output is concrete.
+5. Missing UI mockups:
+   - Flag any specified UI surface whose `html_mockup` is absent, prose-only,
+     or not an HTML fragment.
+6. Missing interactions:
    - Flag cases where a dependency implies meaningful runtime or data flow but
      no INT-* interaction captures it.
-5. Unsupported technology detail:
+7. Unsupported technology detail:
    - Flag technology assignments that are not at least indirectly supported by
      the stack manifest and feature specification.
-6. Untraced features:
+8. Untraced features:
    - Flag any FT-* feature that is not materially realized by at least one
      component.
 
 Review instructions:
 - Use the deterministic validation report as authoritative for structural
-  checks, reference existence, dependency-to-interaction coverage, and feature
-  coverage counts.
+  checks, processing example shape, UI HTML mockup shape, reference existence,
+  dependency-to-interaction coverage, and feature coverage counts.
 - Treat this phase as an allowed elaboration layer.
 - Only ask for a change when the current design is wrong, contradictory,
   materially unsupported, or the change would materially affect downstream

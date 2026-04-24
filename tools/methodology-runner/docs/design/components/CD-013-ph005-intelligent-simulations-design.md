@@ -2,291 +2,230 @@
 
 ## 1. Finality
 
-This design explains how `PH-005` works from start to finish.
+This design explains how `PH-005` produces component simulation stubs.
 
-- **GOAL: GOAL-1** Produce the simulation definitions
-  - **SYNOPSIS:** `PH-005` turns the interface contracts into one
-    acceptance-ready `docs/simulations/simulation-definitions.yaml` file.
-  - **BECAUSE:** Later phases depend on this file.
+- **GOAL: GOAL-1** Produce compile-checked component simulations
+  - **SYNOPSIS:** `PH-005` turns architecture simulation targets into explicit
+    language interfaces, simulation implementations, and a durable manifest at
+    `docs/simulations/simulation-definitions.yaml`.
+  - **BECAUSE:** Later implementation and integration-test slices need
+    substitutable component stubs, not scenario-only descriptions.
 
 ## 2. Inputs And Outputs
 
 This section names the files that the phase uses.
 
-- **FILE: FILE-1** Interface contracts
+- **FILE: FILE-1** Architecture design
   - **SYNOPSIS:** Primary input:
-    - `docs/design/interface-contracts.yaml`
-  - **BECAUSE:** `PH-005` produces simulations directly from the contract
-    definitions.
+    - `docs/architecture/architecture-design.yaml`
+  - **BECAUSE:** The architecture declares which `CMP-*` components are real
+    simulation targets.
 
-- **FILE: FILE-2** Feature specification
+- **FILE: FILE-2** Interface contracts
+  - **SYNOPSIS:** Behavior input:
+    - `docs/design/interface-contracts.yaml`
+  - **BECAUSE:** Contracts describe the operations and integration behavior the
+    simulated component must expose.
+
+- **FILE: FILE-3** Feature specification
   - **SYNOPSIS:** Traceability input:
     - `docs/features/feature-specification.yaml`
-  - **BECAUSE:** The simulations must still support feature intent.
+  - **BECAUSE:** Simulations must still support feature intent.
 
-- **FILE: FILE-3** Simulation definitions
-  - **SYNOPSIS:** Primary output:
+- **FILE: FILE-4** Simulation manifest
+  - **SYNOPSIS:** Primary manifest output:
     - `docs/simulations/simulation-definitions.yaml`
-  - **BECAUSE:** This is the phase output.
+  - **BECAUSE:** Later phases need one stable index of the generated simulation
+    interfaces, implementations, scenarios, and compile commands.
 
-- **FILE: FILE-4** Prompt-runner module
-  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-028-ph005-intelligent-simulations.md`
-    with:
-    - embedded directive blocks for traceability and simulation review discipline
-    - fixed generic prompt-runner generator and judge roles
-    - fixed phase input and output paths
-  - **BECAUSE:** `PH-005` uses one predefined prompt-runner module.
+- **FILE: FILE-5** Simulation source files
+  - **SYNOPSIS:** Interface and implementation files declared by the manifest.
+  - **BECAUSE:** The phase must produce compileable stubs, not only YAML.
 
 ## 3. Technical Directives
 
-This section states the technical directives that shape the phase
-implementation.
+This section states the technical directives that shape the phase.
 
-- **RULE: RULE-1** Read the contracts and feature spec
-  - **SYNOPSIS:** The phase must read `docs/design/interface-contracts.yaml`
-    and `docs/features/feature-specification.yaml`.
-  - **BECAUSE:** The contracts are the main source, and the feature spec keeps
-    simulations tied to user-facing intent.
+- **RULE: RULE-1** Simulate system components
+  - **SYNOPSIS:** A `SIM-*` entry targets a real `CMP-*` component with
+    `simulation_target: true`.
+  - **BECAUSE:** The phase exists to let large systems be built in steps by
+    substituting unavailable components.
 
-- **RULE: RULE-2** Use the predefined prompt module
-  - **SYNOPSIS:** The phase must use
-    `tools/methodology-runner/src/methodology_runner/prompts/PR-028-ph005-intelligent-simulations.md`.
-  - **BECAUSE:** `PH-005` should not build a new prompt module for each run.
+- **RULE: RULE-2** Do not simulate tests or documentation
+  - **SYNOPSIS:** Documentation, verification, and test-suite components are
+    consumers of simulations, not simulation targets.
+  - **BECAUSE:** Simulating a test suite does not provide a substitutable system
+    component for integration work.
 
-- **RULE: RULE-3** Keep the phase directives inside the module
-  - **SYNOPSIS:** The prompt module must contain the PH-005 simulation
-    directives and embedded traceability/review guidance that the generic
-    prompt-runner roles consume.
-  - **BECAUSE:** The module should be self-contained.
+- **RULE: RULE-3** Require explicit language interfaces
+  - **SYNOPSIS:** Every simulation declares an interface language, kind, path,
+    symbol, and contract references.
+  - **BECAUSE:** Downstream code needs a concrete boundary for dependency
+    injection, APIs, libraries, services, commands, or equivalent integrations.
 
-- **RULE: RULE-4** Write one simulation definitions file
-  - **SYNOPSIS:** The phase must write exactly one file at
-    `docs/simulations/simulation-definitions.yaml`.
-  - **BECAUSE:** Later phases need one stable input file.
+- **RULE: RULE-4** Compile or check every simulation
+  - **SYNOPSIS:** Every simulation declares at least one command that proves the
+    interface and implementation compile or satisfy the interface.
+  - **BECAUSE:** Mechanical validation should catch interface drift instead of
+    relying on manual artifact review.
+
+- **RULE: RULE-5** Match behavior sophistication to integration need
+  - **SYNOPSIS:** Simple boundaries may use simple fakes, while stateful or
+    multi-outcome contracts require stateful or configurable simulations.
+  - **BECAUSE:** A simulation is useful only when it can exercise the consumer
+    integration scenarios implied by the architecture and contracts.
+
+- **RULE: RULE-5A** Document simulation usage
+  - **SYNOPSIS:** Every simulation declares how PH-006 should use it, including
+    whether it is a skeleton to fill directly or a stub, mock, fake, adapter,
+    or service consumed through configuration, startup, import, command,
+    dependency injection, or URL.
+  - **BECAUSE:** Gradual implementation needs clear handoff instructions, not
+    only generated files.
+
+- **RULE: RULE-5B** List all generated simulation artifacts
+  - **SYNOPSIS:** Every generated interface, implementation, configuration,
+    fixture, README, usage document, or support file appears in the simulation's
+    `artifacts` list with a `phase_6_usage` instruction.
+  - **BECAUSE:** PH-006 uses that list to plan gradual integration and to know
+    which simulation assets to consume, fill in, or retire.
+
+- **RULE: RULE-9** Empty target set is a skipped phase
+  - **SYNOPSIS:** If every architecture component declares
+    `simulation_target: false`, PH-005 writes `simulations: []` and records the
+    phase as skipped.
+  - **BECAUSE:** A no-op simulation phase should not consume model iterations,
+    but downstream phases still need a canonical manifest and satisfied
+    predecessor status.
 
 ## 4. Workflow
 
 This section describes the phase steps.
 
-- **PROCESS: PROCESS-1** Define the phase contract
-  - **SYNOPSIS:** `PH-005` defines the input files, output path, simulation
-    rules, judge rules, and output shape.
-  - **READS:** `tools/methodology-runner/src/methodology_runner/phases.py`
-    - **BECAUSE:** The phase registry is the source of truth.
-  - **BECAUSE:** The run needs this contract before it starts.
+- **PROCESS: PROCESS-1** Select simulation targets
+  - **SYNOPSIS:** Read the architecture and collect every component with
+    `simulation_target: true`.
+  - **BECAUSE:** Component selection belongs to the architecture, not to ad hoc
+    PH-005 inference.
 
-- **PROCESS: PROCESS-2** Execute the prompts with prompt-runner
-  - **SYNOPSIS:** The methodology runner runs the predefined PH-005 module
-    with prompt-runner.
-  - **USES:** `tools/methodology-runner/src/methodology_runner/orchestrator.py`
-    - **BECAUSE:** The orchestrator owns the phase lifecycle and
-      prompt-runner invocation.
-  - **USES:** `tools/prompt-runner/src/prompt_runner/runner.py`
-    - **BECAUSE:** That module executes the generator/judge revision loop.
-  - **PROMPT-MODULE: PMOD-1** PH-005 prompt-runner input file
-    - **SYNOPSIS:** The PH-005 prompt-runner input file is
-      `tools/methodology-runner/src/methodology_runner/prompts/PR-028-ph005-intelligent-simulations.md`.
-    - **BECAUSE:** The phase uses one fixed module shape.
-    - **READS:** `docs/design/interface-contracts.yaml`
-      - **BECAUSE:** That file is the main source for simulation design.
-    - **READS:** `docs/features/feature-specification.yaml`
-      - **BECAUSE:** That file keeps simulations tied to feature intent.
-    - **RULE:** Just-in-time source embedding
-      - **SYNOPSIS:** The generator and judge embed `docs/design/interface-contracts.yaml` and `docs/features/feature-specification.yaml` inline in `Context` with `{{INCLUDE:...}}`.
-      - **BECAUSE:** The simulation prompt should present upstream contract and feature context where the simulation task uses it.
-    - **AGENT:** `Generator Agent`
-      - **SYNOPSIS:** Embedded generator definition in the PH-005 module.
-      - **BECAUSE:** The generator setup is fixed for this phase.
-      - **RULE:** Embedded PH-005 generation directives
-        - **SYNOPSIS:** Keep simulations grounded in contract behavior and
-          upstream feature intent through prompt-embedded traceability guidance.
-        - **BECAUSE:** `PH-005` must stay traceable without runtime skill discovery.
-      - **RULE:** Prompt-local simulation directives
-        - **SYNOPSIS:** The module itself defines scenario coverage, contract-faithful
-          assertions, and synthetic-setup limits.
-        - **BECAUSE:** PH-005-specific generation behavior now lives in the
-          prompt, not in a phase-only skill.
-      - **RULE:** Concrete invocation examples when contracts make them concrete
-        - **SYNOPSIS:** When a contract already makes the invocation boundary concrete enough for a realistic example, the generator must use a realistic concrete command string or argv value rather than an abstract placeholder token.
-        - **BECAUSE:** Cross-reference and downstream implementation planning need simulations grounded in the same invocation surface the contracts already declare.
-      - **RULE:** Dynamic success outputs use format exemplars plus assertions
-        - **SYNOPSIS:** For contractually dynamic success outputs such as current date/time, the generator must not freeze one exact runtime literal and must not use fake placeholder text as if it were a real observed value. It should instead use the contract's own format exemplar text in the response fields and let assertions carry the exact pattern requirements.
-        - **BECAUSE:** PH-005 must stay at the contract layer for dynamic values without inventing one arbitrary runtime sample or authoring unrealistic placeholder output.
-    - **AGENT:** `Judge Agent`
-      - **SYNOPSIS:** Embedded judge definition in the PH-005 module.
-      - **BECAUSE:** The judge setup is fixed for this phase.
-      - **RULE:** Embedded PH-005 review directives
-        - **BECAUSE:** The judge uses prompt-embedded traceability and review
-          guidance instead of separate runtime skill loading.
-      - **RULE:** Prompt-local simulation review directives
-        - **SYNOPSIS:** The module itself defines the PH-005 review checks for
-          weak assertions, realism defects, missing error coverage, and leakage.
-        - **BECAUSE:** PH-005-specific review behavior now lives in the
-          prompt, not in a phase-only skill.
-      - **RULE:** Placeholder invocations are only allowed when the contract stays abstract
-        - **SYNOPSIS:** The judge must accept placeholder command or argv values only when the contract does not already support a realistic concrete invocation example.
-        - **BECAUSE:** PH-005 should not pass simulations that avoid choosing concrete values where the interface contract already makes the invocation surface concrete enough to do so faithfully.
-      - **RULE:** Dynamic success outputs must be modeled semantically
-        - **SYNOPSIS:** The judge must accept contract-format exemplars plus regex or pattern assertions for dynamic success outputs such as current date/time, and must reject both exact runtime literals and fake placeholder text when they are presented as successful observed values.
-        - **BECAUSE:** PH-005 should preserve dynamic contract meaning without leaking one transient runtime sample or authoring unrealistic success fixtures.
-    - **PROMPT-PAIR: Prompt 1**
-      - **PROMPT:** `Generator`
-        - **SYNOPSIS:** Reads the interface contracts and feature spec and
-          writes `docs/simulations/simulation-definitions.yaml`.
-        - **BECAUSE:** The generator owns artifact production.
-        - **USES:** `Generator Agent`
-          - **BECAUSE:** The prompt pair should use the embedded generator
-            definition already declared in the prompt module.
-        - **USES:** embedded PH-005 simulation directives
-          - **BECAUSE:** The generator's specialized guidance is embedded in
-            the prompt body.
-        - **USES:** prompt-local PH-005 simulation directives
-          - **BECAUSE:** The generator's phase-specific behavior is embedded
-            in the module.
-      - **PROMPT:** `Judge`
-        - **SYNOPSIS:** Reviews contract coverage, scenario quality, error-path
-          coverage, and implementation leakage.
-        - **BECAUSE:** The judge decides whether the file passes or needs
-          another revision.
-        - **RULE:** Just-in-time artifact embedding
-          - **SYNOPSIS:** The judge embeds the current simulation definitions inline in `Context` with `{{RUNTIME_INCLUDE:docs/simulations/simulation-definitions.yaml}}`.
-          - **BECAUSE:** The simulation artifact under review should appear where the judge compares it to the contract and feature sources.
-        - **USES:** `Judge Agent`
-          - **BECAUSE:** The prompt pair should use the embedded judge
-            definition already declared in the prompt module.
-        - **USES:** embedded PH-005 review directives
-          - **BECAUSE:** The judge's specialized guidance is embedded in the
-            prompt body.
-        - **USES:** prompt-local PH-005 review directives
-          - **BECAUSE:** The judge's phase-specific behavior is embedded in
-            the module.
-  - **READS:** embedded prompt-body directive blocks
-    - **BECAUSE:** `PH-005` keeps its fixed specialized guidance in the module.
-  - **LAUNCHES:** generator session
-    - **BECAUSE:** The artifact must be produced before it can be judged.
-  - **LAUNCHES:** judge session
-    - **BECAUSE:** The artifact must be reviewed for phase readiness and
-      either passed, revised, or escalated.
-  - **RESUMES:** the same artifact path across iterations
-    - **BECAUSE:** `PH-005` revises the same output file. It does not create
-      draft variants.
+- **PROCESS: PROCESS-5** Skip empty target sets
+  - **SYNOPSIS:** When the selected target set is empty, the runner writes the
+    canonical empty manifest and records `.run-files/PH-005-intelligent-simulations/skip-reason.txt`.
+  - **BECAUSE:** The harness can decide this mechanically from architecture
+    metadata without asking the generator to invent non-existent simulations.
 
-- **PROCESS: PROCESS-3** Accept or reject the phase result
-  - **SYNOPSIS:** The phase is accepted only when the prompt-runner loop passes
-    and the resulting artifact is accepted as the phase output.
-  - **VALIDATES:** `docs/simulations/simulation-definitions.yaml`
-    - **BECAUSE:** The output file must exist before the phase can pass.
-  - **USES:** `tools/methodology-runner/src/methodology_runner/phase_5_validation.py`
-    - **BECAUSE:** `PH-005` uses deterministic checks for schema, contract
-      coverage, scenario type coverage, and top-level shape.
-  - **BECAUSE:** `PH-005` passes only when both the deterministic checks and
-    the judge review pass.
-  - **PRODUCES:** `docs/simulations/simulation-definitions.yaml`
-    - **BECAUSE:** That artifact is the durable output consumed by `PH-006`.
+- **PROCESS: PROCESS-2** Generate interfaces and simulations
+  - **SYNOPSIS:** For each target component, write an interface file, a
+    simulation implementation file, and a `SIM-*` manifest entry.
+  - **BECAUSE:** The manifest must point to real files that downstream work can
+    import or call.
 
-## 5. Constraints
+- **PROCESS: PROCESS-2A** Document usage handoff
+  - **SYNOPSIS:** Add usage instructions and artifact-list entries that tell
+    PH-006 how to use, configure, start, fill in, or retire the simulation.
+  - **BECAUSE:** Implementation slices need explicit simulation handoff data to
+    use stubs and mocks intentionally rather than rediscovering integration
+    mechanics.
 
-This section states the main limits on the phase.
+- **PROCESS: PROCESS-3** Validate mechanically
+  - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/phase_5_validation.py`
+    checks manifest shape, target coverage, path existence, and declared
+    compile commands.
+  - **BECAUSE:** Interface compliance must be checked by executable commands
+    where possible.
 
-- **RULE: RULE-5** No implementation leakage
-  - **SYNOPSIS:** Expected outputs and validation rules must be derivable from
-    contract behavior, not hidden implementation details.
-  - **BECAUSE:** Simulations are a contract layer, not an implementation
-    layer.
+- **PROCESS: PROCESS-4** Judge semantic usefulness
+  - **SYNOPSIS:** The PH-005 judge checks whether each simulation models the
+    exposed behavior needed by integration consumers.
+  - **BECAUSE:** A stub can compile while still being too thin for the required
+    integration scenario.
 
-- **RULE: RULE-5A** No volatile-literal or fake-placeholder success fixtures
-  - **SYNOPSIS:** For contractually dynamic outputs such as current date/time,
-    success and boundary-valid scenarios must not use one exact runtime literal
-    and must not use fake placeholder strings as if they were real observed
-    output.
-  - **BECAUSE:** Dynamic outputs must remain contract-faithful without becoming
-    either implementation-specific or unrealistic.
-
-- **RULE: RULE-6** No thin scenarios
-  - **SYNOPSIS:** Assertions must check meaningful response content, not only
-    trivial status flags or presence checks.
-  - **BECAUSE:** Later verification depends on simulations that exercise real
-    semantics.
-
-- **RULE: RULE-6A** Synthetic setup must stay at the contract surface
-  - **SYNOPSIS:** Scenario inputs may include synthetic setup outside the raw
-    request payload only when that setup mirrors a declared error branch,
-    comparison context, or observed boundary result already justified by the
-    contract.
-  - **BECAUSE:** PH-005 sometimes needs contract-surface scaffolding to model
-    mismatch or observed-output violations, but it must not smuggle in
-    implementation internals.
-
-- **RULE: RULE-7** One fixed prompt module
-  - **SYNOPSIS:** `PH-005` must use the predefined prompt module instead of
-    building a new module per run.
-  - **BECAUSE:** The module shape should stay stable.
-
-## 6. Output Shape
+## 5. Output Shape
 
 This section states what the output file contains.
 
 - **ENTITY: ENTITY-1** Top-level output shape
   - **SYNOPSIS:** The top-level section is:
     - `simulations`
-  - **BECAUSE:** That is the schema required by the PH-005 phase contract.
+  - **BECAUSE:** That is the manifest section consumed by later phases.
 
 - **ENTITY: ENTITY-2** Simulation fields
   - **SYNOPSIS:** Each simulation contains:
     - `id`
-    - `contract_ref`
-    - `description`
-    - `scenario_bank`
-    - `llm_adjuster`
+    - `component_ref`
+    - `simulated_component`
+    - `purpose`
+    - `interface`
+    - `implementation`
+    - `usage`
+    - `artifacts`
+    - `integration_scenarios`
+    - `compile_commands`
     - `validation_rules`
-  - **BECAUSE:** Those are the fields downstream phases rely on.
+  - **BECAUSE:** These fields connect a component target to compileable stub
+    files and integration behavior.
 
-## 7. Definition Of Good
+## 6. Definition Of Good
 
 This section states when the phase passes.
 
-- **RULE: RULE-8** Contract coverage
-  - **SYNOPSIS:** Every `CTR-*` contract must have at least one matching
-    `SIM-*` simulation.
-  - **BECAUSE:** Later phases can only plan and build against covered
-    contracts.
+- **RULE: RULE-6** Component target coverage
+  - **SYNOPSIS:** Every architecture simulation target has at least one `SIM-*`
+    entry, no non-target component has a simulation, and an empty target set
+    uses the canonical `simulations: []` manifest.
+  - **BECAUSE:** The manifest must match the architecture boundary decisions.
 
-- **RULE: RULE-9** Scenario breadth
-  - **SYNOPSIS:** Every simulation must include at least one happy path, one
-    error path, and one edge case scenario.
-  - **BECAUSE:** Later phases depend on broad scenario coverage.
+- **RULE: RULE-7** Interface implementation proof
+  - **SYNOPSIS:** Interface files and implementation files exist and every
+    compile command exits successfully.
+  - **BECAUSE:** Compile failure is direct evidence that the simulation cannot
+    serve as an integration substitute.
 
-- **RULE: RULE-10** Meaningful assertions
-  - **SYNOPSIS:** Assertions must verify contract semantics, not just generic
-    success flags.
-  - **BECAUSE:** Later planning and verification depend on strong simulation
-    signals.
+- **RULE: RULE-8** No legacy scenario-only simulation shape
+  - **SYNOPSIS:** The artifact must not use `contract_ref`, `scenario_bank`, or
+    `llm_adjuster` as the primary simulation structure.
+  - **BECAUSE:** That shape simulates contract scenarios rather than
+    substitutable components.
 
-- **RULE: RULE-11** Deterministic and judge checks both pass
-  - **SYNOPSIS:** The phase passes only if the deterministic validator passes
-    and the judge returns `VERDICT: pass`.
-  - **BECAUSE:** `PH-005` needs both shape checks and content checks.
+- **RULE: RULE-8A** Complete PH-006 handoff
+  - **SYNOPSIS:** Usage instructions and artifact entries are complete enough
+    for PH-006 to consume or retire simulations without inventing a new
+    integration mechanism.
+  - **BECAUSE:** The value of a simulation is realized when implementation
+    slices can use it for gradual integration.
 
-## 8. Test Cases
+## 7. Test Cases
 
 This section lists the tests the phase design expects.
 
-- **TEST CASE: TC-1** Contract coverage
-  - **SYNOPSIS:** Run the phase on a contract set with known `CTR-*` items and
-    confirm every contract has at least one `SIM-*` simulation.
-  - **BECAUSE:** The design depends on full contract coverage.
+- **TEST CASE: TC-1** Compileable component simulation
+  - **SYNOPSIS:** Given a Python component simulation target, confirm PH-005
+    validation passes when the manifest points to an interface, a fake
+    implementation, and a successful compile/import command.
+  - **BECAUSE:** The validator must prove the new component-stub contract.
 
-- **TEST CASE: TC-2** Embedded directive blocks
-  - **SYNOPSIS:** Confirm the PH-005 module embeds the required simulation,
-    traceability, and review directives directly in the prompt body.
-  - **BECAUSE:** The module is supposed to be self-contained.
+- **TEST CASE: TC-2** Legacy scenario shape rejection
+  - **SYNOPSIS:** Confirm PH-005 validation rejects a `contract_ref` plus
+    `scenario_bank` artifact that contains no component interface or
+    implementation files.
+  - **BECAUSE:** The old test-suite simulation shape must not remain valid.
 
-- **TEST CASE: TC-3** Output file path
-  - **SYNOPSIS:** Run PH-005 and confirm the artifact written is
-    `docs/simulations/simulation-definitions.yaml`.
-  - **BECAUSE:** The phase should produce one stable output file.
+- **TEST CASE: TC-3** Prompt contract coverage
+  - **SYNOPSIS:** Confirm the PH-005 prompt requires component simulation
+    targets, explicit language interfaces, source files, and compile commands.
+  - **BECAUSE:** The generator must receive the same contract enforced by the
+    validator.
 
-- **TEST CASE: TC-4** Weak assertion rejection
-  - **SYNOPSIS:** Run the phase with simulations that assert only trivial
-    success flags and confirm the deterministic and judge loop rejects them.
-  - **BECAUSE:** Thin simulations should not pass this phase.
+- **TEST CASE: TC-4** Empty target skip
+  - **SYNOPSIS:** Confirm the runner skips prompt-runner for PH-005 when the
+    architecture has no simulation targets, writes `simulations: []`, and lets
+    PH-006 predecessor checks proceed.
+  - **BECAUSE:** The harness skip behavior is part of the steady-state phase
+    contract.
+
+- **TEST CASE: TC-5** Usage and artifact handoff
+  - **SYNOPSIS:** Confirm PH-005 validation rejects simulations that omit
+    usage instructions, documentation location, or artifact-list entries.
+  - **BECAUSE:** The implementation workflow relies on this handoff for
+    gradual integration.

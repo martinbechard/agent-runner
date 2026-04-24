@@ -99,6 +99,14 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** When the delivered system is an application, README work must cover typical setup and operation entries such as prerequisites, installation or setup, configuration, run/start commands, test or verification commands, and operating notes.
   - **BECAUSE:** An implemented application is incomplete for a new reader or maintainer if the README does not explain how to set up and operate it.
 
+- **RULE: RULE-6E** Use simulation artifact handoffs
+  - **SYNOPSIS:** When PH-005 declares simulations, child prompts use each
+    relevant simulation's `usage` block and `artifacts` list to consume,
+    configure, start, fill in, or retire the simulation during gradual
+    implementation and gradual integration.
+  - **BECAUSE:** PH-006 should build against the explicit simulation assets
+    already produced rather than inventing a new integration mechanism.
+
 ## 4. Workflow
 
 This section describes the phase steps.
@@ -125,7 +133,9 @@ This section describes the phase steps.
         - **READS:** `docs/design/interface-contracts.yaml`
           - **BECAUSE:** The workflow must implement concrete contract behavior.
         - **READS:** `docs/simulations/simulation-definitions.yaml`
-          - **BECAUSE:** The workflow must know what temporary simulations exist and when they can be replaced.
+          - **BECAUSE:** The workflow must know what temporary simulations
+            exist, which artifact paths they created, how those artifacts are
+            used, and when they can be replaced.
         - **READS:** `docs/features/feature-specification.yaml`
           - **BECAUSE:** The workflow must ground implementation slices in feature and acceptance-criterion meaning.
         - **RULE:** Just-in-time source embedding
@@ -139,7 +149,10 @@ This section describes the phase steps.
           - **BECAUSE:** The workflow under review should appear where the judge compares it to the upstream design inputs.
 
 - **PROCESS: PROCESS-3** Deterministically validate the child workflow
-  - **SYNOPSIS:** The phase validates that the workflow file exists, parses, has a file-level module, and contains the required TDD and final-verification structure.
+  - **SYNOPSIS:** The phase validates that the workflow file exists, parses,
+    has a file-level module, contains the required TDD and final-verification
+    structure, and references declared simulation artifact paths when PH-005
+    produced simulations.
   - **USES:** `tools/methodology-runner/src/methodology_runner/phase_6_validation.py`
     - **BECAUSE:** Mechanical workflow checks should not be left to the LLM judge.
 
@@ -247,6 +260,13 @@ This section states when the phase passes.
   - **SYNOPSIS:** The phase passes only if deterministic validation passes and the outer phase module judge returns `VERDICT: pass`.
   - **BECAUSE:** Both mechanical correctness and semantic correctness matter.
 
+- **RULE: RULE-14** Simulation-backed gradual integration
+  - **SYNOPSIS:** If PH-005 produced simulation artifacts, the workflow names
+    the relevant SIM-* IDs and artifact paths and follows their declared usage
+    instructions.
+  - **BECAUSE:** The child workflow should leverage available simulations for
+    incremental consumer work and real-component replacement.
+
 ## 8. Test Cases
 
 This section lists the tests the design expects.
@@ -266,3 +286,10 @@ This section lists the tests the design expects.
 - **TEST CASE: TC-4** Delivery-quality workflow signal
   - **SYNOPSIS:** Validate that a child workflow is rejected when it lacks code comment discipline, steady-state documentation discipline, or application README setup and operation guidance.
   - **BECAUSE:** These delivery expectations should not depend solely on semantic review.
+
+- **TEST CASE: TC-5** Simulation artifact usage signal
+  - **SYNOPSIS:** Validate that a child workflow is rejected when PH-005
+    declares simulation artifacts but the workflow does not name the SIM-* IDs
+    and artifact paths it will use.
+  - **BECAUSE:** Gradual integration requires an explicit handoff from PH-005
+    to PH-006.

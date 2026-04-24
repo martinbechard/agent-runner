@@ -41,6 +41,13 @@ def test_solution_design_predecessor_is_architecture():
     assert "PH-002-architecture" in sd.predecessors
 
 
+def test_intelligent_simulations_reads_architecture_targets():
+    sim = get_phase("PH-005-intelligent-simulations")
+    assert "PH-002-architecture" in sim.predecessors
+    refs = [src.ref_template for src in sim.input_source_templates]
+    assert any("architecture-design.yaml" in ref for ref in refs)
+
+
 def test_incremental_implementation_predecessors_include_simulations():
     impl = get_phase("PH-006-incremental-implementation")
     assert "PH-005-intelligent-simulations" in impl.predecessors

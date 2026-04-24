@@ -219,8 +219,17 @@ _PROMPT_HEADING_RE = re.compile(r"^## Prompt \d+:", re.MULTILINE)
 _COMPLETED_STATUSES = frozenset({
     PhaseStatus.COMPLETED,
     PhaseStatus.CROSS_REF_PASSED,
+    PhaseStatus.SKIPPED,
 })
 """Phase statuses that count as 'done' for dependency and skip checks."""
+
+PHASE_5_SIMULATIONS_ID = "PH-005-intelligent-simulations"
+"""Phase id for compile-checked component simulation generation."""
+
+PHASE_5_NO_TARGETS_SKIP_REASON = (
+    "Skipped PH-005 because architecture declares no simulation targets."
+)
+"""Run-artifact reason recorded when PH-005 has no simulation work."""
 
 
 # ---------------------------------------------------------------------------
@@ -1041,6 +1050,59 @@ def _verify_phase_output_exists(
     return None
 
 
+def _architecture_declares_no_simulation_targets(workspace: Path) -> bool:
+    """Return whether architecture explicitly marks every component non-simulated.
+
+    The skip decision is intentionally strict: malformed architecture, missing
+    components, non-dict component entries, or absent ``simulation_target``
+    declarations all return False so PH-005 still runs and surfaces the problem
+    through its normal prompt-runner and validation path.
+    """
+    architecture_phase = PHASE_MAP.get("PH-002-architecture")
+    if architecture_phase is None:
+        return False
+    architecture_path = workspace / architecture_phase.output_artifact_path
+    try:
+        raw_architecture = yaml.safe_load(
+            architecture_path.read_text(encoding="utf-8")
+        )
+    except (OSError, yaml.YAMLError):
+        return False
+    if not isinstance(raw_architecture, dict):
+        return False
+    components = raw_architecture.get("components")
+    if not isinstance(components, list):
+        return False
+    for component in components:
+        if not isinstance(component, dict):
+            return False
+        if component.get("simulation_target") is not False:
+            return False
+    return True
+
+
+def _should_skip_phase_5_simulations(
+    phase_config: PhaseConfig,
+    workspace: Path,
+) -> bool:
+    """Return whether PH-005 has no component simulations to generate."""
+    return (
+        phase_config.phase_id == PHASE_5_SIMULATIONS_ID
+        and _architecture_declares_no_simulation_targets(workspace)
+    )
+
+
+def _write_empty_simulations_artifact(
+    workspace: Path,
+    phase_config: PhaseConfig,
+) -> Path:
+    """Write the canonical empty PH-005 simulations manifest."""
+    artifact_path = workspace / phase_config.output_artifact_path
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    artifact_path.write_text("simulations: []\n", encoding="utf-8")
+    return artifact_path
+
+
 def _automate_completed_lifecycle(
     state: ProjectState,
     workspace: Path,
@@ -1247,7 +1309,7 @@ def _invoke_prompt_runner(
 # ---------------------------------------------------------------------------
 
 def _get_completed_phase_ids(state: ProjectState) -> list[str]:
-    """Return phase_ids whose status counts as completed."""
+    """Return phase_ids whose status satisfies downstream dependencies."""
     return [
         ps.phase_id for ps in state.phases
         if ps.status in _COMPLETED_STATUSES
@@ -1255,7 +1317,7 @@ def _get_completed_phase_ids(state: ProjectState) -> list[str]:
 
 
 def _get_completed_phase_states(state: ProjectState) -> list[PhaseState]:
-    """Return PhaseState objects for all completed phases."""
+    """Return PhaseState objects that satisfy downstream dependencies."""
     return [
         ps for ps in state.phases
         if ps.status in _COMPLETED_STATUSES
@@ -1453,6 +1515,46 @@ def _run_single_phase(
     max_retries = config.max_cross_ref_retries
     iteration_count = 0
     placeholder_values = _phase_placeholder_values(phase_config, config)
+
+    should_skip_phase_5 = _should_skip_phase_5_simulations(
+        phase_config,
+        workspace,
+    )
+    if not cross_ref_only and should_skip_phase_5:
+        now = _iso_now()
+        ps.status = PhaseStatus.SKIPPED
+        ps.started_at = ps.started_at or now
+        ps.completed_at = now
+        ps.prompt_file = str(prompt_file)
+        state.current_phase = phase_id
+        _write_empty_simulations_artifact(workspace, phase_config)
+        (run_dir / "skip-reason.txt").write_text(
+            PHASE_5_NO_TARGETS_SKIP_REASON + "\n",
+            encoding="utf-8",
+        )
+        try:
+            ps.git_commit = _git_commit(
+                workspace,
+                f"Phase {phase_config.phase_number}: "
+                f"{phase_config.phase_name} -- skipped",
+            )
+        except RuntimeError:
+            pass
+
+        phase_result = PhaseResult(
+            phase_id=phase_id,
+            status=PhaseStatus.SKIPPED,
+            prompt_runner_file=str(prompt_file),
+            iteration_count=0,
+            wall_time_seconds=time.monotonic() - t0,
+            prompt_runner_success=False,
+            cross_ref_result=None,
+            prompt_file_path=prompt_file,
+            run_dir=run_dir,
+        )
+        state.phase_results[phase_id] = phase_result
+        save_project_state(state, workspace)
+        return phase_result
 
     # ------------------------------------------------------------------
     # Steps 1-6: prompt-runner against the checked-in prompt module
@@ -1691,10 +1793,11 @@ def write_summary(workspace: Path, result: PipelineResult) -> None:
     )
     completed_count = sum(
         1 for pr in result.phase_results
-        if pr.phase_id in target_phase_ids and pr.status == PhaseStatus.COMPLETED
+        if pr.phase_id in target_phase_ids and pr.status in _COMPLETED_STATUSES
     )
     lines.append(
-        f"Phases completed in scope: {completed_count}/{len(target_phase_ids)}"
+        f"Phases completed or skipped in scope: "
+        f"{completed_count}/{len(target_phase_ids)}"
     )
     lines.append("")
     if state is not None:
@@ -1904,7 +2007,8 @@ def run_pipeline(
                 for phase in phases_to_run:
                     ps = _find_phase_state(state, phase.phase_id)
 
-                    # Resume: skip completed phases
+                    # Resume: skip phases whose status already satisfies
+                    # downstream dependencies.
                     if config.resume and ps.status in _COMPLETED_STATUSES:
                         existing = state.phase_results.get(phase.phase_id)
                         if existing is not None:

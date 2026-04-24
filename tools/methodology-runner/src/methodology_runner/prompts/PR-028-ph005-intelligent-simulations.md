@@ -6,12 +6,15 @@ intelligent-simulations
 
 ### Required Files
 
+docs/architecture/architecture-design.yaml
 docs/design/interface-contracts.yaml
 docs/features/feature-specification.yaml
 
 ### Deterministic Validation
 
 python-module:methodology_runner.phase_5_validation
+--architecture
+docs/architecture/architecture-design.yaml
 --contracts
 docs/design/interface-contracts.yaml
 --feature-spec
@@ -21,11 +24,14 @@ docs/simulations/simulation-definitions.yaml
 
 ### Generation Prompt
 
-As a simulation designer, you must derive contract-faithful simulations from
-the interface contracts and write them to
+As a simulation designer, you must create compile-checked component simulation
+stubs for the architecture and write their manifest to
 docs/simulations/simulation-definitions.yaml.
 
 Context:
+<ARCHITECTURE_DESIGN>
+{{INCLUDE:docs/architecture/architecture-design.yaml}}
+</ARCHITECTURE_DESIGN>
 <INTERFACE_CONTRACTS>
 {{INCLUDE:docs/design/interface-contracts.yaml}}
 </INTERFACE_CONTRACTS>
@@ -36,130 +42,208 @@ Context:
 Module-local generator context:
 Embedded directives for this step:
 
-- Create at least one meaningful simulation per contract and include happy,
-  error, and edge coverage.
-- Derive scenarios, expected outputs, and assertions from the contract
-  surface, not from hidden implementation detail.
-- Use synthetic setup only when it mirrors a declared contract condition and
-  does not smuggle in internals.
-- Assertions must verify meaningful contract semantics, not only status flags
-  or output presence.
+- This phase simulates system components, not test suites.
+- A simulation is a compileable fake, stub, adapter, or in-memory service for a
+  real architecture component that another component can consume through a
+  dependency injection, API, library, service, command, or equivalent boundary.
+- Do not create simulations for documentation, verification, or test-suite
+  components. Those components may later use simulations to focus integration
+  tests, but they are not themselves the simulated service.
+- For every architecture component with `simulation_target: true`, create at
+  least one SIM-* simulation. Do not create SIM-* entries for components whose
+  `simulation_target` is false.
+- If no architecture component has `simulation_target: true`, write
+  docs/simulations/simulation-definitions.yaml with exactly `simulations: []`
+  and do not create simulation source files.
+- Every simulation must include an explicit language interface and simulation
+  implementation. The implementation must compile against or otherwise satisfy
+  that interface using commands declared in the manifest.
+- Every simulation must document how downstream work should use it. Skeletons
+  must name the direct source reference to fill or replace; stubs, mocks,
+  fakes, adapters, and services must name the import, dependency-injection
+  binding, configuration key, command, or URL that consumers should use.
+- Every simulation must list every created simulation artifact, including
+  interface files, implementation files, configuration files, fixtures,
+  README/usage files, or other generated support files. That artifact list is
+  the handoff used by PH-006 for gradual implementation and gradual
+  integration.
+- Usage documentation must live in a generated artifact as inline comments or
+  docstrings, or in a README/usage file listed in the manifest. The manifest
+  must point to that documentation location.
+- The simulation code must model the functionality exposed through the interface
+  at the level needed for integration scenarios. Simple stateless fakes are
+  acceptable for simple boundaries; stateful fakes, configurable errors, or
+  richer behavior are required when the integration point needs them.
 
 Phase purpose:
-- Define at least one SIM-* simulation for every CTR-* contract.
-- Provide happy-path, error-path, and edge-case scenarios.
-- Encode explicit expected outcomes and validation rules.
-- Prevent leakage of implementation-only knowledge into the simulations.
+- Turn architecture component boundaries into concrete simulation stubs.
+- Make each simulated component consumable by later implementation and
+  integration-test slices.
+- Use compile or interface-check commands to mechanically prove that the
+  simulation code conforms to its declared interface.
+- Preserve contract and feature traceability without generating scenario-only
+  YAML that cannot be compiled.
 
 Important interpretation:
-- This phase is an elaboration layer over contracts, not over implementation.
-- Simulations must be derivable from contract behavior, not hidden system internals.
-- You may invent concrete sample data and scenario detail if it is contract-faithful.
-- Treat scenarios as contract-exercising examples, not implementation guesses.
-- When a contract declares an error type or branch condition that upstream
-  artifacts do not fully operationalize, you may introduce synthetic
-  contract-surface setup fields to exercise that branch.
-- Those synthetic setup fields must mirror the contract's own language, such as
-  a declared observed process result or a declared timeout condition, and must
-  not prescribe implementation internals.
-- When a contract exposes meaningful request, response, error, or invariant
-  fields, assertions should materially verify those semantics rather than only
-  asserting a generic presence flag.
-- When a contract makes an invocation concrete enough to ground a realistic
-  example, use a realistic concrete value in the scenario input instead of an
-  abstract placeholder token. For example, if the contract requires a
-  non-empty documented Python 3 command string or a direct Python 3
-  `command_argv`, author a realistic concrete invocation consistent with that
-  contract.
-- Do not invent entrypoint filenames, module names, option syntax, or other
-  invocation details unless the contract itself names them.
-- Use placeholder tokens for command or argv values only when the contract
-  leaves that value abstract. Do not use placeholders to avoid choosing a
-  realistic value when the contract already makes the invocation boundary
-  concrete.
-- Do not forbid user-facing command shapes that the contract explicitly permits;
-  forbid only implementation-internal detail that is not part of the contract.
-- For contractually dynamic success outputs such as current date/time, do not
-  freeze one exact runtime literal in successful or boundary-valid fixtures.
-- For those same dynamic success outputs, do not use pseudo-runtime placeholder
-  text such as `<current timestamp>` or `<YYYY-MM-DD ...>` as if it were a
-  realistic observed value.
-- Instead, model dynamic success output with the contract's own format exemplar
-  text in the response fields and use assertions to carry the required
-  digit-shape, zero-padding, or pattern checks.
-- For malformed dynamic-output branches, you may use synthetic observed output
-  strings that concretely show the format defect the contract names, but keep
-  them focused on the defect rather than one arbitrary clock instant.
+- Architecture is the authority for which components are eligible for
+  simulation.
+- Interface contracts describe the operations the simulated component must
+  support, but a SIM-* entry targets a `CMP-*` component, not a `CTR-*`
+  contract by itself.
+- A simulation manifest is not enough. The referenced interface and simulation
+  source files must exist on disk.
+- Choose the language, interface kind, and compile/check command from the
+  component technology and project conventions already present in the upstream
+  artifacts. Do not invent frameworks or toolchains that the project does not
+  otherwise need.
+- If the project language is statically typed, use the project compiler or type
+  checker. If the project language is dynamic, use the strongest available
+  standard or project-local command that imports the interface and fake and
+  exercises the exposed members.
+- If no reliable compile or interface-check command can be defined for a
+  required simulation target, do not fake compliance. Escalate in the judge
+  loop by making that gap explicit in the artifact and validation response.
+- Tests can be described as downstream consumers of simulations, but this phase
+  must not output a simulation whose `component_ref` is a verification or
+  test-suite component.
+- Keep generated source files under `docs/simulations/` only when they are
+  explanatory examples. Prefer a real source-like location such as
+  `simulations/`, `tests/simulations/`, or the project-local equivalent when
+  the files are meant to compile.
 
 Output schema to satisfy:
+```yaml
 simulations:
   - id: "SIM-NNN"
-    contract_ref: "CTR-NNN"
-    description: "What this simulation verifies"
-    scenario_bank:
-      - name: "scenario name"
-        type: "happy_path"
-        input: {}
-        expected_output: {}
-        assertions:
-          - field: "path.to.field"
-            operator: "equals"
-            value: "expected"
-    llm_adjuster:
-      temperature: 0.0
-      system_prompt_addendum: "..."
-      forbidden_patterns: ["..."]
+    component_ref: "CMP-NNN"
+    simulated_component: "Component name"
+    purpose: "Why this component needs a simulation for integration work"
+    interface:
+      language: "python | typescript | ..."
+      kind: "Protocol | abstract_base_class | TypeScript interface | API adapter | ..."
+      path: "relative/path/to/interface/source"
+      symbol: "InterfaceName"
+      contract_refs: ["CTR-NNN", "..."]
+    implementation:
+      path: "relative/path/to/simulation/source"
+      symbol: "FakeOrStubName"
+      implements: "InterfaceName"
+      behavior: "State and behavior modeled by this simulation"
+    usage:
+      mode: "skeleton | stub | mock | fake | adapter | service"
+      instructions: "How downstream code should import, call, configure, start, or replace this simulation"
+      integration_reference: "Import path, dependency injection binding, config key, command, or URL"
+      configuration: {}
+      startup: []
+      retirement: "How PH-006 should replace or keep this simulation during gradual integration"
+      documentation:
+        location: "inline_comments | readme"
+        path: "relative/path/to/file/with/usage/documentation"
+    artifacts:
+      - path: "relative/path/to/generated/artifact"
+        role: "interface | implementation | configuration | fixture | readme | usage_documentation | other"
+        description: "What this artifact contains"
+        phase_6_usage: "How the PH-006 workflow should use or retire this artifact"
+    integration_scenarios:
+      - id: "SCN-NNN"
+        name: "Scenario name"
+        exposed_functionality: "Interface behavior exercised by consumers"
+        inputs: {}
+        outputs: {}
+        state_model: "none | in-memory | configurable | ..."
+        error_modes: []
+    compile_commands:
+      - "command that verifies the interface and implementation compile"
     validation_rules:
-      - rule: "..."
+      - rule: "Mechanical or semantic rule for this simulation"
         severity: "blocking"
+```
 
 Acceptance requirements:
-- The file must be valid YAML parseable by a standard YAML parser.
+- The manifest file must be valid YAML parseable by a standard YAML parser.
 - The top-level key must be exactly:
   simulations
-- Every CTR-* contract must have at least one SIM-* simulation with a matching
-  contract_ref.
-- Every simulation must contain:
+- Every architecture component with `simulation_target: true` must have at
+  least one SIM-* entry with a matching `component_ref`.
+- If the architecture has no simulation targets, the correct manifest is
+  `simulations: []` and no interface or implementation files are required.
+- No SIM-* entry may target a component whose `simulation_target` is false.
+- No SIM-* entry may target documentation, verification, or test-suite
+  components.
+- Every simulation must define:
   id
-  contract_ref
-  description
-  scenario_bank
-  llm_adjuster
+  component_ref
+  simulated_component
+  purpose
+  interface
+  implementation
+  usage
+  artifacts
+  integration_scenarios
+  compile_commands
   validation_rules
-- Every simulation must include at least one happy_path, one error_path, and
-  one edge_case scenario.
-- Every scenario must define:
-  name
-  type
-  input
-  expected_output
-  assertions
-- assertions must be non-empty and must check meaningful response content, not
-  only trivial status flags.
-- Where the contract exposes multiple meaningful fields, at least one scenario
-  for that contract should assert more than a single boolean or presence flag.
-- Error-path scenarios should materially cover every declared contract error
-  type whenever the contract defines multiple error types.
-- When a rejection or failure response contractually requires response fields to
-  be blanked or normalized, assertions must verify those response-shape fields,
-  not only the named error branch.
-- When one declared error branch has materially distinct subconditions, include
-  scenarios that exercise those distinct subconditions when they would change
-  downstream verification behavior.
-- expected_output and assertions must be derivable from the contract, not from
-  hidden implementation details.
-- For declared error branches, expected_output and assertions may also be
-  derived from synthetic contract-surface setup that explicitly represents the
-  declared failure condition.
-- Do not create any files other than docs/simulations/simulation-definitions.yaml.
-- Write the full file contents to docs/simulations/simulation-definitions.yaml.
+- Every `interface` must define:
+  language
+  kind
+  path
+  symbol
+  contract_refs
+- Every `implementation` must define:
+  path
+  symbol
+  implements
+  behavior
+- Every `usage` must define:
+  mode
+  instructions
+  integration_reference
+  configuration
+  startup
+  retirement
+  documentation
+- Every `usage.documentation` must define:
+  location
+  path
+- Every `artifacts` list must be non-empty and must include every interface,
+  implementation, configuration, fixture, README, usage-documentation, or
+  support file created by this phase for the simulation.
+- Every artifact entry must define:
+  path
+  role
+  description
+  phase_6_usage
+- The interface and implementation paths must also appear in the simulation's
+  `artifacts` list.
+- The `usage.documentation.path` must exist and must appear in the simulation's
+  `artifacts` list.
+- Every `integration_scenarios` list must be non-empty and must describe
+  functionality exposed through the explicit interface.
+- Every `compile_commands` list must be non-empty. Each command must be
+  executable from the project root and must exit 0.
+- Interface and implementation paths named in the manifest must exist on disk.
+- Every path named in `usage.documentation` or `artifacts` must exist on disk.
+- The generated implementation source must import, implement, extend, conform
+  to, or otherwise explicitly bind to the declared interface in a way the
+  compile/check command verifies.
+- Do not output the legacy contract-scenario schema with `contract_ref`,
+  `scenario_bank`, `llm_adjuster`, or assertion-only scenario banks as the
+  primary simulation shape.
+- Create or update only docs/simulations/simulation-definitions.yaml and the
+  simulation files declared in that manifest's `artifacts` lists.
+- If a README, configuration, fixture, or usage file is needed to document or
+  operate a simulation, it must be listed in the manifest and may be created by
+  this phase.
+- Write the full manifest to docs/simulations/simulation-definitions.yaml.
 
 ### Validation Prompt
 
-Review the current simulation definitions against <INTERFACE_CONTRACTS> and
-<FEATURE_SPECIFICATION>.
+Review the current component simulation definitions against
+<ARCHITECTURE_DESIGN>, <INTERFACE_CONTRACTS>, and <FEATURE_SPECIFICATION>.
 
 Context:
+<ARCHITECTURE_DESIGN>
+{{INCLUDE:docs/architecture/architecture-design.yaml}}
+</ARCHITECTURE_DESIGN>
 <INTERFACE_CONTRACTS>
 {{INCLUDE:docs/design/interface-contracts.yaml}}
 </INTERFACE_CONTRACTS>
@@ -173,82 +257,93 @@ Context:
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
+Value and fidelity standard:
+- Judge whether the simulations preserve the requested behavior carried by the
+  architecture, contracts, and feature spec while providing substitutable
+  component stubs for incremental delivery.
+- A simulation is valuable only if downstream code can consume it through the
+  declared interface and exercise behavior that matters to integration of the
+  requested software.
+- Do not reward compileable but behaviorless fakes, scenario catalogs that are
+  not usable as component substitutes, or sophisticated simulations that drift
+  beyond the upstream request.
+
 Module-local judge context:
 
-- Review for weak assertions, unrealistic scenarios, implementation leakage,
-  missing error coverage, contract underuse, and unsupported synthetic setup.
+- Review for wrong simulation targets, missing language interfaces,
+  non-compileable stubs, undocumented usage, incomplete artifact handoffs,
+  insufficient behavior models, implementation leakage, and missing component
+  coverage.
 
-Your job is to decide whether the generated simulation definitions are phase-ready.
+Your job is to decide whether the generated component simulations are
+phase-ready.
 
 Review method:
-- Iterate through simulations in SIM-* order.
-- For each simulation, review its contract_ref, scenario_bank,
-  llm_adjuster, and validation_rules together.
-- Within each simulation, iterate through scenarios in authored order.
-- Before flagging coverage, assertions, or scenario detail as missing, check
-  whether that same downstream-actionable contract meaning is already covered
-  elsewhere in the simulation set.
-- Only flag it as missing if the allegedly missing content would change
-  downstream verification or implementation planning.
+- Iterate through architecture components in CMP-* order.
+- Identify the components with `simulation_target: true`.
+- For each simulation target, verify that a SIM-* entry supplies an explicit
+  language interface, implementation source, compile/check command, and
+  integration scenarios for the component's exposed behavior.
+- Within each SIM-* entry, review the interface and implementation together.
+- Only flag a missing behavior if it would change downstream implementation or
+  integration-test planning.
 
 Focus your semantic review on these failure modes:
 
-1. Validation gaps:
-   - Flag scenarios whose assertions are too trivial to verify the contract's
-     stated request/response/error or invariant semantics.
-2. Scenario realism:
-   - Flag scenarios that violate the contract's stated constraints without the
-     contract itself permitting that input.
-3. LLM leakage:
-   - Flag expected outputs or rules that rely on implementation knowledge not
-     contained in the contract.
-4. Missing error coverage:
-   - Flag contracts whose declared error types are not exercised by error_path scenarios.
-6. Contract-underuse:
-   - Flag simulation sets that only nominally cover a contract while ignoring
-     important exposed fields or invariants the contract makes available.
-7. Unsupported synthetic setup:
-   - Flag synthetic scenario setup only when it introduces implementation
-     internals or contradicts the declared contract branch it is meant to
-     exercise.
-5. Uncovered contracts:
-   - Flag contracts that are only nominally covered but not materially exercised.
+1. Wrong target:
+   - Flag simulations that target documentation, verification, or test-suite
+     components.
+   - Flag simulations organized around test-suite behavior instead of a system
+     component boundary.
+2. Missing interface:
+   - Flag any simulation without an explicit language interface source path,
+     symbol, and implementation binding.
+3. Weak mechanical proof:
+   - Flag compile/check commands that are absent, irrelevant, or incapable of
+     checking the interface and simulation implementation.
+4. Missing usage handoff:
+   - Flag simulations that do not explain how PH-006 should import, configure,
+     start, call, or replace the simulation.
+   - Flag skeletons whose direct source reference is unclear, and flag stubs,
+     mocks, fakes, adapters, or services whose configuration, URL, command, or
+     dependency-injection binding is unclear.
+5. Incomplete artifact list:
+   - Flag missing interface, implementation, configuration, fixture, README, or
+     usage-documentation files from the manifest artifact list when downstream
+     implementation would need them for gradual integration.
+6. Behavior gaps:
+   - Flag simulations whose behavior model is too thin for the integration
+     scenarios implied by the architecture and contracts.
+7. Contract underuse:
+   - Flag simulations that ignore contract operations attached to the simulated
+     component's integration points.
+8. Unsupported toolchain:
+   - Flag source files or commands that invent dependencies, frameworks, or
+     language tooling not justified by the upstream artifacts.
 
 Review instructions:
-- Use the deterministic validation report as authoritative for structural
-  checks, contract coverage, scenario type coverage, and basic assertion presence.
-- Treat this phase as an allowed elaboration layer over contracts only.
-- Only ask for a change when the current simulations are wrong, contradictory,
-  materially unsupported, or would materially affect downstream implementation
-  planning or verification.
-- Do not reject a scenario merely because it uses an abstract placeholder for a
-  contract-permitted command shape when the upstream contract does not specify
-  the concrete tokens.
-- Do flag placeholder command or argv values when the contract or behavioral
-  spec already requires a concrete documented invocation or direct Python 3
-  invocation shape that can support a realistic example.
-- Do not reject a scenario merely because it uses synthetic contract-surface
-  setup to exercise a declared error branch, as long as that setup mirrors the
-  contract's own error condition and avoids implementation internals.
-- Do not require implementation-specific filenames, module names, or option
-  syntax unless the contract itself explicitly requires them.
-- For contractually dynamic outputs such as current date/time, accept
-  contract-format exemplars plus regex or pattern assertions as the correct
-  success-case representation.
-- Flag successful or boundary-valid dynamic-output scenarios that either freeze
-  one exact runtime literal or use fake placeholder text as if it were a real
-  observed value.
-- Do not request wording polish or alternative sample values unless the current
-  choices are misleading or contract-inconsistent.
-- If you find issues, cite exact SIM-* / CTR-* IDs.
+- Use the deterministic validation report as authoritative for manifest shape,
+  target coverage, usage/artifact-list field presence, path existence, and
+  command exit codes.
+- Treat this phase as an allowed elaboration layer over architecture and
+  contracts, but only for simulation stubs and their interfaces.
+- Do not ask for scenario-only YAML when compileable code is required.
+- Do not require implementation-specific business internals beyond the public
+  interface and contract behavior needed for integration.
+- Accept a minimal in-memory fake when the component boundary is simple and the
+  contracts do not require richer behavior.
+- Require stateful or configurable behavior when consumers need to exercise
+  multiple outcomes, errors, or edge cases through the same interface.
+- If you find issues, cite exact SIM-* and CMP-* IDs.
 - For each material correction, include at least one corrective rule in this form:
   - RULE: the generator MUST / MUST NOT / SHOULD / SHOULD NOT make a specific change
     - BECAUSE: why that correction is necessary
-- Use VERDICT: pass only if the artifact is phase-ready with no material
-  contract-coverage, realism, or leakage defects.
-- Use VERDICT: revise if the artifact can be corrected within this same file.
-- Use VERDICT: escalate only if the upstream contracts are too ambiguous to
-  support stable simulations.
+- Use VERDICT: pass only if the artifact is phase-ready with no material target,
+  interface, compile, behavior, or traceability defects.
+- Use VERDICT: revise if the artifact can be corrected in the manifest or
+  declared simulation files.
+- Use VERDICT: escalate only if upstream architecture or contracts do not define
+  enough component-boundary information to create compile-checked simulations.
 
 End with exactly one of:
 VERDICT: pass

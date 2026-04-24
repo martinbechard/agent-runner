@@ -736,6 +736,9 @@ class TestPhaseCrossRefChecks:
     def test_phase_3_references_phase_2(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-003-solution-design"]
         assert "architecture-design.yaml" in t
+        assert "processing function" in t
+        assert "input and output values" in t
+        assert "HTML mockup" in t
 
     def test_phase_4_references_phase_3(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-004-interface-contracts"]
@@ -743,11 +746,14 @@ class TestPhaseCrossRefChecks:
 
     def test_phase_5_references_phase_4(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-005-intelligent-simulations"]
+        assert "architecture-design.yaml" in t
         assert "interface-contracts.yaml" in t
-        assert "contract-format exemplars" in t
-        assert "pseudo-runtime placeholder" in t
-        assert "Scenario `request` payloads match" in t
-        assert "synthetic contract-surface setup" in t
+        assert "simulation_target is true" in t
+        assert "explicit language interface" in t
+        assert "legacy contract_ref/scenario_bank shape" in t
+        assert "test-suite components" in t
+        assert "usage instructions" in t
+        assert "created simulation artifacts" in t
 
     def test_phase_6_references_phases_1_through_5(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-006-incremental-implementation"]
@@ -760,6 +766,9 @@ class TestPhaseCrossRefChecks:
         assert "file-level, type-level, and function-level comments" in t
         assert "steady-state software" in t
         assert "README work includes typical setup" in t
+        assert "component stubs" in t
+        assert "artifact paths" in t
+        assert "gradual implementation and gradual integration" in t
 
     def test_phase_7_references_phases_0_1_3_6(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-007-verification-sweep"]

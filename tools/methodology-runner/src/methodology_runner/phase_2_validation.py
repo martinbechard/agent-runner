@@ -24,6 +24,8 @@ REQUIRED_COMPONENT_FIELDS = [
     "persistence",
     "expected_expertise",
     "features_served",
+    "simulation_target",
+    "simulation_boundary",
 ]
 REQUIRED_INTEGRATION_FIELDS = [
     "id",
@@ -119,6 +121,7 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
     component_field_issues: list[dict] = []
     expertise_issues: list[dict] = []
     coherence_issues: list[dict] = []
+    simulation_target_issues: list[dict] = []
     for component in architecture_design.get("components", []):
         component_id = component.get("id", "(missing-id)")
         if isinstance(component_id, str):
@@ -140,6 +143,25 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
             bad = _framework_coherence_issues(str(component.get("technology", "")), frameworks)
             if bad:
                 coherence_issues.append({"component_id": component_id, "issues": bad})
+        if "simulation_target" in component and not isinstance(component.get("simulation_target"), bool):
+            simulation_target_issues.append(
+                {
+                    "component_id": component_id,
+                    "issue": "simulation_target_must_be_boolean",
+                    "actual": component.get("simulation_target"),
+                }
+            )
+        if "simulation_boundary" in component and not str(component.get("simulation_boundary", "")).strip():
+            simulation_target_issues.append(
+                {"component_id": component_id, "issue": "blank_simulation_boundary"}
+            )
+        role = str(component.get("role", "")).lower()
+        if component.get("simulation_target") is True and any(
+            marker in role for marker in ("documentation", "verification", "test")
+        ):
+            simulation_target_issues.append(
+                {"component_id": component_id, "issue": "non_runtime_component_marked_simulation_target", "role": role}
+            )
 
     duplicate_components = sorted(component_id for component_id in set(component_ids) if component_ids.count(component_id) > 1)
     checks.append(
@@ -162,6 +184,13 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
             "id": "technology_framework_coherence",
             "status": "pass" if not coherence_issues else "fail",
             "details": coherence_issues,
+        }
+    )
+    checks.append(
+        {
+            "id": "simulation_target_classification",
+            "status": "pass" if not simulation_target_issues else "fail",
+            "details": simulation_target_issues,
         }
     )
 

@@ -25,8 +25,8 @@ This design explains how `PH-002` works from start to finish.
   - **SYNOPSIS:** `tools/methodology-runner/src/methodology_runner/prompts/PR-024-ph002-architecture.md`
     with:
     - fixed phase input and output paths
-    - embedded directive blocks for `structured-design`,
-      `structured-review`, and `traceability-discipline`
+    - an authoritative PH-002 architecture YAML schema
+    - embedded directive blocks for rationale/review guidance
     - generic prompt-runner generator and judge roles
   - **BECAUSE:** `PH-002` uses one predefined prompt module.
 
@@ -51,6 +51,14 @@ This design explains how `PH-002` works from start to finish.
   - **SYNOPSIS:** The phase must write exactly one file at
     `docs/architecture/architecture-design.yaml`.
   - **BECAUSE:** Later phases need one stable input file.
+
+- **RULE: RULE-4A** Use the compact PH-002 architecture schema
+  - **SYNOPSIS:** The artifact must use top-level `components`, `integration_points`, and `rationale`, with `CMP-*` components, `features_served` lists, and explicit `simulation_target` classification.
+  - **BECAUSE:** Deterministic validation, cross-reference checks, and `PH-003` consume that compact schema directly.
+
+- **RULE: RULE-4B** Do not emit structured-design architecture sections as the artifact schema
+  - **SYNOPSIS:** The prompt may use structured-design guidance for clear rationale, but must not output `finality`, `system_shape.modules`, `MODULE-*`, `supports`, `definition_of_good`, or `test_cases` as substitutes for the PH-002 schema.
+  - **BECAUSE:** Those shapes can be readable, but they do not satisfy the actual phase contract used downstream.
 
 ## 4. Workflow
 
@@ -111,6 +119,15 @@ This design explains how `PH-002` works from start to finish.
     interactions.
   - **BECAUSE:** Later phases need real boundaries, not decorative ones.
 
+- **RULE: RULE-6A** Identify real simulation targets
+  - **SYNOPSIS:** Components that expose behavior to other components through
+    dependency injection, APIs, libraries, services, commands, or equivalent
+    boundaries must declare whether they are simulation targets. Documentation,
+    verification, and test-suite components must not be marked as simulation
+    targets.
+  - **BECAUSE:** `PH-005` creates substitutable component stubs from these
+    classifications.
+
 - **RULE: RULE-7** Keep expertise human-readable
   - **SYNOPSIS:** Architecture rationale and expertise descriptions must be
     plain-language knowledge areas, not skill IDs, slugs, or tool names.
@@ -120,31 +137,33 @@ This design explains how `PH-002` works from start to finish.
 
 - **ENTITY: ENTITY-1** Top-level output shape
   - **SYNOPSIS:** The top-level sections are:
-    - `finality`
-    - `system_shape`
-    - `boundaries_and_interactions`
-    - `constraints`
-    - `definition_of_good`
-    - `test_cases`
-  - **BECAUSE:** That is the current PH-002 architecture document shape.
+    - `components`
+    - `integration_points`
+    - `rationale`
+  - **BECAUSE:** That is the current PH-002 architecture contract consumed by deterministic validation, cross-reference checks, and `PH-003`.
 
 - **ENTITY: ENTITY-2** System shape content
-  - **SYNOPSIS:** `system_shape` identifies the architecture modules, the
-    features they serve, and the technology/runtime choices that materially
-    affect those boundaries.
+  - **SYNOPSIS:** `components` identifies `CMP-*` architecture components, the
+    `features_served`, and the technology/runtime choices that materially
+    affect those boundaries, plus `simulation_target` and `simulation_boundary`
+    fields for later component-stub generation.
   - **BECAUSE:** Later phases refine those declared boundaries rather than
     inventing new ones.
+
+- **ENTITY: ENTITY-3** Integration point content
+  - **SYNOPSIS:** `integration_points` identifies pairwise `IP-*` relationships whose `between` list contains exactly two distinct `CMP-*` component IDs.
+  - **BECAUSE:** Later contract design depends on resolvable pairwise component boundaries.
 
 ## 7. Definition Of Good
 
 - **RULE: RULE-8** Feature coverage
   - **SYNOPSIS:** Every `FT-*` feature must be covered by the declared
-    architecture modules.
+    architecture components through `features_served`.
   - **BECAUSE:** Later phases can only refine what the architecture actually serves.
 
 - **RULE: RULE-9** Real interaction boundaries
   - **SYNOPSIS:** Every real cross-module boundary must appear under
-    `boundaries_and_interactions`, and fake ones must not be introduced.
+    `integration_points`, and fake ones must not be introduced.
   - **BECAUSE:** Later contract design depends on accurate interaction scope.
 
 - **RULE: RULE-10** Coherent architecture choices
@@ -161,7 +180,7 @@ This design explains how `PH-002` works from start to finish.
 
 - **TEST CASE: TC-1** Feature coverage
   - **SYNOPSIS:** Run the phase on a feature spec with known `FT-*` items and
-    confirm every feature is represented in the architecture.
+    confirm every feature is represented in `components[*].features_served`.
   - **BECAUSE:** The design depends on full feature coverage.
 
 - **TEST CASE: TC-2** Embedded directive blocks
@@ -173,3 +192,7 @@ This design explains how `PH-002` works from start to finish.
   - **SYNOPSIS:** Run PH-002 and confirm the artifact written is
     `docs/architecture/architecture-design.yaml`.
   - **BECAUSE:** The phase should produce one stable output file.
+
+- **TEST CASE: TC-4** Schema contract
+  - **SYNOPSIS:** Confirm the PH-002 prompt requires `components`, `integration_points`, `rationale`, `CMP-*`, `features_served`, `simulation_target`, and `simulation_boundary`, and rejects `MODULE-*` or `supports` as substitutes.
+  - **BECAUSE:** The generator prompt must stay aligned with the validator and downstream phase contracts.

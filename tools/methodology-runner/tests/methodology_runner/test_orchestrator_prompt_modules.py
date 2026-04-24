@@ -16,12 +16,14 @@ from methodology_runner.models import (
 )
 from methodology_runner.orchestrator import (
     PipelineConfig,
+    PHASE_5_NO_TARGETS_SKIP_REASON,
     _phase_path_mappings,
     _phase_placeholder_values,
     _resolve_bundled_skills_root,
     _resolve_prompt_runner_src_root,
     _resolve_phase_prompt_module_path,
     _invoke_prompt_runner_library,
+    _verify_predecessor_artifacts,
     run_pipeline,
     _run_single_phase,
 )
@@ -42,6 +44,31 @@ def test_all_phases_have_checked_in_prompt_modules() -> None:
         phase = get_phase(phase_id)
         assert phase.prompt_module_path is not None
         assert _resolve_phase_prompt_module_path(phase).exists()
+
+
+def test_phase_validation_prompts_have_value_and_fidelity_standard() -> None:
+    prompt_dir = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+    )
+    for prompt_name in (
+        "PR-025-ph000-requirements-inventory.md",
+        "PR-023-ph001-feature-specification.md",
+        "PR-024-ph002-architecture.md",
+        "PR-026-ph003-solution-design.md",
+        "PR-027-ph004-interface-contracts.md",
+        "PR-028-ph005-intelligent-simulations.md",
+        "PR-029-ph006-incremental-implementation.md",
+        "PR-030-ph007-verification-sweep.md",
+    ):
+        text = (prompt_dir / prompt_name).read_text(encoding="utf-8")
+        validation_prompt_count = sum(
+            1 for line in text.splitlines() if line == "### Validation Prompt"
+        )
+        assert validation_prompt_count > 0, prompt_name
+        assert text.count("Value and fidelity standard:") == validation_prompt_count
 
 
 def test_phase_prompts_do_not_depend_on_external_agent_assets() -> None:
@@ -65,6 +92,47 @@ def test_phase_prompts_do_not_depend_on_external_agent_assets() -> None:
         assert "agent-assets/skills" not in text
         assert "{{INCLUDE:skills/structured-design/SKILL.md}}" in text
         assert "{{INCLUDE:skills/structured-review/SKILL.md}}" in text
+
+
+def test_ph002_prompt_module_requires_compact_architecture_schema() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-024-ph002-architecture.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "The output schema below is authoritative" in text
+    assert "top-level keys exactly `components`, `integration_points`, `rationale`" in text
+    assert "component IDs must use `CMP-NNN`" in text
+    assert "component feature coverage must be expressed in `features_served`" in text
+    assert "every component must declare `simulation_target` and `simulation_boundary`" in text
+    assert "each integration point `between` list must name exactly two distinct" in text
+    assert "Do not use `MODULE-*`" in text
+    assert "structured-design sections such as `system_shape`, `finality`" in text
+    assert "as substitutes for `CMP-*`\n  components with `features_served`" in text
+    assert "documentation, verification, or test-suite\n  components" in text
+
+
+def test_ph003_prompt_module_requires_processing_examples_and_ui_mockups() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-026-ph003-solution-design.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "processing_functions" in text
+    assert "ui_surfaces" in text
+    assert "examples" in text
+    assert "input" in text
+    assert "output" in text
+    assert "html_mockup" in text
+    assert "HTML fragment" in text
 
 
 def test_phase_path_mappings_resolve_bundled_skill_root() -> None:
@@ -171,6 +239,7 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     text = prompt_path.read_text(encoding="utf-8")
 
     assert "same exact test command" in text
+    assert "--simulations\ndocs/simulations/simulation-definitions.yaml" in text
     assert "failing or tightened-test outcome" not in text
     assert "failing or tightened-test" in text
     assert "## Command Reports" in text
@@ -196,9 +265,12 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "file-level, type-level, and function-level comments" in text
     assert "steady-state software" in text
     assert "typical setup\n  and operation entries" in text
+    assert "authoritative handoff for gradual implementation" in text
+    assert "simulation artifact paths" in text
+    assert "configuration, startup command, import path, service URL" in text
 
 
-def test_ph005_prompt_module_handles_dynamic_outputs_without_literal_or_fake_samples() -> None:
+def test_ph005_prompt_module_requires_compile_checked_component_simulations() -> None:
     prompt_path = (
         Path(__file__).resolve().parents[2]
         / "src"
@@ -208,11 +280,126 @@ def test_ph005_prompt_module_handles_dynamic_outputs_without_literal_or_fake_sam
     )
     text = prompt_path.read_text(encoding="utf-8")
 
-    assert "do not\n  freeze one exact runtime literal" in text
-    assert "pseudo-runtime placeholder" in text
-    assert "contract's own format exemplar" in text
-    assert "regex or pattern assertions" in text
-    assert "one arbitrary clock instant" in text
+    assert "This phase simulates system components, not test suites." in text
+    assert "simulation_target: true" in text
+    assert "explicit language interface" in text
+    assert "compile_commands" in text
+    assert "legacy contract-scenario schema" in text
+    assert "documentation, verification, or test-suite" in text
+    assert "exactly `simulations: []`" in text
+    assert "no interface or implementation files are required" in text
+    assert "Every simulation must document how downstream work should use it" in text
+    assert "Every simulation must list every created simulation artifact" in text
+    assert "phase_6_usage" in text
+
+
+def test_ph005_skips_prompt_runner_when_architecture_has_no_simulation_targets(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace = tmp_path / "workspace"
+    req = workspace / "docs" / "requirements" / "raw-requirements.md"
+    req.parent.mkdir(parents=True, exist_ok=True)
+    req.write_text("# Requirements\n", encoding="utf-8")
+    architecture = workspace / "docs" / "architecture" / "architecture-design.yaml"
+    architecture.parent.mkdir(parents=True, exist_ok=True)
+    architecture.write_text(
+        "components:\n"
+        "  - id: CMP-001\n"
+        "    name: Single-process clock app\n"
+        "    type: application\n"
+        "    responsibility: Print greeting and current date-time.\n"
+        "    features_served: [FEAT-001]\n"
+        "    contracts: []\n"
+        "    depends_on: []\n"
+        "    simulation_target: false\n"
+        "    simulation_boundary: none\n"
+        "integration_points: []\n"
+        "rationale: No external service boundary needs a simulation.\n",
+        encoding="utf-8",
+    )
+    contracts = workspace / "docs" / "design" / "interface-contracts.yaml"
+    contracts.parent.mkdir(parents=True, exist_ok=True)
+    contracts.write_text("contracts: []\n", encoding="utf-8")
+
+    state = ProjectState(
+        workspace_dir=workspace,
+        requirements_path=req,
+        phase_results={},
+        started_at="2026-04-17T12:00:00Z",
+        git_initialized=False,
+        model=None,
+        phases=[
+            PhaseState(
+                phase_id=phase.phase_id,
+                status=(
+                    PhaseStatus.COMPLETED
+                    if phase.phase_id == "PH-004-interface-contracts"
+                    else PhaseStatus.PENDING
+                ),
+                started_at=None,
+                completed_at=None,
+                prompt_file=None,
+                cross_ref_result_path=None,
+                cross_ref_retries=0,
+                git_commit=None,
+            )
+            for phase in PHASES
+        ],
+    )
+    config = PipelineConfig(
+        requirements_path=req,
+        workspace_dir=workspace,
+        backend="codex",
+    )
+    phase = get_phase("PH-005-intelligent-simulations")
+
+    def fail_if_invoked(*args, **kwargs):
+        raise AssertionError("prompt-runner should not run when PH-005 is empty")
+
+    def fail_if_cross_ref_invoked(*args, **kwargs):
+        raise AssertionError("cross-reference should not run for skipped PH-005")
+
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator._invoke_prompt_runner",
+        fail_if_invoked,
+    )
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator.verify_phase_cross_references",
+        fail_if_cross_ref_invoked,
+    )
+    monkeypatch.setattr(
+        "methodology_runner.orchestrator._git_commit",
+        lambda workspace, message: "deadbeef",
+    )
+
+    result = _run_single_phase(
+        phase,
+        state,
+        workspace,
+        config,
+        claude_client=object(),
+    )
+
+    artifact = workspace / "docs" / "simulations" / "simulation-definitions.yaml"
+    phase_state = next(ps for ps in state.phases if ps.phase_id == phase.phase_id)
+    assert result.status == PhaseStatus.SKIPPED
+    assert result.iteration_count == 0
+    assert result.prompt_runner_success is False
+    assert artifact.read_text(encoding="utf-8") == "simulations: []\n"
+    assert phase_state.status == PhaseStatus.SKIPPED
+    assert phase_state.completed_at is not None
+    assert phase_state.git_commit == "deadbeef"
+    assert state.phase_results[phase.phase_id] == result
+    skip_reason = workspace / ".run-files" / phase.phase_id / "skip-reason.txt"
+    assert skip_reason.read_text(encoding="utf-8") == (
+        PHASE_5_NO_TARGETS_SKIP_REASON + "\n"
+    )
+    assert _verify_predecessor_artifacts(
+        get_phase("PH-006-incremental-implementation"),
+        state,
+        workspace,
+    ) is None
 
 
 def test_ph004_prompt_module_requires_non_empty_response_schemas() -> None:
@@ -605,6 +792,16 @@ def test_full_run_auto_finalizes_and_merges_into_main(
                 "    feature_realization_map:\n"
                 "      FT-001: \"Implements the command-line behavior.\"\n"
                 "    dependencies: []\n"
+                "    processing_functions:\n"
+                "      - name: \"main\"\n"
+                "        purpose: \"Runs the CLI entrypoint.\"\n"
+                "        triggered_by_features: [\"FT-001\"]\n"
+                "        examples:\n"
+                "          - name: \"default run\"\n"
+                "            input: {}\n"
+                "            output:\n"
+                "              stdout: \"Hello, world!\\n\"\n"
+                "    ui_surfaces: []\n"
                 "interactions: []\n",
                 encoding="utf-8",
             )

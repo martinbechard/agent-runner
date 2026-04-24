@@ -343,3 +343,125 @@ Review.
         check for check in workflow_check["checks"] if check["id"] == "forbidden_assumed_baseline_phrase"
     )
     assert baseline_check["status"] == "fail"
+
+
+def test_phase_6_validation_requires_declared_simulation_artifact_usage(
+    tmp_path: Path,
+) -> None:
+    simulations = _write(
+        tmp_path / "docs" / "simulations" / "simulation-definitions.yaml",
+        """simulations:
+  - id: "SIM-001"
+    artifacts:
+      - path: "simulations/interfaces/clock_provider.py"
+        role: "interface"
+        description: "Clock provider interface."
+        phase_6_usage: "Use as the dependency-injection boundary."
+      - path: "simulations/fakes/fake_clock_provider.py"
+        role: "implementation"
+        description: "Fake clock provider."
+        phase_6_usage: "Inject into consumer tests until the real provider exists."
+""",
+    )
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Consumer Against Simulation
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_clock.py,
+then implement the consumer slice. Record stdout, stderr, and exit code
+outcomes. Use SIM-001 with simulations/interfaces/clock_provider.py and
+simulations/fakes/fake_clock_provider.py as the simulation artifacts for
+gradual integration.
+Follow project-local best practices and add meaningful file-level, type-level,
+and function-level comments or docstrings. Keep documentation steady-state
+without relying on an older or previous state. Update the README with setup and
+operation entries including prerequisites, setup, run commands, and
+verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow, simulations_path=simulations)
+
+    assert report["overall_status"] == "pass"
+
+
+def test_phase_6_validation_rejects_missing_simulation_artifact_paths(
+    tmp_path: Path,
+) -> None:
+    simulations = _write(
+        tmp_path / "docs" / "simulations" / "simulation-definitions.yaml",
+        """simulations:
+  - id: "SIM-001"
+    artifacts:
+      - path: "simulations/interfaces/clock_provider.py"
+        role: "interface"
+        description: "Clock provider interface."
+        phase_6_usage: "Use as the dependency-injection boundary."
+""",
+    )
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Consumer
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_clock.py,
+then implement the consumer slice. Record stdout, stderr, and exit code
+outcomes. Use the available simulation during gradual integration.
+Follow project-local best practices and add meaningful file-level, type-level,
+and function-level comments or docstrings. Keep documentation steady-state
+without relying on an older or previous state. Update the README with setup and
+operation entries including prerequisites, setup, run commands, and
+verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow, simulations_path=simulations)
+
+    assert report["overall_status"] == "fail"
+    workflow_check = next(check for check in report["checks"] if check["id"] == "workflow_prompt")
+    simulation_check = next(
+        check for check in workflow_check["checks"]
+        if check["id"] == "simulation_artifact_usage_signal"
+    )
+    assert simulation_check["status"] == "fail"
+    assert simulation_check["missing_simulation_ids"] == ["SIM-001"]
+    assert simulation_check["missing_artifact_paths"] == [
+        "simulations/interfaces/clock_provider.py"
+    ]

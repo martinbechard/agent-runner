@@ -190,7 +190,7 @@ application repository.*
     - **BECAUSE:** The methodology depends on strict predecessor ordering between PH-000 and PH-007.
   - **STEP 8:** Rewrite `.run-files/methodology-runner/summary.txt` after each phase.
     - **BECAUSE:** Users need a current summary while a long run is still active.
-  - **STEP 9:** If all PH-* phases complete, run end-to-end cross-reference verification.
+  - **STEP 9:** If all PH-* phases complete or are explicitly skipped, run end-to-end cross-reference verification.
     - **BECAUSE:** The methodology requires one final consistency check across the whole artifact chain.
   - **STEP 10:** Finalize LC-001 and, when the full methodology is complete, automate LC-002 through LC-006.
     - **BECAUSE:** A fully successful run should now finish as an integrated change instead of stopping at phase completion.
@@ -203,22 +203,24 @@ application repository.*
     - **BECAUSE:** The phase contract is stored in the repository, not generated on the fly.
   - **STEP 3:** Verify predecessor phase status and predecessor output existence.
     - **BECAUSE:** A completed status without the actual upstream artifact is not enough to start a downstream phase safely.
-  - **STEP 4:** Mark the phase `running`, persist state, and invoke `prompt_runner`.
+  - **STEP 4:** For PH-005, skip prompt-runner when architecture declares no simulation targets, write `simulations: []`, and mark the phase `skipped`.
+    - **BECAUSE:** The runner can mechanically identify that no component simulations are needed while still providing the downstream manifest artifact.
+  - **STEP 5:** Mark the phase `running`, persist state, and invoke `prompt_runner`.
     - **BECAUSE:** The runner must expose in-progress state before the nested model call starts.
-  - **STEP 5:** If prompt-runner halts, map the configured escalation policy to `failed` or `escalated` and stop the phase.
+  - **STEP 6:** If prompt-runner halts, map the configured escalation policy to `failed` or `escalated` and stop the phase.
     - **BECAUSE:** The runner distinguishes hard stop from human-review escalation, but both are visible in phase state.
-  - **STEP 6:** If prompt-runner succeeds, mark the phase `prompt_runner_passed` and run phase cross-reference verification.
+  - **STEP 7:** If prompt-runner succeeds, mark the phase `prompt_runner_passed` and run phase cross-reference verification.
     - **BECAUSE:** Prompt success is necessary but not sufficient; the phase output must also satisfy methodology traceability checks.
-  - **STEP 7:** On cross-reference failure, write `.run-files/<phase-id>/cross-ref-result.json` and optional `retry-guidance-N.txt`, then rerun the same prompt module with runtime retry guidance injected.
+  - **STEP 8:** On cross-reference failure, write `.run-files/<phase-id>/cross-ref-result.json` and optional `retry-guidance-N.txt`, then rerun the same prompt module with runtime retry guidance injected.
     - **BECAUSE:** Retries should revise the same canonical prompt contract rather than switch to a new generated prompt file.
-  - **STEP 8:** When cross-reference passes, mark the phase `cross_ref_passed`, commit the worktree, then mark the phase `completed`.
+  - **STEP 9:** When cross-reference passes, mark the phase `cross_ref_passed`, commit the worktree, then mark the phase `completed`.
     - **BECAUSE:** The methodology records one git checkpoint per successful phase before the next phase starts.
 
 - **PROCESS: PROCESS-3** Resume execution
   - **SYNOPSIS:** `methodology-runner resume <workspace>` continues from the saved `ProjectState`.
   - **STEP 1:** Reload `ProjectState` from `.methodology-runner/state.json`.
   - **STEP 2:** If a selected phase is already `prompt_runner_passed`, rerun only cross-reference for that phase.
-  - **STEP 3:** Skip already completed phases in the chosen execution scope.
+  - **STEP 3:** Skip phases that are already completed or explicitly skipped in the chosen execution scope.
   - **STEP 4:** If the methodology already finished and the current lifecycle phase is LC-002 through LC-006, resume lifecycle automation from that outer phase.
   - **BECAUSE:** Recovery must preserve completed work and resume from the narrowest safe boundary.
 

@@ -203,6 +203,15 @@ Constraints:
 - Focus on material semantic problems only.
 - Do not ask for wording polish, alternate tags, or stylistic rewrites when
   the inventory is already source-faithful and phase-ready.
+- Value and fidelity standard:
+  - A useful inventory preserves the user's requested software obligations so
+    later phases can build the right thing without reinterpreting the raw
+    request.
+  - Do not pass entries that are technically well-formed but collapse distinct
+    obligations, dilute exact limits, or replace source intent with vague
+    phrasing.
+  - Do not request low-value restatement of prose that has no downstream
+    actionability.
 - Review in this order:
   - Iterate through the inventory item by item in RI-* order.
   - For each item, compare normalized_requirement and justification against

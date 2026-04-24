@@ -1278,6 +1278,13 @@ phase_3_solution_design:
             responsible for authentication and component B's interactions
             include authenticating users, there is a conflict.
 
+        (f) PROCESSING CONCRETENESS — every specified processing function
+            includes at least one concrete example with both input and output
+            values.
+
+        (g) UI CONCRETENESS — every specified UI surface includes an HTML
+            mockup that shows representative structure and visible content.
+
       checklist_items:
         # ---- Feature coverage items ----
         - id: "CL-SD-001"
@@ -1367,6 +1374,20 @@ phase_3_solution_design:
             independently (without delegating to A).
           verification_method: "behavioral_trace"
 
+        - id: "CL-SD-010"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every processing function specified by a component includes at
+            least one example with both input and output values.
+          verification_method: "schema_inspection"
+
+        - id: "CL-SD-011"
+          source_ref: "docs/features/feature-specification.yaml#$.features"
+          criterion: >
+            Every UI surface specified by a component includes an HTML mockup,
+            not only prose description.
+          verification_method: "schema_inspection"
+
       # --- Checklist item guidance ---
       #
       # GOOD checklist items for this phase:
@@ -1454,6 +1475,16 @@ phase_3_solution_design:
               describing one thing this component does)
             technology_constraints: list of string (optional — mandated
               technologies from inventory constraints)
+            processing_functions: list of processing function objects
+              name: string
+              purpose: string
+              triggered_by_features: list of FT-* IDs
+              examples: list of example objects with name, input, and output
+            ui_surfaces: list of UI surface objects
+              name: string
+              purpose: string
+              triggered_by_features: list of FT-* IDs
+              html_mockup: string containing an HTML fragment
 
           Interaction object fields:
             interaction_id: string (INT-{three-digit-sequence}, e.g., INT-001)
@@ -1497,6 +1528,11 @@ phase_3_solution_design:
            another component?).
         3. List concrete responsibilities as verb-phrases.
         4. Ensure no responsibility overlaps with another component.
+        5. List processing_functions. Use an empty list if the component has
+           no processing functions. For every specified processing function,
+           include at least one example with input and output values.
+        6. List ui_surfaces. Use an empty list if the component has no UI.
+           For every specified UI surface, include an HTML mockup fragment.
 
         For each interaction:
         1. Identify which component initiates and which receives.
@@ -2159,56 +2195,46 @@ phase_4_contract_first_interfaces:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 5: INTELLIGENT SIMULATIONS
-# ═══════════════════════════════════════════════════════════════════════════════
+# ===============================================================================
 #
-# Purpose: For each component interface, produce an LLM-powered simulation
-# that validates inputs and outputs against the contract, provides realistic
-# responses from a scenario bank, and uses an LLM adjuster for inputs not
-# covered by the bank.
+# Purpose: Create compile-checked component simulation stubs for architecture
+# components that are explicit simulation targets. A simulation is a fake, stub,
+# adapter, in-memory service, command implementation, or library implementation
+# that another component can consume through dependency injection, an API, a
+# service boundary, a library boundary, a command boundary, or an equivalent
+# integration seam.
 #
-# Simulations are not stubs or simple mocks. They are contract-enforcing test
-# doubles that:
-#   - Validate every input against the contract's input type and preconditions
-#   - Validate every output against the contract's output type and postconditions
-#   - Provide deterministic responses for known scenarios (scenario bank)
-#   - Use an LLM to generate plausible responses for unknown inputs, constrained
-#     to the contract's output schema
-#
-# Simulations enable parallel development: any component can be implemented
-# and tested against simulations of its dependencies before those dependencies
-# exist. They also serve as living documentation of the contract's expected
-# behavior.
-# ═══════════════════════════════════════════════════════════════════════════════
+# Simulations are not test-suite simulations. Test suites can consume these
+# component stubs to focus integration tests, but the simulated thing is the
+# provider component, not the test harness.
+# ==============================================================================
 
 phase_5_intelligent_simulations:
   phase_processing_unit:
     phase_id: "PH-005-intelligent-simulations"
     phase_name: "Intelligent Simulations"
-    version: "1.0.0"
+    version: "2.0.0"
 
     # -----------------------------------------------------------------------
     # 1. INPUT SOURCES
     # -----------------------------------------------------------------------
     input_sources:
       artifacts:
-        - ref: "docs/design/interface-contracts.yaml"
+        - ref: "docs/architecture/architecture-design.yaml"
           role: "primary"
           format: "yaml"
           description: >
-            The interface contracts from Phase 4. Every contract defines the
-            input types, output types, error types, preconditions,
-            postconditions, and edge cases that the simulation must enforce.
-            Each contract gets exactly one simulation.
+            Architecture design with CMP-* components, simulation_target
+            classifications, and simulation_boundary values.
           content_hash: ""
           version: ""
 
-        - ref: "docs/design/solution-design.yaml"
+        - ref: "docs/design/interface-contracts.yaml"
           role: "validation-reference"
           format: "yaml"
           description: >
-            The solution design from Phase 3. Used to understand the
-            interaction topology so simulations can model realistic
-            multi-step scenarios and state dependencies between contracts.
+            Interface contracts whose CTR-* operations describe the behavior
+            exposed by simulated components.
           content_hash: ""
           version: ""
 
@@ -2216,10 +2242,8 @@ phase_5_intelligent_simulations:
           role: "validation-reference"
           format: "yaml"
           description: >
-            The feature specification from Phase 1. Used to derive
-            realistic scenario bank entries from acceptance criteria.
-            Each feature's acceptance criteria suggest happy-path and
-            error-path scenarios.
+            Feature intent and acceptance criteria used to size the simulation
+            behavior needed by downstream integration scenarios.
           content_hash: ""
           version: ""
 
@@ -2232,137 +2256,103 @@ phase_5_intelligent_simulations:
       extractor_agent: "checklist-extractor"
 
       extraction_focus: |
-        The extractor must derive checklist items that verify four properties
-        of the intelligent simulations:
+        The extractor must derive checklist items for component simulation
+        coverage, explicit language interfaces, mechanical compile or
+        interface-check proof, and behavior sufficiency.
 
-        (a) CONTRACT COVERAGE — every contract (CTR-*) in the interface
-            definitions has a corresponding simulation. No contract is
-            left without a simulation.
+        (a) COMPONENT TARGET COVERAGE - every architecture component marked
+            simulation_target: true has at least one SIM-* entry, and no
+            component marked simulation_target: false has one. If there are
+            no simulation targets, the manifest is the canonical
+            simulations: [] empty list.
 
-        (b) INPUT/OUTPUT VALIDATION — each simulation validates inputs
-            against the contract's input type and preconditions, and
-            validates outputs against the contract's output type and
-            postconditions. The validation is strict: invalid inputs
-            produce contract violation errors, not silent acceptance.
+        (b) INTERFACE PRECISION - every simulation declares an interface
+            language, kind, path, symbol, and contract_refs list, plus an
+            implementation path, symbol, implements field, and behavior model.
 
-        (c) SCENARIO BANK QUALITY — each simulation's scenario bank
-            covers: (a) the happy path for every feature that uses this
-            contract, (b) every error condition enumerated in the
-            contract's error type, and (c) every edge case listed in
-            the contract. Scenarios have deterministic inputs and
-            expected outputs.
+        (c) MECHANICAL PROOF - every simulation declares compile_commands that
+            run from the project root and prove the implementation conforms to
+            the declared interface.
 
-        (d) LLM ADJUSTER CONSTRAINTS — the LLM adjuster for unknown
-            inputs is constrained to produce outputs that conform to the
-            contract's output type schema. The adjuster receives the
-            contract definition as context and its outputs are validated
-            against the schema before being returned.
+        (d) USAGE HANDOFF - every simulation documents how PH-006 should use
+            it, including whether it is a skeleton to fill directly or a stub,
+            mock, fake, adapter, or service consumed through configuration,
+            startup, import, command, dependency injection, or URL.
+
+        (e) ARTIFACT HANDOFF - every generated simulation file appears in an
+            artifacts list with a role, description, and phase_6_usage value.
+
+        (f) TARGET DISCIPLINE - simulations model system components provided
+            through dependency injection, APIs, libraries, services, commands,
+            or equivalent boundaries. They do not model documentation,
+            verification, or test-suite components.
+
+        (g) BEHAVIOR SUFFICIENCY - the fake or stub models enough state,
+            outputs, and error modes for the integration scenarios implied by
+            the architecture, contracts, and feature specification.
 
       checklist_items:
-        # ---- Contract coverage items ----
         - id: "CL-IS-001"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/architecture/architecture-design.yaml#$.components"
           criterion: >
-            Every CTR-* contract in the interface definitions has a
-            corresponding simulation entry with a matching contract_ref
-            field. No contract is without a simulation.
+            Every CMP-* component with simulation_target: true has at least
+            one SIM-* entry whose component_ref matches that component.
           verification_method: "coverage_query"
 
-        # ---- Input/output validation items ----
         - id: "CL-IS-002"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/architecture/architecture-design.yaml#$.components"
           criterion: >
-            Each simulation includes an input_validation section that
-            checks every field of the contract's input type for type
-            correctness, required-field presence, and format conformance.
-            Invalid inputs produce a CONTRACT_VIOLATION error, not a
-            silent default.
-          verification_method: "content_match"
+            No SIM-* entry targets a component whose simulation_target is
+            false or whose role is documentation, verification, or test-suite
+            oriented.
+          verification_method: "coverage_query"
 
         - id: "CL-IS-003"
           source_ref: "docs/design/interface-contracts.yaml#$.contracts"
           criterion: >
-            Each simulation includes an output_validation section that
-            verifies every generated response (from scenario bank or LLM
-            adjuster) against the contract's output type before returning
-            it. Responses that fail validation are rejected and logged.
-          verification_method: "content_match"
+            Each SIM-* entry declares interface.language, interface.kind,
+            interface.path, interface.symbol, and interface.contract_refs, and
+            every listed contract reference names an existing CTR-* contract.
+          verification_method: "schema_inspection"
 
         - id: "CL-IS-004"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
-            Each simulation checks the contract's preconditions before
-            processing the input. If a precondition is violated, the
-            simulation returns the appropriate error from the contract's
-            error type rather than processing the request.
-          verification_method: "content_match"
+            Each SIM-* entry declares implementation.path,
+            implementation.symbol, implementation.implements, and
+            implementation.behavior, and implementation.implements matches the
+            interface symbol it is intended to satisfy.
+          verification_method: "schema_inspection"
 
-        # ---- Scenario bank quality items ----
         - id: "CL-IS-005"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
-            Each simulation's scenario bank includes at least one
-            happy-path scenario for every feature that uses this contract
-            (as determined by the interaction's features_served list in
-            the solution design).
-          verification_method: "coverage_query"
+            Each SIM-* entry includes at least one compile_commands item that
+            exits successfully from the project root and verifies the declared
+            interface and implementation source files.
+          verification_method: "behavioral_trace"
 
         - id: "CL-IS-006"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
-            Each simulation's scenario bank includes at least one
-            scenario for every error code in the contract's error type.
-            The scenario specifies the input that triggers the error
-            and the expected error response.
-          verification_method: "coverage_query"
+            Each SIM-* entry includes integration_scenarios that exercise the
+            functionality exposed by the explicit interface and include any
+            state model or error modes needed by downstream consumers.
+          verification_method: "content_match"
 
         - id: "CL-IS-007"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
-            Each simulation's scenario bank includes at least one
-            scenario for every edge case listed in the contract. The
-            scenario specifies the boundary input and the expected
-            output or error.
-          verification_method: "coverage_query"
+            Each SIM-* entry includes usage instructions that tell PH-006 how
+            to use, configure, start, fill in, or retire the simulation.
+          verification_method: "content_match"
 
-        # ---- LLM adjuster constraint items ----
         - id: "CL-IS-008"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
+          source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
-            Each simulation's LLM adjuster configuration includes the
-            full contract definition (input type, output type, error
-            type, postconditions) as context for the LLM, and specifies
-            that the LLM output must be parsed and validated against
-            the output type schema before being returned.
-          verification_method: "content_match"
-
-        - id: "CL-IS-009"
-          source_ref: "docs/design/interface-contracts.yaml#$.contracts"
-          criterion: >
-            Each simulation's LLM adjuster specifies a fallback behavior
-            for when the LLM produces output that fails schema validation:
-            either retry with additional constraints, or return a
-            SIMULATION_FALLBACK error. The simulation does not return
-            unvalidated LLM output.
-          verification_method: "content_match"
-
-      # --- Checklist item guidance ---
-      #
-      # GOOD checklist items for this phase:
-      #   "CTR-003 (authenticateUser) simulation's scenario bank includes
-      #    a scenario for INVALID_CREDENTIALS error with input
-      #    {email: 'test@example.com', password: 'wrong'} and expected
-      #    output {error_code: 'INVALID_CREDENTIALS', ...}."
-      #   "The LLM adjuster for CTR-005 receives the full OutputType
-      #    definition as context and validates its response against the
-      #    schema before returning."
-      #
-      # BAD checklist items for this phase:
-      #   "Simulations are realistic" (subjective)
-      #   "Edge cases are handled" (not specific about which cases)
-      #   "The LLM produces good outputs" (not verifiable)
-      #   "The implementation passes all tests" (wrong phase — Phase 5
-      #    creates simulations, not implementations)
+            Each SIM-* entry lists every generated simulation artifact with a
+            path, role, description, and phase_6_usage value.
+          verification_method: "schema_inspection"
 
       validation:
         validator_agent: "checklist-validator"
@@ -2379,25 +2369,24 @@ phase_5_intelligent_simulations:
           grounding:
             order: 1
             description: >
-              Every checklist item traces to a contract in the interface
-              definitions or a feature in the specification. No checklist
-              item tests for simulation properties not implied by the
-              contracts.
+              Every checklist item traces to architecture simulation targets,
+              interface contracts, feature context, or simulation manifest
+              elements.
             failure_action: "remove_ungrounded_items_then_recheck_coverage"
 
           coverage:
             order: 2
             description: >
-              Every contract in the interface definitions is the subject
-              of at least one checklist item covering validation,
-              scenarios, and LLM adjuster constraints.
+              Every architecture simulation target is covered by checklist
+              items for target coverage, interface precision, compile proof,
+              and behavior sufficiency.
             failure_action: "return_to_extractor"
 
           specificity:
             order: 3
             description: >
-              Each checklist item names specific contracts, error codes,
-              or edge cases rather than testing general simulation quality.
+              Each checklist item names concrete manifest fields or target
+              relationships rather than general simulation quality.
             failure_action: "return_to_extractor"
 
     # -----------------------------------------------------------------------
@@ -2411,113 +2400,89 @@ phase_5_intelligent_simulations:
       artifact_schema:
         description: |
           Top-level keys:
-            simulation_metadata:
-              source_contracts: string (path to interface contracts)
-              generation_date: string (ISO 8601 date)
-              total_simulation_count: integer
-
             simulations: list of simulation objects
 
           Simulation object fields:
-            simulation_id: string (SIM-{three-digit-sequence}, e.g., SIM-001)
-            contract_ref: string (CTR-* ID from interface contracts)
-            operation_name: string (matching the contract's operation_name)
-            description: string (what this simulation models)
-
-            input_validation: object
-              validation_rules: list of validation rule objects
-                Each rule specifies:
-                  field: string (dot-path to the field in the input type)
-                  check: string (type_match | required | format | range |
-                    enum_member | custom)
-                  constraint: string (the specific constraint, e.g.,
-                    "must be valid email format", "must be >= 1")
-                  on_failure: string (the error_code returned when this
-                    validation fails)
-
-            precondition_checks: list of precondition check objects
-              Each check specifies:
-                precondition: string (from the contract)
-                check_mechanism: string (how the simulation verifies
-                  this — state inspection, input field check, etc.)
-                on_failure_error_code: string
-
-            output_validation: object
-              validation_rules: list of validation rule objects
-                Same structure as input validation but applied to
-                responses generated by the scenario bank or LLM adjuster.
-
-            scenario_bank: list of scenario objects
-              Each scenario specifies:
-                scenario_id: string (SCN-{sim-sequence}-{scenario-sequence})
-                description: string (what this scenario tests)
-                category: string (happy-path | error | edge-case)
-                feature_refs: list of string (FT-* IDs, if happy-path)
-                input: object (concrete input values)
-                expected_output: object (concrete output values or error)
-                precondition_state: object (optional — any state the
-                  simulation must be in for this scenario)
-
-            llm_adjuster: object
-              contract_context: string (reference to the full contract
-                definition provided as LLM context)
-              output_schema_constraint: string (the output type schema
-                the LLM must conform to)
-              max_retries: integer (how many times to retry if schema
-                validation fails)
-              fallback_behavior: string (error_code returned if all
-                retries fail)
-              temperature: number (LLM temperature — lower for more
-                deterministic outputs)
+            id: string (SIM-{three-digit-sequence})
+            component_ref: string (CMP-* architecture component ID)
+            simulated_component: string
+            purpose: string
+            interface: object
+              language: string
+              kind: string
+              path: string (relative path to interface source)
+              symbol: string
+              contract_refs: list of CTR-* IDs
+            implementation: object
+              path: string (relative path to simulation source)
+              symbol: string
+              implements: string (must match interface.symbol)
+              behavior: string
+            usage: object
+              mode: skeleton | stub | mock | fake | adapter | service
+              instructions: string
+              integration_reference: string
+              configuration: object
+              startup: list
+              retirement: string
+              documentation:
+                location: inline_comments | readme
+                path: string
+            artifacts: list of generated simulation artifacts
+              path: string
+              role: string
+              description: string
+              phase_6_usage: string
+            integration_scenarios: list of scenario objects
+              id: string (SCN-{three-digit-sequence})
+              name: string
+              exposed_functionality: string
+              inputs: object
+              outputs: object
+              state_model: string
+              error_modes: list
+            compile_commands: list of commands that run from the project root
+            validation_rules: list of blocking or warning validation rules
         artifact_element_id_format: "$."
 
       generation_instructions: |
-        Produce an intelligent simulation for every contract in the
-        interface definitions. For each simulation:
+        Produce component simulation stubs plus a simulation manifest.
 
-        1. Map to the CTR-* contract it simulates.
-        2. Define input validation rules that check every field of the
-           contract's input type. Each rule specifies the field, the
-           check type, and the error code on failure.
-        3. Define precondition checks that verify the contract's
-           preconditions. Specify how the simulation checks each one.
-        4. Define output validation rules that check responses against
-           the contract's output type.
-        5. Build a scenario bank:
-           - For each feature that uses this contract: at least one
-             happy-path scenario with concrete inputs and expected outputs
-           - For each error code: one scenario with input that triggers it
-           - For each edge case: one scenario with boundary input
-        6. Configure the LLM adjuster:
-           - Provide the full contract definition as context
-           - Specify the output schema constraint
-           - Set max retries and fallback behavior
-           - Use low temperature (0.1-0.3) for deterministic outputs
+        1. Read architecture components in CMP-* order.
+        2. Select only components with simulation_target: true.
+        3. If no components are selected, write
+           docs/simulations/simulation-definitions.yaml with simulations: []
+           and do not create simulation source files.
+        4. For each selected component, create an explicit language interface
+           and a simulation implementation that implements or conforms to it.
+        5. Link the interface to relevant CTR-* contracts through
+           interface.contract_refs.
+        6. Add usage instructions that tell PH-006 how to consume or retire
+           the simulation. Skeletons use direct source references; stubs,
+           mocks, fakes, adapters, and services use declared configuration,
+           startup, imports, commands, dependency bindings, or URLs.
+        7. List every generated simulation artifact with its path, role,
+           description, and phase_6_usage value.
+        8. Define integration_scenarios that exercise the exposed interface
+           behavior needed by consumers.
+        9. Declare compile_commands that run from the project root and prove
+           the interface and implementation compile or otherwise conform.
+        10. Write docs/simulations/simulation-definitions.yaml and the
+            declared simulation artifact files.
 
-        Scenario design principles:
-        - Use realistic but obviously test data (e.g., test@example.com)
-        - Scenarios should be independently executable (no shared state
-          between scenarios unless explicitly declared)
-        - Error scenarios should test one error at a time
-        - Edge case scenarios should test exactly the boundary value
+        Do not use a contract_ref plus scenario_bank artifact as the primary
+        simulation shape. That shape describes test cases, not compileable
+        component substitutes.
 
       traceability_mapping:
-        # Artifact side: $.simulations[n] — each simulation definition
-        #   and $.simulations[n].scenario_bank[m] — each scenario
-        # Input side: $.contracts[n] — from interface contracts
-        #   and $.features[n].acceptance_criteria — from feature spec
-        #
-        # The mapping is one-to-one at the simulation level:
-        #   contract → simulation
-        # And many-to-many at the scenario level:
-        #   scenario → contract error codes, edge cases, or features
         - artifact_element_ref: "docs/simulations/simulation-definitions.yaml#$.simulations[0]"
-          checklist_item_ids: ["CL-IS-001", "CL-IS-002", "CL-IS-003"]
+          checklist_item_ids: ["CL-IS-001", "CL-IS-003", "CL-IS-004", "CL-IS-007", "CL-IS-008"]
           input_source_refs:
+            - "docs/architecture/architecture-design.yaml#$.components[0]"
             - "docs/design/interface-contracts.yaml#$.contracts[0]"
 
-        - artifact_element_ref: "docs/simulations/simulation-definitions.yaml#$.simulations[0].scenario_bank[0]"
-          checklist_item_ids: ["CL-IS-005"]
+        - artifact_element_ref: "docs/simulations/simulation-definitions.yaml#$.simulations[0].integration_scenarios[0]"
+          checklist_item_ids: ["CL-IS-006"]
           input_source_refs:
             - "docs/features/feature-specification.yaml#$.features[0]"
 
@@ -2527,37 +2492,10 @@ phase_5_intelligent_simulations:
     judgment:
       judge_agent: "simulation-judge"
 
-      # --- Judge evaluation guidance ---
-      #
-      # Beyond the checklist, the judge should specifically look for:
-      #
-      # 1. VALIDATION GAPS — input validation rules that miss fields
-      #    defined in the contract's input type, or output validation
-      #    rules that miss fields in the output type. Every typed field
-      #    should have a corresponding validation rule.
-      #
-      # 2. SCENARIO REALISM — scenarios whose inputs are syntactically
-      #    valid but semantically nonsensical (e.g., a user with age
-      #    -5 or a date in the year 9999). While edge cases should test
-      #    boundaries, happy-path scenarios should use realistic data.
-      #
-      # 3. SCENARIO INDEPENDENCE — scenarios that implicitly depend on
-      #    other scenarios' side effects (e.g., scenario B assumes
-      #    scenario A created a user). Each scenario should declare its
-      #    precondition_state if it depends on prior state.
-      #
-      # 4. LLM ADJUSTER LEAKAGE — configurations where the LLM adjuster
-      #    could produce outputs that technically match the schema but
-      #    violate the contract's postconditions (e.g., returning a
-      #    valid UserObject but with a user_id that duplicates an existing
-      #    scenario bank ID). The judge should check that postconditions
-      #    are included in the adjuster's contract context.
-      #
-      # 5. ERROR CASCADE BLINDNESS — simulations that validate inputs and
-      #    return errors independently but do not model the state changes
-      #    that a real implementation would produce. For example, a
-      #    "createOrder" simulation that always succeeds without tracking
-      #    that the order ID should be unique across calls.
+      evaluation_focus: |
+        The judge reviews for wrong simulation targets, missing language
+        interfaces, weak compile proof, behavior models that are too thin for
+        integration consumers, and contract operations ignored by the fake.
 
       evaluations:
         - checklist_item_id: "CL-IS-001"
@@ -2567,7 +2505,6 @@ phase_5_intelligent_simulations:
           artifact_location: ""
 
       uncovered_concerns: []
-
       verdict: "pass"
 
     # -----------------------------------------------------------------------
@@ -2577,33 +2514,18 @@ phase_5_intelligent_simulations:
       max_iterations: 3
       escalation_policy: "halt"
 
-      # --- Revision hints ---
-      #
-      # Common failure modes and how to fix them:
-      #
-      # 1. MISSING SIMULATIONS (CL-IS-001 failure)
-      #    Contracts have no corresponding simulation. Fix: create
-      #    simulations for missing contracts. Start with the contract's
-      #    type definitions to build validation rules, then derive
-      #    scenarios from the contract's error codes and edge cases.
-      #
-      # 2. INCOMPLETE VALIDATION (CL-IS-002/CL-IS-003 failure)
-      #    Validation rules miss fields. Fix: walk every field in the
-      #    contract's input/output type definitions and add a validation
-      #    rule for each. Check nested objects and arrays recursively.
-      #
-      # 3. MISSING SCENARIOS (CL-IS-005/CL-IS-006/CL-IS-007 failure)
-      #    Scenario bank has gaps. Fix: use the contract's error_type
-      #    variants as a checklist — one scenario per error code. Use
-      #    the contract's edge_cases as another checklist — one scenario
-      #    per edge case. Use the features_served from the design
-      #    interaction for happy-path scenarios.
-      #
-      # 4. UNCONSTRAINED LLM ADJUSTER (CL-IS-008/CL-IS-009 failure)
-      #    LLM adjuster lacks proper constraints or fallback. Fix:
-      #    include the full contract definition (not just the type) in
-      #    the adjuster's context. Add schema validation as a post-
-      #    processing step. Define explicit retry and fallback behavior.
+      revision_hints: |
+        Missing target coverage: add a SIM-* entry for each architecture
+        component with simulation_target: true.
+
+        Missing interface: create an interface source file and declare its
+        language, kind, path, symbol, and contract_refs.
+
+        Missing compile proof: add a command that imports, compiles, type
+        checks, or otherwise verifies the interface and fake implementation.
+
+        Wrong target: remove simulations for documentation, verification, and
+        test-suite components.
 
       iteration_log: []
 
@@ -2625,14 +2547,13 @@ phase_5_intelligent_simulations:
       phase_summary:
         total_iterations: 0
         final_verdict: "pass"
-        checklist_item_count: 9
+        checklist_item_count: 6
         passed_count: 0
         failed_count: 0
         partial_count: 0
         uncovered_concern_count: 0
         escalation_status: "none"
 
-# ═══════════════════════════════════════════════════════════════════════════════
 # PHASE 6: INCREMENTAL IMPLEMENTATION
 # ═══════════════════════════════════════════════════════════════════════════════
 #
@@ -2696,9 +2617,10 @@ phase_6_incremental_implementation:
           format: "yaml"
           description: >
             The simulation definitions from Phase 5. Each simulation
-            provides a test double that components integrate against
-            before real dependencies are available. The scenario banks
-            provide integration test cases.
+            provides a component stub with an explicit interface and
+            implementation that components integrate against before real
+            dependencies are available. The integration_scenarios describe
+            the component behaviors available through that interface.
           content_hash: ""
           version: ""
 
@@ -2759,8 +2681,9 @@ phase_6_incremental_implementation:
 
         (d) SIMULATION INTEGRATION — each component's plan specifies
             which simulations it integrates against and includes
-            integration test cases derived from the simulation's
-            scenario bank.
+            integration test cases derived from the simulation's explicit
+            interface, usage instructions, artifacts list, and
+            integration_scenarios.
 
         (e) SIMULATION REPLACEMENT — the plan specifies the handoff
             protocol for replacing each simulation with the real
@@ -2824,19 +2747,19 @@ phase_6_incremental_implementation:
           source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
             Each component's implementation plan identifies which
-            simulations (SIM-*) it will integrate against during
-            development, corresponding to the contracts of components
-            it depends on that are not yet implemented at that point
-            in the order.
+            component stubs (SIM-*) it will integrate against through
+            explicit interfaces during development, corresponding to the
+            components it depends on that are not yet implemented at that
+            point in the order.
           verification_method: "content_match"
 
         - id: "CL-II-007"
           source_ref: "docs/simulations/simulation-definitions.yaml#$.simulations"
           criterion: >
             Each component's integration test plan includes test cases
-            derived from the scenario banks of the simulations it
-            integrates against. At minimum: all happy-path scenarios
-            and all error scenarios from each dependency simulation.
+            derived from the integration_scenarios of the simulations it
+            integrates against. The tests exercise the explicit simulation
+            interface rather than a test-suite-only simulation artifact.
           verification_method: "coverage_query"
 
         # ---- Simulation replacement items ----
@@ -2975,7 +2898,7 @@ phase_6_incremental_implementation:
                 dependency_ref: string (CMP-* or SIM-* ID being
                   integrated against)
                 scenario_refs: list of string (SCN-* IDs from the
-                  simulation scenario bank)
+                  simulation integration_scenarios)
                 description: string (what the integration test verifies)
 
             contract_conformance_tests: list of conformance test objects
@@ -3028,9 +2951,9 @@ phase_6_incremental_implementation:
            - For each feature the component serves, find the acceptance
              criteria from the feature specification
            - Create a unit test spec for each criterion
-        4. Design integration tests from simulation scenarios:
-           - For each dependency simulation, include its scenario bank
-             entries as integration test inputs
+        4. Design integration tests from simulation interfaces and scenarios:
+           - For each dependency simulation, consume the declared interface
+             and use integration_scenarios as test inputs
         5. Design contract conformance tests:
            - For each contract the component provides, include tests for
              input validation, output type, error handling, and
@@ -3090,11 +3013,11 @@ phase_6_incremental_implementation:
       #    says "the system returns an error for invalid input" but the
       #    test plan only tests valid inputs.
       #
-      # 3. SIMULATION MISMATCH RISK — cases where a simulation's
-      #    scenario bank covers behaviors that the real implementation
-      #    might not replicate exactly (especially around timing, state
-      #    management, or error responses). The judge should flag areas
-      #    where simulation-to-real divergence is likely.
+      # 3. SIMULATION MISMATCH RISK — cases where a component stub's
+      #    integration_scenarios or behavior model cover behaviors that the
+      #    real implementation might not replicate exactly (especially around
+      #    timing, state management, or error responses). The judge should flag
+      #    areas where simulation-to-real divergence is likely.
       #
       # 4. COMPLETION CRITERIA GAPS — steps whose completion criteria
       #    do not fully ensure the component is ready. For example,

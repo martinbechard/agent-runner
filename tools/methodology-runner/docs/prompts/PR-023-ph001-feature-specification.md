@@ -199,6 +199,17 @@ Context:
 The deterministic validation result is already provided to you. Use it for
 mechanical checks and do not re-run or duplicate those checks manually.
 
+Value and fidelity standard:
+- Judge whether the feature specification turns the original request, as
+  represented by <RAW_REQUIREMENTS> and <REQUIREMENTS_INVENTORY>, into
+  deliverable product capabilities with useful completion criteria.
+- A feature or `AC-*` is valuable only if it preserves source meaning and helps
+  downstream architecture, implementation, or verification make a better
+  decision.
+- Do not reward compliance-only features, decorative criteria, or restatements
+  that are traceable on paper but do not materially advance delivery of the
+  requested software.
+
 Module-local judge context:
 Embedded directives for this step:
 
