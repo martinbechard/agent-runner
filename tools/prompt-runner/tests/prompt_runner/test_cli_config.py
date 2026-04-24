@@ -100,6 +100,33 @@ def test_invalid_config_reports_error(tmp_path: Path, capsys):
     assert "R-CONFIG-INVALID" in captured.err
 
 
+def test_load_config_parses_optimize_overrides(tmp_path: Path):
+    from prompt_runner.config import load_config
+
+    (tmp_path / "prompt-runner.toml").write_text(
+        "[optimize]\n"
+        "default_profile = \"custom\"\n"
+        "\n"
+        "[optimize.models.custom]\n"
+        "model = \"gpt-5.4-mini\"\n"
+        "allowed_durations = [\"low\", \"medium\"]\n"
+        "recommended_durations = [\"medium\"]\n"
+        "\n"
+        "[optimize.profiles.custom]\n"
+        "entries = [\n"
+        "  { model = \"custom\", durations = [\"medium\"] },\n"
+        "]\n",
+        encoding="utf-8",
+    )
+    pfile = _prompt_file(tmp_path / "pr.md")
+
+    cfg = load_config(pfile)
+    assert cfg.optimize.default_profile == "custom"
+    assert cfg.optimize.models["custom"].model == "gpt-5.4-mini"
+    assert cfg.optimize.profiles["custom"].entries[0].model == "custom"
+    assert cfg.optimize.profiles["custom"].entries[0].durations == ("medium",)
+
+
 def test_default_run_dir_uses_project_prompt_runner_runs(tmp_path: Path, monkeypatch):
     from prompt_runner import __main__ as m
 
@@ -262,6 +289,61 @@ def test_cli_variant_requires_fork_prompt(tmp_path: Path, capsys):
     assert rc == 2
     captured = capsys.readouterr()
     assert "R-INVALID-FLAGS" in captured.err
+
+
+def test_cli_optimize_invokes_optimizer_with_profile_and_candidates(tmp_path: Path, monkeypatch):
+    from prompt_runner import __main__ as m
+    from prompt_runner.optimizer import OptimizeResult
+
+    (tmp_path / "prompt-runner.toml").write_text(
+        "[run]\nmodel = \"gpt-5.3-codex\"\n"
+        "[optimize]\nbackend = \"codex\"\n",
+        encoding="utf-8",
+    )
+    pfile = _prompt_file(tmp_path / "pr.md")
+    exercise_dir = tmp_path / "exercise"
+    captured: dict = {}
+
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
+        captured["backend"] = backend
+
+        class DummyClient:
+            pass
+
+        return DummyClient()
+
+    def fake_optimize_prompt_file(**kwargs):
+        captured["kwargs"] = kwargs
+        return OptimizeResult(
+            exercise_root=exercise_dir,
+            baseline_run_dir=exercise_dir / "baseline-run",
+            optimization_run_dir=exercise_dir / "optimization-run",
+            optimization_prompt_file=exercise_dir / "optimization.prompt.md",
+            optimized_prompt_file=exercise_dir / "optimized.prompt.md",
+            report_path=exercise_dir / "report.md",
+            decisions=[],
+        )
+
+    monkeypatch.setattr(m, "make_client", fake_make_client)
+    monkeypatch.setattr(m, "optimize_prompt_file", fake_optimize_prompt_file)
+
+    rc = m.main([
+        "optimize",
+        str(pfile),
+        "--exercise-dir",
+        str(exercise_dir),
+        "--profile",
+        "balanced",
+        "--candidate",
+        "gpt_5_4:medium",
+    ])
+
+    assert rc == 0
+    assert captured["backend"] == "codex"
+    assert captured["kwargs"]["profile_name"] == "balanced"
+    assert captured["kwargs"]["candidate_specs"] == ["gpt_5_4:medium"]
+    assert captured["kwargs"]["run_config"].model == "gpt-5.3-codex"
+    assert captured["kwargs"]["exercise_root"] == exercise_dir
 
 
 def test_cli_debug_defaults_to_zero_without_flag(tmp_path: Path, monkeypatch):

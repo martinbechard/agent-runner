@@ -28,9 +28,17 @@ Run a prompt file:
 prompt-runner run your-file.md --project-dir /path/to/project --run-dir /path/to/run
 ```
 
+Optimize model/effort settings for a prompt file:
+
+```bash
+prompt-runner optimize your-file.md --profile balanced --project-dir /path/to/project
+```
+
 ## What this tool does
 
 `prompt-runner` reads a markdown workflow, executes each generation prompt with a configured backend, optionally executes a matching validation prompt in a separate session, and iterates on revision feedback.
+
+`prompt-runner optimize` reuses that same execution model, but synthesizes one `[VARIANTS] [SELECT]` fork per judge-bearing prompt so it can compare multiple model/effort settings, require a passing winner, and emit a normal optimized prompt file under `.prompt-runner/optimizations/`.
 
 ## Related References
 
@@ -99,6 +107,8 @@ Examples:
 - `## Prompt 2: Judge structure [MODEL:gpt-5.4] [EFFORT:high]`
 
 `[interactive]` and `[VARIANTS]` cannot appear on the same heading.
+
+`prompt-runner optimize` currently rejects source files that already contain `[VARIANTS]`, `[SELECT]`, or `[interactive]`.
 
 ## Prompt subsections
 

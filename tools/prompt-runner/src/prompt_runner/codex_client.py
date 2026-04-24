@@ -17,6 +17,7 @@ from prompt_runner.claude_client import (
     ClaudeCall,
     ClaudeInvocationError,
     ClaudeResponse,
+    UsageStats,
 )
 from prompt_runner.process_tracking import (
     mark_process_completed,
@@ -94,6 +95,39 @@ def _extract_last_agent_message(stdout: str) -> str:
             if text:
                 last_text = text.strip()
     return last_text
+
+
+def _extract_usage_and_duration(stdout: str) -> tuple[UsageStats | None, int | None]:
+    usage_total = UsageStats()
+    saw_usage = False
+    last_duration_ms: int | None = None
+    for raw in stdout.splitlines():
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            obj = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+        if not isinstance(obj, dict):
+            continue
+        usage = obj.get("usage")
+        if isinstance(usage, dict):
+            try:
+                usage_total = UsageStats(
+                    input_tokens=usage_total.input_tokens + int(usage.get("input_tokens", 0) or 0),
+                    cached_input_tokens=usage_total.cached_input_tokens + int(
+                        usage.get("cached_input_tokens", 0) or 0
+                    ),
+                    output_tokens=usage_total.output_tokens + int(usage.get("output_tokens", 0) or 0),
+                )
+                saw_usage = True
+            except (TypeError, ValueError):
+                pass
+        duration_ms = obj.get("duration_ms")
+        if isinstance(duration_ms, int):
+            last_duration_ms = duration_ms
+    return (usage_total if saw_usage else None, last_duration_ms)
 
 
 def _ensure_codex_on_path() -> None:
@@ -305,12 +339,15 @@ class RealCodexClient:
             match = _SESSION_RE.search(stdout)
             if match:
                 session_id = match.group(1)
+            usage, duration_ms = _extract_usage_and_duration(stdout)
 
             response = ClaudeResponse(
                 stdout=last_message,
                 stderr=stderr,
                 returncode=returncode,
                 session_id=session_id,
+                usage=usage,
+                duration_ms=duration_ms,
             )
             if returncode == 0:
                 return response

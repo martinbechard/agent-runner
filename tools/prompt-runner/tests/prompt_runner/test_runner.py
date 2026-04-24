@@ -1978,6 +1978,52 @@ def test_manifest_includes_wall_time(tmp_path: Path):
     assert _re.match(r"^\d{2}:\d{2}:\d{2}$", manifest["wall_time"])
 
 
+def test_run_prompt_writes_prompt_metrics_json(tmp_path: Path):
+    import json as _json
+
+    from prompt_runner.claude_client import ClaudeResponse, FakeClaudeClient, UsageStats
+    from prompt_runner.runner import RunConfig, run_prompt
+
+    pair = _pair(1, "Alpha")
+    run_dir = tmp_path / "run"
+    client = FakeClaudeClient(scripted=[
+        ClaudeResponse(
+            stdout="artifact body",
+            stderr="",
+            returncode=0,
+            usage=UsageStats(input_tokens=10, cached_input_tokens=1, output_tokens=4),
+        ),
+        ClaudeResponse(
+            stdout="Looks good.\n\nVERDICT: pass",
+            stderr="",
+            returncode=0,
+            usage=UsageStats(input_tokens=3, cached_input_tokens=0, output_tokens=2),
+        ),
+    ])
+
+    result = run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=run_dir,
+        config=RunConfig(max_iterations=3),
+        claude_client=client,
+        run_id="test-run",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    metrics_path = _module_dir(run_dir, "Alpha") / "prompt-01.metrics.json"
+    payload = _json.loads(metrics_path.read_text(encoding="utf-8"))
+    assert result.metrics is not None
+    assert payload["prompt_index"] == 1
+    assert payload["final_verdict"] == "pass"
+    assert payload["iterations_used"] == 1
+    assert payload["input_tokens"] == 13
+    assert payload["cached_input_tokens"] == 1
+    assert payload["output_tokens"] == 6
+    assert payload["total_tokens"] == 20
+    assert payload["wall_time_seconds"] >= 0.0
+
+
 def test_r_backend_failed_halt_reason_includes_stderr_tail_and_log_paths(tmp_path: Path):
     """R-BACKEND-FAILED must include the stderr tail, partial output path, and log dir."""
     pair = _pair(1, "Alpha")

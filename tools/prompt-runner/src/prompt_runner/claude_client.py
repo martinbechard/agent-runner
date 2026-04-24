@@ -52,11 +52,24 @@ class ClaudeCall:
 
 
 @dataclass(frozen=True)
+class UsageStats:
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    output_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return self.input_tokens + self.cached_input_tokens + self.output_tokens
+
+
+@dataclass(frozen=True)
 class ClaudeResponse:
     stdout: str
     stderr: str
     returncode: int
     session_id: str = ""
+    usage: UsageStats | None = None
+    duration_ms: int | None = None
     """Session ID from the claude JSONL output. Populated by RealClaudeClient
     when --output-format stream-json --verbose is used. Empty for
     FakeClaudeClient and DryRunClaudeClient."""
@@ -129,6 +142,23 @@ class DryRunClaudeClient:
             f"model={call.model}, prompt_len={len(call.prompt)}"
         )
         return ClaudeResponse(stdout=placeholder, stderr="", returncode=0)
+
+
+def _extract_usage_stats(event: dict) -> UsageStats | None:
+    usage = event.get("usage")
+    if not isinstance(usage, dict):
+        return None
+    try:
+        input_tokens = int(usage.get("input_tokens", 0) or 0)
+        cached_input_tokens = int(usage.get("cached_input_tokens", 0) or 0)
+        output_tokens = int(usage.get("output_tokens", 0) or 0)
+    except (TypeError, ValueError):
+        return None
+    return UsageStats(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_input_tokens,
+        output_tokens=output_tokens,
+    )
 
 
 def _append_aggregate_log(
@@ -313,6 +343,8 @@ class RealClaudeClient:
         # response, because they are not part of the artifact under review.
         text_buffer: list[str] = []
         captured_session_id: list[str] = []
+        captured_usage: UsageStats | None = None
+        captured_duration_ms: int | None = None
 
         with open(call.stdout_log_path, "a", encoding="utf-8") as log:
             for line in proc.stdout:
@@ -326,15 +358,22 @@ class RealClaudeClient:
                     line,
                 )
                 # Capture session_id from the first event that has one.
-                if not captured_session_id:
-                    try:
-                        import json as _json
-                        ev = _json.loads(line)
+                try:
+                    import json as _json
+                    ev = _json.loads(line)
+                except (ValueError, TypeError):
+                    ev = None
+                if isinstance(ev, dict):
+                    if not captured_session_id:
                         sid = ev.get("session_id", "")
                         if sid:
                             captured_session_id.append(sid)
-                    except (ValueError, TypeError):
-                        pass
+                    usage = _extract_usage_stats(ev)
+                    if usage is not None:
+                        captured_usage = usage
+                    duration_ms = ev.get("duration_ms")
+                    if isinstance(duration_ms, int):
+                        captured_duration_ms = duration_ms
                 # Parse the line into 0+ kind-tagged display items.
                 items = _parse_stream_event(line)
                 for kind, content in items:
@@ -352,6 +391,8 @@ class RealClaudeClient:
             stderr="".join(stderr_buffer),
             returncode=returncode,
             session_id=captured_session_id[0] if captured_session_id else "",
+            usage=captured_usage,
+            duration_ms=captured_duration_ms,
         )
         if returncode != 0:
             raise ClaudeInvocationError(call, response)

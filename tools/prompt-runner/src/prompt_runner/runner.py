@@ -24,6 +24,7 @@ from prompt_runner.claude_client import (
     ClaudeClient,
     ClaudeInvocationError,
     ClaudeResponse,
+    UsageStats,
 )
 from prompt_runner.parser import ForkPoint, PromptPair, VariantPrompt
 from prompt_runner.process_tracking import (
@@ -129,6 +130,27 @@ def _format_wall_time(started_at: datetime, finished_at: datetime) -> str:
     hours, remainder = divmod(total_seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours:02d}:{minutes:02d}:{seconds:02d}"
+
+
+def _elapsed_seconds(started_at: datetime, finished_at: datetime) -> float:
+    return max(0.0, (finished_at - started_at).total_seconds())
+
+
+def _format_seconds(value: float) -> str:
+    return f"{value:.3f}s"
+
+
+def _sum_usage_stats(usages: list[UsageStats | None]) -> UsageStats:
+    total = UsageStats()
+    for usage in usages:
+        if usage is None:
+            continue
+        total = UsageStats(
+            input_tokens=total.input_tokens + usage.input_tokens,
+            cached_input_tokens=total.cached_input_tokens + usage.cached_input_tokens,
+            output_tokens=total.output_tokens + usage.output_tokens,
+        )
+    return total
 
 
 def _emit_progress(message: str) -> None:
@@ -289,6 +311,23 @@ class IterationResult:
     generator_output: str
     judge_output: str
     verdict: Verdict
+    generator_usage: UsageStats | None = None
+    judge_usage: UsageStats | None = None
+
+
+@dataclass(frozen=True)
+class PromptMetrics:
+    prompt_index: int
+    prompt_title: str
+    final_verdict: str
+    iterations_used: int
+    wall_time_seconds: float
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    total_tokens: int
+    model: str | None = None
+    effort: str | None = None
 
 
 @dataclass(frozen=True)
@@ -296,6 +335,7 @@ class PromptResult:
     pair: PromptPair
     iterations: list[IterationResult]
     final_verdict: Verdict
+    metrics: PromptMetrics | None = None
     created_files: list[Path] = field(default_factory=list)
     """Relative paths of files added or modified by this prompt's generator,
     relative to the worktree directory. Empty for text-only prompts. Passed
@@ -335,6 +375,7 @@ class VariantResult:
     final_verdict: str = ""
     changed_files: tuple[Path, ...] = ()
     deleted_files: tuple[Path, ...] = ()
+    metrics: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -737,6 +778,10 @@ def _prompt_artifact_dir(run_dir: Path, pair: PromptPair) -> Path:
 
 def _prompt_history_dir(run_dir: Path, pair: PromptPair) -> Path:
     return _module_dir(run_dir, pair) / "history" / _prompt_file_stem(pair)
+
+
+def _prompt_metrics_path(run_dir: Path, pair: PromptPair) -> Path:
+    return _prompt_artifact_dir(run_dir, pair) / f"{_prompt_file_stem(pair)}.metrics.json"
 
 
 def _fork_representative_pair(fork: ForkPoint) -> PromptPair:
@@ -1163,6 +1208,62 @@ def _write_json(path: Path, payload: object) -> None:
     _write(path, json.dumps(payload, indent=2) + "\n")
 
 
+def _prompt_metrics_payload(metrics: PromptMetrics) -> dict[str, object]:
+    return {
+        "prompt_index": metrics.prompt_index,
+        "prompt_title": metrics.prompt_title,
+        "final_verdict": metrics.final_verdict,
+        "iterations_used": metrics.iterations_used,
+        "wall_time_seconds": metrics.wall_time_seconds,
+        "input_tokens": metrics.input_tokens,
+        "cached_input_tokens": metrics.cached_input_tokens,
+        "output_tokens": metrics.output_tokens,
+        "total_tokens": metrics.total_tokens,
+        "model": metrics.model,
+        "effort": metrics.effort,
+    }
+
+
+def _write_prompt_metrics(run_dir: Path, pair: PromptPair, metrics: PromptMetrics) -> None:
+    _write_json(_prompt_metrics_path(run_dir, pair), _prompt_metrics_payload(metrics))
+
+
+def _load_run_prompt_metrics(run_dir: Path) -> list[dict[str, object]]:
+    metrics_paths = sorted(_run_files_dir(run_dir).rglob("prompt-*.metrics.json"))
+    loaded: list[dict[str, object]] = []
+    for path in metrics_paths:
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(payload, dict):
+            loaded.append(payload)
+    return loaded
+
+
+def _aggregate_run_prompt_metrics(run_dir: Path) -> dict[str, object] | None:
+    prompt_metrics = _load_run_prompt_metrics(run_dir)
+    if not prompt_metrics:
+        return None
+    final_verdict = prompt_metrics[-1].get("final_verdict")
+    iterations_used = sum(int(item.get("iterations_used", 0) or 0) for item in prompt_metrics)
+    wall_time_seconds = sum(float(item.get("wall_time_seconds", 0.0) or 0.0) for item in prompt_metrics)
+    input_tokens = sum(int(item.get("input_tokens", 0) or 0) for item in prompt_metrics)
+    cached_input_tokens = sum(int(item.get("cached_input_tokens", 0) or 0) for item in prompt_metrics)
+    output_tokens = sum(int(item.get("output_tokens", 0) or 0) for item in prompt_metrics)
+    total_tokens = sum(int(item.get("total_tokens", 0) or 0) for item in prompt_metrics)
+    return {
+        "prompt_count": len(prompt_metrics),
+        "final_verdict": final_verdict,
+        "iterations_used": iterations_used,
+        "wall_time_seconds": wall_time_seconds,
+        "input_tokens": input_tokens,
+        "cached_input_tokens": cached_input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
 def _excluded_run_roots(worktree_dir: Path, run_dir: Path) -> tuple[Path, ...]:
     if worktree_dir.resolve() == run_dir.resolve():
         return (Path(RUN_FILES_DIRNAME),)
@@ -1383,6 +1484,7 @@ def _run_interactive_prompt(
     prompt_dir = _prompt_artifact_dir(run_dir, pair)
     module_log_path = _module_log_path(run_dir, pair)
     prompt_dir.mkdir(parents=True, exist_ok=True)
+    prompt_started_at = datetime.now(timezone.utc)
 
     excluded_roots = _excluded_run_roots(worktree_dir, run_dir)
     snapshot_dir = prompt_dir / "snapshot-pre"
@@ -1469,11 +1571,27 @@ def _run_interactive_prompt(
         prompt_dir / f"{prompt_slug}.files-created.txt",
         "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
     )
+    prompt_finished_at = datetime.now(timezone.utc)
+    metrics = PromptMetrics(
+        prompt_index=pair.index,
+        prompt_title=pair.title,
+        final_verdict=Verdict.PASS.value,
+        iterations_used=0,
+        wall_time_seconds=_elapsed_seconds(prompt_started_at, prompt_finished_at),
+        input_tokens=0,
+        cached_input_tokens=0,
+        output_tokens=0,
+        total_tokens=0,
+        model=pair.model_override or config.model,
+        effort=pair.effort_override or config.default_effort,
+    )
+    _write_prompt_metrics(run_dir, pair, metrics)
 
     return PromptResult(
         pair=pair,
         iterations=[],  # no iterations in interactive mode
         final_verdict=Verdict.PASS,
+        metrics=metrics,
         created_files=created_files,
     )
 
@@ -1528,6 +1646,7 @@ def run_prompt(
     gen_response: ClaudeResponse | None = None
     stateless_revisions = config.backend == "codex"
     progress_started_at = pipeline_started_at or datetime.now(timezone.utc)
+    prompt_started_at = datetime.now(timezone.utc)
 
     _emit_progress(
         f"{_progress_prefix(progress_started_at)} "
@@ -1657,6 +1776,8 @@ def run_prompt(
                     generator_output=artifact_text,
                     judge_output="",  # no judge call
                     verdict=Verdict.PASS,
+                    generator_usage=gen_response.usage,
+                    judge_usage=None,
                 )
             )
             _emit_progress(
@@ -1736,6 +1857,8 @@ def run_prompt(
                     generator_output=artifact_text,
                     judge_output=jud_response.stdout,
                     verdict=verdict,
+                    generator_usage=gen_response.usage,
+                    judge_usage=jud_response.usage,
                 )
         )
         _emit_progress(
@@ -1765,6 +1888,28 @@ def run_prompt(
         prompt_dir / f"{prompt_slug}.files-created.txt",
         "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
     )
+    prompt_finished_at = datetime.now(timezone.utc)
+    usage_totals = _sum_usage_stats(
+        [
+            usage
+            for iteration in iterations
+            for usage in (iteration.generator_usage, iteration.judge_usage)
+        ]
+    )
+    metrics = PromptMetrics(
+        prompt_index=pair.index,
+        prompt_title=pair.title,
+        final_verdict=final_verdict.value,
+        iterations_used=len(iterations),
+        wall_time_seconds=_elapsed_seconds(prompt_started_at, prompt_finished_at),
+        input_tokens=usage_totals.input_tokens,
+        cached_input_tokens=usage_totals.cached_input_tokens,
+        output_tokens=usage_totals.output_tokens,
+        total_tokens=usage_totals.total_tokens,
+        model=pair.model_override or config.model,
+        effort=pair.effort_override or config.default_effort,
+    )
+    _write_prompt_metrics(run_dir, pair, metrics)
 
     # Capture the session ID from the last generator response for fork support.
     last_sid = ""
@@ -1775,6 +1920,7 @@ def run_prompt(
         pair=pair,
         iterations=iterations,
         final_verdict=final_verdict,
+        metrics=metrics,
         created_files=created_files,
         last_session_id=last_sid,
     )
@@ -1839,6 +1985,7 @@ def _run_judge_only_prompt(
     artifact_text, created_files = _load_saved_prompt_state(pair, run_dir, worktree_dir)
     iteration_number = _next_judge_only_iteration_number(run_dir, pair)
     progress_started_at = pipeline_started_at or datetime.now(timezone.utc)
+    prompt_started_at = datetime.now(timezone.utc)
 
     _emit_progress(
         f"{_progress_prefix(progress_started_at)} "
@@ -1927,6 +2074,22 @@ def _run_judge_only_prompt(
         prompt_dir / f"{prompt_slug}.files-created.txt",
         "\n".join(str(p) for p in created_files) + ("\n" if created_files else ""),
     )
+    prompt_finished_at = datetime.now(timezone.utc)
+    usage_totals = _sum_usage_stats([jud_response.usage])
+    metrics = PromptMetrics(
+        prompt_index=pair.index,
+        prompt_title=pair.title,
+        final_verdict=verdict.value,
+        iterations_used=1,
+        wall_time_seconds=_elapsed_seconds(prompt_started_at, prompt_finished_at),
+        input_tokens=usage_totals.input_tokens,
+        cached_input_tokens=usage_totals.cached_input_tokens,
+        output_tokens=usage_totals.output_tokens,
+        total_tokens=usage_totals.total_tokens,
+        model=pair.model_override or config.model,
+        effort=pair.effort_override or config.default_effort,
+    )
+    _write_prompt_metrics(run_dir, pair, metrics)
     return PromptResult(
         pair=pair,
         iterations=[
@@ -1935,9 +2098,12 @@ def _run_judge_only_prompt(
                 generator_output=artifact_text,
                 judge_output=jud_response.stdout,
                 verdict=verdict,
+                generator_usage=None,
+                judge_usage=jud_response.usage,
             )
         ],
         final_verdict=verdict,
+        metrics=metrics,
         created_files=created_files,
     )
 
@@ -2541,6 +2707,20 @@ def _variant_final_verdict(variant_run_dir: Path) -> str:
     return Verdict.PASS.value
 
 
+def _format_selector_metrics(metrics: dict[str, object] | None) -> list[str]:
+    if not metrics:
+        return ["Metrics: (unavailable)"]
+    return [
+        "Metrics:",
+        f"- Iterations used: {metrics.get('iterations_used', 0)}",
+        f"- Wall time: {_format_seconds(float(metrics.get('wall_time_seconds', 0.0) or 0.0))}",
+        f"- Input tokens: {metrics.get('input_tokens', 0)}",
+        f"- Cached input tokens: {metrics.get('cached_input_tokens', 0)}",
+        f"- Output tokens: {metrics.get('output_tokens', 0)}",
+        f"- Total tokens: {metrics.get('total_tokens', 0)}",
+    ]
+
+
 def _build_selector_dossier(
     fork: ForkPoint,
     variant_results: list[VariantResult],
@@ -2551,6 +2731,8 @@ def _build_selector_dossier(
             f"## Variant {result.variant_name}: {result.variant_title}",
             f"Exit code: {result.exit_code}",
             f"Final verdict: {result.final_verdict or 'unknown'}",
+            "",
+            *_format_selector_metrics(result.metrics),
             "",
             "Changed files:",
         ]
@@ -2798,6 +2980,7 @@ def _run_fork_point(
         final_verdict = (
             Verdict.ESCALATE.value if exit_code != 0 else _variant_final_verdict(variant_run_dir)
         )
+        metrics = _aggregate_run_prompt_metrics(variant_run_dir)
         result = VariantResult(
             variant_name=variant.variant_name,
             variant_title=variant.variant_title,
@@ -2808,6 +2991,7 @@ def _run_fork_point(
             final_verdict=final_verdict,
             changed_files=tuple(changed_files),
             deleted_files=tuple(deleted_files),
+            metrics=metrics,
         )
         if selection_enabled:
             assert selection_dir is not None
@@ -2822,6 +3006,7 @@ def _run_fork_point(
                     "summary_path": str(summary_path),
                     "changed_files": [str(path) for path in changed_files],
                     "deleted_files": [str(path) for path in deleted_files],
+                    "metrics": metrics,
                 },
             )
             _write(
@@ -3018,6 +3203,26 @@ def _run_fork_point(
     assert selection_dir is not None
     selector_dir = selection_dir / "selector"
     selector_dir.mkdir(parents=True, exist_ok=True)
+    _write_json(
+        selector_dir / "candidate-scorecard.json",
+        {
+            "fork_index": fork.index,
+            "fork_title": fork.title,
+            "candidates": [
+                {
+                    "variant_name": result.variant_name,
+                    "variant_title": result.variant_title,
+                    "exit_code": result.exit_code,
+                    "final_verdict": result.final_verdict,
+                    "metrics": result.metrics,
+                    "summary_excerpt": " | ".join(
+                        line for line in result.summary.splitlines() if line.strip()
+                    )[:240],
+                }
+                for result in variant_results
+            ],
+        },
+    )
     dossier = _build_selector_dossier(fork, variant_results)
     _write(selector_dir / "selector-dossier.md", dossier + ("\n" if dossier else ""))
     selector_pair = PromptPair(
@@ -3708,8 +3913,10 @@ def _write_manifest(
         "source_file_sha256": _file_sha256(source_file),
         "run_id": run_id,
         "config": {
+            "backend": config.backend,
             "max_iterations": config.max_iterations,
             "model": config.model,
+            "default_effort": config.default_effort,
             "only": config.only,
             "judge_only": config.judge_only,
             "dry_run": config.dry_run,

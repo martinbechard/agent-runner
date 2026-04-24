@@ -17,6 +17,11 @@ from prompt_runner.client_factory import (
     make_client,
 )
 from prompt_runner.config import load_config
+from prompt_runner.optimizer import (
+    OptimizationError,
+    default_exercise_dir,
+    optimize_prompt_file,
+)
 from prompt_runner.parser import ForkPoint, ParseError, PromptPair, parse_file
 from prompt_runner.runner import PipelineResult, RUN_FILES_DIRNAME, RunConfig, run_pipeline
 
@@ -325,6 +330,136 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_optimize(args: argparse.Namespace) -> int:
+    source = Path(args.file)
+    sys.stdout.write(f"prompt-runner optimize starting: {source}\n")
+    sys.stdout.flush()
+    try:
+        items = parse_file(source)
+    except ParseError as err:
+        _print_error_banner(err.error_id, err.message)
+        return 2
+    try:
+        file_config = load_config(source)
+    except (OSError, ValueError, tomllib.TOMLDecodeError) as err:
+        _print_error_banner("R-CONFIG-INVALID", str(err))
+        return 2
+
+    backend = args.backend or file_config.optimize.backend or file_config.run.backend or "codex"
+    model = args.model or file_config.run.model
+
+    generator_prelude: str | None = None
+    judge_prelude: str | None = None
+    if args.generator_prelude:
+        gp_path = Path(args.generator_prelude)
+        if not gp_path.exists():
+            _print_error_banner(
+                "R-PRELUDE-NOT-FOUND",
+                f"--generator-prelude file not found: {gp_path}",
+            )
+            return 2
+        generator_prelude = gp_path.read_text(encoding="utf-8")
+    if args.judge_prelude:
+        jp_path = Path(args.judge_prelude)
+        if not jp_path.exists():
+            _print_error_banner(
+                "R-PRELUDE-NOT-FOUND",
+                f"--judge-prelude file not found: {jp_path}",
+            )
+            return 2
+        judge_prelude = jp_path.read_text(encoding="utf-8")
+
+    placeholder_values: dict[str, str] = {}
+    for item in args.var:
+        if "=" not in item:
+            _print_error_banner(
+                "R-INVALID-VAR",
+                f"invalid --var (expected NAME=VALUE): {item}",
+            )
+            return 2
+        name, value = item.split("=", 1)
+        placeholder_values[name] = value
+
+    path_mappings: dict[str, str] = {}
+    for item in args.path_map:
+        if "=" not in item:
+            _print_error_banner(
+                "R-INVALID-PATH-MAP",
+                f"invalid --path-map (expected PREFIX=ROOT): {item}",
+            )
+            return 2
+        prefix, root = item.split("=", 1)
+        if not prefix:
+            _print_error_banner(
+                "R-INVALID-PATH-MAP",
+                f"invalid --path-map prefix: {item}",
+            )
+            return 2
+        path_mappings[prefix] = root
+
+    run_config = RunConfig(
+        backend=backend,
+        max_iterations=args.max_iterations,
+        model=model,
+        debug=args.debug,
+        dry_run=False,
+        verbose=args.verbose,
+        generator_prelude=generator_prelude,
+        judge_prelude=judge_prelude,
+        include_project_organiser=not args.no_project_organiser,
+        variant_sequential=args.variant_sequential,
+        placeholder_values=placeholder_values,
+        path_mappings=path_mappings,
+    )
+
+    try:
+        client = make_client(backend, dry_run=False, verbose=args.verbose)
+    except (ClaudeBinaryNotFound, CodexBinaryNotFound) as err:
+        _print_error_banner("R-NO-BACKEND", str(err))
+        return 3
+
+    project_dir = Path(args.project_dir).resolve() if args.project_dir else None
+    exercise_root = (
+        Path(args.exercise_dir).resolve()
+        if args.exercise_dir
+        else default_exercise_dir(source, project_dir)
+    )
+    baseline_run_dir = (
+        Path(args.baseline_run).resolve()
+        if args.baseline_run
+        else None
+    )
+
+    try:
+        result = optimize_prompt_file(
+            source_file=source,
+            items=items,
+            file_config=file_config,
+            run_config=run_config,
+            claude_client=client,
+            profile_name=args.profile,
+            candidate_specs=args.candidate,
+            baseline_run_dir=baseline_run_dir,
+            exercise_root=exercise_root,
+            source_project_dir=project_dir,
+        )
+    except OptimizationError as err:
+        _print_error_banner("R-OPTIMIZE-FAILED", str(err))
+        return 3
+
+    sys.stdout.write(
+        f"\n{BANNER_RULE}\nPrompt Runner — Optimization complete\n{BANNER_RULE}\n"
+        f"Exercise: {result.exercise_root}\n"
+        f"Baseline: {result.baseline_run_dir}\n"
+        f"Optimization prompt: {result.optimization_prompt_file}\n"
+        f"Optimized prompt: {result.optimized_prompt_file}\n"
+        f"Report: {result.report_path}\n"
+        f"{BANNER_RULE}\n"
+    )
+    sys.stdout.flush()
+    return 0
+
+
 def _print_error_banner(error_id: str, message: str) -> None:
     sys.stderr.write(f"\n{BANNER_RULE}\nERROR: {error_id}\n{BANNER_RULE}\n")
     sys.stderr.write(f"{message}\n{BANNER_RULE}\n")
@@ -539,6 +674,127 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_cmd.set_defaults(func=_cmd_run)
+
+    optimize_cmd = sub.add_parser(
+        "optimize",
+        help="Search model/effort settings for a prompt-runner file.",
+    )
+    optimize_cmd.add_argument("file", help="Path to the input markdown file.")
+    optimize_cmd.add_argument(
+        "--backend",
+        choices=("claude", "codex"),
+        default=None,
+        help=(
+            "Backend to optimize against. Defaults to [optimize].backend, then "
+            "[run].backend, then codex."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--model",
+        default=None,
+        help=(
+            "Default baseline model for prompts that do not already carry "
+            "[MODEL:...]. Required when the source prompts otherwise have no "
+            "effective model."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--project-dir",
+        default=None,
+        help=(
+            "Source project tree used to initialise the baseline and optimization "
+            "run worktrees. Defaults to cwd."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--exercise-dir",
+        default=None,
+        help=(
+            "Optimization exercise root (default: <project>/.prompt-runner/optimizations/"
+            "<timestamp>-<stem>/)."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--baseline-run",
+        default=None,
+        help="Reuse an existing successful baseline run directory for the source prompt file.",
+    )
+    optimize_cmd.add_argument(
+        "--profile",
+        default=None,
+        help="Optimization profile name from [optimize.profiles].",
+    )
+    optimize_cmd.add_argument(
+        "--candidate",
+        action="append",
+        default=[],
+        metavar="MODEL[:DURATION]",
+        help=(
+            "Add one candidate model/duration setting. MODEL must resolve through "
+            "[optimize.models]. If DURATION is omitted, the model's "
+            "recommended_durations are used."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--var",
+        action="append",
+        default=[],
+        metavar="NAME=VALUE",
+        help="Extra placeholder binding applied during baseline and optimization runs.",
+    )
+    optimize_cmd.add_argument(
+        "--path-map",
+        action="append",
+        default=[],
+        metavar="PREFIX=ROOT",
+        help="Prefix-based prompt path mapping. May be repeated.",
+    )
+    optimize_cmd.add_argument(
+        "--max-iterations",
+        type=int,
+        default=3,
+        help="Max revision iterations per prompt (default: 3).",
+    )
+    optimize_cmd.add_argument(
+        "--generator-prelude",
+        default=None,
+        help="Path to a text file prepended to every generator message.",
+    )
+    optimize_cmd.add_argument(
+        "--judge-prelude",
+        default=None,
+        help="Path to a text file prepended to every judge message.",
+    )
+    optimize_cmd.add_argument(
+        "--no-project-organiser",
+        action="store_true",
+        help="Do not append the project-organiser instruction to generator prompts.",
+    )
+    optimize_cmd.add_argument(
+        "--variant-sequential",
+        action="store_true",
+        default=False,
+        help="Run optimization variants one at a time instead of in parallel.",
+    )
+    optimize_cmd.add_argument(
+        "--verbose",
+        action="store_true",
+        help="Stream backend stdout/stderr live to the terminal during execution.",
+    )
+    optimize_cmd.add_argument(
+        "--debug",
+        nargs="?",
+        const=3,
+        default=0,
+        type=int,
+        metavar="N",
+        help=(
+            "Enable depth-limited prompt-runner function tracing in "
+            ".run-files/process.log. Default depth is 3 when the flag is "
+            "present without a value."
+        ),
+    )
+    optimize_cmd.set_defaults(func=_cmd_optimize)
 
     return root
 

@@ -230,6 +230,31 @@ def test_falls_back_to_last_agent_message_when_sidecar_missing(monkeypatch, tmp_
     assert response.stdout == "VERDICT: pass"
 
 
+def test_parses_usage_and_duration_from_codex_json(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
+
+    def fake_popen(argv, **kwargs):
+        message_path = Path(argv[argv.index("--output-last-message") + 1])
+        message_path.write_text("artifact body\n", encoding="utf-8")
+        return _FakePopen(
+            stdout=(
+                '{"type":"turn.started"}\n'
+                '{"type":"turn.completed","duration_ms":1234,"usage":{"input_tokens":11,"cached_input_tokens":2,"output_tokens":5}}\n'
+            )
+        )
+
+    monkeypatch.setattr("subprocess.Popen", fake_popen)
+    client = RealCodexClient()
+    response = client.call(_call(tmp_path, new_session=True))
+    assert response.stdout == "artifact body"
+    assert response.duration_ms == 1234
+    assert response.usage is not None
+    assert response.usage.input_tokens == 11
+    assert response.usage.cached_input_tokens == 2
+    assert response.usage.output_tokens == 5
+    assert response.usage.total_tokens == 18
+
+
 def test_nonzero_exit_raises_with_partial_message(monkeypatch, tmp_path: Path):
     monkeypatch.setattr("shutil.which", lambda _: "/usr/bin/codex")
 
