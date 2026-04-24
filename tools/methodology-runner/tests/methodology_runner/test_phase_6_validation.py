@@ -26,6 +26,12 @@ implementation-workflow
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the
 smallest slice needed. Record stdout, stderr, and exit code outcomes.
+Follow project-local best practices and add meaningful file-level, type-level,
+and function-level comments or docstrings for public surfaces and non-obvious
+behavior. Update documentation as steady-state documentation that does not rely
+on knowing an older or previous state. If this is an application, update the
+README with setup and operation entries including prerequisites, setup, run
+commands, and verification commands.
 
 ### Validation Prompt
 
@@ -93,6 +99,10 @@ implementation-workflow
 
 Use TDD and run python3 -m unittest test_hello.py. Record stdout, stderr,
 and exit code outcomes.
+Follow project-local best practices with file-level, type-level, and
+function-level comments or docstrings where appropriate. Keep docs
+steady-state without relying on a previous state, and keep application README
+setup and operation guidance current.
 
 ### Validation Prompt
 
@@ -251,6 +261,47 @@ next_action: "none"
         check for check in run_report_check["checks"] if check["id"] == "test_commands_shape"
     )
     assert commands_shape["status"] == "fail"
+
+
+def test_phase_6_validation_rejects_missing_delivery_quality_signal(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Slice
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
+then implement the smallest slice needed. Record stdout, stderr, and exit code
+outcomes.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow)
+    assert report["overall_status"] == "fail"
+    workflow_check = next(check for check in report["checks"] if check["id"] == "workflow_prompt")
+    delivery_check = next(
+        check for check in workflow_check["checks"] if check["id"] == "delivery_quality_signal"
+    )
+    assert delivery_check["status"] == "fail"
 
 
 def test_phase_6_validation_rejects_assumed_baseline_wording(

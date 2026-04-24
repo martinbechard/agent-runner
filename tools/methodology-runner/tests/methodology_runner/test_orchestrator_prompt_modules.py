@@ -193,6 +193,9 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "exactly one of `stdout_excerpt` or" in text
     assert "stale halted child snapshot" in text
     assert "resume the child workflow again" in text
+    assert "file-level, type-level, and function-level comments" in text
+    assert "steady-state software" in text
+    assert "typical setup\n  and operation entries" in text
 
 
 def test_ph005_prompt_module_handles_dynamic_outputs_without_literal_or_fake_samples() -> None:
@@ -245,6 +248,9 @@ def test_ph007_prompt_module_uses_compatibility_not_overconstraint() -> None:
     assert "methodology_runner.phase_7_validation" in text
     assert "Volatile-literal overreach" in text
     assert "Methodology self-validation leakage" in text
+    assert "Delivery-quality omission" in text
+    assert "file-level, type-level,\n  and function-level comments" in text
+    assert "setup and operation entries" in text
 
 
 def test_cross_ref_retry_preserves_existing_artifact_for_retry(

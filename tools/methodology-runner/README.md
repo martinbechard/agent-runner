@@ -52,6 +52,21 @@ Inspect run status:
 methodology-runner status work/hello-world-pipeline
 ```
 
+## Delivery Expectations
+
+The full pipeline is tuned for changes to existing software. `PH-006`
+authors and runs an implementation workflow that must deliver code, tests,
+and project files in the target workspace. Generated implementation prompts
+must require project-local code best practices, meaningful file-level,
+type-level, and function-level comments or docstrings where appropriate,
+steady-state documentation, and application README setup and operation
+guidance.
+
+`PH-007` treats those expectations as part of final verification. When code,
+documentation, or README files changed, the verification report should account
+for the delivered quality of those files instead of only reporting that a
+behavioral test passed.
+
 ## Sample
 
 The reference sample lives under `sample/hello-world/`.

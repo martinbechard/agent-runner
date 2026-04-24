@@ -83,6 +83,10 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** Current clock values, timestamp strings, and test-run elapsed durations should be summarized semantically unless the upstream approved artifacts explicitly require those exact literals.
   - **BECAUSE:** PH-007 may rerun verification commands later than PH-006, so truthful later evidence can differ in volatile values while still proving the same behavior.
 
+- **RULE: RULE-6C** Verify delivery quality for changed code, docs, and README files
+  - **SYNOPSIS:** When those surfaces changed, the generator must verify code best practices and meaningful file-level, type-level, and function-level comments or docstrings, steady-state documentation, and application README setup and operation guidance.
+  - **BECAUSE:** Final verification should confirm the delivered software is maintainable and operable, not merely that a narrow behavior test passed.
+
 ## 4. Workflow
 
 This section describes the phase steps.
@@ -116,7 +120,7 @@ This section describes the phase steps.
           - **SYNOPSIS:** The generator and judge embed the requirements inventory, feature specification, implementation workflow, and implementation run report inline in `Context` with `{{INCLUDE:...}}`.
           - **BECAUSE:** Final verification should begin with the verification task and then present the upstream evidence where that task uses it.
       - **PROMPT:** `Judge`
-        - **SYNOPSIS:** Reviews the report for truthfulness, evidence quality, honest coverage, unsupported satisfaction claims, and contradiction with upstream-approved semantics.
+        - **SYNOPSIS:** Reviews the report for truthfulness, evidence quality, honest coverage, delivery-quality omissions, unsupported satisfaction claims, and contradiction with upstream-approved semantics.
         - **BECAUSE:** The final report must not overstate what was actually verified.
         - **RULE:** Just-in-time artifact embedding
           - **SYNOPSIS:** The judge embeds the current verification report inline in `Context` with `{{RUNTIME_INCLUDE:docs/verification/verification-report.yaml}}`.
@@ -158,6 +162,10 @@ This section states the main limits on the phase.
 - **RULE: RULE-9B** No methodology self-validation leakage into workspace evidence
   - **SYNOPSIS:** PH-007 validator/self-check commands are methodology-internal checks and must not be recorded as product verification commands or requirement evidence.
   - **BECAUSE:** Final verification should describe the implemented workspace, not the runner's own package-health checks.
+
+- **RULE: RULE-9C** No delivery-quality blind spots
+  - **SYNOPSIS:** The report must not mark related requirements satisfied while ignoring missing code comment discipline, previous-state documentation prose, or missing application README setup and operation guidance.
+  - **BECAUSE:** These omissions materially affect whether the implemented software is ready for a reader, maintainer, or operator.
 
 ## 6. Output Shape
 
@@ -213,6 +221,10 @@ This section states when the phase passes.
   - **SYNOPSIS:** If the evidence supports only part of a requirement, the row must say `partial` rather than force `satisfied`.
   - **BECAUSE:** Overstated success is worse than explicit incompleteness.
 
+- **RULE: RULE-12A** Delivery-quality evidence
+  - **SYNOPSIS:** Requirement rows and command evidence account for changed code, documentation, and README quality when those surfaces are part of the delivered change.
+  - **BECAUSE:** Final verification should preserve delivery-readiness evidence in the durable report.
+
 - **RULE: RULE-13** Deterministic and judge checks both pass
   - **SYNOPSIS:** The phase passes only if deterministic validation passes and the judge returns `VERDICT: pass`.
   - **BECAUSE:** The report needs both mechanical and semantic verification.
@@ -232,3 +244,7 @@ This section lists the tests the design expects.
 - **TEST CASE: TC-3** Command-evidence consistency
   - **SYNOPSIS:** Present a report whose evidence notes contradict the observed commands and confirm the phase rejects it.
   - **BECAUSE:** Evidence contradictions should not survive final verification.
+
+- **TEST CASE: TC-4** Delivery-quality omission
+  - **SYNOPSIS:** Present a report that ignores missing changed-code comments, previous-state documentation, or missing application README setup and operation guidance and confirm the judge rejects it.
+  - **BECAUSE:** Final verification must account for delivery readiness when it is part of the implemented workspace.

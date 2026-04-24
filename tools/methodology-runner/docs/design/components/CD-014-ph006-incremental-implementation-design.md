@@ -87,6 +87,18 @@ This section states the technical directives that shape the phase.
   - **SYNOPSIS:** The child workflow may add practical implementation or verification constraints needed to realize the approved solution, but it must not contradict upstream approved artifacts or weaken them by broadening away from required behavior.
   - **BECAUSE:** PH-006 is where the methodology converges from approved design into executable slices, so more specificity is expected; the defect is contradiction or loss of required semantics.
 
+- **RULE: RULE-6B** Child workflows must enforce delivered code quality
+  - **SYNOPSIS:** Implementation child prompts must require project-local best practices, including meaningful file-level, type-level, and function-level comments or docstrings for public surfaces and non-obvious behavior.
+  - **BECAUSE:** PH-006 delivers existing-software changes, so the generated implementation workflow must preserve maintainability rather than only making tests pass.
+
+- **RULE: RULE-6C** Child workflows must write steady-state documentation
+  - **SYNOPSIS:** Documentation updates must describe the software as it exists after the change and must not rely on reader knowledge of an older or previous state unless the upstream request explicitly asks for migration notes, release notes, or historical change documentation.
+  - **BECAUSE:** Methodology outputs should leave durable project documentation, not transitional commentary that becomes confusing after the change lands.
+
+- **RULE: RULE-6D** Application READMEs must include setup and operation guidance
+  - **SYNOPSIS:** When the delivered system is an application, README work must cover typical setup and operation entries such as prerequisites, installation or setup, configuration, run/start commands, test or verification commands, and operating notes.
+  - **BECAUSE:** An implemented application is incomplete for a new reader or maintainer if the README does not explain how to set up and operate it.
+
 ## 4. Workflow
 
 This section describes the phase steps.
@@ -120,7 +132,7 @@ This section describes the phase steps.
           - **SYNOPSIS:** Prompt 1 embeds the approved design, contracts, simulations, and feature specification inline in `Context` with `{{INCLUDE:...}}`.
           - **BECAUSE:** The workflow-authoring prompt should begin with its task and then present the upstream inputs where it uses them.
       - **PROMPT:** `Judge`
-        - **SYNOPSIS:** Reviews the workflow for executability, TDD cadence, slice size, traceability, semantic compatibility with upstream artifacts, and final-verification coverage.
+        - **SYNOPSIS:** Reviews the workflow for executability, TDD cadence, slice size, traceability, delivery quality, semantic compatibility with upstream artifacts, and final-verification coverage.
         - **BECAUSE:** The workflow must be phase-ready before any child run starts.
         - **RULE:** Just-in-time artifact embedding
           - **SYNOPSIS:** Prompt 1's judge embeds the current child workflow inline in `Context` with `{{RUNTIME_INCLUDE:docs/implementation/implementation-workflow.md}}`.
@@ -174,6 +186,10 @@ This section states the main limits on the phase.
   - **SYNOPSIS:** When a slice implements a required current date-and-time output, its test contract must prove a date-and-time-bearing value from the same run rather than accepting arbitrary non-empty text.
   - **BECAUSE:** A non-empty second line is too weak to prove the upstream semantic requirement, but a compatible practical refinement such as standard-library parsing is allowed.
 
+- **RULE: RULE-7C** No previous-state documentation drift
+  - **SYNOPSIS:** Child prompts must not turn steady-state documentation into prose about what changed from an old behavior unless that historical form is explicitly requested.
+  - **BECAUSE:** Readers of project documentation may not have the old software state available.
+
 - **RULE: RULE-8** No fake child-run completion
   - **SYNOPSIS:** The run report must not claim completed status, passed prompts, changed files, or observed test commands that the child run did not produce.
   - **BECAUSE:** PH-007 depends on PH-006 evidence.
@@ -219,6 +235,10 @@ This section states when the phase passes.
   - **SYNOPSIS:** At least one child implementation prompt explicitly tightens or adds a test before code changes, and implementation prompts run the relevant tests after the edit.
   - **BECAUSE:** The workflow is supposed to guide incremental TDD implementation.
 
+- **RULE: RULE-11A** Delivery-quality discipline
+  - **SYNOPSIS:** The workflow explicitly requires code comments or docstrings at file/type/function levels where appropriate, steady-state documentation, and application README setup and operation guidance.
+  - **BECAUSE:** The methodology is meant to deliver usable existing-software changes, not only source diffs.
+
 - **RULE: RULE-12** Truthful run report
   - **SYNOPSIS:** The run report agrees with the child `.run-files/implementation-workflow/summary.txt` and observed child-run artifacts.
   - **BECAUSE:** Later verification cannot rely on guessed execution history.
@@ -242,3 +262,7 @@ This section lists the tests the design expects.
 - **TEST CASE: TC-3** Halted child run
   - **SYNOPSIS:** Validate that a halted child run produces a run report with non-empty `halt_reason` and does not claim full completion.
   - **BECAUSE:** Failure reporting must be truthful too.
+
+- **TEST CASE: TC-4** Delivery-quality workflow signal
+  - **SYNOPSIS:** Validate that a child workflow is rejected when it lacks code comment discipline, steady-state documentation discipline, or application README setup and operation guidance.
+  - **BECAUSE:** These delivery expectations should not depend solely on semantic review.

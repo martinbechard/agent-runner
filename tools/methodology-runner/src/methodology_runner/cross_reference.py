@@ -436,10 +436,18 @@ Verify that:
   copy instead of the current worktree.
 - The workflow does not drift back into requirements, architecture, or design
   authoring.
+- The workflow requires delivered code to follow project-local best practices,
+  including meaningful file-level, type-level, and function-level comments or
+  docstrings where appropriate.
+- Documentation-update prompts describe the steady-state software rather than
+  assuming the reader knows an older or previous state.
 
 ### 4. Integration
 - Verify the workflow is compatible with the actual project worktree and can
   create real source files, tests, and README content.
+- For application deliverables, verify README work includes typical setup and
+  operation entries such as prerequisites, setup, configuration, run/start
+  commands, test commands, and operating notes.
 - Verify the final child prompt leaves enough evidence for Phase 7 to perform
   truthful final verification.
 - Verify the support report at
@@ -494,7 +502,10 @@ Verify that:
 - Verify every verification command was actually observed during the child
   implementation run.
 - Verify the final verification report is aligned with the implemented project,
-  not with a hypothetical completion state.\
+  not with a hypothetical completion state.
+- Verify the report does not ignore changed-code quality, steady-state
+  documentation quality, or application README setup and operation guidance
+  when those surfaces are part of the delivered change.\
 """,
 }
 

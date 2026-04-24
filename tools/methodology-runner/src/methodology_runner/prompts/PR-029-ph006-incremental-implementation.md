@@ -66,6 +66,19 @@ Important implementation discipline:
 - Keep each child prompt small enough that a failure is local and obvious.
 - Do not create separate planning tables when the same information can be
   expressed directly as prompt order and prompt instructions.
+- Require changed code to follow project-local best practices, including
+  meaningful file-level, type-level, and function-level comments or docstrings
+  for public surfaces and non-obvious behavior. Do not require noise comments
+  that merely restate self-evident code.
+- Require documentation updates to describe the steady-state software that the
+  reader has now. Do not write docs that depend on knowing an older or previous
+  behavior unless the upstream request explicitly asks for migration notes,
+  release notes, or historical change documentation.
+- For application deliverables, require the README to contain the typical setup
+  and operation entries a user or maintainer needs: prerequisites,
+  installation or setup, configuration and environment variables when
+  applicable, run or start commands, test or verification commands, and common
+  operating notes.
 - Once a child prompt chooses a concrete command string, preserve that exact
   command spelling everywhere it is reused in that prompt, in later final
   verification steps, and in the supervisor report. Do not substitute an
@@ -106,6 +119,13 @@ Output contract:
   - name the concrete project files it is expected to create or update
   - require the same exact relevant test command to be run before and after
     the implementation change in the same prompt
+  - require changed code to include appropriate file-level, type-level, and
+    function-level comments or docstrings as part of project-local best
+    practices
+  - require changed documentation to be steady-state documentation rather than
+    transitional prose about a previous software state
+  - require application README updates to include setup and operation entries
+    when the implemented system is an application
   - require an explicit generator response structure with exactly these
     section headings:
     - `## Files Created Or Updated`
@@ -179,6 +199,15 @@ Acceptance requirements:
   implemented system and preserve those exact command strings.
 - The workflow must require command evidence that includes stdout, stderr, and
   exit code details rather than only pass/fail summaries.
+- The workflow must include delivery-quality discipline for code, docs, and
+  README work:
+  - changed code must follow project-local best practices and include
+    meaningful file-level, type-level, and function-level comments or
+    docstrings where appropriate
+  - changed documentation must describe the steady-state software without
+    relying on reader knowledge of a previous state
+  - application README content must cover typical setup and operation entries
+    when the project is an application
 - For any slice involving datetime or date-and-time behavior, the child prompt
   itself must explicitly require the same upstream semantic behavior. When the
   upstream artifacts require a runtime-generated current local date-and-time
@@ -291,6 +320,19 @@ Focus your semantic review on these failure modes:
 8. Missing final verification:
    - Flag workflows that do not end with a prompt that runs the full
      verification commands against the completed implementation.
+9. Missing delivery-quality discipline:
+   - Flag workflows that implement code without requiring project-local best
+     practices and meaningful file-level, type-level, and function-level
+     comments or docstrings where appropriate.
+10. Transitional documentation:
+   - Flag documentation-update prompts that describe changes relative to an
+     older or previous software state instead of documenting the steady-state
+     software, unless the upstream request explicitly asks for migration notes,
+     release notes, or historical change documentation.
+11. Incomplete application README:
+   - Flag workflows for application deliverables that do not require README
+     setup and operation entries such as prerequisites, setup, configuration,
+     run/start commands, test/verification commands, and operating notes.
 
 Review instructions:
 - Treat this phase as workflow authoring for real implementation, not as a

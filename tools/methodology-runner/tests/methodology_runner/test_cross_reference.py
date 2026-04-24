@@ -757,6 +757,9 @@ class TestPhaseCrossRefChecks:
         assert "simulation-definitions.yaml" in t
         assert "failing test run after the test is" in t
         assert "Phase 6 run report already show that sequence explicitly" in t
+        assert "file-level, type-level, and function-level comments" in t
+        assert "steady-state software" in t
+        assert "README work includes typical setup" in t
 
     def test_phase_7_references_phases_0_1_3_6(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-007-verification-sweep"]
@@ -764,6 +767,7 @@ class TestPhaseCrossRefChecks:
         assert "feature-specification.yaml" in t
         assert "implementation-workflow.md" in t
         assert "implementation-run-report.yaml" in t
+        assert "application README setup and operation guidance" in t
 
 
 # ---------------------------------------------------------------------------

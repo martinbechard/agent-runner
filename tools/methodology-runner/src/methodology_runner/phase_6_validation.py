@@ -16,6 +16,40 @@ _LOOSE_TDD_RE = re.compile(r"failing\s+or\s+tighten(?:ed|ing)?[-\s]test")
 _ASSUMED_BASELINE_RE = re.compile(r"from the current .+? behavior", re.IGNORECASE)
 
 
+def _has_delivery_quality_signal(lower_text: str) -> bool:
+    file_comment = "file-level" in lower_text or "file comment" in lower_text
+    type_comment = "type-level" in lower_text or "type comment" in lower_text
+    function_comment = "function-level" in lower_text or "function comment" in lower_text
+    comments = "comment" in lower_text or "docstring" in lower_text
+    code_quality = (
+        file_comment
+        and type_comment
+        and function_comment
+        and comments
+        and ("best practice" in lower_text or "project-local" in lower_text)
+    )
+    steady_state_docs = (
+        "steady-state" in lower_text
+        and ("documentation" in lower_text or "docs" in lower_text)
+        and ("previous state" in lower_text or "older" in lower_text)
+    )
+    readme_operations = (
+        "readme" in lower_text
+        and (
+            "setup" in lower_text
+            or "installation" in lower_text
+            or "prerequisites" in lower_text
+        )
+        and (
+            "operation" in lower_text
+            or "operate" in lower_text
+            or "run or start" in lower_text
+            or "run/start" in lower_text
+        )
+    )
+    return code_quality and steady_state_docs and readme_operations
+
+
 def _bad_path_metadata_entries(text: str) -> list[dict]:
     lines = text.splitlines()
     active_section: str | None = None
@@ -153,6 +187,12 @@ def _validate_workflow_prompt(path: Path) -> dict:
                 or "full verification" in text.lower()
                 else "fail"
             ),
+        }
+    )
+    checks.append(
+        {
+            "id": "delivery_quality_signal",
+            "status": "pass" if _has_delivery_quality_signal(lower_text) else "fail",
         }
     )
     bad_path_entries = _bad_path_metadata_entries(text)

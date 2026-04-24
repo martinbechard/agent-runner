@@ -88,6 +88,20 @@ Verification discipline:
   preference unless the upstream approved artifacts require that detail or the
   missing detail changes the requirement's meaning. A compatible refinement is
   allowed; contradiction or unsupported exclusion is not.
+- Verify delivered code quality where code files changed. Code should follow
+  project-local best practices and include meaningful file-level, type-level,
+  and function-level comments or docstrings for public surfaces and non-obvious
+  behavior without adding comments that merely restate self-evident code.
+- Verify delivered documentation quality where documentation files changed.
+  Documentation should describe the steady-state software that exists now and
+  should not rely on reader knowledge of an older or previous state unless the
+  upstream request explicitly asks for migration notes, release notes, or
+  historical change documentation.
+- Verify README quality for application deliverables. A README for an
+  application should include typical setup and operation entries such as
+  prerequisites, installation or setup, configuration and environment
+  variables when applicable, run or start commands, test or verification
+  commands, and common operating notes.
 
 Output schema to satisfy:
 verification_commands:
@@ -129,6 +143,10 @@ Acceptance requirements:
   evidence
 - evidence.files, evidence.commands, and evidence.notes must all be present.
 - coverage_summary counts must match the actual requirement_results rows.
+- When code, documentation, or README files are part of the delivered change,
+  the report must not mark related requirements satisfied if those files fail
+  the applicable delivery-quality expectations for comments, steady-state
+  documentation, or application setup and operation guidance.
 - Do not create any files other than docs/verification/verification-report.yaml.
 - Write the full file contents to docs/verification/verification-report.yaml.
 
@@ -207,6 +225,12 @@ Focus your semantic review on these failure modes:
 10. Methodology self-validation leakage:
    - Flag reports that include methodology-internal validator/self-check
      commands in `verification_commands` or `requirement_results[*].evidence.commands`.
+11. Delivery-quality omission:
+   - Flag satisfied or partial implementation claims that ignore missing
+     project-local code best practices, missing meaningful file-level,
+     type-level, or function-level comments/docstrings in changed code,
+     transitional documentation that depends on previous-state knowledge, or
+     application README content that lacks setup and operation guidance.
 
 Review instructions:
 - Treat this phase as final verification of the real implemented workspace.
