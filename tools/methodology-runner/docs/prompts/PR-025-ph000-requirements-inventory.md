@@ -201,7 +201,8 @@ coverage_verdict:
 - On a retry, if cross-reference retry guidance is supplied and the two output
   artifacts already exist, you may read only those two artifacts before editing
   them. Use the retry guidance to revise the existing artifacts directly; do
-  not inspect any other filesystem content.
+  not rerun the deterministic bootstrap unless either artifact is missing, and
+  do not inspect any other filesystem content.
 - If the runtime does not expose a named file-write tool, use shell commands
   or the available file-edit mechanism to create the files directly.
 - After writing both files, review the coverage file against

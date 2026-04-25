@@ -158,6 +158,7 @@ def test_ph000_prompt_module_aligns_list_atomicity_and_retry_revision() -> None:
     assert "inline `or` lists describe alternative ways to satisfy one behavior" in text
     assert "if cross-reference retry guidance is supplied" in text
     assert "read only those two artifacts before editing\n  them" in text
+    assert "not rerun the deterministic bootstrap unless either artifact is missing" in text
 
 
 def test_ph000_cross_reference_allows_coherent_field_groups() -> None:

@@ -68,15 +68,69 @@ def _normalize(text: str) -> str:
 
 def _category_for(text: str) -> str:
     normalized = text.lower()
-    if any(
-        term in normalized
-        for term in ("must not", "do not", "only ", "outside", "local-only")
-    ):
-        return "constraint"
-    if any(term in normalized for term in ("should", "may", "can be")):
-        return "non_functional"
     if any(term in normalized for term in ("assuming", "given that", "provided that")):
         return "assumption"
+    if any(
+        term in normalized
+        for term in (
+            "must not",
+            "shall not",
+            "may not",
+            "cannot",
+            "can't",
+            "do not access",
+            "do not execute",
+            "do not expose",
+            "do not mutate",
+            "do not read",
+            "do not write",
+            "local-only",
+            "outside configured allowed roots",
+            "outside the configured allowed roots",
+            "outside allowed roots",
+            "arbitrary file reads",
+        )
+    ):
+        return "constraint"
+    if any(
+        term in normalized
+        for term in (
+            "must",
+            "shall",
+            "will",
+            "need to",
+            "needs to",
+            "build",
+            "include",
+            "contains",
+            "support",
+            "provide",
+            "show",
+            "expose",
+            "cover",
+            "handle",
+            "reject",
+            "run",
+            "load",
+            "parse",
+            "normalize",
+            "display",
+            "render",
+            "open",
+            "link",
+            "filter",
+            "toggle",
+            "sort",
+            "group",
+            "aggregate",
+            "document",
+            "implement",
+            "create",
+        )
+    ):
+        return "functional"
+    if any(term in normalized for term in ("should", "may", "can be")):
+        return "non_functional"
     return "functional"
 
 
