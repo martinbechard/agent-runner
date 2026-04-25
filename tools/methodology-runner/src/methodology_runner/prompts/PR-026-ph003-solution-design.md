@@ -86,7 +86,11 @@ Embedded directives for this step:
 
 Phase purpose:
 - Refine the architecture into explicit component responsibilities.
-- Map every FT-* feature to the components that realize it.
+- Map runtime/product FT-* features to the components that realize them.
+- Map README, documentation, automated-test, test-suite, verification-script,
+  and report features through concrete implementation files with artifact refs,
+  unless a real component directly owns the behavior being documented or
+  verified.
 - Assign concrete implementation paths for components and related artifacts.
 - Declare inter-component interactions where real data or control flows cross
   component boundaries.
@@ -185,8 +189,12 @@ Acceptance requirements:
   `implementation_files` entry using `artifact_ref: "ART-NNN"`.
 - Use `artifact_ref: null` for component source files that do not correspond
   to a PH-002 related artifact.
-- Every FT-* from docs/features/feature-specification.yaml must appear in at
-  least one component's feature_realization_map.
+- Every runtime/product FT-* from docs/features/feature-specification.yaml must
+  appear in at least one component's feature_realization_map.
+- Every support-artifact FT-* from docs/features/feature-specification.yaml must
+  appear in at least one implementation_files entry with features_supported and
+  an artifact_ref, unless a component directly owns the documented or verified
+  behavior and includes the FT-* in feature_realization_map.
 - feature_realization_map values must explain the component's contribution and
   must not be empty placeholders.
 - Every dependency on another component must be justified by at least one real
@@ -309,8 +317,11 @@ Focus your semantic review on these failure modes:
    - Flag technology assignments that are not at least indirectly supported by
      the stack manifest and feature specification.
 9. Untraced features:
-   - Flag any FT-* feature that is not materially realized by at least one
-     component.
+   - Flag any runtime/product FT-* feature that is not materially realized by
+     at least one component.
+   - Flag any support-artifact FT-* feature that is not covered by an
+     implementation_files entry with `features_supported` and `artifact_ref`,
+     unless a component directly owns the documented or verified behavior.
 
 Review instructions:
 - Use the deterministic validation report as authoritative for structural

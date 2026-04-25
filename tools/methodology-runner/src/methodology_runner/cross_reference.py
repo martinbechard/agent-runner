@@ -279,10 +279,15 @@ or report features that have no related artifact entry.
 
 ### 2. Coverage
 Read docs/features/feature-specification.yaml.  Collect all FT-NNN IDs.
-For each FT-NNN, verify it appears in at least one component's
-features_served list.  Flag any untraced features.
-For support-artifact features, also verify the FT-NNN appears in at least one
-related_artifacts entry.
+For runtime/product behavior features, verify each FT-NNN appears in at least
+one component's features_served list.  Flag any untraced runtime/product
+features.
+For support-artifact features such as README, documentation, automated-test,
+test-suite, verification-script, or report deliverables, verify the FT-NNN
+appears in at least one related_artifacts entry. Do not require these
+support-artifact features to also appear in component features_served unless a
+real code/system component directly owns the behavior being documented or
+verified.
 
 ### 3. Consistency
 Verify that:
@@ -350,8 +355,14 @@ For each implementation_files entry:
 
 ### 2. Coverage
 Read docs/features/feature-specification.yaml.  Collect all FT-NNN IDs.
-For each FT-NNN, verify it appears in at least one component's
-feature_realization_map.  Flag any untraced features.
+For runtime/product behavior features, verify each FT-NNN appears in at least
+one component's feature_realization_map.  Flag any untraced runtime/product
+features.
+For support-artifact features such as README, documentation, automated-test,
+test-suite, verification-script, or report deliverables, verify the FT-NNN is
+covered either by a component feature_realization_map or by at least one
+implementation_files entry with features_supported and the appropriate
+artifact_ref.
 Verify every CMP-* component appears in at least one implementation_files
 entry. Verify every Phase 2 ART-* related artifact appears in at least one
 implementation_files entry via artifact_ref.

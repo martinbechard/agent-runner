@@ -440,6 +440,13 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
         }
     )
 
+    support_feature_ids = [
+        str(feature.get("id"))
+        for feature in feature_spec.get("features", [])
+        if isinstance(feature.get("id"), str) and _is_support_feature(feature)
+    ]
+    support_feature_id_set = set(support_feature_ids)
+
     coverage: dict[str, list[str]] = {feature_id: [] for feature_id in feature_ids}
     empty_features_served: list[str] = []
     for component in architecture_design.get("components", []):
@@ -449,13 +456,18 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
             empty_features_served.append(component_id)
         for feature_id in features_served:
             coverage.setdefault(feature_id, []).append(component_id)
-    missing_feature_refs = [feature_id for feature_id in feature_ids if not coverage.get(feature_id)]
+    missing_feature_refs = [
+        feature_id
+        for feature_id in feature_ids
+        if feature_id not in support_feature_id_set and not coverage.get(feature_id)
+    ]
     checks.append(
         {
             "id": "feature_coverage",
             "status": "pass" if not missing_feature_refs and not empty_features_served else "fail",
             "missing_feature_refs": missing_feature_refs,
             "empty_features_served": empty_features_served,
+            "support_feature_refs": support_feature_ids,
             "coverage": coverage,
         }
     )
@@ -518,11 +530,6 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
     duplicate_related_artifacts = sorted(
         artifact_id for artifact_id in set(related_artifact_ids) if related_artifact_ids.count(artifact_id) > 1
     )
-    support_feature_ids = [
-        str(feature.get("id"))
-        for feature in feature_spec.get("features", [])
-        if isinstance(feature.get("id"), str) and _is_support_feature(feature)
-    ]
     missing_support_artifact_coverage = [
         feature_id for feature_id in support_feature_ids if not related_artifact_coverage.get(feature_id)
     ]

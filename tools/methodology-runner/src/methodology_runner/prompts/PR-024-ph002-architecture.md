@@ -47,7 +47,9 @@ structured-design architecture shape when it conflicts with this phase schema.
 
 Requirements:
 
-- Cover every FT-* feature at least once.
+- Cover every FT-* feature at least once through `components` for
+  runtime/product behavior or through `related_artifacts` for README,
+  documentation, test, verification, and report deliverables.
 - Prefer `FT-*` and `RI-*` traceability for architecture claims.
 - Use `AC-*` traceability only when a needed claim is not supported by a
   broader `FT-*` or `RI-*` statement.
@@ -65,9 +67,9 @@ Requirements:
   directory paths here. PH-003 solution design owns project-relative paths for
   source modules, README files, tests, scripts, and other deliverable files.
 - Features that require README content, documentation, automated tests, or
-  verification commands are covered by the code component whose behavior they
-  document or verify, plus a matching `related_artifacts` entry for the
-  required artifact.
+  verification commands are covered by a matching `related_artifacts` entry.
+  Component coverage is only required when a real code/system component
+  directly owns the behavior being documented or verified.
 - Every component must include at least one conceptual example that names a
   scenario, the expected outcome, and the FT-* feature refs it illustrates.
 - Every integration point must include at least one conceptual example flow
@@ -277,6 +279,10 @@ Review rules:
 - Reject missing `related_artifacts` coverage for requested README,
   documentation, automated test, test-suite, verification-script, or report
   deliverables.
+- Do not reject support-artifact features solely because they are absent from
+  `components[*].features_served`; related artifact coverage is their PH-002
+  ownership path unless a real code/system component directly owns the behavior
+  being documented or verified.
 - Reject `related_artifacts` entries that assign concrete file or directory
   paths. Architecture is conceptual; PH-003 solution design assigns paths.
 - Reject `related_artifacts` entries that reference unknown `CMP-*` components

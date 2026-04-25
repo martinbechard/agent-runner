@@ -197,6 +197,97 @@ rationale: "One CLI component owns runtime behavior, README guidance, and tests 
     assert report["overall_status"] == "pass"
 
 
+def test_phase_2_validation_accepts_support_features_covered_by_related_artifacts_only(
+    tmp_path: Path,
+) -> None:
+    """Allow documentation and verification features to stay out of code components."""
+    architecture = _write(
+        tmp_path / "docs" / "architecture" / "architecture-design.yaml",
+        """components:
+  - id: "CMP-001"
+    name: "Hello World CLI application"
+    role: "runtime"
+    technology: "Python"
+    runtime: "Python 3"
+    frameworks: []
+    persistence: "none"
+    expected_expertise: ["Python command-line application development"]
+    features_served: ["FT-001"]
+    simulation_target: false
+    simulation_boundary: "none"
+    examples:
+      - name: "Run hello world"
+        scenario: "A user runs the CLI from a shell."
+        expected_outcome: "The CLI prints the required greeting and exits successfully."
+        feature_refs: ["FT-001"]
+related_artifacts:
+  - id: "ART-001"
+    name: "Run instructions README"
+    artifact_type: "readme"
+    scope: "system"
+    related_components: ["CMP-001"]
+    features_served: ["FT-002"]
+  - id: "ART-002"
+    name: "CLI output test"
+    artifact_type: "automated-test"
+    scope: "component"
+    related_components: ["CMP-001"]
+    features_served: ["FT-003"]
+integration_points: []
+rationale: "One CLI component owns runtime behavior; README guidance and tests are related artifacts."
+""",
+    )
+
+    report = build_report(architecture, _feature_spec(tmp_path), _requirements_inventory(tmp_path))
+
+    assert report["overall_status"] == "pass"
+    feature_coverage_check = _check(report, "feature_coverage")
+    assert feature_coverage_check["missing_feature_refs"] == []
+    assert feature_coverage_check["support_feature_refs"] == ["FT-002", "FT-003"]
+
+
+def test_phase_2_validation_requires_runtime_features_to_have_components(
+    tmp_path: Path,
+) -> None:
+    """Do not let related artifacts substitute for runtime feature ownership."""
+    architecture = _write(
+        tmp_path / "docs" / "architecture" / "architecture-design.yaml",
+        """components:
+  - id: "CMP-001"
+    name: "Placeholder CLI application"
+    role: "runtime"
+    technology: "Python"
+    runtime: "Python 3"
+    frameworks: []
+    persistence: "none"
+    expected_expertise: ["Python command-line application development"]
+    features_served: []
+    simulation_target: false
+    simulation_boundary: "none"
+    examples:
+      - name: "No runtime feature"
+        scenario: "No feature is assigned to the runtime."
+        expected_outcome: "No runtime behavior is owned."
+        feature_refs: ["FT-001"]
+related_artifacts:
+  - id: "ART-001"
+    name: "Run instructions README"
+    artifact_type: "readme"
+    scope: "system"
+    related_components: ["CMP-001"]
+    features_served: ["FT-001", "FT-002", "FT-003"]
+integration_points: []
+rationale: "Incorrectly places runtime behavior in a README artifact."
+""",
+    )
+
+    report = build_report(architecture, _feature_spec(tmp_path), _requirements_inventory(tmp_path))
+
+    feature_coverage_check = _check(report, "feature_coverage")
+    assert feature_coverage_check["status"] == "fail"
+    assert feature_coverage_check["missing_feature_refs"] == ["FT-001"]
+
+
 def test_phase_2_validation_requires_related_artifacts_for_support_features(
     tmp_path: Path,
 ) -> None:

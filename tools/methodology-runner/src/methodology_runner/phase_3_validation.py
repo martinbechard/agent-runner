@@ -48,6 +48,19 @@ REQUIRED_INTERACTION_FIELDS = [
     "triggered_by",
 ]
 ALLOWED_PROTOCOLS = {"sync-call", "async-message", "event", "shared-store"}
+SUPPORT_FEATURE_MARKERS = (
+    "readme",
+    "documentation",
+    "document",
+    "run instruction",
+    "run instructions",
+    "runbook",
+    "automated test",
+    "test suite",
+    "verification",
+    "verify",
+    "report",
+)
 
 
 def _load_yaml(path: Path):
@@ -93,6 +106,34 @@ def _architecture_related_artifact_ids(architecture: dict) -> set[str]:
     }
 
 
+def _architecture_related_artifact_features(architecture: dict) -> set[str]:
+    """Return FT-* IDs served by PH-002 related artifacts."""
+    related_artifacts = architecture.get("related_artifacts", [])
+    if not isinstance(related_artifacts, list):
+        return set()
+    return {
+        feature
+        for artifact in related_artifacts
+        if isinstance(artifact, dict)
+        for feature in artifact.get("features_served", [])
+        if isinstance(feature, str)
+    }
+
+
+def _is_support_feature(feature: dict) -> bool:
+    """Return whether a feature describes a non-component support artifact."""
+    text_parts: list[str] = []
+    for key in ("name", "description"):
+        value = feature.get(key)
+        if isinstance(value, str):
+            text_parts.append(value)
+    for criterion in feature.get("acceptance_criteria", []):
+        if isinstance(criterion, dict) and isinstance(criterion.get("description"), str):
+            text_parts.append(criterion["description"])
+    normalized = " ".join(text_parts).lower()
+    return any(marker in normalized for marker in SUPPORT_FEATURE_MARKERS)
+
+
 def _has_html_markup(value) -> bool:
     """Return whether a value looks like a non-empty HTML fragment."""
     return isinstance(value, str) and "<" in value and ">" in value and bool(value.strip())
@@ -112,12 +153,18 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
     interactions = design.get("interactions", [])
     component_ids = {component.get("id") for component in components}
     feature_ids = {feature.get("id") for feature in feature_spec.get("features", [])}
+    support_feature_ids = {
+        feature.get("id")
+        for feature in feature_spec.get("features", [])
+        if isinstance(feature.get("id"), str) and _is_support_feature(feature)
+    }
 
     missing_component_fields = []
     orphan_components = []
     processing_function_issues = []
     ui_surface_issues = []
     covered_features = set()
+    file_supported_features = set()
     for component in components:
         missing = [field for field in REQUIRED_COMPONENT_FIELDS if field not in component]
         if missing:
@@ -235,9 +282,6 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
     checks.append({"id": "processing_function_examples", "status": "pass" if not processing_function_issues else "fail", "details": processing_function_issues})
     checks.append({"id": "ui_html_mockups", "status": "pass" if not ui_surface_issues else "fail", "details": ui_surface_issues})
 
-    uncovered_features = sorted(feature_ids - covered_features)
-    checks.append({"id": "feature_coverage", "status": "pass" if not uncovered_features else "fail", "uncovered_features": uncovered_features})
-
     architecture_artifact_ids = _architecture_related_artifact_ids(architecture)
     implementation_file_issues = []
     file_component_refs: set[str] = set()
@@ -317,6 +361,8 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
                         "feature_ref": feature_ref,
                     }
                 )
+                continue
+            file_supported_features.add(feature_ref)
         if not isinstance(implementation_file.get("purpose"), str) or not implementation_file["purpose"].strip():
             implementation_file_issues.append({"path": path, "issue": "blank_purpose"})
     missing_component_file_refs = sorted(
@@ -334,6 +380,23 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
             "details": implementation_file_issues,
             "missing_component_refs": missing_component_file_refs,
             "missing_artifact_refs": missing_artifact_file_refs,
+        }
+    )
+
+    uncovered_component_features = sorted((feature_ids - support_feature_ids) - covered_features)
+    uncovered_support_features = sorted(
+        feature_id
+        for feature_id in support_feature_ids
+        if feature_id not in covered_features and feature_id not in file_supported_features
+    )
+    uncovered_features = sorted(set(uncovered_component_features) | set(uncovered_support_features))
+    checks.append(
+        {
+            "id": "feature_coverage",
+            "status": "pass" if not uncovered_features else "fail",
+            "uncovered_features": uncovered_features,
+            "uncovered_component_features": uncovered_component_features,
+            "uncovered_support_features": uncovered_support_features,
         }
     )
 
@@ -370,7 +433,13 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
         architecture_components = architecture.get("components", [])
 
     stack_features = _architecture_stack_features(architecture_components)
-    stack_alignment_failures = sorted(feature_ids - stack_features)
+    stack_related_artifact_features = _architecture_related_artifact_features(architecture)
+    stack_alignment_failures = sorted(
+        feature_id
+        for feature_id in feature_ids
+        if feature_id not in stack_features
+        and (feature_id not in support_feature_ids or feature_id not in stack_related_artifact_features)
+    )
     checks.append({"id": "stack_alignment", "status": "pass" if not stack_alignment_failures else "fail", "details": stack_alignment_failures})
 
     failed = [check["id"] for check in checks if check["status"] != "pass"]

@@ -413,9 +413,10 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
     output_format="yaml",
     expected_output_files=[_OUTPUT_PHASE_2],
     extraction_focus=(
-        "Component completeness: every feature from the feature spec\n"
-        "must be served by at least one declared code/system component;\n"
-        "support-artifact features must also be listed as conceptual related artifacts.  Technology\n"
+        "Component completeness: every runtime/product feature from the\n"
+        "feature spec must be served by at least one declared code/system\n"
+        "component; support-artifact features may be covered by conceptual\n"
+        "related_artifacts without forcing fake runtime ownership.  Technology\n"
         "coherence: each component has a single named technology and a\n"
         "coherent frameworks list.  Expertise articulation: each\n"
         "component declares a non-empty expected_expertise list of\n"
@@ -425,8 +426,8 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
         "point. Example concreteness: every component and integration\n"
         "point includes conceptual examples with scenarios and expected\n"
         "outcomes tied to FT-* refs. Support-artifact discipline: README files, docs,\n"
-        "tests, and verification scripts are related_artifacts or component\n"
-        "responsibilities, not components, unless the requested system\n"
+        "tests, and verification scripts are related_artifacts, not\n"
+        "components, unless the requested system\n"
         "explicitly needs them as runtime services. Simulation target discipline: only\n"
         "provider components consumed by another real runtime component\n"
         "through an implementation boundary should be marked as simulation\n"
@@ -515,9 +516,10 @@ _PHASE_2_ARCHITECTURE = PhaseConfig(
         "clear component boundaries, real integration points, and faithful\n"
         "coverage of requested features without unnecessary structure.\n"
         "\n"
-        "1. Feature coverage gaps: every FT-* feature from Phase 1 must\n"
-        "   appear in at least one component's features_served list, and\n"
-        "   support-artifact features must also appear in related_artifacts.\n"
+        "1. Feature coverage gaps: every runtime/product FT-* feature from\n"
+        "   Phase 1 must appear in at least one component's features_served\n"
+        "   list, and support-artifact features must appear in\n"
+        "   related_artifacts without requiring fake runtime ownership.\n"
         "2. Component usefulness: flag components that do not serve a feature\n"
         "   or do not represent a coherent ownership boundary.\n"
         "3. Orphan integration points: every integration_point must\n"
@@ -638,8 +640,10 @@ _PHASE_3 = PhaseConfig(
     output_format="yaml",
     expected_output_files=[_OUTPUT_PHASE_3],
     extraction_focus=(
-        "Feature realization: every FT-* feature must appear in at least\n"
-        "one component's feature_realization_map.  Boundary clarity: each\n"
+        "Feature realization: every runtime/product FT-* feature must\n"
+        "appear in at least one component's feature_realization_map, while\n"
+        "support-artifact features may be covered by implementation_files\n"
+        "with artifact_ref.  Boundary clarity: each\n"
         "component has a well-defined responsibility boundary -- no two\n"
         "components own the same data entity or operation.  Interaction\n"
         "completeness: every data flow between components is captured as\n"
@@ -694,8 +698,11 @@ _PHASE_3 = PhaseConfig(
         "Design for separation of concerns.  Each component should have a\n"
         "single primary responsibility.  Interactions capture all data\n"
         "flows -- if component A needs data owned by component B, there\n"
-        "must be an INT-* interaction.  Map every feature to the components\n"
-        "that collaborate to deliver it via feature_realization_map."
+        "must be an INT-* interaction.  Map runtime/product features to the\n"
+        "components that collaborate to deliver them via feature_realization_map;\n"
+        "map support-artifact features through implementation_files with\n"
+        "artifact_ref unless a code component directly owns the documented or\n"
+        "verified behavior."
         " For each specified processing function, include input/output\n"
         "examples. For each specified UI surface, include an HTML mockup.\n"
         "PH-002 architecture is conceptual and does not own file paths;\n"
@@ -721,8 +728,11 @@ _PHASE_3 = PhaseConfig(
         "5. Implicit state sharing: flag cases where two components appear\n"
         "   to read or write the same data entity without an explicit\n"
         "   INT-* interaction.\n"
-        "6. Untraced features: every FT-NNN from Phase 1 must appear in\n"
-        "   at least one component's feature_realization_map.\n"
+        "6. Untraced features: every runtime/product FT-NNN from Phase 1\n"
+        "   must appear in at least one component's feature_realization_map;\n"
+        "   support-artifact FT-NNN entries must be covered by concrete\n"
+        "   implementation_files with artifact_ref or by a real component\n"
+        "   only when that component directly owns the behavior.\n"
         "7. Missing processing examples: every specified processing function\n"
         "   needs at least one concrete input/output example.\n"
         "8. Missing UI mockups: every specified UI surface needs an HTML mockup."
@@ -769,9 +779,10 @@ _PHASE_3 = PhaseConfig(
     ),
     checklist_examples_good=[
         (
-            "Every FT-* feature from Phase 1 appears in at least one "
-            "component's feature_realization_map with a description of "
-            "how the component contributes to delivering it"
+            "Every runtime/product FT-* feature from Phase 1 appears in "
+            "at least one component's feature_realization_map, and every "
+            "support-artifact FT-* feature is covered by a concrete "
+            "implementation_files entry with artifact_ref"
         ),
         (
             "Every dependency edge between components has a corresponding "
