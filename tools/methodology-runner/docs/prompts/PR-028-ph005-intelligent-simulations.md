@@ -74,6 +74,19 @@ Embedded directives for this step:
   at the level needed for integration scenarios. Simple stateless fakes are
   acceptable for simple boundaries; stateful fakes, configurable errors, or
   richer behavior are required when the integration point needs them.
+- For every referenced contract operation, enumerate the request fields, normal
+  outcomes, error outcomes, and enum/literal value sets that downstream
+  consumers can observe. The simulation implementation must model each
+  contract-visible outcome family needed for integration, not only the happy
+  path.
+- Static type annotations are not runtime validation. When a contract can be
+  called through JavaScript, JSON, CLI arguments, HTTP, dependency injection, or
+  another dynamic seam, the fake must defensively validate enum/literal request
+  fields before lookup or dispatch and return the contract's declared invalid
+  request outcome for unsupported runtime values.
+- Do not collapse contract-visible failures into generic thrown exceptions or
+  misleading fallback errors unless the interface contract explicitly defines
+  exceptions as the boundary behavior.
 
 Phase purpose:
 - Turn architecture component boundaries into concrete simulation stubs.
@@ -225,6 +238,10 @@ Acceptance requirements:
 - The generated implementation source must import, implement, extend, conform
   to, or otherwise explicitly bind to the declared interface in a way the
   compile/check command verifies.
+- The generated implementation must map every referenced contract operation's
+  success and error outcome families into executable fake behavior, including
+  invalid-request cases for unsupported enum/literal request values when the
+  boundary can receive runtime data.
 - Do not output the legacy contract-scenario schema with `contract_ref`,
   `scenario_bank`, `llm_adjuster`, or assertion-only scenario banks as the
   primary simulation shape.
@@ -317,6 +334,11 @@ Focus your semantic review on these failure modes:
 7. Contract underuse:
    - Flag simulations that ignore contract operations attached to the simulated
      component's integration points.
+   - Flag simulations that claim an invalid-request or structured error family
+     but validate only one member of that family.
+   - Flag simulations that rely on static type annotations as the only guard
+     for enum/literal request values that may arrive through runtime seams such
+     as JavaScript, JSON, CLI, API, or dependency injection.
 8. Unsupported toolchain:
    - Flag source files or commands that invent dependencies, frameworks, or
      language tooling not justified by the upstream artifacts.
@@ -334,6 +356,9 @@ Review instructions:
   contracts do not require richer behavior.
 - Require stateful or configurable behavior when consumers need to exercise
   multiple outcomes, errors, or edge cases through the same interface.
+- When giving revise feedback for one missing contract-visible error case, make
+  the corrective rule cover the whole related outcome family so the next
+  generator pass repairs siblings, not just the cited example.
 - If you find issues, cite exact SIM-* and CMP-* IDs.
 - For each material correction, include at least one corrective rule in this form:
   - RULE: the generator MUST / MUST NOT / SHOULD / SHOULD NOT make a specific change

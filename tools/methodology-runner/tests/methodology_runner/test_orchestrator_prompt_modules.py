@@ -391,6 +391,9 @@ def test_ph005_prompt_module_requires_compile_checked_component_simulations() ->
     assert "Every simulation must document how downstream work should use it" in text
     assert "Every simulation must list every created simulation artifact" in text
     assert "phase_6_usage" in text
+    assert "Static type annotations are not runtime validation" in text
+    assert "validate enum/literal request" in text
+    assert "contract-visible outcome family" in text
 
 
 def test_ph005_skips_prompt_runner_when_architecture_has_no_simulation_targets(
