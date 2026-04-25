@@ -139,6 +139,25 @@ def test_ph002_prompt_module_requires_compact_architecture_schema() -> None:
     assert "Architecture is conceptual; PH-003 solution design assigns paths" in text
 
 
+def test_ph000_prompt_module_aligns_list_atomicity_and_retry_revision() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-025-ph000-requirements-inventory.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "requirement-bearing lead-in such as \"must support\", \"must include\"" in text
+    assert "each listed entry is\n  independently satisfiable" in text
+    assert "comma-separated field in a list item" in text
+    assert "Use only contiguous source wording in verbatim_quote" in text
+    assert "inline `or` lists describe alternative ways to satisfy one behavior" in text
+    assert "if cross-reference retry guidance is supplied" in text
+    assert "read only those two artifacts before editing\n  them" in text
+
+
 def test_ph003_prompt_module_requires_processing_examples_ui_mockups_and_files() -> None:
     prompt_path = (
         Path(__file__).resolve().parents[2]

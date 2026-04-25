@@ -48,6 +48,21 @@ Constraints:
   process each section, paragraph, bullet, and table row in order.
 - Extract every requirement-bearing statement, constraint, assumption, and
   explicit definition-of-done check.
+- Treat a list item as a requirement-bearing source span when it appears under
+  a requirement-bearing lead-in such as "must support", "must include",
+  "must show", "must provide", "must expose", "must cover", or "must handle".
+  In these cases, the lead-in supplies local context, but each listed entry is
+  independently satisfiable unless the list item itself says otherwise.
+- For enumerated support/include/show/cover lists, create separate RI items for
+  each independently satisfiable bullet, numbered list item, table row, or
+  comma-separated field in a list item when each child can use an exact
+  contiguous source phrase as its verbatim_quote.
+- Use only contiguous source wording in verbatim_quote. Do not concatenate
+  non-adjacent bullets, skip intervening bullets inside one quote, or quote an
+  entire list when the individual entries are separately satisfiable.
+- When a lead-in sentence is needed to make a listed entry standalone, include
+  that context in normalized_requirement and source_location rather than
+  expanding verbatim_quote beyond the exact listed entry.
 - For each RI item:
   - keep the exact source wording in verbatim_quote
   - write normalized_requirement as a coherent standalone software
@@ -60,7 +75,7 @@ Constraints:
     verbatim_quote
 - Do not split when:
   - the clauses are inseparable parts of one behavior
-  - `or` lists options inside one capability
+  - inline `or` lists describe alternative ways to satisfy one behavior
   - splitting would require rewritten, normalized, or invented child quotes
 - If a sentence is semantically compound but exact child quotes do not exist,
   keep the original sentence as one RI item and let the separate coverage file
@@ -164,6 +179,10 @@ coverage_verdict:
 - Do not create any files other than:
   docs/requirements/requirements-inventory.yaml
   docs/requirements/requirements-inventory-coverage.yaml
+- On a retry, if cross-reference retry guidance is supplied and the two output
+  artifacts already exist, you may read only those two artifacts before editing
+  them. Use the retry guidance to revise the existing artifacts directly; do
+  not inspect any other filesystem content.
 - If the runtime does not expose a named file-write tool, use shell commands
   or the available file-edit mechanism to create the files directly.
 - After writing both files, review the coverage file against
