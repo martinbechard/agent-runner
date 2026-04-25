@@ -13,6 +13,7 @@ from prompt_runner.runner import (
     SHELL_PORTABILITY_INSTRUCTION,
     RUN_FILES_DIRNAME,
     PriorArtifact,
+    _git_commit_current_state,
     _missing_required_files,
     _render_prompt_pair,
     build_initial_generator_message,
@@ -607,6 +608,53 @@ def test_is_snapshot_excluded_catches_common_junk():
     assert _is_snapshot_excluded(Path(".DS_Store"))
     assert not _is_snapshot_excluded(Path("src/cli/foo.py"))
     assert not _is_snapshot_excluded(Path("docs/design/CD-001-x.md"))
+
+
+def test_git_commit_current_state_excludes_runner_and_dependency_artifacts(
+    tmp_path: Path,
+):
+    worktree = tmp_path / "worktree"
+    worktree.mkdir()
+    subprocess.run(["git", "init"], cwd=worktree, check=True, capture_output=True)
+    subprocess.run(
+        ["git", "config", "user.name", "Prompt Runner Tests"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+    )
+    subprocess.run(
+        ["git", "config", "user.email", "prompt-runner-tests@example.com"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+    )
+
+    (worktree / "docs").mkdir()
+    (worktree / "docs" / "out.txt").write_text("artifact\n", encoding="utf-8")
+    (worktree / ".run-files").mkdir()
+    (worktree / ".run-files" / "process.log").write_text("log\n", encoding="utf-8")
+    (worktree / ".methodology-runner").mkdir()
+    (worktree / ".methodology-runner" / "state.json").write_text("{}", encoding="utf-8")
+    (worktree / "node_modules" / "pkg").mkdir(parents=True)
+    (worktree / "node_modules" / "pkg" / "index.js").write_text(
+        "module.exports = {};\n",
+        encoding="utf-8",
+    )
+
+    _git_commit_current_state(worktree, "prompt-runner: prompt 1 Alpha")
+
+    tracked = subprocess.run(
+        ["git", "ls-tree", "-r", "--name-only", "HEAD"],
+        cwd=worktree,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.splitlines()
+
+    assert "docs/out.txt" in tracked
+    assert not any(path.startswith(".run-files/") for path in tracked)
+    assert not any(path.startswith(".methodology-runner/") for path in tracked)
+    assert not any(path.startswith("node_modules/") for path in tracked)
 
 
 def test_snapshot_and_diff_detects_new_file(tmp_path: Path):

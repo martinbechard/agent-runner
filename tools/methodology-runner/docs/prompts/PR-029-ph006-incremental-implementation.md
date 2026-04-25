@@ -56,6 +56,12 @@ Phase purpose:
   files must use the declared PH-003 paths exactly. Do not substitute a
   different filename for the same artifact unless the upstream request
   explicitly requires a path change.
+- Treat project-hygiene files required by the selected toolchain as legitimate
+  supporting configuration even when they are not modeled as system components.
+  For a package-managed application or library, the implementation workflow
+  must create or update the project ignore file such as `.gitignore` early
+  enough that dependency installs, build outputs, coverage files, framework
+  caches, and runner-local state cannot become source-controlled deliverables.
 
 Important implementation discipline:
 - This phase is planning the implementation workflow, not writing another
@@ -75,6 +81,10 @@ Important implementation discipline:
   of requiring a missing file.
 - Use `### Checks Files` for durable files the child prompt may create or
   update.
+- When a child prompt bootstraps a package manager, framework, build tool, or
+  test runner, include the repository ignore file in `### Checks Files` and
+  instruct the child to cover common dependency, cache, build, coverage, and
+  runner-local artifact paths for that technology.
 - Treat PH-005 simulations as component stubs with explicit language interfaces,
   not as simulations of test suites. Child prompts may use those stubs to focus
   integration tests while dependent components are still unbuilt.
@@ -191,6 +201,10 @@ Output contract:
     transitional prose about a previous software state
   - require application README updates to include setup and operation entries
     when the implemented system is an application
+  - require package-managed applications or libraries to create or update the
+    repository ignore file before dependency installation artifacts can be
+    committed, covering dependency directories, build outputs, coverage output,
+    framework caches, and runner-local state
   - require an explicit generator response structure with exactly these
     section headings:
     - `## Files Created Or Updated`
@@ -441,7 +455,13 @@ Focus your semantic review on these failure modes:
    - Flag workflows for application deliverables that do not require README
      setup and operation entries such as prerequisites, setup, configuration,
      run/start commands, test/verification commands, and operating notes.
-12. Simulation misuse:
+12. Unsafe toolchain bootstrap:
+   - Flag workflows for package-managed applications or libraries that install
+     dependencies, create build/test tooling, or generate framework caches
+     without creating or updating a repository ignore file such as `.gitignore`
+     to exclude dependency directories, build outputs, coverage output,
+     framework caches, and runner-local state from source control.
+13. Simulation misuse:
    - Flag workflows that treat PH-005 simulations as test-suite simulations
      instead of component stubs with explicit interfaces.
    - Flag workflows that ignore declared simulation interfaces when building a

@@ -90,6 +90,25 @@ SHELL_PORTABILITY_INSTRUCTION = (
 )
 _HORIZONTAL_RULE = "\n\n---\n\n"
 RUN_FILES_DIRNAME = ".run-files"
+_GIT_COMMIT_EXCLUDED_PATHS: tuple[str, ...] = (
+    ".methodology-runner",
+    ".prompt-runner",
+    RUN_FILES_DIRNAME,
+    "prompt-runner-files",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".next",
+    ".turbo",
+    ".vercel",
+    "coverage",
+    "dist",
+    "build",
+)
 
 # Stable namespace for deterministic session-ID UUID generation.
 # The Claude CLI requires --session-id to be a valid UUID, so we map our
@@ -973,8 +992,36 @@ def _git_has_changes(
     return bool(_git_status_paths(worktree_dir, extra_excluded_roots))
 
 
+def _git_stageable_status_paths(worktree_dir: Path) -> list[Path]:
+    """Return changed paths that should be staged by runner-managed commits."""
+    proc = _git(
+        ["status", "--porcelain=v1", "--untracked-files=all", "-z"],
+        cwd=worktree_dir,
+    )
+    raw_entries = [entry for entry in proc.stdout.split("\0") if entry]
+    changed: list[Path] = []
+    i = 0
+    while i < len(raw_entries):
+        entry = raw_entries[i]
+        if len(entry) < 4:
+            i += 1
+            continue
+        code = entry[:2]
+        paths = [Path(entry[3:])]
+        if code.startswith("R") or code.startswith("C"):
+            i += 1
+            if i >= len(raw_entries):
+                break
+            paths.append(Path(raw_entries[i]))
+        for rel in paths:
+            if not _is_snapshot_excluded(rel):
+                changed.append(rel)
+        i += 1
+    return sorted(dict.fromkeys(changed))
+
+
 def _git_commit_prompt_changes(worktree_dir: Path, pair: PromptPair) -> None:
-    _git(["add", "-A"], cwd=worktree_dir)
+    _git_add_relevant_changes(worktree_dir)
     proc = _git(["diff", "--cached", "--quiet"], cwd=worktree_dir, check=False)
     if proc.returncode == 0:
         return
@@ -1008,7 +1055,7 @@ def _using_git_change_tracking(worktree_dir: Path, run_dir: Path) -> bool:
 
 
 def _git_commit_current_state(worktree_dir: Path, message: str) -> None:
-    _git(["add", "-A"], cwd=worktree_dir)
+    _git_add_relevant_changes(worktree_dir)
     proc = _git(["diff", "--cached", "--quiet"], cwd=worktree_dir, check=False)
     if proc.returncode == 0:
         return
@@ -1023,6 +1070,15 @@ def _git_commit_current_state(worktree_dir: Path, message: str) -> None:
         ],
         cwd=worktree_dir,
     )
+
+
+def _git_add_relevant_changes(worktree_dir: Path) -> None:
+    """Stage project changes while excluding runner state and local caches."""
+    _ensure_run_files_gitignored(worktree_dir)
+    changed_paths = _git_stageable_status_paths(worktree_dir)
+    if not changed_paths:
+        return
+    _git(["add", "-A", "--", *map(str, changed_paths)], cwd=worktree_dir)
 
 
 # Directory names that are always skipped when snapshotting or diffing the
@@ -1274,7 +1330,7 @@ def _excluded_run_roots(worktree_dir: Path, run_dir: Path) -> tuple[Path, ...]:
 
 
 def _ensure_run_files_gitignored(run_dir: Path) -> None:
-    entry = f"{RUN_FILES_DIRNAME}/"
+    entries = tuple(f"{path}/" for path in _GIT_COMMIT_EXCLUDED_PATHS)
     if _git_is_worktree(run_dir):
         proc = _git(["rev-parse", "--git-path", "info/exclude"], cwd=run_dir)
         raw_exclude_path = Path(proc.stdout.strip())
@@ -1288,23 +1344,25 @@ def _ensure_run_files_gitignored(run_dir: Path) -> None:
             exclude_path.read_text(encoding="utf-8").splitlines()
             if exclude_path.exists() else []
         )
-        if entry in existing:
+        missing_entries = [entry for entry in entries if entry not in existing]
+        if not missing_entries:
             return
         content = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
         suffix = "" if content.endswith("\n") or content == "" else "\n"
-        _write(exclude_path, content + suffix + entry + "\n")
+        _write(exclude_path, content + suffix + "\n".join(missing_entries) + "\n")
         return
 
     gitignore_path = run_dir / ".gitignore"
     if gitignore_path.exists():
         existing = gitignore_path.read_text(encoding="utf-8").splitlines()
-        if entry in existing:
+        missing_entries = [entry for entry in entries if entry not in existing]
+        if not missing_entries:
             return
         content = gitignore_path.read_text(encoding="utf-8")
         suffix = "" if content.endswith("\n") or content == "" else "\n"
-        _write(gitignore_path, content + suffix + entry + "\n")
+        _write(gitignore_path, content + suffix + "\n".join(missing_entries) + "\n")
         return
-    _write(gitignore_path, entry + "\n")
+    _write(gitignore_path, "\n".join(entries) + "\n")
 
 
 def _read_saved_prompt_artifact_text(

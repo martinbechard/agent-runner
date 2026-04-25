@@ -5,7 +5,11 @@ import subprocess
 from pathlib import Path
 
 from methodology_runner.models import ProjectState
-from methodology_runner.orchestrator import PipelineConfig, _automate_completed_lifecycle
+from methodology_runner.orchestrator import (
+    PipelineConfig,
+    _automate_completed_lifecycle,
+    _git_commit,
+)
 
 
 def test_completed_lifecycle_can_skip_target_merge(tmp_path: Path) -> None:
@@ -57,6 +61,28 @@ def test_completed_lifecycle_can_skip_target_merge(tmp_path: Path) -> None:
     assert handoff["source_branch"] == "feature-add-search"
     assert handoff["target_branch"] == "main"
     assert handoff["source_commit"]
+
+
+def test_git_commit_excludes_runner_and_dependency_artifacts(tmp_path: Path) -> None:
+    repo = tmp_path / "app"
+    repo.mkdir()
+    _git(repo, "init", "-b", "main")
+    _git(repo, "config", "user.email", "tester@example.com")
+    _git(repo, "config", "user.name", "Tester")
+
+    _write(repo / "src/app.ts", "export const value = 1;\n")
+    _write(repo / ".run-files/process.log", "runtime log\n")
+    _write(repo / ".methodology-runner/state.json", "{}\n")
+    _write(repo / "node_modules/pkg/index.js", "module.exports = {};\n")
+
+    _git_commit(repo, "Commit app source")
+
+    tracked = _git(repo, "ls-tree", "-r", "--name-only", "HEAD").splitlines()
+
+    assert "src/app.ts" in tracked
+    assert not any(path.startswith(".run-files/") for path in tracked)
+    assert not any(path.startswith(".methodology-runner/") for path in tracked)
+    assert not any(path.startswith("node_modules/") for path in tracked)
 
 
 def _write_lifecycle_inputs(workspace: Path) -> None:

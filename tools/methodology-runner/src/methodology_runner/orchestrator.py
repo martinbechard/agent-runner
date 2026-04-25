@@ -83,6 +83,27 @@ METHODOLOGY_DIR = ".methodology-runner"
 RUN_FILES_DIRNAME = ".run-files"
 """Shared execution-artifact root in the workspace."""
 
+GIT_COMMIT_EXCLUDED_PATHS = (
+    METHODOLOGY_DIR,
+    RUN_FILES_DIRNAME,
+    ".prompt-runner",
+    "prompt-runner-files",
+    ".venv",
+    "venv",
+    "node_modules",
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".next",
+    ".turbo",
+    ".vercel",
+    "coverage",
+    "dist",
+    "build",
+)
+"""Workspace-local control, dependency, and build paths excluded from commits."""
+
 METHODOLOGY_RUN_FILES_SUBDIR = "methodology-runner"
 """Methodology-owned artifacts within the shared .run-files tree."""
 
@@ -324,10 +345,12 @@ def _git(workspace: Path, *args: str) -> str:
 def _git_init(workspace: Path) -> None:
     """Initialize a git repo in *workspace* if not already present."""
     if (workspace / ".git").exists():
+        _ensure_workspace_git_excludes(workspace)
         return
     _git(workspace, "init")
     _git(workspace, "config", "user.email", "methodology-runner@local")
     _git(workspace, "config", "user.name", "Methodology Runner")
+    _ensure_workspace_git_excludes(workspace)
 
 
 def _git_commit(workspace: Path, message: str) -> str:
@@ -335,12 +358,95 @@ def _git_commit(workspace: Path, message: str) -> str:
 
     If there are no changes to commit, returns the current HEAD hash.
     """
-    _git(workspace, "add", "-A")
-    status = _git(workspace, "status", "--porcelain")
-    if not status:
+    _git_add_relevant_changes(workspace)
+    staged = subprocess.run(
+        ["git", "diff", "--cached", "--quiet"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+    )
+    if staged.returncode == 0:
         return _git(workspace, "rev-parse", "HEAD")
     _git(workspace, "commit", "-m", message)
     return _git(workspace, "rev-parse", "HEAD")
+
+
+def _git_add_relevant_changes(workspace: Path) -> None:
+    """Stage software and methodology deliverables while excluding local state."""
+    _ensure_workspace_git_excludes(workspace)
+    changed_paths = _git_stageable_status_paths(workspace)
+    if not changed_paths:
+        return
+    _git(workspace, "add", "-A", "--", *map(str, changed_paths))
+
+
+def _git_stageable_status_paths(workspace: Path) -> list[Path]:
+    """Return changed paths that should be staged by methodology commits."""
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all", "-z"],
+        cwd=workspace,
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout
+    raw_entries = [entry for entry in status.split("\0") if entry]
+    changed: list[Path] = []
+    i = 0
+    while i < len(raw_entries):
+        entry = raw_entries[i]
+        if len(entry) < 4:
+            i += 1
+            continue
+        code = entry[:2]
+        paths = [Path(entry[3:])]
+        if code.startswith("R") or code.startswith("C"):
+            i += 1
+            if i >= len(raw_entries):
+                break
+            paths.append(Path(raw_entries[i]))
+        for rel in paths:
+            if not _is_git_commit_excluded(rel):
+                changed.append(rel)
+        i += 1
+    return sorted(dict.fromkeys(changed))
+
+
+def _is_git_commit_excluded(rel_path: Path) -> bool:
+    """Return True when rel_path is runner state, local dependency, or build output."""
+    for part in rel_path.parts:
+        if part in GIT_COMMIT_EXCLUDED_PATHS:
+            return True
+        if part.endswith(".egg-info"):
+            return True
+        if part == ".DS_Store":
+            return True
+    return False
+
+
+def _ensure_workspace_git_excludes(workspace: Path) -> None:
+    """Keep runner state and dependency caches out of git status and commits."""
+    if not (workspace / ".git").exists():
+        return
+    exclude_path_text = _git(workspace, "rev-parse", "--git-path", "info/exclude")
+    exclude_path = Path(exclude_path_text)
+    if not exclude_path.is_absolute():
+        exclude_path = (workspace / exclude_path).resolve()
+    exclude_path.parent.mkdir(parents=True, exist_ok=True)
+    entries = tuple(f"{path}/" for path in GIT_COMMIT_EXCLUDED_PATHS)
+    existing = (
+        exclude_path.read_text(encoding="utf-8").splitlines()
+        if exclude_path.exists()
+        else []
+    )
+    missing_entries = [entry for entry in entries if entry not in existing]
+    if not missing_entries:
+        return
+    content = exclude_path.read_text(encoding="utf-8") if exclude_path.exists() else ""
+    suffix = "" if content.endswith("\n") or content == "" else "\n"
+    exclude_path.write_text(
+        content + suffix + "\n".join(missing_entries) + "\n",
+        encoding="utf-8",
+    )
 
 
 def _git_diff(workspace: Path) -> str:
