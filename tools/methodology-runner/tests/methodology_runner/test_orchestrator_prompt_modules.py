@@ -388,6 +388,10 @@ def test_ph001_prompt_module_requires_local_ac_traceability() -> None:
     assert "When adding, moving, or revising an\n  acceptance criterion" in text
     assert "same `RI-*` item to appear in multiple features" in text
     assert "Do not leave a\n  second-order traceability defect" in text
+    assert "qualitative `RI-*` item constrains an observable product surface" in text
+    assert "Do not leave unanchored qualitative qualifiers in an `AC-*`" in text
+    assert "initial overview rendering from metadata before opening optional large" in text
+    assert "controls staying available while optional content\n  loads" in text
 
 
 def test_ph005_prompt_module_requires_compile_checked_component_simulations() -> None:

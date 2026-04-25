@@ -60,6 +60,13 @@ Embedded directives for this step:
 - If an `RI-*` item is qualitative and you cannot state a binary feature-level
   completion condition without inventing a new metric or review standard, put
   it in `out_of_scope` instead of turning it into a vague `AC-*`.
+- If a qualitative `RI-*` item constrains an observable product surface, convert
+  it into concrete observable behavior instead of copying the vague wording.
+  For example, performance or responsiveness requirements without numeric
+  budgets can be made reviewable through visible workflow conditions such as
+  what overview data appears before optional content is opened, whether browsing
+  controls remain available while optional large content loads, and what loading,
+  truncation, warning, or error state the user sees.
 - Do not add implementation-shaped detail that the cited `RI-*` items do not
   require. For example, do not invent path-oriented, filename-oriented, or
   wrapper-command obligations when the source only requires that a human can
@@ -146,6 +153,17 @@ Acceptance requirements:
 - Acceptance criteria must be binary and testable. Avoid vague language like
   fast, user-friendly, intuitive, appropriate, reasonable, or similar words
   without measurable conditions.
+- Do not leave unanchored qualitative qualifiers in an `AC-*`, including
+  phrases such as `when practical`, `large enough for real runs`, `remains
+  usable`, `does not freeze`, `responsive`, or `stable`. Either replace the
+  phrase with observable feature-level behavior, or move the source item to
+  `out_of_scope` if no source-grounded observable condition exists.
+- When refining qualitative performance or large-content requirements without a
+  numeric threshold, use observable completion conditions instead of invented
+  timing budgets. State the product behavior a reviewer can see, such as the
+  initial overview rendering from metadata before opening optional large
+  prompt/output/log content, controls staying available while optional content
+  loads, and explicit loading, truncation, warning, or error states.
 - Interpret `binary and testable` at the feature-specification level:
   the criterion must support a clear pass/fail review of whether the feature is
   done, but it does not need to be written as an executable test case.
