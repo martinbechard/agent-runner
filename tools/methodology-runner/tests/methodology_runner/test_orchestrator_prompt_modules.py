@@ -392,6 +392,11 @@ def test_ph001_prompt_module_requires_local_ac_traceability() -> None:
     assert "Do not leave unanchored qualitative qualifiers in an `AC-*`" in text
     assert "initial overview rendering from metadata before opening optional large" in text
     assert "controls staying available while optional content\n  loads" in text
+    assert "represented obligations, not a coverage\n  bucket" in text
+    assert "perform a feature-local coverage pass" in text
+    assert "singular/plural boundaries on security and configuration surfaces" in text
+    assert "Do not drip-feed several same-feature defects across retries" in text
+    assert "Source-ref only coverage" in text
 
 
 def test_ph005_prompt_module_requires_compile_checked_component_simulations() -> None:

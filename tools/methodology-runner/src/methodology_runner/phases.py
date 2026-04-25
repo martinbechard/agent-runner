@@ -294,7 +294,10 @@ _PHASE_1 = PhaseConfig(
         "features that share data, sequencing constraints, or transactional\n"
         "boundaries must declare their inter-feature dependencies.  Local\n"
         "traceability: each AC must be supported by the same feature's\n"
-        "source_inventory_refs, including during retry edits."
+        "source_inventory_refs, including during retry edits.  Represented\n"
+        "coverage: each RI-* listed on a feature must have its distinct\n"
+        "downstream-actionable behavior represented by that feature's\n"
+        "description or AC-* entries, not merely by appearing in the list."
     ),
     generation_instructions=(
         "Read the requirements inventory and produce a feature specification\n"
@@ -330,7 +333,11 @@ _PHASE_1 = PhaseConfig(
         "warning, or error states are visible.  Treat\n"
         "source_inventory_refs as local evidence for the feature description\n"
         "and all AC-* entries; when adding, moving, or revising an AC, update\n"
-        "the affected feature's source_inventory_refs in the same edit.  The\n"
+        "the affected feature's source_inventory_refs in the same edit.  Also\n"
+        "audit the opposite direction: every RI-* listed on a feature must\n"
+        "have its distinct behavior, hard default, error rule, security\n"
+        "boundary, and exact singular/plural or minimum/exact bound reflected\n"
+        "in that same feature's description or AC-* entries.  The\n"
         "same RI-* may appear in multiple features when it supports each one."
     ),
     judge_guidance=(
@@ -359,7 +366,13 @@ _PHASE_1 = PhaseConfig(
         "   If the needed fix is an added AC, include the corresponding\n"
         "   source_inventory_refs fix in the same revise feedback.\n"
         "5. Missing dependencies: if feature A reads data that feature B\n"
-        "   produces, feature B must appear in feature A's dependencies."
+        "   produces, feature B must appear in feature A's dependencies.\n"
+        "6. Source-ref only coverage: if a feature lists an RI-* but does\n"
+        "   not represent that RI's distinct downstream-actionable behavior\n"
+        "   in the description or an AC-*, flag it.  When one feature has a\n"
+        "   material issue, scan that same feature for related exact-bound,\n"
+        "   security-boundary, default-behavior, and error-reporting defects\n"
+        "   so retry feedback is clustered rather than drip-fed."
     ),
     artifact_format="yaml",
     artifact_schema_description=(

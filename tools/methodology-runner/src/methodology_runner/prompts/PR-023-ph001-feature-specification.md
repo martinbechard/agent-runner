@@ -53,6 +53,12 @@ Embedded directives for this step:
   criterion depends on an `RI-*` item, that `RI-*` must appear in the same
   feature's `source_inventory_refs`, even if it also appears in another
   feature.
+- Treat `source_inventory_refs` as represented obligations, not a coverage
+  bucket. Every `RI-*` listed on a feature must have its distinct actionable
+  meaning represented by that feature's description or by at least one `AC-*`.
+  If a listed `RI-*` is only contextual and has no represented completion
+  condition, either add a source-grounded criterion, move the `RI-*` to the
+  feature that owns it, or put it in `out_of_scope` with a reason.
 - Declare dependencies only when one feature consumes output, state, or
   interfaces produced by another.
 - Any `RI-*` item not represented in a feature must go to `out_of_scope`
@@ -82,6 +88,12 @@ Embedded directives for this step:
   change deliberately instead of copying the old structure blindly.
 - The raw requirements and requirements inventory are authoritative over older
   steady-state feature docs when they conflict.
+- Before writing the final YAML, perform a feature-local coverage pass:
+  for each `RI-*` in each feature's `source_inventory_refs`, confirm that the
+  feature description or an `AC-*` preserves its downstream-actionable behavior,
+  hard default, security boundary, error-reporting rule, optional/fatal
+  distinction, and exact count or singular/plural bound. Do not rely on a broad
+  feature name or cross-cutting concern to cover a distinct `RI-*` behavior.
 
 Phase purpose:
 - Group related RI-* items into coherent FT-* features.
@@ -142,6 +154,10 @@ Acceptance requirements:
   feature's `source_inventory_refs`. When adding, moving, or revising an
   acceptance criterion, update the feature's `source_inventory_refs` in the same
   edit so the criterion's supporting `RI-*` items are local to that feature.
+- Conversely, every `RI-*` in a feature's `source_inventory_refs` must be
+  represented by the feature description or at least one `AC-*` in that same
+  feature. A source reference that only satisfies inventory coverage but does
+  not influence the feature behavior is not sufficient.
 - It is valid for the same `RI-*` item to appear in multiple features when that
   requirement supports acceptance criteria in more than one feature.
 - You may introduce supporting specification detail that is not stated verbatim
@@ -183,6 +199,10 @@ Acceptance requirements:
   `README`, `application`, or another specific deliverable term, do not
   silently reinterpret it as a narrower or different unit such as `test case`
   unless the cited source text uses that exact term.
+- Preserve singular/plural boundaries on security and configuration surfaces.
+  If the source allows a set such as configured roots but also names a singular
+  default or currently displayed root, keep both meanings instead of collapsing
+  the set into one root or broadening the default into many defaults.
 - When a source requirement names an artifact type but not a single exact
   filename, write the acceptance criterion in terms of the artifact's presence
   and role rather than a closed filename allowlist.
@@ -261,6 +281,11 @@ Review method:
 - Iterate through features in FT-* order.
 - For each feature, review its description, source_inventory_refs,
   acceptance_criteria, and dependencies together.
+- For each feature that has one material issue, continue scanning that same
+  feature for other material source-ref, exact-boundary, security-boundary,
+  default-behavior, and error-reporting defects before returning a revise
+  verdict. Do not drip-feed several same-feature defects across retries when
+  they can be identified from the same local evidence set.
 - Then review out_of_scope entries in RI-* order.
 - Then review cross_cutting_concerns in CC-* order.
 - Before flagging any requirement, scope statement, or concern as missing,
@@ -298,10 +323,17 @@ Focus your semantic review on these failure modes:
    - When the defect can be fixed by adding or moving an `RI-*` reference,
      include that source_inventory_refs correction in the same revise feedback
      as the AC correction.
-8. Pseudo-objective constraints:
+8. Source-ref only coverage:
+   - Flag any feature that lists an `RI-*` in `source_inventory_refs` without
+     carrying that RI's distinct downstream-actionable behavior into the feature
+     description or at least one `AC-*`.
+   - Pay special attention to hard defaults, fatal-versus-optional behavior,
+     security boundaries, error reporting, and singular/plural or minimum/exact
+     source bounds.
+9. Pseudo-objective constraints:
    - Flag any AC that pretends to make a qualitative constraint objective
      without a source-grounded inspection rule or measurable threshold.
-9. Contradictory invention:
+10. Contradictory invention:
    - Flag any invented supporting detail that contradicts the source
      inventory, weakens an exact source constraint, or introduces unrelated
      product scope.
@@ -337,6 +369,10 @@ Review instructions:
   vague `AC-*`.
 - Do not require or accept path-oriented, filename-oriented, or wrapper-
   command detail unless the cited upstream requirements explicitly require it.
+- Do not treat a feature's `source_inventory_refs` entry as sufficient by
+  itself. If the cited RI has distinct downstream-actionable behavior, that
+  behavior must appear in the same feature's description or `AC-*`, or the
+  generator must move the RI to a feature that represents it.
 - Do not reject supporting elaboration merely because it is not stated
   verbatim in one `RI-*` item. Reject it only if it contradicts the source,
   weakens exact source meaning, adds unrelated scope, or no longer serves the
