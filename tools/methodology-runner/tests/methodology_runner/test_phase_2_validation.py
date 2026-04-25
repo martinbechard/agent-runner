@@ -304,6 +304,77 @@ rationale: "The checkout application consumes time through a provider boundary."
     assert report["overall_status"] == "pass"
 
 
+def test_phase_2_validation_accepts_internal_library_provider(
+    tmp_path: Path,
+) -> None:
+    """Allow a single deployable app to simulate an internal provider library."""
+    architecture = _write(
+        tmp_path / "docs" / "architecture" / "architecture-design.yaml",
+        """components:
+  - id: "CMP-001"
+    name: "Web report application"
+    role: "runtime"
+    technology: "TypeScript"
+    runtime: "Node 22"
+    frameworks: ["vite"]
+    persistence: "none"
+    expected_expertise: ["TypeScript web application development"]
+    features_served: ["FT-001", "FT-002", "FT-003"]
+    simulation_target: false
+    simulation_boundary: "none"
+    examples:
+      - name: "Render normalized report"
+        scenario: "A user opens a report file in the local web app."
+        expected_outcome: "The app renders timeline data returned by the parser."
+        feature_refs: ["FT-001"]
+  - id: "CMP-002"
+    name: "Report data parser"
+    role: "library"
+    technology: "TypeScript"
+    runtime: "Node 22"
+    frameworks: []
+    persistence: "none"
+    expected_expertise: ["Parser interface and data normalization design"]
+    features_served: ["FT-001"]
+    simulation_target: true
+    simulation_boundary: "library"
+    examples:
+      - name: "Parse report JSON"
+        scenario: "The web app requests normalized data for a selected report."
+        expected_outcome: "The parser returns rows and details for the UI."
+        feature_refs: ["FT-001"]
+related_artifacts:
+  - id: "ART-001"
+    name: "Run instructions README"
+    artifact_type: "readme"
+    scope: "system"
+    related_components: ["CMP-001", "CMP-002"]
+    features_served: ["FT-002"]
+  - id: "ART-002"
+    name: "Report rendering verification"
+    artifact_type: "automated-test"
+    scope: "component"
+    related_components: ["CMP-001"]
+    features_served: ["FT-003"]
+integration_points:
+  - id: "IP-001"
+    between: ["CMP-001", "CMP-002"]
+    protocol: "library"
+    contract_source: "FT-001"
+    examples:
+      - name: "Application calls parser library"
+        scenario: "The web app loads report data by calling the parser library."
+        expected_outcome: "Normalized report data flows back to the application."
+        feature_refs: ["FT-001"]
+rationale: "The app and parser ship together but have a useful library boundary for staged implementation."
+""",
+    )
+
+    report = build_report(architecture, _feature_spec(tmp_path), _requirements_inventory(tmp_path))
+
+    assert report["overall_status"] == "pass"
+
+
 def test_phase_2_validation_rejects_related_artifact_paths(
     tmp_path: Path,
 ) -> None:

@@ -129,7 +129,12 @@ def test_ph002_prompt_module_requires_compact_architecture_schema() -> None:
     assert "related_artifacts:" in text
     assert 'path: "README.md' not in text
     assert "Do not create architecture\n  components just to represent those support artifacts" in text
+    assert "single local or deployable application can still have multiple architecture" in text
+    assert "server-to-library" in text
+    assert "Only collapse to one\n  component" in text
     assert "Human instructions, README content, and automated tests\n  do not by themselves justify simulating the provider" in text
+    assert "truly single-component application" in text
+    assert "The provider may be internal to the same local or deployable application" in text
     assert 'simulation_target: false' in text
     assert "Do not use `MODULE-*`" in text
     assert "structured-design sections such as `system_shape`, `finality`" in text

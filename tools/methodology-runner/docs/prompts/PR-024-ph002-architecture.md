@@ -85,6 +85,13 @@ Requirements:
 - Break the system into components that can be built and tested separately when
   there is a real dependency, API, library, service, or other integration
   boundary. Do not split a single coherent component only to create a simulation.
+- A single local or deployable application can still have multiple architecture
+  components when it contains real browser-to-server, server-to-library,
+  adapter-to-provider, dependency-injection, API route, package/module,
+  command, or service boundaries that help downstream phases design, simulate,
+  build, or integration-test the system in stages. Only collapse to one
+  component when there is no meaningful internal or external implementation
+  boundary.
 - Mark only real provider components as simulation targets. Documentation,
   verification, and test-suite components are not simulation targets, although
   they may later consume simulations in integration tests.
@@ -93,8 +100,9 @@ Requirements:
   dependency-injection, API, library, service, command, or equivalent
   integration boundary. Human instructions, README content, and automated tests
   do not by themselves justify simulating the provider.
-- For a single coherent application with no external service, library, API, or
-  provider dependency, use one component with `simulation_target: false`,
+- For a truly single-component application with no meaningful internal or
+  external provider, service, library, API, dependency-injection, command, or
+  module boundary, use one component with `simulation_target: false`,
   `simulation_boundary: "none"`, and no integration points.
 - Keep the architecture at architecture level. Do not drift into low-level
   implementation detail.
@@ -235,6 +243,11 @@ Review rules:
 - Cite exact component, FT-*, and RI-* references when you ask for changes.
 - Treat unnecessary `AC-*` dependence as a traceability quality defect when the
   same claim should have been grounded in `FT-*` source text.
+- Do not reject internal code boundaries solely because the requested software
+  is one local or deployable application. Browser/server, API, library,
+  package/module, dependency-injection, command, and service boundaries are
+  valid when they provide downstream design, simulation, build, or
+  integration-test value.
 - Check that the artifact follows the exact PH-002 architecture schema:
   top-level `components`, `related_artifacts`, `integration_points`, and
   `rationale`.
@@ -254,6 +267,7 @@ Review rules:
   components. A simulation target must be a component that exposes behavior to
   another component through dependency injection, an API, a library boundary, a
   service boundary, a command boundary, or an equivalent real integration point.
+  The provider may be internal to the same local or deployable application.
 - Reject `simulation_target: true` when the only consumers are humans,
   documentation, README guidance, tests, or verification artifacts.
 - Reject architecture components whose only purpose is a README, documentation

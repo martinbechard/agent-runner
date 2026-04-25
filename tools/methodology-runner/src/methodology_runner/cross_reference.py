@@ -296,9 +296,11 @@ Verify that:
   the source request explicitly asks for them as runtime services or
   independently implemented system components.
 - A component marked simulation_target: true has at least one integration point
-  where another real runtime or implementation component consumes it. Human
-  instructions, README content, tests, and verification artifacts do not by
-  themselves justify simulating a provider component.
+  where another real runtime or implementation component consumes it through a
+  dependency-injection, API, library, service, command, module, or equivalent
+  implementation boundary. The provider may be internal to the same deployable
+  application. Human instructions, README content, tests, and verification
+  artifacts do not by themselves justify simulating a provider component.
 
 ### 4. Integration
 - Flag components with no features_served entries.
@@ -307,8 +309,15 @@ Verify that:
   name, scenario, expected_outcome, and feature_refs. If there are no real
   cross-component interactions, no integration point is required.
 - Verify technology choices are coherent with frameworks listed.
-- Verify a single coherent application with no external service, provider,
-  library, or API dependency uses simulation_target: false,
+- Do not reject components, integration points, or simulation targets solely
+  because the requested software is one local or deployable application.
+  Browser-to-server, server-to-library, adapter-to-provider, dependency
+  injection, API route, package/module, command, and service boundaries are
+  valid architecture boundaries when they materially support separate design,
+  simulation, build, or integration testing.
+- Verify a truly single-component application with no meaningful internal or
+  external service, provider, library, API, dependency-injection, module,
+  command, or equivalent implementation boundary uses simulation_target: false,
   simulation_boundary: none, and no integration points.\
 """,
 

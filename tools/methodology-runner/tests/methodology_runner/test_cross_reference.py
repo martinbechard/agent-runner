@@ -734,6 +734,12 @@ class TestPhaseCrossRefChecks:
         assert "feature-specification.yaml" in t
         assert "conceptual example" in t
         assert "expected_outcome" in t
+        assert (
+            "Do not reject components, integration points, or simulation targets solely"
+            in t
+        )
+        assert "server-to-library" in t
+        assert "truly single-component application" in t
 
     def test_phase_3_references_phase_2(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-003-solution-design"]
