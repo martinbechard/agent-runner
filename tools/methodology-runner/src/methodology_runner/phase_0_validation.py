@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import re
+from dataclasses import dataclass
 from pathlib import Path
 
 import yaml
@@ -38,6 +39,23 @@ ALLOWED_CATEGORIES = {
     "assumption",
 }
 RI_ID_RE = re.compile(r"^RI-\d{3}$")
+NUMBERED_LIST_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
+REQUIREMENT_SIGNAL_RE = re.compile(
+    r"\b(must|should|shall|will|need to|needs to|not|do not|can|include|contains|support|"
+    r"provide|show|expose|cover|handle|reject|run|build)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass(frozen=True)
+class _SourceEntry:
+    """One contiguous source span used to seed a PH-000 inventory item."""
+
+    quote: str
+    section: str
+    location_kind: str
+    location_index: int
+    lead_in: str = ""
 
 
 def _load_yaml(path: Path) -> dict:
@@ -46,6 +64,335 @@ def _load_yaml(path: Path) -> dict:
 
 def _normalize(text: str) -> str:
     return " ".join(text.split())
+
+
+def _category_for(text: str) -> str:
+    normalized = text.lower()
+    if any(
+        term in normalized
+        for term in ("must not", "do not", "only ", "outside", "local-only")
+    ):
+        return "constraint"
+    if any(term in normalized for term in ("should", "may", "can be")):
+        return "non_functional"
+    if any(term in normalized for term in ("assuming", "given that", "provided that")):
+        return "assumption"
+    return "functional"
+
+
+def _short_tags(section: str, quote: str) -> list[str]:
+    words = re.findall(r"[A-Za-z][A-Za-z0-9-]{2,}", f"{section} {quote}".lower())
+    stop_words = {
+        "the",
+        "and",
+        "for",
+        "must",
+        "should",
+        "with",
+        "when",
+        "that",
+        "this",
+        "from",
+        "into",
+        "each",
+        "available",
+    }
+    tags: list[str] = []
+    for word in words:
+        cleaned = word.strip("-")
+        if cleaned in stop_words or cleaned in tags:
+            continue
+        tags.append(cleaned[:32])
+        if len(tags) == 4:
+            break
+    return tags or ["requirement"]
+
+
+def _standalone_requirement(entry: _SourceEntry) -> str:
+    quote = entry.quote.strip()
+    if REQUIREMENT_SIGNAL_RE.search(quote):
+        return quote
+    context = entry.lead_in.rstrip(":").strip() or entry.section
+    return f"{context}: {quote}"
+
+
+def _source_location(entry: _SourceEntry) -> str:
+    return f"{entry.section} > {entry.location_kind} {entry.location_index}"
+
+
+def _groupable_field_list(entry: _SourceEntry) -> bool:
+    lead_in = entry.lead_in.lower()
+    section = entry.section.lower()
+    if entry.location_kind not in {"bullet", "numbered item"}:
+        return False
+    if any(
+        excluded in section
+        for excluded in (
+            "supported inputs",
+            "loading workflow",
+            "parser behavior",
+            "search and filtering",
+            "drill-down navigation",
+            "error and warning handling",
+            "accessibility and usability",
+            "performance",
+            "security",
+            "implementation expectations",
+            "documentation",
+            "testing",
+            "acceptance criteria",
+        )
+    ):
+        return False
+    return any(
+        marker in lead_in
+        for marker in (
+            "with these concepts",
+            "must include",
+            "must show",
+            "must expose viewer links",
+        )
+    )
+
+
+def _entry_source_line(entry: _SourceEntry) -> str:
+    if entry.location_kind == "bullet":
+        return f"- {entry.quote}"
+    if entry.location_kind == "numbered item":
+        return f"{entry.location_index}. {entry.quote}"
+    return entry.quote
+
+
+def _coalesce_groupable_field_lists(entries: list[_SourceEntry]) -> list[_SourceEntry]:
+    grouped: list[_SourceEntry] = []
+    index = 0
+    while index < len(entries):
+        entry = entries[index]
+        if not _groupable_field_list(entry):
+            grouped.append(entry)
+            index += 1
+            continue
+
+        group = [entry]
+        cursor = index + 1
+        while cursor < len(entries):
+            candidate = entries[cursor]
+            if (
+                _groupable_field_list(candidate)
+                and candidate.section == entry.section
+                and candidate.lead_in == entry.lead_in
+                and candidate.location_kind == entry.location_kind
+            ):
+                group.append(candidate)
+                cursor += 1
+                continue
+            break
+
+        if len(group) == 1:
+            grouped.append(entry)
+        else:
+            grouped.append(
+                _SourceEntry(
+                    quote=_normalize(" ".join(_entry_source_line(item) for item in group)),
+                    section=entry.section,
+                    location_kind="list",
+                    location_index=entry.location_index,
+                    lead_in=entry.lead_in,
+                )
+            )
+        index = cursor
+    return grouped
+
+
+def _is_requirement_entry(entry: _SourceEntry) -> bool:
+    combined = f"{entry.lead_in} {entry.quote}"
+    if REQUIREMENT_SIGNAL_RE.search(combined):
+        return True
+    # Field and metric lists under requirement-bearing lead-ins are still
+    # useful downstream, even when the individual field name has no modal verb.
+    return bool(entry.lead_in)
+
+
+def _parse_source_entries(raw_requirements_path: Path) -> list[_SourceEntry]:
+    """Extract contiguous paragraphs and list items with section locations."""
+    lines = raw_requirements_path.read_text(encoding="utf-8").splitlines()
+    section_stack: list[str] = []
+    entries: list[_SourceEntry] = []
+    paragraph: list[str] = []
+    paragraph_start = 0
+    lead_in = ""
+    counters: dict[tuple[str, str], int] = {}
+
+    def section_name() -> str:
+        return " > ".join(section_stack) if section_stack else "Document"
+
+    def next_index(kind: str) -> int:
+        key = (section_name(), kind)
+        counters[key] = counters.get(key, 0) + 1
+        return counters[key]
+
+    def append_entry(quote: str, kind: str, start_index: int | None = None) -> None:
+        normalized = _normalize(quote)
+        if not normalized:
+            return
+        index = start_index if start_index is not None else next_index(kind)
+        entry = _SourceEntry(
+            quote=normalized,
+            section=section_name(),
+            location_kind=kind,
+            location_index=index,
+            lead_in=lead_in,
+        )
+        if _is_requirement_entry(entry):
+            entries.append(entry)
+
+    def flush_paragraph() -> None:
+        nonlocal paragraph, paragraph_start, lead_in
+        if not paragraph:
+            return
+        text = _normalize(" ".join(paragraph))
+        paragraph = []
+        if not text:
+            return
+        if text.endswith(":"):
+            lead_in = text
+            return
+        append_entry(text, "paragraph", paragraph_start or None)
+        lead_in = ""
+
+    for raw_line in lines:
+        stripped = raw_line.strip()
+        if not stripped:
+            flush_paragraph()
+            continue
+        if stripped.startswith("#"):
+            flush_paragraph()
+            level = len(stripped) - len(stripped.lstrip("#"))
+            title = stripped[level:].strip()
+            section_stack = section_stack[: max(level - 1, 0)] + [title]
+            lead_in = ""
+            continue
+        if raw_line.startswith("- "):
+            flush_paragraph()
+            append_entry(raw_line[2:].strip(), "bullet")
+            continue
+        numbered = NUMBERED_LIST_RE.match(raw_line)
+        if numbered is not None:
+            flush_paragraph()
+            append_entry(numbered.group(2).strip(), "numbered item", int(numbered.group(1)))
+            continue
+        if not paragraph:
+            paragraph_start = next_index("paragraph")
+        paragraph.append(stripped)
+
+    flush_paragraph()
+    return entries
+
+
+def generate_inventory(
+    requirements_inventory_path: Path,
+    requirements_coverage_path: Path,
+    raw_requirements_path: Path,
+) -> None:
+    """Write deterministic PH-000 inventory and coverage seed artifacts."""
+    entries = _coalesce_groupable_field_lists(_parse_source_entries(raw_requirements_path))
+    items: list[dict] = []
+    for index, entry in enumerate(entries, start=1):
+        item_id = f"RI-{index:03d}"
+        items.append(
+            {
+                "id": item_id,
+                "category": _category_for(f"{entry.lead_in} {entry.quote}"),
+                "verbatim_quote": entry.quote,
+                "normalized_requirement": _standalone_requirement(entry),
+                "justification": "",
+                "source_location": _source_location(entry),
+                "tags": _short_tags(entry.section, entry.quote),
+                "rationale": {
+                    "rule": "deterministic source-span extraction",
+                    "because": (
+                        "The source span is a contiguous requirement-bearing "
+                        "paragraph or list item in the raw request."
+                    ),
+                },
+                "open_assumptions": [],
+            }
+        )
+
+    item_ids = {item["id"] for item in items}
+    source_phrases = _extract_requirement_phrases(raw_requirements_path)
+    coverage_check: dict[str, list[str] | str] = {}
+    for phrase in source_phrases:
+        normalized_phrase = _normalize(phrase)
+        refs = [
+            item["id"]
+            for item in items
+            if _normalize(item["verbatim_quote"]) in normalized_phrase
+            or normalized_phrase in _normalize(item["verbatim_quote"])
+        ]
+        if not refs:
+            fallback_id = f"RI-{len(items) + 1:03d}"
+            fallback_entry = _SourceEntry(
+                quote=phrase,
+                section="Source coverage",
+                location_kind="phrase",
+                location_index=len(items) + 1,
+            )
+            items.append(
+                {
+                    "id": fallback_id,
+                    "category": _category_for(phrase),
+                    "verbatim_quote": phrase,
+                    "normalized_requirement": _standalone_requirement(fallback_entry),
+                    "justification": "",
+                    "source_location": _source_location(fallback_entry),
+                    "tags": _short_tags(fallback_entry.section, phrase),
+                    "rationale": {
+                        "rule": "coverage fallback extraction",
+                        "because": (
+                            "The deterministic coverage phrase did not map to "
+                            "an earlier source-span item, so it was preserved "
+                            "as its own contiguous requirement phrase."
+                        ),
+                    },
+                    "open_assumptions": [],
+                }
+            )
+            item_ids.add(fallback_id)
+            refs = [fallback_id]
+        coverage_check[phrase] = [ref for ref in refs if ref in item_ids]
+
+    total = len(source_phrases)
+    coverage_check["status"] = (
+        f"{total}/{total} requirement-bearing phrases covered, 0 orphans, 0 invented"
+    )
+    inventory = {
+        "source_document": "docs/requirements/raw-requirements.md",
+        "items": items,
+        "out_of_scope": [],
+    }
+    coverage = {
+        "source_document": "docs/requirements/raw-requirements.md",
+        "inventory_document": "docs/requirements/requirements-inventory.yaml",
+        "coverage_check": coverage_check,
+        "coverage_verdict": {
+            "total_upstream_phrases": total,
+            "covered": total,
+            "orphaned": 0,
+            "invented": 0,
+            "verdict": "PASS",
+        },
+    }
+    requirements_inventory_path.parent.mkdir(parents=True, exist_ok=True)
+    requirements_coverage_path.parent.mkdir(parents=True, exist_ok=True)
+    requirements_inventory_path.write_text(
+        yaml.safe_dump(inventory, sort_keys=False, allow_unicode=False),
+        encoding="utf-8",
+    )
+    requirements_coverage_path.write_text(
+        yaml.safe_dump(coverage, sort_keys=False, allow_unicode=False),
+        encoding="utf-8",
+    )
 
 
 def _extract_requirement_phrases(raw_requirements_path: Path) -> list[str]:
@@ -351,12 +698,22 @@ def main(argv: list[str] | None = None) -> int:
         default="docs/requirements/raw-requirements.md",
         help="Path to the raw requirements markdown relative to cwd.",
     )
+    parser.add_argument(
+        "--generate",
+        action="store_true",
+        help=(
+            "Generate deterministic seed inventory and coverage artifacts "
+            "before validating them."
+        ),
+    )
     args = parser.parse_args(argv)
 
     inventory_path = Path(args.requirements_inventory)
     raw_requirements_path = Path(args.raw_requirements)
     coverage_path = Path(args.requirements_coverage)
     try:
+        if args.generate:
+            generate_inventory(inventory_path, coverage_path, raw_requirements_path)
         report = build_report(inventory_path, coverage_path, raw_requirements_path)
     except Exception as exc:
         print(

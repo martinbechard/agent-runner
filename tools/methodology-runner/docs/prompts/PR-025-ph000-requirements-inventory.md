@@ -29,6 +29,9 @@ Goal:
 - Write the inventory to docs/requirements/requirements-inventory.yaml.
 - Write the coverage support file to
   docs/requirements/requirements-inventory-coverage.yaml.
+- Prefer the deterministic PH-000 bootstrap command for the first draft so
+  large requests do not require hand-authoring a complete YAML file in one
+  model response.
 
 Context:
 - Use this authoritative user request:
@@ -39,11 +42,22 @@ Context:
   the request requires so later phases can design and implement from it.
 
 Constraints:
-- Use only the information embedded in this prompt.
+- Use only the information embedded in this prompt, except that you may run the
+  deterministic bootstrap command below, which reads {{raw_requirements_path}}
+  and writes the two required PH-000 artifacts.
 - Do not inspect the filesystem to discover additional source material.
-- Do not re-read files whose contents are already embedded in this prompt.
+- Do not re-read files whose contents are already embedded in this prompt,
+  except through the deterministic bootstrap command.
 - Only touch the filesystem when you need to create or update the required
   output artifacts.
+- First try this command exactly from the run workspace:
+  `python -m methodology_runner.phase_0_validation --generate --requirements-inventory docs/requirements/requirements-inventory.yaml --requirements-coverage docs/requirements/requirements-inventory-coverage.yaml --raw-requirements {{raw_requirements_path}}`
+- If that command writes both artifacts and reports a passing deterministic
+  validation result, leave the artifacts in place and return the requested
+  diagnostics.
+- If the deterministic bootstrap command is unavailable or fails, manually
+  create the two artifacts from <RAW_REQUIREMENTS> using the extraction rules
+  below.
 - Walk <RAW_REQUIREMENTS> in document order. Read the whole request once, then
   process each section, paragraph, bullet, and table row in order.
 - Extract every requirement-bearing statement, constraint, assumption, and

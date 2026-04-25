@@ -2,7 +2,7 @@ from pathlib import Path
 
 import yaml
 
-from methodology_runner.phase_0_validation import build_report
+from methodology_runner.phase_0_validation import build_report, generate_inventory
 
 
 def _write_yaml(path: Path, data: dict) -> None:
@@ -231,3 +231,33 @@ def test_build_report_fails_when_justification_is_missing(tmp_path: Path):
     assert report["overall_status"] == "fail"
     assert "item_required_fields" in report["failed_checks"]
     assert "justifications" in report["failed_checks"]
+
+
+def test_generate_inventory_writes_valid_seed_inventory_and_coverage(tmp_path: Path):
+    raw_requirements = tmp_path / "docs" / "requirements" / "raw-requirements.md"
+    raw_requirements.parent.mkdir(parents=True, exist_ok=True)
+    raw_requirements.write_text(
+        "# Request\n\n"
+        "The application must support these inputs:\n\n"
+        "1. A workspace that contains `.run-files`.\n"
+        "2. A comparison manifest JSON file.\n\n"
+        "The app must reject paths outside configured allowed roots.\n\n"
+        "The report view must show:\n\n"
+        "- Report title.\n"
+        "- Total cost.\n",
+        encoding="utf-8",
+    )
+    inventory = tmp_path / "docs" / "requirements" / "requirements-inventory.yaml"
+    coverage = tmp_path / "docs" / "requirements" / "requirements-inventory-coverage.yaml"
+
+    generate_inventory(inventory, coverage, raw_requirements)
+
+    report = build_report(inventory, coverage, raw_requirements)
+    data = yaml.safe_load(inventory.read_text(encoding="utf-8"))
+    quotes = [item["verbatim_quote"] for item in data["items"]]
+
+    assert report["overall_status"] == "pass"
+    assert "A workspace that contains `.run-files`." in quotes
+    assert "A comparison manifest JSON file." in quotes
+    assert "The app must reject paths outside configured allowed roots." in quotes
+    assert "- Report title. - Total cost." in quotes

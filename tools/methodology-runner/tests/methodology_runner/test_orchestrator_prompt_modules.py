@@ -149,6 +149,8 @@ def test_ph000_prompt_module_aligns_list_atomicity_and_retry_revision() -> None:
     )
     text = prompt_path.read_text(encoding="utf-8")
 
+    assert "deterministic PH-000 bootstrap command" in text
+    assert "python -m methodology_runner.phase_0_validation --generate" in text
     assert "requirement-bearing lead-in such as \"must support\", \"must include\"" in text
     assert "independently satisfiable behaviours, capabilities, constraints" in text
     assert "Do not split a coherent schema, data model, table-column set" in text
