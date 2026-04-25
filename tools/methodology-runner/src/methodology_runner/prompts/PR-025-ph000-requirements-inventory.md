@@ -51,7 +51,7 @@ Constraints:
 - Only touch the filesystem when you need to create or update the required
   output artifacts.
 - First try this command exactly from the run workspace:
-  `python -m methodology_runner.phase_0_validation --generate --requirements-inventory docs/requirements/requirements-inventory.yaml --requirements-coverage docs/requirements/requirements-inventory-coverage.yaml --raw-requirements {{raw_requirements_path}}`
+  `{{phase_0_bootstrap_command}} --generate --requirements-inventory docs/requirements/requirements-inventory.yaml --requirements-coverage docs/requirements/requirements-inventory-coverage.yaml --raw-requirements {{raw_requirements_path}}`
 - If that command writes both artifacts and reports a passing deterministic
   validation result, leave the artifacts in place and return the requested
   diagnostics.

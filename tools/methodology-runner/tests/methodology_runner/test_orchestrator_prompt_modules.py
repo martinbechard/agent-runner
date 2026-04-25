@@ -150,7 +150,7 @@ def test_ph000_prompt_module_aligns_list_atomicity_and_retry_revision() -> None:
     text = prompt_path.read_text(encoding="utf-8")
 
     assert "deterministic PH-000 bootstrap command" in text
-    assert "python -m methodology_runner.phase_0_validation --generate" in text
+    assert "{{phase_0_bootstrap_command}} --generate" in text
     assert "requirement-bearing lead-in such as \"must support\", \"must include\"" in text
     assert "independently satisfiable behaviours, capabilities, constraints" in text
     assert "Do not split a coherent schema, data model, table-column set" in text
@@ -286,6 +286,21 @@ def test_phase_placeholder_values_include_ph006_prompt_runner_command() -> None:
         f"{shlex.quote(sys.executable)} -m prompt_runner"
     )
     assert values["methodology_backend"] == "codex"
+
+
+def test_phase_placeholder_values_include_ph000_bootstrap_command() -> None:
+    phase = get_phase("PH-000-requirements-inventory")
+    config = PipelineConfig(
+        requirements_path=Path("req.md"),
+        workspace_dir=Path("workspace"),
+        backend="codex",
+    )
+    values = _phase_placeholder_values(phase, config)
+
+    assert values["raw_requirements_path"] == "docs/requirements/raw-requirements.md"
+    assert "phase_0_bootstrap_command" in values
+    assert "PYTHONPATH=" in values["phase_0_bootstrap_command"]
+    assert "-m methodology_runner.phase_0_validation" in values["phase_0_bootstrap_command"]
 
 
 def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -> None:

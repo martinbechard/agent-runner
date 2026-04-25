@@ -1480,8 +1480,14 @@ def _phase_placeholder_values(
     """Return prompt-runner placeholder bindings for a phase."""
     values: dict[str, str] = {}
     if phase_config.phase_id == "PH-000-requirements-inventory":
+        methodology_src = _resolve_methodology_runner_src_root()
         values["raw_requirements_path"] = (
             f"{REQUIREMENTS_DEST}/{RAW_REQUIREMENTS_FILENAME}"
+        )
+        values["phase_0_bootstrap_command"] = (
+            f"PYTHONPATH={shlex.quote(str(methodology_src))} "
+            f"{shlex.quote(sys.executable)} "
+            "-m methodology_runner.phase_0_validation"
         )
     if phase_config.phase_id == "PH-006-incremental-implementation":
         prompt_runner_src = _resolve_prompt_runner_src_root()
@@ -1517,6 +1523,11 @@ def _resolve_prompt_runner_src_root() -> Path:
         if candidate.exists():
             return candidate
     return candidates[0]
+
+
+def _resolve_methodology_runner_src_root() -> Path:
+    """Resolve the methodology-runner source root for PH-000 bootstrap commands."""
+    return Path(__file__).resolve().parents[1]
 
 
 def _phase_path_mappings() -> dict[str, str]:
