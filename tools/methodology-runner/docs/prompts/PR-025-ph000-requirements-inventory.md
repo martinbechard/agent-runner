@@ -51,12 +51,17 @@ Constraints:
 - Treat a list item as a requirement-bearing source span when it appears under
   a requirement-bearing lead-in such as "must support", "must include",
   "must show", "must provide", "must expose", "must cover", or "must handle".
-  In these cases, the lead-in supplies local context, but each listed entry is
-  independently satisfiable unless the list item itself says otherwise.
+  In these cases, the lead-in supplies local context.
 - For enumerated support/include/show/cover lists, create separate RI items for
-  each independently satisfiable bullet, numbered list item, table row, or
-  comma-separated field in a list item when each child can use an exact
-  contiguous source phrase as its verbatim_quote.
+  independently satisfiable behaviours, capabilities, constraints, supported
+  input shapes, user actions, error cases, security rules, test scenarios, and
+  acceptance criteria when each child can use an exact contiguous source phrase
+  as its verbatim_quote.
+- Do not split a coherent schema, data model, table-column set, metric set, or
+  viewer-control set into one RI item per field name solely because the fields
+  are individually listed. Keep the grouped item when the normalized
+  requirement preserves the complete list and the coverage file maps the
+  relevant source phrase to that RI item.
 - Use only contiguous source wording in verbatim_quote. Do not concatenate
   non-adjacent bullets, skip intervening bullets inside one quote, or quote an
   entire list when the individual entries are separately satisfiable.

@@ -159,6 +159,7 @@ PHASE_CROSS_REF_CHECKS: dict[str, str] = {
 
 Current phase output: {output_path}
 Raw requirements source: docs/requirements/raw-requirements.md
+Coverage support file: docs/requirements/requirements-inventory-coverage.yaml
 
 ### 1. Traceability
 Read the requirements inventory YAML at {output_path}.
@@ -175,6 +176,9 @@ requirements using Grep.
 
 ### 2. Coverage
 Read every section and paragraph in docs/requirements/raw-requirements.md.
+Read docs/requirements/requirements-inventory-coverage.yaml and use it as
+supporting evidence for source phrases that intentionally map to grouped RI
+items.
 Identify every statement containing shall, must, will, should, or an
 imperative verb describing system behaviour.  Verify each has at least one
 corresponding RI-* item.  Flag sections with zero RI-* coverage.
@@ -189,9 +193,16 @@ Verify that:
 ### 4. Integration
 Phase 0 is the first phase, so integration checks are minimal:
 - Verify the inventory does not invent requirements absent from the source.
-- Flag a compound RI-* item as incorrectly unsplit only when it joins
-  independently satisfiable behaviours that could be separated into exact
-  source-faithful child quotes without losing meaning.
+- Flag a compound RI-* item as incorrectly unsplit only when it joins unrelated
+  behaviours, workflows, constraints, supported input shapes, error cases,
+  security rules, test scenarios, or acceptance criteria that downstream phases
+  must design, implement, or verify separately, and that could be separated into
+  exact source-faithful child quotes without losing meaning.
+- Do not flag an RI-* item merely because it groups a coherent schema, data
+  model, table-column set, metric set, content-viewer control set, token-field
+  set, or display-field set, provided the normalized_requirement preserves the
+  complete list and the coverage support file maps the relevant source phrase
+  to one or more real RI-* IDs.
 - Do not flag a requirement merely because it contains 'and' or 'or' inside a
   single behavior, a single acceptance check, or a result clause that depends
   on the same action.\

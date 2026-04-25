@@ -150,12 +150,24 @@ def test_ph000_prompt_module_aligns_list_atomicity_and_retry_revision() -> None:
     text = prompt_path.read_text(encoding="utf-8")
 
     assert "requirement-bearing lead-in such as \"must support\", \"must include\"" in text
-    assert "each listed entry is\n  independently satisfiable" in text
-    assert "comma-separated field in a list item" in text
+    assert "independently satisfiable behaviours, capabilities, constraints" in text
+    assert "Do not split a coherent schema, data model, table-column set" in text
     assert "Use only contiguous source wording in verbatim_quote" in text
     assert "inline `or` lists describe alternative ways to satisfy one behavior" in text
     assert "if cross-reference retry guidance is supplied" in text
     assert "read only those two artifacts before editing\n  them" in text
+
+
+def test_ph000_cross_reference_allows_coherent_field_groups() -> None:
+    from methodology_runner.cross_reference import PHASE_CROSS_REF_CHECKS
+
+    text = PHASE_CROSS_REF_CHECKS["PH-000-requirements-inventory"]
+
+    assert "Coverage support file: docs/requirements/requirements-inventory-coverage.yaml" in text
+    assert "use it as\nsupporting evidence for source phrases" in text
+    assert "joins unrelated\n  behaviours, workflows, constraints" in text
+    assert "Do not flag an RI-* item merely because it groups a coherent schema" in text
+    assert "display-field set" in text
 
 
 def test_ph003_prompt_module_requires_processing_examples_ui_mockups_and_files() -> None:
