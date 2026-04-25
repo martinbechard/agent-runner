@@ -64,6 +64,8 @@ def test_new_session_uses_codex_exec_and_reads_last_message(monkeypatch, tmp_pat
     client = RealCodexClient()
     response = client.call(_call(tmp_path, new_session=True))
     assert captured["argv"][:2] == ["codex", "exec"]
+    assert "--ignore-user-config" in captured["argv"]
+    assert "--ignore-rules" in captured["argv"]
     assert "--dangerously-bypass-approvals-and-sandbox" in captured["argv"]
     assert "--json" in captured["argv"]
     assert f'projects."{tmp_path}".trust_level="trusted"' in captured["argv"]

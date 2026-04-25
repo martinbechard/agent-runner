@@ -37,6 +37,10 @@ _TRANSIENT_FAILURE_PATTERNS = (
 )
 _MAX_TRANSIENT_RETRIES = 2
 _INITIAL_TRANSIENT_BACKOFF_SECONDS = 2.0
+CODEX_HEADLESS_ISOLATION_ARGS = (
+    "--ignore-user-config",
+    "--ignore-rules",
+)
 
 NON_INTERACTIVE_PROMPT_PREFIX = (
     "You are being called from a headless pipeline. Your response IS the "
@@ -393,6 +397,7 @@ class RealCodexClient:
         base = [
             "codex",
             "exec",
+            *CODEX_HEADLESS_ISOLATION_ARGS,
             "--dangerously-bypass-approvals-and-sandbox",
             *common_overrides,
             "--json",
