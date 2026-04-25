@@ -601,6 +601,7 @@ def test_is_snapshot_excluded_catches_common_junk():
     assert _is_snapshot_excluded(Path("tmp/scratch/file.txt"))
     assert _is_snapshot_excluded(Path(".methodology-runner/state.json"))
     assert _is_snapshot_excluded(Path(".prompt-runner/backend-state/codex/sqlite/state.sqlite"))
+    assert _is_snapshot_excluded(Path("cross-ref-logs/PH-001/stdout.log"))
     assert _is_snapshot_excluded(Path("prompt-runner-files/logs/PH-000/attempt-1-stdout.log"))
     assert _is_snapshot_excluded(Path("node_modules/a/b.js"))
     assert _is_snapshot_excluded(Path("src/__pycache__/x.pyc"))
@@ -635,6 +636,11 @@ def test_git_commit_current_state_excludes_runner_and_dependency_artifacts(
     (worktree / ".run-files" / "process.log").write_text("log\n", encoding="utf-8")
     (worktree / ".methodology-runner").mkdir()
     (worktree / ".methodology-runner" / "state.json").write_text("{}", encoding="utf-8")
+    (worktree / "cross-ref-logs" / "PH-001").mkdir(parents=True)
+    (worktree / "cross-ref-logs" / "PH-001" / "stdout.log").write_text(
+        "cross-ref\n",
+        encoding="utf-8",
+    )
     (worktree / "node_modules" / "pkg").mkdir(parents=True)
     (worktree / "node_modules" / "pkg" / "index.js").write_text(
         "module.exports = {};\n",
@@ -654,6 +660,7 @@ def test_git_commit_current_state_excludes_runner_and_dependency_artifacts(
     assert "docs/out.txt" in tracked
     assert not any(path.startswith(".run-files/") for path in tracked)
     assert not any(path.startswith(".methodology-runner/") for path in tracked)
+    assert not any(path.startswith("cross-ref-logs/") for path in tracked)
     assert not any(path.startswith("node_modules/") for path in tracked)
 
 

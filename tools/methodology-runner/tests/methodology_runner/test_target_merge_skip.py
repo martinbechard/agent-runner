@@ -73,6 +73,7 @@ def test_git_commit_excludes_runner_and_dependency_artifacts(tmp_path: Path) -> 
     _write(repo / "src/app.ts", "export const value = 1;\n")
     _write(repo / ".run-files/process.log", "runtime log\n")
     _write(repo / ".methodology-runner/state.json", "{}\n")
+    _write(repo / "cross-ref-logs/PH-001/stdout.log", "cross-ref\n")
     _write(repo / "node_modules/pkg/index.js", "module.exports = {};\n")
 
     _git_commit(repo, "Commit app source")
@@ -82,6 +83,7 @@ def test_git_commit_excludes_runner_and_dependency_artifacts(tmp_path: Path) -> 
     assert "src/app.ts" in tracked
     assert not any(path.startswith(".run-files/") for path in tracked)
     assert not any(path.startswith(".methodology-runner/") for path in tracked)
+    assert not any(path.startswith("cross-ref-logs/") for path in tracked)
     assert not any(path.startswith("node_modules/") for path in tracked)
 
 

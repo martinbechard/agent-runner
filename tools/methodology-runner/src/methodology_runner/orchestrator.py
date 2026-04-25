@@ -86,6 +86,7 @@ RUN_FILES_DIRNAME = ".run-files"
 GIT_COMMIT_EXCLUDED_PATHS = (
     METHODOLOGY_DIR,
     RUN_FILES_DIRNAME,
+    "cross-ref-logs",
     ".prompt-runner",
     "prompt-runner-files",
     ".venv",
