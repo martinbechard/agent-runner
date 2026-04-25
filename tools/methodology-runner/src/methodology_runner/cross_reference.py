@@ -178,7 +178,8 @@ requirements using Grep.
 Read every section and paragraph in docs/requirements/raw-requirements.md.
 Read docs/requirements/requirements-inventory-coverage.yaml and use it as
 supporting evidence for source phrases that intentionally map to grouped RI
-items.
+items or to child RI items that preserve a requirement-bearing lead-in in their
+normalized_requirement.
 Identify every statement containing shall, must, will, should, or an
 imperative verb describing system behaviour.  Verify each has at least one
 corresponding RI-* item.  Flag sections with zero RI-* coverage.
@@ -203,6 +204,10 @@ Phase 0 is the first phase, so integration checks are minimal:
   set, or display-field set, provided the normalized_requirement preserves the
   complete list and the coverage support file maps the relevant source phrase
   to one or more real RI-* IDs.
+- Do not require a standalone parent RI for a requirement-bearing lead-in such
+  as "The report view must show:" when each child bullet is represented as its
+  own RI, the child normalized_requirement preserves that lead-in, and the
+  coverage support file maps the lead-in phrase to those child RI IDs.
 - Do not flag a requirement merely because it contains 'and' or 'or' inside a
   single behavior, a single acceptance check, or a result clause that depends
   on the same action.\

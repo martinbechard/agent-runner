@@ -275,8 +275,10 @@ def test_generate_inventory_writes_valid_seed_inventory_and_coverage(tmp_path: P
 
     report = build_report(inventory, coverage, raw_requirements)
     data = yaml.safe_load(inventory.read_text(encoding="utf-8"))
+    coverage_data = yaml.safe_load(coverage.read_text(encoding="utf-8"))
     quotes = [item["verbatim_quote"] for item in data["items"]]
     categories = {item["verbatim_quote"]: item["category"] for item in data["items"]}
+    items_by_id = {item["id"]: item for item in data["items"]}
     normalized_requirements = {
         item["verbatim_quote"]: item["normalized_requirement"] for item in data["items"]
     }
@@ -327,7 +329,23 @@ def test_generate_inventory_writes_valid_seed_inventory_and_coverage(tmp_path: P
         "The parser must normalize every supported input shape into a report document "
         "with these concepts: A list of parsing warnings that do not prevent display."
     )
+    parser_lead_in_refs = coverage_data["coverage_check"][
+        "The parser must normalize every supported input shape into a report document "
+        "with these concepts:"
+    ]
+    assert {
+        items_by_id[item_id]["verbatim_quote"] for item_id in parser_lead_in_refs
+    } == {
+        "Report title.",
+        "Source path.",
+        "A list of parsing warnings that do not prevent display.",
+    }
     assert normalized_requirements["Total cost."] == "The report view must show: Total cost."
+    report_view_refs = coverage_data["coverage_check"]["The report view must show:"]
+    assert {items_by_id[item_id]["verbatim_quote"] for item_id in report_view_refs} == {
+        "Report title.",
+        "Total cost.",
+    }
     assert categories[
         "Toggle to show only rows with warnings, errors, or failed/revise verdicts."
     ] == "functional"

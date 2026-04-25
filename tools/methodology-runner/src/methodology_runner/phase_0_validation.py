@@ -279,8 +279,10 @@ def generate_inventory(
     """Write deterministic PH-000 inventory and coverage seed artifacts."""
     entries = _parse_source_entries(raw_requirements_path)
     items: list[dict] = []
+    entry_records: list[tuple[_SourceEntry, str]] = []
     for index, entry in enumerate(entries, start=1):
         item_id = f"RI-{index:03d}"
+        entry_records.append((entry, item_id))
         items.append(
             {
                 "id": item_id,
@@ -307,10 +309,11 @@ def generate_inventory(
     for phrase in source_phrases:
         normalized_phrase = _normalize(phrase)
         refs = [
-            item["id"]
-            for item in items
-            if _normalize(item["verbatim_quote"]) in normalized_phrase
-            or normalized_phrase in _normalize(item["verbatim_quote"])
+            item_id
+            for entry, item_id in entry_records
+            if _normalize(entry.quote) in normalized_phrase
+            or normalized_phrase in _normalize(entry.quote)
+            or (entry.lead_in and normalized_phrase == _normalize(entry.lead_in))
         ]
         if not refs:
             fallback_id = f"RI-{len(items) + 1:03d}"
@@ -419,6 +422,8 @@ def _extract_requirement_phrases(raw_requirements_path: Path) -> list[str]:
         if stripped.endswith(":"):
             flush_paragraph()
             flush_bullet()
+            if REQUIREMENT_SIGNAL_RE.search(stripped):
+                phrases.append(stripped)
             in_requirement_section = stripped in {
                 "Requirements:",
                 "Constraints:",
