@@ -42,7 +42,9 @@ RI_ID_RE = re.compile(r"^RI-\d{3}$")
 NUMBERED_LIST_RE = re.compile(r"^\s*(\d+)\.\s+(.*)$")
 REQUIREMENT_SIGNAL_RE = re.compile(
     r"\b(must|should|shall|will|need to|needs to|not|do not|can|include|contains|support|"
-    r"provide|show|expose|cover|handle|reject|run|build)\b",
+    r"provide|provides|show|expose|cover|handle|reject|rejects|run|runs|build|builds|"
+    r"reviewing|comparing|diagnosing|"
+    r"use|keep|comment|add|prefer|describe|document)\b",
     re.IGNORECASE,
 )
 
@@ -164,10 +166,12 @@ def _short_tags(section: str, quote: str) -> list[str]:
 
 def _standalone_requirement(entry: _SourceEntry) -> str:
     quote = entry.quote.strip()
+    context = entry.lead_in.rstrip(":").strip()
+    if context:
+        return f"{context}: {quote}"
     if REQUIREMENT_SIGNAL_RE.search(quote):
         return quote
-    context = entry.lead_in.rstrip(":").strip() or entry.section
-    return f"{context}: {quote}"
+    return f"{entry.section}: {quote}"
 
 
 def _source_location(entry: _SourceEntry) -> str:
@@ -259,6 +263,8 @@ def _coalesce_groupable_field_lists(entries: list[_SourceEntry]) -> list[_Source
 
 
 def _is_requirement_entry(entry: _SourceEntry) -> bool:
+    if entry.location_kind in {"bullet", "numbered item"}:
+        return True
     combined = f"{entry.lead_in} {entry.quote}"
     if REQUIREMENT_SIGNAL_RE.search(combined):
         return True
@@ -275,6 +281,7 @@ def _parse_source_entries(raw_requirements_path: Path) -> list[_SourceEntry]:
     paragraph: list[str] = []
     paragraph_start = 0
     lead_in = ""
+    list_after_lead_in = False
     counters: dict[tuple[str, str], int] = {}
 
     def section_name() -> str:
@@ -286,6 +293,7 @@ def _parse_source_entries(raw_requirements_path: Path) -> list[_SourceEntry]:
         return counters[key]
 
     def append_entry(quote: str, kind: str, start_index: int | None = None) -> None:
+        nonlocal list_after_lead_in
         normalized = _normalize(quote)
         if not normalized:
             return
@@ -299,6 +307,7 @@ def _parse_source_entries(raw_requirements_path: Path) -> list[_SourceEntry]:
         )
         if _is_requirement_entry(entry):
             entries.append(entry)
+        list_after_lead_in = kind in {"bullet", "numbered item"} and bool(lead_in)
 
     def flush_paragraph() -> None:
         nonlocal paragraph, paragraph_start, lead_in
@@ -318,6 +327,9 @@ def _parse_source_entries(raw_requirements_path: Path) -> list[_SourceEntry]:
         stripped = raw_line.strip()
         if not stripped:
             flush_paragraph()
+            if list_after_lead_in:
+                lead_in = ""
+                list_after_lead_in = False
             continue
         if stripped.startswith("#"):
             flush_paragraph()
