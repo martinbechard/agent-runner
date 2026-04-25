@@ -370,6 +370,22 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "configuration, startup command, import path, service URL" in text
 
 
+def test_ph001_prompt_module_requires_local_ac_traceability() -> None:
+    prompt_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "methodology_runner"
+        / "prompts"
+        / "PR-023-ph001-feature-specification.md"
+    )
+    text = prompt_path.read_text(encoding="utf-8")
+
+    assert "local evidence set" in text
+    assert "When adding, moving, or revising an\n  acceptance criterion" in text
+    assert "same `RI-*` item to appear in multiple features" in text
+    assert "Do not leave a\n  second-order traceability defect" in text
+
+
 def test_ph005_prompt_module_requires_compile_checked_component_simulations() -> None:
     prompt_path = (
         Path(__file__).resolve().parents[2]

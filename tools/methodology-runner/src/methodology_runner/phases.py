@@ -290,7 +290,9 @@ _PHASE_1 = PhaseConfig(
         "be testable, specific, and free of ambiguous qualifiers (e.g.,\n"
         "'fast', 'user-friendly', 'appropriate').  Dependency identification:\n"
         "features that share data, sequencing constraints, or transactional\n"
-        "boundaries must declare their inter-feature dependencies."
+        "boundaries must declare their inter-feature dependencies.  Local\n"
+        "traceability: each AC must be supported by the same feature's\n"
+        "source_inventory_refs, including during retry edits."
     ),
     generation_instructions=(
         "Read the requirements inventory and produce a feature specification\n"
@@ -318,7 +320,11 @@ _PHASE_1 = PhaseConfig(
         "\n"
         "Group related RI items into coherent features.  Write acceptance\n"
         "criteria that are binary pass/fail -- a tester must be able to\n"
-        "determine the verdict without subjective judgment."
+        "determine the verdict without subjective judgment.  Treat\n"
+        "source_inventory_refs as local evidence for the feature description\n"
+        "and all AC-* entries; when adding, moving, or revising an AC, update\n"
+        "the affected feature's source_inventory_refs in the same edit.  The\n"
+        "same RI-* may appear in multiple features when it supports each one."
     ),
     judge_guidance=(
         "Check for these failure modes:\n"
@@ -338,6 +344,8 @@ _PHASE_1 = PhaseConfig(
         "   or execution order.\n"
         "4. Scope creep: flag features that introduce functionality not\n"
         "   traceable to any inventory item.\n"
+        "   If the needed fix is an added AC, include the corresponding\n"
+        "   source_inventory_refs fix in the same revise feedback.\n"
         "5. Missing dependencies: if feature A reads data that feature B\n"
         "   produces, feature B must appear in feature A's dependencies."
     ),

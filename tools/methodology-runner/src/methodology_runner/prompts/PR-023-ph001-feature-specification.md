@@ -48,6 +48,11 @@ Embedded directives for this step:
   acceptance criteria, split it along the clearest domain or workflow
   boundary.
 - Write feature-level completion criteria, not implementation test scripts.
+- Treat each feature's `source_inventory_refs` as the local evidence set for
+  that feature's description and every `AC-*` under it. If an acceptance
+  criterion depends on an `RI-*` item, that `RI-*` must appear in the same
+  feature's `source_inventory_refs`, even if it also appears in another
+  feature.
 - Declare dependencies only when one feature consumes output, state, or
   interfaces produced by another.
 - Any `RI-*` item not represented in a feature must go to `out_of_scope`
@@ -126,6 +131,12 @@ Acceptance requirements:
   dependencies
 - Every RI-* item from docs/requirements/requirements-inventory.yaml must appear
   in at least one feature's source_inventory_refs list or in out_of_scope with a reason.
+- Every feature description and every `AC-*` must be supported by that same
+  feature's `source_inventory_refs`. When adding, moving, or revising an
+  acceptance criterion, update the feature's `source_inventory_refs` in the same
+  edit so the criterion's supporting `RI-*` items are local to that feature.
+- It is valid for the same `RI-*` item to appear in multiple features when that
+  requirement supports acceptance criteria in more than one feature.
 - You may introduce supporting specification detail that is not stated verbatim
   in a single `RI-*` item if it is a reasonable, non-contradictory elaboration
   that directly or indirectly supports satisfying the cited requirements.
@@ -266,6 +277,9 @@ Focus your semantic review on these failure modes:
    - Flag any AC or feature description that adds detail which is neither
      directly nor indirectly supported by its cited `RI-*` items, or which
      stops serving the cited requirements.
+   - When the defect can be fixed by adding or moving an `RI-*` reference,
+     include that source_inventory_refs correction in the same revise feedback
+     as the AC correction.
 8. Pseudo-objective constraints:
    - Flag any AC that pretends to make a qualitative constraint objective
      without a source-grounded inspection rule or measurable threshold.
@@ -316,6 +330,9 @@ Review instructions:
   formulations unless the current wording is actually wrong or the difference
   would materially change downstream design or implementation choices.
 - If you find issues, cite the exact FT-* / AC-* / RI-* IDs involved.
+- When requesting a new or revised acceptance criterion, also state any required
+  `source_inventory_refs` changes for the affected feature. Do not leave a
+  second-order traceability defect for the next judge pass.
 - For each material correction, include at least one corrective rule in this form:
   - RULE: the generator MUST / MUST NOT / SHOULD / SHOULD NOT make a specific change
     - BECAUSE: why that correction is necessary
