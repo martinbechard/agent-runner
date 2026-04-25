@@ -306,10 +306,28 @@ def test_generate_inventory_writes_valid_seed_inventory_and_coverage(tmp_path: P
     ] == "functional"
     assert "The app must reject paths outside configured allowed roots." in quotes
     assert categories["The app must reject paths outside configured allowed roots."] == "constraint"
-    assert categories[
-        "- Report title. - Source path. - A list of parsing warnings that do not prevent display."
-    ] == "functional"
-    assert "- Report title. - Total cost." in quotes
+    assert "Report title." in quotes
+    report_title_requirements = [
+        item["normalized_requirement"]
+        for item in data["items"]
+        if item["verbatim_quote"] == "Report title."
+    ]
+    assert sorted(report_title_requirements) == [
+        "The parser must normalize every supported input shape into a report document "
+        "with these concepts: Report title.",
+        "The report view must show: Report title.",
+    ]
+    assert normalized_requirements["Source path."] == (
+        "The parser must normalize every supported input shape into a report document "
+        "with these concepts: Source path."
+    )
+    assert normalized_requirements[
+        "A list of parsing warnings that do not prevent display."
+    ] == (
+        "The parser must normalize every supported input shape into a report document "
+        "with these concepts: A list of parsing warnings that do not prevent display."
+    )
+    assert normalized_requirements["Total cost."] == "The report view must show: Total cost."
     assert categories[
         "Toggle to show only rows with warnings, errors, or failed/revise verdicts."
     ] == "functional"

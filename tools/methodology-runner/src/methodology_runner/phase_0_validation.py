@@ -178,90 +178,6 @@ def _source_location(entry: _SourceEntry) -> str:
     return f"{entry.section} > {entry.location_kind} {entry.location_index}"
 
 
-def _groupable_field_list(entry: _SourceEntry) -> bool:
-    lead_in = entry.lead_in.lower()
-    section = entry.section.lower()
-    if entry.location_kind not in {"bullet", "numbered item"}:
-        return False
-    if any(
-        excluded in section
-        for excluded in (
-            "supported inputs",
-            "loading workflow",
-            "parser behavior",
-            "search and filtering",
-            "drill-down navigation",
-            "error and warning handling",
-            "accessibility and usability",
-            "performance",
-            "security",
-            "implementation expectations",
-            "documentation",
-            "testing",
-            "acceptance criteria",
-        )
-    ):
-        return False
-    return any(
-        marker in lead_in
-        for marker in (
-            "with these concepts",
-            "must include",
-            "must show",
-            "must expose viewer links",
-        )
-    )
-
-
-def _entry_source_line(entry: _SourceEntry) -> str:
-    if entry.location_kind == "bullet":
-        return f"- {entry.quote}"
-    if entry.location_kind == "numbered item":
-        return f"{entry.location_index}. {entry.quote}"
-    return entry.quote
-
-
-def _coalesce_groupable_field_lists(entries: list[_SourceEntry]) -> list[_SourceEntry]:
-    grouped: list[_SourceEntry] = []
-    index = 0
-    while index < len(entries):
-        entry = entries[index]
-        if not _groupable_field_list(entry):
-            grouped.append(entry)
-            index += 1
-            continue
-
-        group = [entry]
-        cursor = index + 1
-        while cursor < len(entries):
-            candidate = entries[cursor]
-            if (
-                _groupable_field_list(candidate)
-                and candidate.section == entry.section
-                and candidate.lead_in == entry.lead_in
-                and candidate.location_kind == entry.location_kind
-            ):
-                group.append(candidate)
-                cursor += 1
-                continue
-            break
-
-        if len(group) == 1:
-            grouped.append(entry)
-        else:
-            grouped.append(
-                _SourceEntry(
-                    quote=_normalize(" ".join(_entry_source_line(item) for item in group)),
-                    section=entry.section,
-                    location_kind="list",
-                    location_index=entry.location_index,
-                    lead_in=entry.lead_in,
-                )
-            )
-        index = cursor
-    return grouped
-
-
 def _is_requirement_entry(entry: _SourceEntry) -> bool:
     if entry.location_kind in {"bullet", "numbered item"}:
         return True
@@ -361,7 +277,7 @@ def generate_inventory(
     raw_requirements_path: Path,
 ) -> None:
     """Write deterministic PH-000 inventory and coverage seed artifacts."""
-    entries = _coalesce_groupable_field_lists(_parse_source_entries(raw_requirements_path))
+    entries = _parse_source_entries(raw_requirements_path)
     items: list[dict] = []
     for index, entry in enumerate(entries, start=1):
         item_id = f"RI-{index:03d}"
