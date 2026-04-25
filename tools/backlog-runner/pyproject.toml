@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "backlog-runner"
+version = "0.1.0"
+description = "Run backlog items through methodology-runner with bounded parallelism."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+backlog-runner = "backlog_runner.cli:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["backlog_runner*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

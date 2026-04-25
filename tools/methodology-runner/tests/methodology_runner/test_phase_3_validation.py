@@ -42,6 +42,16 @@ def test_build_report_accepts_system_shape_components_for_stack_alignment(tmp_pa
                     "ui_surfaces": [],
                 }
             ],
+            "implementation_files": [
+                {
+                    "path": "app.py",
+                    "role": "source",
+                    "component_refs": ["CMP-001"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-001"],
+                    "purpose": "Contains the CLI runtime behavior.",
+                }
+            ],
             "interactions": [],
         },
     )
@@ -162,6 +172,32 @@ def test_build_report_prefers_features_served_when_supports_is_mapping(tmp_path:
                     "ui_surfaces": [],
                 },
             ],
+            "implementation_files": [
+                {
+                    "path": "app.py",
+                    "role": "source",
+                    "component_refs": ["CMP-001"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-001"],
+                    "purpose": "Contains the CLI runtime behavior.",
+                },
+                {
+                    "path": "README.md",
+                    "role": "readme",
+                    "component_refs": ["CMP-002"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-002"],
+                    "purpose": "Documents run instructions.",
+                },
+                {
+                    "path": "tests/test_cli.py",
+                    "role": "test",
+                    "component_refs": ["CMP-003"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-003"],
+                    "purpose": "Verifies CLI output.",
+                },
+            ],
             "interactions": [
                 {
                     "id": "INT-001",
@@ -265,6 +301,16 @@ def test_build_report_rejects_processing_function_without_examples(tmp_path: Pat
                     "ui_surfaces": [],
                 }
             ],
+            "implementation_files": [
+                {
+                    "path": "processor.py",
+                    "role": "source",
+                    "component_refs": ["CMP-001"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-001"],
+                    "purpose": "Contains request processing.",
+                }
+            ],
             "interactions": [],
         },
     )
@@ -308,6 +354,16 @@ def test_build_report_rejects_ui_surface_without_html_mockup(tmp_path: Path):
                     ],
                 }
             ],
+            "implementation_files": [
+                {
+                    "path": "web_ui.py",
+                    "role": "source",
+                    "component_refs": ["CMP-001"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-001"],
+                    "purpose": "Contains the web UI.",
+                }
+            ],
             "interactions": [],
         },
     )
@@ -323,3 +379,88 @@ def test_build_report_rejects_ui_surface_without_html_mockup(tmp_path: Path):
 
     assert report["overall_status"] == "fail"
     assert "ui_html_mockups" in report["failed_checks"]
+
+
+def test_build_report_requires_files_for_related_artifacts(tmp_path: Path):
+    solution_design = tmp_path / "docs" / "design" / "solution-design.yaml"
+    _write_yaml(
+        solution_design,
+        {
+            "components": [
+                {
+                    "id": "CMP-001",
+                    "name": "CLI application",
+                    "responsibility": "Owns the runtime behavior.",
+                    "technology": "Python 3",
+                    "feature_realization_map": {
+                        "FT-001": "Provides the runtime behavior.",
+                        "FT-002": "Supports run documentation.",
+                    },
+                    "dependencies": [],
+                    "processing_functions": [
+                        {
+                            "name": "run_cli",
+                            "purpose": "Runs the application.",
+                            "triggered_by_features": ["FT-001"],
+                            "examples": [
+                                {
+                                    "name": "default run",
+                                    "input": {},
+                                    "output": {"stdout": "Hello, world!\n"},
+                                }
+                            ],
+                        }
+                    ],
+                    "ui_surfaces": [],
+                }
+            ],
+            "implementation_files": [
+                {
+                    "path": "app.py",
+                    "role": "source",
+                    "component_refs": ["CMP-001"],
+                    "artifact_ref": None,
+                    "features_supported": ["FT-001"],
+                    "purpose": "Contains the CLI runtime behavior.",
+                }
+            ],
+            "interactions": [],
+        },
+    )
+    architecture_design = tmp_path / "docs" / "architecture" / "architecture-design.yaml"
+    _write_yaml(
+        architecture_design,
+        {
+            "components": [
+                {"id": "CMP-001", "features_served": ["FT-001", "FT-002"]}
+            ],
+            "related_artifacts": [
+                {
+                    "id": "ART-001",
+                    "name": "README",
+                    "artifact_type": "readme",
+                    "scope": "system",
+                    "related_components": ["CMP-001"],
+                    "features_served": ["FT-002"],
+                }
+            ],
+        },
+    )
+    feature_spec = tmp_path / "docs" / "features" / "feature-specification.yaml"
+    _write_yaml(
+        feature_spec,
+        {
+            "features": [
+                {"id": "FT-001", "name": "Runtime"},
+                {"id": "FT-002", "name": "Documentation"},
+            ]
+        },
+    )
+
+    report = build_report(solution_design, architecture_design, feature_spec)
+
+    assert report["overall_status"] == "fail"
+    implementation_files_check = next(
+        check for check in report["checks"] if check["id"] == "implementation_files"
+    )
+    assert implementation_files_check["missing_artifact_refs"] == ["ART-001"]

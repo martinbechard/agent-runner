@@ -16,6 +16,8 @@ docs/design/solution-design.yaml
 python-module:methodology_runner.phase_6_validation
 --workflow-prompt
 docs/implementation/implementation-workflow.md
+--solution-design
+docs/design/solution-design.yaml
 --simulations
 docs/simulations/simulation-definitions.yaml
 
@@ -47,12 +49,32 @@ Phase purpose:
   relevant tests before moving on.
 - End with a final child-workflow prompt that runs the full verification
   commands for the implemented system.
+- Preserve the PH-003 implementation file contract. PH-002 architecture is
+  conceptual and does not own file paths; PH-003 solution design declares the
+  concrete source, README, test, script, configuration, and documentation paths
+  in `implementation_files`. Child prompts that create, update, or verify those
+  files must use the declared PH-003 paths exactly. Do not substitute a
+  different filename for the same artifact unless the upstream request
+  explicitly requires a path change.
 
 Important implementation discipline:
 - This phase is planning the implementation workflow, not writing another
   abstract specification layer.
 - The child workflow must produce real code, tests, and project files in the
   project worktree.
+- Treat each child prompt's `### Required Files` section as a hard execution
+  precondition. Only list files that already exist when that child prompt
+  begins: upstream methodology artifacts, existing project files, or files
+  explicitly produced by an earlier child prompt and listed in that earlier
+  prompt's `### Checks Files`.
+- Do not list files the same child prompt is expected to create, optional
+  project-local policy or convention files that are not known to exist, or
+  invented helper documents in `### Required Files`. If no project-local
+  convention file exists, instruct the child prompt to follow visible
+  repository patterns and the delivery-quality rules in this workflow instead
+  of requiring a missing file.
+- Use `### Checks Files` for durable files the child prompt may create or
+  update.
 - Treat PH-005 simulations as component stubs with explicit language interfaces,
   not as simulations of test suites. Child prompts may use those stubs to focus
   integration tests while dependent components are still unbuilt.
@@ -91,6 +113,14 @@ Important implementation discipline:
   meaningful file-level, type-level, and function-level comments or docstrings
   for public surfaces and non-obvious behavior. Do not require noise comments
   that merely restate self-evident code.
+- Do not infer a separate coding-rules, policy, or convention file from the
+  phrase `project-local best practices`. If such a file is not already
+  available in the worktree or upstream artifacts, the literal delivery-quality
+  sentence below and the visible repository patterns are the child prompt's
+  quality guidance.
+- Every child prompt that can create or update code must include this literal
+  sentence in its Generation Prompt and Validation Prompt:
+  `Require changed code to follow project-local best practices, including meaningful file-level, type-level, and function-level comments or docstrings where appropriate.`
 - Require documentation updates to describe the steady-state software that the
   reader has now. Do not write docs that depend on knowing an older or previous
   behavior unless the upstream request explicitly asks for migration notes,
@@ -122,6 +152,10 @@ Output contract:
   - `### Validation Prompt`
 - In `### Required Files` and `### Checks Files`, write one bare relative path
   per non-empty line.
+- In `### Required Files`, include only files available before the child prompt
+  begins. A file is available only if it already exists in the worktree or was
+  produced by an earlier child prompt and listed in that earlier prompt's
+  `### Checks Files`.
 - Do not format path entries as markdown bullets or code spans. For example,
   write `docs/features/feature-specification.yaml`, not
   `- \`docs/features/feature-specification.yaml\``.
@@ -146,6 +180,9 @@ Output contract:
   - require changed code to include appropriate file-level, type-level, and
     function-level comments or docstrings as part of project-local best
     practices
+  - include the exact sentence
+    `Require changed code to follow project-local best practices, including meaningful file-level, type-level, and function-level comments or docstrings where appropriate.`
+    in that child prompt's Generation Prompt and Validation Prompt
   - require changed documentation to be steady-state documentation rather than
     transitional prose about a previous software state
   - require application README updates to include setup and operation entries
@@ -211,6 +248,11 @@ Acceptance requirements:
 - Each `### Required Files` or `### Checks Files` section must use bare
   relative path lines only, with no markdown bullets and no backticks around
   the path values.
+- Each `### Required Files` entry must be available before that child prompt
+  begins, either because it already exists in the worktree or because an
+  earlier child prompt lists it in `### Checks Files`.
+- No child prompt may list absent or invented project-local policy,
+  convention, or helper documents in `### Required Files`.
 - At least one implementation prompt must explicitly require the test-defining
   change to be followed by a failing test run before code changes.
 - When PH-005 declares component simulations, at least one implementation prompt
@@ -223,9 +265,10 @@ Acceptance requirements:
 - At least one implementation prompt must explicitly require a failing run of
   the same exact test command before code changes and a passing rerun of that
   same exact test command after code changes.
-- No child prompt may weaken that TDD rule with wording such as
-  `failing or tightened-test ...`; the workflow must require a real failing run
-  of the same exact command before the implementation change.
+- No child prompt may weaken that TDD rule by allowing any alternate outcome in
+  place of a real failing run before the implementation change.
+- Do not include examples of forbidden loose TDD wording in the generated child
+  workflow; describe the required red/green command sequence directly.
 - The final prompt must explicitly run the full verification commands for the
   implemented system and preserve those exact command strings.
 - The workflow must require command evidence that includes stdout, stderr, and
@@ -330,6 +373,13 @@ Focus your semantic review on these failure modes:
 1. Non-executable workflow:
    - Flag child prompts that only describe work abstractly and do not direct
      real file edits or real test execution.
+   - Flag child prompts whose `### Required Files` list contains a file that
+     is not available before that prompt begins, because prompt-runner will
+     halt before the child prompt can create or ignore that file.
+   - Flag absent or invented project-local policy, convention, or helper
+     documents listed as required files; correcting those entries is a
+     workflow revision unless the upstream artifacts are themselves
+     contradictory.
 2. Broken TDD cadence:
    - Flag child prompts that add code without first adding or tightening the
      test that defines the new behavior.
@@ -339,6 +389,11 @@ Focus your semantic review on these failure modes:
 4. Traceability gaps:
    - Flag child prompts whose implementation work is not materially grounded in
      the upstream FT-* / AC-* / CMP-* / CTR-* / SIM-* artifacts.
+   - Flag child prompts that create, update, or verify source, README, test,
+     documentation, runbook, verification-script, or report files using a
+     different durable path than the corresponding PH-003
+     `implementation_files` entry, because later end-to-end verification must
+     reconcile solution design paths with implementation evidence.
 5. Invented baseline state:
    - Flag child prompts that claim a fixed pre-change runtime state in the
      form `from the current ... behavior` when that exact baseline is not
@@ -364,6 +419,10 @@ Focus your semantic review on these failure modes:
    - Flag workflows that implement code without requiring project-local best
      practices and meaningful file-level, type-level, and function-level
      comments or docstrings where appropriate.
+   - Do not treat delivery-quality discipline as a requirement to invent or
+     require a separate coding-rules, policy, or convention file. If no such
+     file is available before a child prompt begins, asking for that file would
+     make the workflow non-executable rather than higher quality.
 10. Transitional documentation:
    - Flag documentation-update prompts that describe changes relative to an
      older or previous software state instead of documenting the steady-state
@@ -413,6 +472,7 @@ VERDICT: escalate
 
 ### Required Files
 
+docs/design/solution-design.yaml
 docs/implementation/implementation-workflow.md
 
 ### Deterministic Validation
@@ -420,6 +480,8 @@ docs/implementation/implementation-workflow.md
 python-module:methodology_runner.phase_6_validation
 --workflow-prompt
 docs/implementation/implementation-workflow.md
+--solution-design
+docs/design/solution-design.yaml
 --simulations
 docs/simulations/simulation-definitions.yaml
 --run-report

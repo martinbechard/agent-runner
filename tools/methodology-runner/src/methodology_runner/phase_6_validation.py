@@ -10,6 +10,7 @@ import yaml
 
 _WORKFLOW_MODULE_RE = re.compile(r"^### Module\s*$", re.MULTILINE)
 _PROMPT_HEADING_RE = re.compile(r"^##\s+Prompt\b", re.MULTILINE)
+_PROMPT_TITLE_RE = re.compile(r"^##\s+Prompt\s+(\d+):\s+(.+?)\s*$")
 _LEVEL3_RE = re.compile(r"^###\s+(.+?)\s*$")
 _MARKDOWN_LIST_RE = re.compile(r"^(?:[-+*]|\d+\.)\s+")
 _LOOSE_TDD_RE = re.compile(r"failing\s+or\s+tighten(?:ed|ing)?[-\s]test")
@@ -31,7 +32,12 @@ def _has_delivery_quality_signal(lower_text: str) -> bool:
     steady_state_docs = (
         "steady-state" in lower_text
         and ("documentation" in lower_text or "docs" in lower_text)
-        and ("previous state" in lower_text or "older" in lower_text)
+        and (
+            "previous state" in lower_text
+            or "older" in lower_text
+            or "previous behavior" in lower_text
+            or "prior behavior" in lower_text
+        )
     )
     readme_operations = (
         "readme" in lower_text
@@ -82,6 +88,113 @@ def _bad_path_metadata_entries(text: str) -> list[dict]:
                 }
             )
     return bad_entries
+
+
+def _child_prompt_file_sections(text: str) -> list[dict]:
+    prompts: list[dict] = []
+    current_prompt: dict | None = None
+    active_section: str | None = None
+
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        prompt_match = _PROMPT_TITLE_RE.match(raw_line)
+        if prompt_match is not None:
+            current_prompt = {
+                "prompt_index": int(prompt_match.group(1)),
+                "title": prompt_match.group(2).strip(),
+                "required_files": [],
+                "checks_files": [],
+            }
+            prompts.append(current_prompt)
+            active_section = None
+            continue
+
+        heading_match = _LEVEL3_RE.match(raw_line)
+        if heading_match is not None:
+            normalized = " ".join(heading_match.group(1).strip().lower().split())
+            active_section = (
+                normalized
+                if normalized in {"required files", "checks files"}
+                else None
+            )
+            continue
+
+        if raw_line.startswith("## "):
+            active_section = None
+            continue
+
+        if current_prompt is None or active_section is None:
+            continue
+
+        stripped = raw_line.strip()
+        if not stripped:
+            continue
+
+        entry = {
+            "line": line_number,
+            "path": stripped,
+        }
+        if active_section == "required files":
+            current_prompt["required_files"].append(entry)
+        elif active_section == "checks files":
+            current_prompt["checks_files"].append(entry)
+
+    return prompts
+
+
+def _workflow_workspace_root(path: Path) -> Path:
+    resolved = path.resolve()
+    if (
+        resolved.name == "implementation-workflow.md"
+        and resolved.parent.name == "implementation"
+        and resolved.parent.parent.name == "docs"
+    ):
+        return resolved.parent.parent.parent
+    return Path.cwd()
+
+
+def _is_plain_relative_file_path(path_text: str) -> bool:
+    if path_text.startswith("`") or _MARKDOWN_LIST_RE.match(path_text):
+        return False
+    if "{{" in path_text or "}}" in path_text:
+        return False
+    return not Path(path_text).is_absolute()
+
+
+def _required_files_available_check(text: str, workflow_path: Path) -> dict:
+    workspace_root = _workflow_workspace_root(workflow_path)
+    available_paths: set[str] = set()
+    missing_entries: list[dict] = []
+
+    for prompt in _child_prompt_file_sections(text):
+        for required in prompt["required_files"]:
+            path_text = required["path"]
+            if not _is_plain_relative_file_path(path_text):
+                continue
+            if path_text in available_paths:
+                continue
+            if (workspace_root / path_text).exists():
+                available_paths.add(path_text)
+                continue
+            missing_entries.append(
+                {
+                    "prompt_index": prompt["prompt_index"],
+                    "title": prompt["title"],
+                    "line": required["line"],
+                    "path": path_text,
+                }
+            )
+
+        for checked in prompt["checks_files"]:
+            path_text = checked["path"]
+            if _is_plain_relative_file_path(path_text):
+                available_paths.add(path_text)
+
+    return {
+        "id": "required_files_available",
+        "status": "pass" if not missing_entries else "fail",
+        "workspace_root": str(workspace_root),
+        "missing": missing_entries,
+    }
 
 
 def _load_yaml(path: Path):
@@ -140,7 +253,84 @@ def _simulation_artifact_usage_check(
     }
 
 
-def _validate_workflow_prompt(path: Path, simulations_path: Path | None = None) -> dict:
+def _workflow_mentions_artifact_path(
+    workflow_text: str,
+    artifact_path: str,
+    artifact_type: str,
+    prompt_sections: list[dict],
+) -> bool:
+    if artifact_path in workflow_text:
+        return True
+    normalized = artifact_path.rstrip("/")
+    if not normalized:
+        return False
+    path_name = Path(normalized).name
+    directory_like = artifact_type in {"test-suite", "directory"} or "." not in path_name
+    if not directory_like:
+        return False
+    prefix = f"{normalized}/"
+    for prompt in prompt_sections:
+        for entry in prompt["required_files"] + prompt["checks_files"]:
+            if entry["path"].startswith(prefix):
+                return True
+    return False
+
+
+def _solution_design_implementation_file_usage_check(
+    workflow_text: str,
+    solution_design_path: Path | None,
+) -> dict | None:
+    """Check that PH-006 workflow carries PH-003 implementation file paths forward."""
+    if solution_design_path is None:
+        return None
+    if not solution_design_path.exists():
+        return {
+            "id": "solution_design_implementation_file_usage_signal",
+            "status": "fail",
+            "issue": "solution_design_file_missing",
+            "path": str(solution_design_path),
+        }
+
+    solution_design = _load_yaml(solution_design_path) or {}
+    implementation_files = _as_dict_list(solution_design.get("implementation_files", []))
+    prompt_sections = _child_prompt_file_sections(workflow_text)
+    file_paths: list[dict] = []
+    missing_paths: list[dict] = []
+
+    for implementation_file in implementation_files:
+        path_value = implementation_file.get("path")
+        role = implementation_file.get("role", "")
+        artifact_ref = implementation_file.get("artifact_ref")
+        if not isinstance(path_value, str) or not path_value.strip():
+            continue
+        path_text = path_value.strip()
+        path_record = {
+            "path": path_text,
+            "role": role,
+            "artifact_ref": artifact_ref,
+        }
+        file_paths.append(path_record)
+        if not _workflow_mentions_artifact_path(
+            workflow_text,
+            path_text,
+            str(role),
+            prompt_sections,
+        ):
+            missing_paths.append(path_record)
+
+    return {
+        "id": "solution_design_implementation_file_usage_signal",
+        "status": "pass" if not missing_paths else "fail",
+        "implementation_file_paths": file_paths,
+        "missing_implementation_file_paths": missing_paths,
+    }
+
+
+def _validate_workflow_prompt(
+    path: Path,
+    simulations_path: Path | None = None,
+    solution_design_path: Path | None = None,
+) -> dict:
     text = path.read_text(encoding="utf-8")
     lower_text = text.lower()
     checks: list[dict] = []
@@ -255,9 +445,16 @@ def _validate_workflow_prompt(path: Path, simulations_path: Path | None = None) 
             "details": bad_path_entries,
         }
     )
+    checks.append(_required_files_available_check(text, path))
     simulation_artifact_check = _simulation_artifact_usage_check(text, simulations_path)
     if simulation_artifact_check is not None:
         checks.append(simulation_artifact_check)
+    solution_design_file_check = _solution_design_implementation_file_usage_check(
+        text,
+        solution_design_path,
+    )
+    if solution_design_file_check is not None:
+        checks.append(solution_design_file_check)
 
     failed = [check["id"] for check in checks if check["status"] != "pass"]
     return {
@@ -459,8 +656,15 @@ def build_report(
     run_report_path: Path | None = None,
     check_run_report: bool = False,
     simulations_path: Path | None = None,
+    solution_design_path: Path | None = None,
 ) -> dict:
-    checks = [_validate_workflow_prompt(workflow_prompt_path, simulations_path)]
+    checks = [
+        _validate_workflow_prompt(
+            workflow_prompt_path,
+            simulations_path,
+            solution_design_path,
+        )
+    ]
     if check_run_report:
         assert run_report_path is not None
         checks.append(_validate_run_report(workflow_prompt_path, run_report_path))
@@ -488,6 +692,11 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help="Optional PH-005 simulation definitions for artifact usage checks.",
     )
+    parser.add_argument(
+        "--solution-design",
+        default=None,
+        help="Optional PH-003 solution design for implementation file path checks.",
+    )
     parser.add_argument("--check-run-report", action="store_true")
     args = parser.parse_args(argv)
     try:
@@ -496,6 +705,9 @@ def main(argv: list[str] | None = None) -> int:
             Path(args.run_report),
             check_run_report=args.check_run_report,
             simulations_path=Path(args.simulations) if args.simulations else None,
+            solution_design_path=(
+                Path(args.solution_design) if args.solution_design else None
+            ),
         )
     except Exception as exc:
         print(

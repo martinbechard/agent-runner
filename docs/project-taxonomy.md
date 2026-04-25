@@ -26,12 +26,15 @@
   implementation, tests, docs, or support scripts produced by the tools.
 - **Prompt-runner files** live under `tools/prompt-runner/`.
 - **Methodology files** live under `tools/methodology-runner/`.
+- **Backlog-runner files** live under tools/backlog-runner/.
 - **Sample files** live under `sample/`.
 - **Rule:** When a file exists only to support prompt-runner execution, keep it
   under `tools/prompt-runner/` rather than mixing it with project files.
 - **Rule:** When a file exists only to support methodology-runner execution,
   keep it under `tools/methodology-runner/` rather than mixing it with project
   files.
+- **Rule:** When a file exists only to support backlog-runner execution, keep it
+  under tools/backlog-runner/ rather than mixing it with project files.
 - **Rule:** When a file is a curated example bundle or runnable repository
   sample, keep it under `sample/` so the request, fixtures, and helper assets
   stay together.
@@ -212,6 +215,37 @@
 - **Signals:** methodology skill definition, `SKILL.md`, phase-local or shared methodology discipline, prompt-injected bundled skill, audience is methodology generator or judge agents.
 - **Filename pattern:** `SKILL.md` inside `tools/methodology-runner/skills/<skill-name>/`.
 - **Example:** `tools/methodology-runner/skills/structured-design/SKILL.md`
+
+### tools/backlog-runner/
+- **Purpose:** Package root for the backlog-runner tool itself. Use this path for tool-level packaging files such as pyproject.toml, the tool README, and other root files that define how backlog-runner is installed and presented as a product.
+- **Signals:** backlog-runner package metadata, backlog-runner distribution root, tool-level install instructions, console entry point definition, backlog-runner product README.
+- **Filename pattern:** fixed tool-root filenames such as pyproject.toml and README.md.
+- **Example:** tools/backlog-runner/pyproject.toml
+
+### tools/backlog-runner/docs/design/high-level/
+- **Purpose:** High-level design documents for backlog-runner itself. Use this mirrored design path when the document describes backlog-runner architecture, backlog folder semantics, worker orchestration, or end-to-end dispatch flow rather than a single internal module.
+- **Signals:** backlog-runner architecture, backlog scanning and claiming model, concurrent methodology-runner orchestration, worktree isolation, archive lifecycle, status reporting.
+- **Filename pattern:** preserve the high-level-design filename such as HLD-NNN-slug.md.
+- **Example:** tools/backlog-runner/docs/design/high-level/HLD-001-backlog-runner.md
+
+### tools/backlog-runner/docs/design/components/
+- **Purpose:** Canonical component designs for backlog-runner internals. Use this mirrored design path when the document describes a specific backlog-runner component such as claiming, scheduling, worker supervision, archive routing, or status state.
+- **Signals:** backlog-runner component internals, scoped data model, CLI command behavior, scheduler algorithm, file lifecycle rules, worker result contract.
+- **Filename pattern:** preserve the component-design filename such as CD-NNN-slug.md.
+- **Example:** tools/backlog-runner/docs/design/components/CD-001-backlog-claiming.md
+
+### tools/backlog-runner/src/
+- **Purpose:** Backlog-runner Python source code. Use this mirrored source path when the code belongs to backlog-runner rather than to the main project tree, prompt-runner, or methodology-runner.
+- **Signals:** backlog-runner CLI entry point, backlog scanner, item claimer, worker supervisor, methodology-runner subprocess launcher, archive router, package code imported as backlog_runner.
+- **Filename pattern:** snake_case.py for modules and fixed Python package files such as __init__.py and __main__.py.
+- **Tests location:** tools/backlog-runner/tests/ -- mirror path, test_module.py.
+- **Example:** tools/backlog-runner/src/backlog_runner/scheduler.py
+
+### tools/backlog-runner/tests/
+- **Purpose:** Backlog-runner Python tests and fixtures. Use this mirrored test path when the tests exercise backlog-runner code rather than the main project tree, prompt-runner, methodology-runner, or report tool.
+- **Signals:** backlog-runner CLI tests, scheduler tests, filesystem-claim tests, worker supervision tests, archive routing tests, imports from backlog_runner.
+- **Filename pattern:** test_module.py; fixtures keep descriptive filenames in subfolders such as fixtures/.
+- **Mirrors:** tools/backlog-runner/src/
 
 ### tools/report/
 - **Purpose:** Root for the repository's cross-tool reporting utilities. Use this path for reporting-specific documentation and support files when they are not owned by prompt-runner or methodology-runner alone.
@@ -397,6 +431,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-04-24 — tools/backlog-runner/ added — backlog-runner is a sibling tool for backlog queue supervision and needs its own package, design, source, and test paths.
 - 2026-04-20 — docs/strategies/ added — durable operating guidance such as file-promotion and artifact-retention models needs a canonical home separate from one-off reviews and staged plans.
 - 2026-04-19 — tools/report/ added — the timeline report script, its tests, and its fixtures are cross-tool diagnostics and belong under a dedicated reporting tool instead of lingering in root `scripts/` and `tests/`.
 - 2026-04-18 — sample/ added — curated example bundles such as Hello World need one self-contained home instead of being split across docs and methodology fixtures.

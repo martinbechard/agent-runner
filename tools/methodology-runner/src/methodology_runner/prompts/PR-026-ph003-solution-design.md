@@ -59,6 +59,11 @@ Embedded directives for this step:
 - For every specified UI surface, include an `html_mockup` field containing an
   HTML fragment that shows the steady-state user interface structure and
   representative visible content.
+- Declare concrete project-relative implementation files for the design in
+  `implementation_files`. PH-002 architecture is conceptual and does not own
+  file paths; this phase must bind each component and each PH-002
+  `related_artifacts` entry to the source, README, test, script, configuration,
+  or documentation paths downstream implementation must use.
 - Add interactions for every real dependency handoff that crosses component
   boundaries, including human-mediated handoffs that the architecture treats
   as real integration points.
@@ -82,6 +87,7 @@ Embedded directives for this step:
 Phase purpose:
 - Refine the architecture into explicit component responsibilities.
 - Map every FT-* feature to the components that realize it.
+- Assign concrete implementation paths for components and related artifacts.
 - Declare inter-component interactions where real data or control flows cross
   component boundaries.
 - Make ownership boundaries and dependencies explicit for downstream contracts.
@@ -119,6 +125,13 @@ components:
           <main>
             <h1>Representative UI heading</h1>
           </main>
+implementation_files:
+  - path: "relative/path/from/project/root.py"
+    role: "source | test | readme | documentation | configuration | script | data | other"
+    component_refs: ["CMP-NNN", "..."]
+    artifact_ref: null
+    features_supported: ["FT-NNN", "..."]
+    purpose: "Why this file exists and what it contains"
 interactions:
   - id: "INT-NNN"
     source: "CMP-NNN"
@@ -131,6 +144,7 @@ Acceptance requirements:
 - The file must be valid YAML parseable by a standard YAML parser.
 - The top-level keys must appear exactly in this order:
   components
+  implementation_files
   interactions
 - Every component must contain:
   id
@@ -158,6 +172,19 @@ Acceptance requirements:
   html_mockup
 - Every UI `html_mockup` must contain HTML markup. Do not describe a UI in
   prose only.
+- `implementation_files` must be a list. Every item must contain:
+  path
+  role
+  component_refs
+  artifact_ref
+  features_supported
+  purpose
+- Every component must be referenced by at least one `implementation_files`
+  entry.
+- Every PH-002 `related_artifacts` entry must be referenced by at least one
+  `implementation_files` entry using `artifact_ref: "ART-NNN"`.
+- Use `artifact_ref: null` for component source files that do not correspond
+  to a PH-002 related artifact.
 - Every FT-* from docs/features/feature-specification.yaml must appear in at
   least one component's feature_realization_map.
 - feature_realization_map values must explain the component's contribution and
@@ -227,9 +254,9 @@ Embedded directives for this step:
 
 
 - Review for responsibility overlap, weak or missing feature realization,
-  missing processing-function examples, missing UI HTML mockups, invented
-  interactions, inconsistent dependencies, and implementation-detail leakage
-  that belongs to a later phase.
+  missing implementation file mapping, missing processing-function examples,
+  missing UI HTML mockups, invented interactions, and inconsistent
+  dependencies.
 - Review continuity with existing steady-state design docs when they exist.
   Flag unjustified component renames, decomposition churn, or ownership drift,
   but do not block deliberate evolution that is supported by the current
@@ -241,6 +268,9 @@ Review method:
 - Iterate through components in CMP-* order.
 - For each component, review responsibility, technology, feature_realization_map,
   dependencies, processing_functions, and ui_surfaces together.
+- Then review implementation_files and confirm each component and PH-002
+  related artifact has a concrete project-relative path for downstream
+  implementation.
 - Then iterate through interactions in INT-* order.
 - Before flagging any feature realization, interaction, or ownership boundary
   as missing, check whether that same downstream-actionable meaning is already
@@ -259,28 +289,34 @@ Focus your semantic review on these failure modes:
 3. Unnecessary decomposition:
    - Flag components or interactions that materially complicate the design
      without improving ownership clarity or downstream implementation choices.
-4. Missing processing examples:
+4. Missing implementation file mapping:
+   - Flag components that have no concrete implementation file path.
+   - Flag PH-002 related artifacts that have no concrete implementation file
+     path in `implementation_files`.
+   - Flag implementation file entries that use unknown CMP-* or ART-* refs.
+5. Missing processing examples:
    - Flag any specified processing function that lacks at least one concrete
      example with both input and output values.
    - Do not flag `input: {}` for a no-argument function or command when the
      output is concrete.
-5. Missing UI mockups:
+6. Missing UI mockups:
    - Flag any specified UI surface whose `html_mockup` is absent, prose-only,
      or not an HTML fragment.
-6. Missing interactions:
+7. Missing interactions:
    - Flag cases where a dependency implies meaningful runtime or data flow but
      no INT-* interaction captures it.
-7. Unsupported technology detail:
+8. Unsupported technology detail:
    - Flag technology assignments that are not at least indirectly supported by
      the stack manifest and feature specification.
-8. Untraced features:
+9. Untraced features:
    - Flag any FT-* feature that is not materially realized by at least one
      component.
 
 Review instructions:
 - Use the deterministic validation report as authoritative for structural
-  checks, processing example shape, UI HTML mockup shape, reference existence,
-  dependency-to-interaction coverage, and feature coverage counts.
+  checks, implementation file mapping, processing example shape, UI HTML
+  mockup shape, reference existence, dependency-to-interaction coverage, and
+  feature coverage counts.
 - Treat this phase as an allowed elaboration layer.
 - Only ask for a change when the current design is wrong, contradictory,
   materially unsupported, or the change would materially affect downstream

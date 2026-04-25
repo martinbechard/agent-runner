@@ -108,6 +108,12 @@ on the same workspace. Uses fcntl.flock so the OS auto-releases on crash."""
 CHANGE_RECORD_ROOT = "docs/changes"
 """Root for preserved per-change records."""
 
+TARGET_MERGE_HANDOFF_FILENAME = "target-merge-handoff.json"
+"""Filename for the target-merge handoff written when target merge is skipped."""
+
+TARGET_MERGE_PENDING_STATUS = "target_merge_pending"
+"""Status written into the target-merge handoff."""
+
 STEADY_STATE_DOC_ROOTS = (
     "docs/features",
     "docs/design",
@@ -168,6 +174,26 @@ _FINAL_CLEANUP_PATHS: tuple[str, ...] = (
     "timeline-implementation-workflow.html",
 )
 """Intermediate execution state removed before the final repo commit."""
+
+_TRANSIENT_DELIVERY_DIR_NAMES = frozenset({
+    "__pycache__",
+    ".pytest_cache",
+    ".mypy_cache",
+    ".ruff_cache",
+    ".tox",
+    ".nox",
+    "htmlcov",
+})
+"""Generated cache/build directories that must not be delivered as app code."""
+
+_TRANSIENT_DELIVERY_FILE_NAMES = frozenset({
+    ".coverage",
+    "coverage.xml",
+})
+"""Generated cache/report files that must not be delivered as app code."""
+
+_TRANSIENT_DELIVERY_FILE_SUFFIXES = (".pyc", ".pyo")
+"""Generated Python bytecode suffixes excluded from final integration."""
 
 
 class WorkspaceLockError(RuntimeError):
@@ -252,6 +278,9 @@ class PipelineConfig:
     process logs and any methodology-owned debug logging."""
     escalation_policy: EscalationPolicy | None = None
     max_cross_ref_retries: int = MAX_CROSS_REF_RETRIES
+    skip_target_merge: bool = False
+    target_branch: str | None = None
+    base_commit: str | None = None
 
 
 @dataclass
@@ -378,6 +407,17 @@ def _find_branch_worktree_path(workspace: Path, branch: str) -> Path | None:
         if entry.get("branch") == branch:
             return Path(entry["path"]).resolve()
     return None
+
+
+def _resolve_target_branch(
+    workspace: Path,
+    source_branch: str,
+    configured_target_branch: str | None,
+) -> str:
+    """Return the configured target branch or the default integration branch."""
+    if configured_target_branch:
+        return configured_target_branch
+    return _target_integration_branch(workspace, source_branch)
 
 
 def _process_log_path(workspace: Path) -> Path:
@@ -688,6 +728,21 @@ def _copy_preserved_artifact(src: Path, dest: Path) -> None:
     """Copy one preserved artifact, creating parent directories as needed."""
     dest.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dest)
+
+
+def _remove_transient_delivery_artifacts(workspace: Path) -> None:
+    """Remove generated caches and bytecode before committing delivered changes."""
+    for path in sorted(workspace.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        if ".git" in path.parts:
+            continue
+        if path.is_dir() and path.name in _TRANSIENT_DELIVERY_DIR_NAMES:
+            shutil.rmtree(path, ignore_errors=True)
+            continue
+        if path.is_file() and (
+            path.name in _TRANSIENT_DELIVERY_FILE_NAMES
+            or path.name.endswith(_TRANSIENT_DELIVERY_FILE_SUFFIXES)
+        ):
+            path.unlink(missing_ok=True)
 
 
 def _slugify_doc_segment(value: str) -> str:
@@ -1103,9 +1158,45 @@ def _write_empty_simulations_artifact(
     return artifact_path
 
 
+def _target_merge_handoff_path(change_root: Path) -> Path:
+    """Return the target-merge handoff path under one change record."""
+    return change_root / "execution" / TARGET_MERGE_HANDOFF_FILENAME
+
+
+def _write_target_merge_handoff(
+    *,
+    path: Path,
+    change_id: str,
+    source_branch: str,
+    target_branch: str,
+    source_commit: str,
+    handoff_commit: str | None,
+    base_commit: str | None,
+) -> None:
+    """Write the target-merge handoff consumed by backlog-runner."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        json.dumps(
+            {
+                "change_id": change_id,
+                "source_branch": source_branch,
+                "target_branch": target_branch,
+                "source_commit": source_commit,
+                "handoff_commit": handoff_commit,
+                "base_commit": base_commit,
+                "status": TARGET_MERGE_PENDING_STATUS,
+            },
+            indent=2,
+            sort_keys=False,
+        ) + "\n",
+        encoding="utf-8",
+    )
+
+
 def _automate_completed_lifecycle(
     state: ProjectState,
     workspace: Path,
+    config: PipelineConfig,
 ) -> str | None:
     """Execute LC-002 through LC-006 and return an error string on failure."""
     change_id = state.change_id or workspace.name
@@ -1169,20 +1260,32 @@ def _automate_completed_lifecycle(
         state, workspace, "LC-006-final-review-and-history-integration", persist=True
     )
     source_branch = _git_current_branch(workspace)
-    target_branch = _target_integration_branch(workspace, source_branch)
+    target_branch = _resolve_target_branch(
+        workspace,
+        source_branch,
+        config.target_branch,
+    )
 
-    target_worktree = _find_branch_worktree_path(workspace, target_branch)
-    if target_worktree is None:
-        _fail_lifecycle_phase(
-            state, workspace, "LC-006-final-review-and-history-integration", persist=True
-        )
-        return f"No worktree found with target branch checked out: {target_branch}"
+    target_worktree: Path | None = None
+    if not config.skip_target_merge:
+        target_worktree = _find_branch_worktree_path(workspace, target_branch)
+        if target_worktree is None:
+            _fail_lifecycle_phase(
+                state,
+                workspace,
+                "LC-006-final-review-and-history-integration",
+                persist=True,
+            )
+            return f"No worktree found with target branch checked out: {target_branch}"
 
-    if target_worktree != workspace and _git_status_porcelain(target_worktree):
-        _fail_lifecycle_phase(
-            state, workspace, "LC-006-final-review-and-history-integration", persist=True
-        )
-        return f"Target worktree is not clean: {target_worktree}"
+        if target_worktree != workspace and _git_status_porcelain(target_worktree):
+            _fail_lifecycle_phase(
+                state,
+                workspace,
+                "LC-006-final-review-and-history-integration",
+                persist=True,
+            )
+            return f"Target worktree is not clean: {target_worktree}"
 
     for relpath in _FINAL_CLEANUP_PATHS:
         target = workspace / relpath
@@ -1190,6 +1293,7 @@ def _automate_completed_lifecycle(
             shutil.rmtree(target, ignore_errors=True)
         else:
             target.unlink(missing_ok=True)
+    _remove_transient_delivery_artifacts(workspace)
 
     state.finished_at = _iso_now()
     _complete_lifecycle_phase(
@@ -1208,9 +1312,29 @@ def _automate_completed_lifecycle(
 
     final_commit_message = f"Finalize lifecycle for {change_id}"
     try:
-        _git_commit(workspace, final_commit_message)
+        source_commit = _git_commit(workspace, final_commit_message)
     except RuntimeError as exc:
         return f"Final lifecycle commit failed on {source_branch}: {exc}"
+
+    if config.skip_target_merge:
+        handoff_path = _target_merge_handoff_path(change_root)
+        _write_target_merge_handoff(
+            path=handoff_path,
+            change_id=change_id,
+            source_branch=source_branch,
+            target_branch=target_branch,
+            source_commit=source_commit,
+            handoff_commit=None,
+            base_commit=config.base_commit,
+        )
+        try:
+            _git_commit(
+                workspace,
+                f"Record target merge handoff for {change_id}",
+            )
+        except RuntimeError as exc:
+            return f"Target merge handoff commit failed on {source_branch}: {exc}"
+        return None
 
     if target_branch != source_branch:
         try:
@@ -2113,7 +2237,11 @@ def run_pipeline(
 
             lifecycle_error: str | None = None
             if all_done and not halted_early:
-                lifecycle_error = _automate_completed_lifecycle(state, workspace)
+                lifecycle_error = _automate_completed_lifecycle(
+                    state,
+                    workspace,
+                    config,
+                )
                 if lifecycle_error is not None:
                     halted_early = True
                     halt_reason = lifecycle_error

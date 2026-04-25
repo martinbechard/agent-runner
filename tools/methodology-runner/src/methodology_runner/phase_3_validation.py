@@ -7,7 +7,7 @@ from pathlib import Path
 import yaml
 
 
-EXPECTED_TOP_LEVEL_KEYS = ["components", "interactions"]
+EXPECTED_TOP_LEVEL_KEYS = ["components", "implementation_files", "interactions"]
 REQUIRED_COMPONENT_FIELDS = [
     "id",
     "name",
@@ -30,6 +30,14 @@ REQUIRED_UI_SURFACE_FIELDS = [
     "purpose",
     "triggered_by_features",
     "html_mockup",
+]
+REQUIRED_IMPLEMENTATION_FILE_FIELDS = [
+    "path",
+    "role",
+    "component_refs",
+    "artifact_ref",
+    "features_supported",
+    "purpose",
 ]
 REQUIRED_INTERACTION_FIELDS = [
     "id",
@@ -73,6 +81,18 @@ def _architecture_stack_features(architecture_components: list[dict]) -> set[str
     return legacy_supports
 
 
+def _architecture_related_artifact_ids(architecture: dict) -> set[str]:
+    """Return conceptual ART-* IDs declared by PH-002 architecture."""
+    related_artifacts = architecture.get("related_artifacts", [])
+    if not isinstance(related_artifacts, list):
+        return set()
+    return {
+        artifact["id"]
+        for artifact in related_artifacts
+        if isinstance(artifact, dict) and isinstance(artifact.get("id"), str)
+    }
+
+
 def _has_html_markup(value) -> bool:
     """Return whether a value looks like a non-empty HTML fragment."""
     return isinstance(value, str) and "<" in value and ">" in value and bool(value.strip())
@@ -88,6 +108,7 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
     checks.append({"id": "top_level_keys", "status": "pass" if actual_keys == EXPECTED_TOP_LEVEL_KEYS else "fail", "actual": actual_keys})
 
     components = design.get("components", [])
+    implementation_files = design.get("implementation_files", [])
     interactions = design.get("interactions", [])
     component_ids = {component.get("id") for component in components}
     feature_ids = {feature.get("id") for feature in feature_spec.get("features", [])}
@@ -216,6 +237,105 @@ def build_report(solution_design_path: Path, architecture_design_path: Path, fea
 
     uncovered_features = sorted(feature_ids - covered_features)
     checks.append({"id": "feature_coverage", "status": "pass" if not uncovered_features else "fail", "uncovered_features": uncovered_features})
+
+    architecture_artifact_ids = _architecture_related_artifact_ids(architecture)
+    implementation_file_issues = []
+    file_component_refs: set[str] = set()
+    file_artifact_refs: set[str] = set()
+    if not isinstance(implementation_files, list):
+        implementation_file_issues.append({"issue": "implementation_files_must_be_list"})
+        implementation_files = []
+    for index, implementation_file in enumerate(implementation_files):
+        if not isinstance(implementation_file, dict):
+            implementation_file_issues.append(
+                {
+                    "file_index": index,
+                    "issue": "implementation_file_must_be_mapping",
+                }
+            )
+            continue
+        path = implementation_file.get("path")
+        missing_file_fields = [
+            field
+            for field in REQUIRED_IMPLEMENTATION_FILE_FIELDS
+            if field not in implementation_file
+        ]
+        if missing_file_fields:
+            implementation_file_issues.append(
+                {
+                    "path": path,
+                    "issue": "missing_implementation_file_fields",
+                    "missing_fields": missing_file_fields,
+                }
+            )
+            continue
+        if not isinstance(path, str) or not path.strip():
+            implementation_file_issues.append({"path": path, "issue": "blank_path"})
+        if not isinstance(implementation_file.get("role"), str) or not implementation_file["role"].strip():
+            implementation_file_issues.append({"path": path, "issue": "blank_role"})
+        component_refs = implementation_file.get("component_refs", [])
+        if not isinstance(component_refs, list) or not component_refs:
+            implementation_file_issues.append(
+                {"path": path, "issue": "missing_component_refs"}
+            )
+            component_refs = []
+        for component_ref in component_refs:
+            if component_ref not in component_ids:
+                implementation_file_issues.append(
+                    {
+                        "path": path,
+                        "issue": "unknown_component_ref",
+                        "component_ref": component_ref,
+                    }
+                )
+                continue
+            file_component_refs.add(component_ref)
+        artifact_ref = implementation_file.get("artifact_ref")
+        if artifact_ref is not None:
+            if artifact_ref not in architecture_artifact_ids:
+                implementation_file_issues.append(
+                    {
+                        "path": path,
+                        "issue": "unknown_artifact_ref",
+                        "artifact_ref": artifact_ref,
+                    }
+                )
+            else:
+                file_artifact_refs.add(artifact_ref)
+        features_supported = implementation_file.get("features_supported", [])
+        if not isinstance(features_supported, list) or not features_supported:
+            implementation_file_issues.append(
+                {"path": path, "issue": "missing_features_supported"}
+            )
+            features_supported = []
+        for feature_ref in features_supported:
+            if feature_ref not in feature_ids:
+                implementation_file_issues.append(
+                    {
+                        "path": path,
+                        "issue": "unknown_feature_ref",
+                        "feature_ref": feature_ref,
+                    }
+                )
+        if not isinstance(implementation_file.get("purpose"), str) or not implementation_file["purpose"].strip():
+            implementation_file_issues.append({"path": path, "issue": "blank_purpose"})
+    missing_component_file_refs = sorted(
+        component_id for component_id in component_ids if component_id not in file_component_refs
+    )
+    missing_artifact_file_refs = sorted(architecture_artifact_ids - file_artifact_refs)
+    checks.append(
+        {
+            "id": "implementation_files",
+            "status": "pass"
+            if not implementation_file_issues
+            and not missing_component_file_refs
+            and not missing_artifact_file_refs
+            else "fail",
+            "details": implementation_file_issues,
+            "missing_component_refs": missing_component_file_refs,
+            "missing_artifact_refs": missing_artifact_file_refs,
+        }
+    )
 
     missing_interaction_fields = []
     bad_interactions = []

@@ -105,18 +105,41 @@ def test_ph002_prompt_module_requires_compact_architecture_schema() -> None:
     text = prompt_path.read_text(encoding="utf-8")
 
     assert "The output schema below is authoritative" in text
-    assert "top-level keys exactly `components`, `integration_points`, `rationale`" in text
+    assert "python-module:methodology_runner.phase_2_validation" in text
+    assert (
+        "top-level keys exactly `components`, `related_artifacts`,\n"
+        "    `integration_points`, `rationale`"
+    ) in text
     assert "component IDs must use `CMP-NNN`" in text
+    assert "related artifact IDs must use `ART-NNN`" in text
     assert "component feature coverage must be expressed in `features_served`" in text
+    assert "related artifact feature coverage must be expressed in `features_served`" in text
     assert "every component must declare `simulation_target` and `simulation_boundary`" in text
+    assert "every component must include an `examples` list" in text
+    assert "each integration point must include an `examples` list" in text
+    assert "expected_outcome" in text
     assert "each integration point `between` list must name exactly two distinct" in text
+    assert "System components are code-bearing units" in text
+    assert "The `components` list is only for these code/system units" in text
+    assert "Put those in `related_artifacts`, not in `components`" in text
+    assert "A README for the overall system is a system-level related artifact" in text
+    assert "Keep related artifacts conceptual in PH-002" in text
+    assert "PH-003 solution design owns project-relative paths" in text
+    assert 'role: "runtime | service | library | adapter | provider | cli | ui"' in text
+    assert "related_artifacts:" in text
+    assert 'path: "README.md' not in text
+    assert "Do not create architecture\n  components just to represent those support artifacts" in text
+    assert "Human instructions, README content, and automated tests\n  do not by themselves justify simulating the provider" in text
+    assert 'simulation_target: false' in text
     assert "Do not use `MODULE-*`" in text
     assert "structured-design sections such as `system_shape`, `finality`" in text
     assert "as substitutes for `CMP-*`\n  components with `features_served`" in text
     assert "documentation, verification, or test-suite\n  components" in text
+    assert "Reject missing `related_artifacts` coverage" in text
+    assert "Architecture is conceptual; PH-003 solution design assigns paths" in text
 
 
-def test_ph003_prompt_module_requires_processing_examples_and_ui_mockups() -> None:
+def test_ph003_prompt_module_requires_processing_examples_ui_mockups_and_files() -> None:
     prompt_path = (
         Path(__file__).resolve().parents[2]
         / "src"
@@ -133,6 +156,10 @@ def test_ph003_prompt_module_requires_processing_examples_and_ui_mockups() -> No
     assert "output" in text
     assert "html_mockup" in text
     assert "HTML fragment" in text
+    assert "implementation_files" in text
+    assert "artifact_ref" in text
+    assert "Every component must be referenced by at least one `implementation_files`" in text
+    assert "Every PH-002 `related_artifacts` entry must be referenced" in text
 
 
 def test_phase_path_mappings_resolve_bundled_skill_root() -> None:
@@ -239,9 +266,11 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     text = prompt_path.read_text(encoding="utf-8")
 
     assert "same exact test command" in text
+    assert "--solution-design\ndocs/design/solution-design.yaml" in text
     assert "--simulations\ndocs/simulations/simulation-definitions.yaml" in text
     assert "failing or tightened-test outcome" not in text
-    assert "failing or tightened-test" in text
+    assert "failing or tightened-test" not in text
+    assert "Do not include examples of forbidden loose TDD wording" in text
     assert "## Command Reports" in text
     assert "plain-text command-report block" in text
     assert "### Command Report 1" in text
@@ -262,7 +291,22 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     assert "exactly one of `stdout_excerpt` or" in text
     assert "stale halted child snapshot" in text
     assert "resume the child workflow again" in text
+    assert "Treat each child prompt's `### Required Files` section as a hard execution" in text
+    assert "Only list files that already exist when that child prompt\n  begins" in text
+    assert "Do not list files the same child prompt is expected to create" in text
+    assert "Use `### Checks Files` for durable files the child prompt may create or\n  update" in text
+    assert "prompt-runner will\n     halt before the child prompt can create or ignore that file" in text
+    assert "Preserve the PH-003 implementation file contract" in text
+    assert "PH-002 architecture is\n  conceptual and does not own file paths" in text
+    assert "different durable path than the corresponding PH-003\n     `implementation_files`" in text
+    assert "Do not infer a separate coding-rules, policy, or convention file" in text
+    assert "asking for that file would\n     make the workflow non-executable" in text
     assert "file-level, type-level, and function-level comments" in text
+    assert (
+        "Require changed code to follow project-local best practices, including "
+        "meaningful file-level, type-level, and function-level comments or "
+        "docstrings where appropriate."
+    ) in text
     assert "steady-state software" in text
     assert "typical setup\n  and operation entries" in text
     assert "authoritative handoff for gradual implementation" in text
@@ -415,6 +459,9 @@ def test_ph004_prompt_module_requires_non_empty_response_schemas() -> None:
     assert "response_schema:" in text
     assert "fields: []" not in text
     assert "response_schema.fields must be explicit non-empty" in text
+    assert "If `<SOLUTION_DESIGN>.interactions` is empty" in text
+    assert "write exactly `contracts: []`" in text
+    assert "Do not create contracts for README files" in text
 
 
 def test_ph007_prompt_module_uses_compatibility_not_overconstraint() -> None:
@@ -802,6 +849,13 @@ def test_full_run_auto_finalizes_and_merges_into_main(
                 "            output:\n"
                 "              stdout: \"Hello, world!\\n\"\n"
                 "    ui_surfaces: []\n"
+                "implementation_files:\n"
+                "  - path: \"hello_world.py\"\n"
+                "    role: \"source\"\n"
+                "    component_refs: [\"CMP-1\"]\n"
+                "    artifact_ref: null\n"
+                "    features_supported: [\"FT-001\"]\n"
+                "    purpose: \"Contains the CLI entrypoint.\"\n"
                 "interactions: []\n",
                 encoding="utf-8",
             )
@@ -862,6 +916,9 @@ def test_full_run_auto_finalizes_and_merges_into_main(
                 "def test_readme() -> None:\n    assert True\n",
                 encoding="utf-8",
             )
+            pycache = tests_dir / "__pycache__"
+            pycache.mkdir(exist_ok=True)
+            (pycache / "test_cli.cpython-311.pyc").write_bytes(b"compiled-test-cache")
         elif phase.phase_id == "PH-007-verification-sweep":
             output.write_text("coverage_summary:\n  satisfaction_percentage: 100.0\n", encoding="utf-8")
 
@@ -902,6 +959,7 @@ def test_full_run_auto_finalizes_and_merges_into_main(
     assert (repo / "hello_world.py").exists()
     assert (repo / "README.md").exists()
     assert (repo / "tests" / "test_cli.py").exists()
+    assert not (repo / "tests" / "__pycache__").exists()
     assert (
         repo
         / "docs"
@@ -919,3 +977,11 @@ def test_full_run_auto_finalizes_and_merges_into_main(
     assert (
         repo / "docs" / "contracts" / "hello-clock-contracts.md"
     ).exists()
+    tracked_files = subprocess.run(
+        ["git", "ls-files"],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    ).stdout.splitlines()
+    assert "tests/__pycache__/test_cli.cpython-311.pyc" not in tracked_files

@@ -382,6 +382,9 @@ class TestBuildParser:
             "--application-repo", "/tmp/app",
             "--change-id", "change-002",
             "--branch-name", "change-002-add-datetime",
+            "--target-branch", "main",
+            "--base-branch", "main",
+            "--skip-target-merge",
             "--model", "opus",
             "--max-iterations", "5",
             "--debug", "4",
@@ -394,6 +397,9 @@ class TestBuildParser:
         assert args.application_repo == "/tmp/app"
         assert args.change_id == "change-002"
         assert args.branch_name == "change-002-add-datetime"
+        assert args.target_branch == "main"
+        assert args.base_branch == "main"
+        assert args.skip_target_merge is True
         assert args.model == "opus"
         assert args.max_iterations == 5
         assert args.debug == 4
@@ -529,6 +535,11 @@ class TestCmdRun:
             "change-002",
             "--branch-name",
             "change-002-add-datetime",
+            "--target-branch",
+            "main",
+            "--base-branch",
+            "main",
+            "--skip-target-merge",
         ])
 
         from methodology_runner.orchestrator import PipelineConfig, PipelineResult
@@ -566,6 +577,8 @@ class TestCmdRun:
         assert rc == EXIT_SUCCESS
         mock_prepare.assert_called_once()
         assert captured_config[0].workspace_dir == prepared_workspace
+        assert captured_config[0].target_branch == "main"
+        assert captured_config[0].skip_target_merge is True
 
     def test_successful_run(self, tmp_path: Path) -> None:
         req = tmp_path / "req.md"

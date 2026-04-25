@@ -11,6 +11,7 @@ import yaml
 
 EXPECTED_ARCHITECTURE_DESIGN_TOP_LEVEL_KEYS = [
     "components",
+    "related_artifacts",
     "integration_points",
     "rationale",
 ]
@@ -26,12 +27,28 @@ REQUIRED_COMPONENT_FIELDS = [
     "features_served",
     "simulation_target",
     "simulation_boundary",
+    "examples",
 ]
 REQUIRED_INTEGRATION_FIELDS = [
     "id",
     "between",
     "protocol",
     "contract_source",
+    "examples",
+]
+REQUIRED_EXAMPLE_FIELDS = [
+    "name",
+    "scenario",
+    "expected_outcome",
+    "feature_refs",
+]
+REQUIRED_RELATED_ARTIFACT_FIELDS = [
+    "id",
+    "name",
+    "artifact_type",
+    "scope",
+    "related_components",
+    "features_served",
 ]
 PYTHON_FRAMEWORKS = {
     "fastapi",
@@ -50,6 +67,43 @@ TYPESCRIPT_FRAMEWORKS = {
     "jest",
     "vitest",
     "hono",
+}
+SUPPORT_ARTIFACT_ROLE_MARKERS = (
+    "documentation",
+    "readme",
+    "verification",
+    "test",
+    "test-suite",
+)
+SUPPORT_FEATURE_MARKERS = (
+    "readme",
+    "documentation",
+    "document",
+    "run instruction",
+    "run instructions",
+    "runbook",
+    "automated test",
+    "test suite",
+    "verification",
+    "verify",
+    "report",
+)
+SUPPORT_ARTIFACT_TECHNOLOGIES = {"markdown"}
+SUPPORT_ARTIFACT_RUNTIME_MARKERS = ("none", "test runner", "unittest", "pytest")
+HUMAN_OR_SUPPORT_PROTOCOL_MARKERS = (
+    "human",
+    "instruction",
+    "documentation",
+    "readme",
+    "verification",
+    "test",
+)
+SIMULATABLE_BOUNDARIES = {
+    "dependency-injection",
+    "api",
+    "library",
+    "service",
+    "command",
 }
 
 
@@ -76,6 +130,58 @@ def _framework_coherence_issues(technology: str, frameworks: list[str]) -> list[
     return issues
 
 
+def _is_support_artifact_role(role: str) -> bool:
+    """Return whether a component role describes support artifacts, not runtime."""
+    normalized_role = role.strip().lower()
+    return any(marker in normalized_role for marker in SUPPORT_ARTIFACT_ROLE_MARKERS)
+
+
+def _is_support_artifact_component(component: dict) -> bool:
+    """Detect README, documentation, test, and verification artifacts as components."""
+    if not _is_support_artifact_role(str(component.get("role", ""))):
+        return False
+
+    technology = str(component.get("technology", "")).strip().lower()
+    runtime = str(component.get("runtime", "")).strip().lower()
+    name = str(component.get("name", "")).strip().lower()
+
+    return (
+        technology in SUPPORT_ARTIFACT_TECHNOLOGIES
+        or any(marker in runtime for marker in SUPPORT_ARTIFACT_RUNTIME_MARKERS)
+        or any(marker in name for marker in SUPPORT_ARTIFACT_ROLE_MARKERS)
+    )
+
+
+def _is_human_or_support_protocol(protocol: str) -> bool:
+    """Return whether an integration protocol is not a runtime dependency."""
+    normalized_protocol = protocol.strip().lower()
+    return any(marker in normalized_protocol for marker in HUMAN_OR_SUPPORT_PROTOCOL_MARKERS)
+
+
+def _has_real_runtime_consumer(
+    component_id: str,
+    components_by_id: dict[str, dict],
+    integration_points: list[dict],
+) -> bool:
+    """Return whether a simulated provider is consumed by another runtime component."""
+    for integration_point in integration_points:
+        between = integration_point.get("between", [])
+        if not isinstance(between, list) or len(between) != 2 or component_id not in between:
+            continue
+
+        other_component_id = between[1] if between[0] == component_id else between[0]
+        other_component = components_by_id.get(str(other_component_id))
+        if other_component is None:
+            continue
+        if _is_support_artifact_component(other_component):
+            continue
+        if _is_human_or_support_protocol(str(integration_point.get("protocol", ""))):
+            continue
+        return True
+
+    return False
+
+
 def _detect_artifact_shape(artifact: object) -> str:
     if not isinstance(artifact, dict):
         return "invalid"
@@ -84,11 +190,95 @@ def _detect_artifact_shape(artifact: object) -> str:
         return "architecture_design"
     if {
         "components",
+        "related_artifacts",
         "integration_points",
         "rationale",
     }.issubset(set(actual_keys)):
         return "structured_architecture"
     return "invalid"
+
+
+def _is_support_feature(feature: dict) -> bool:
+    """Return whether a feature describes a non-component support artifact."""
+    text_parts: list[str] = []
+    for key in ("name", "description"):
+        value = feature.get(key)
+        if isinstance(value, str):
+            text_parts.append(value)
+    for criterion in feature.get("acceptance_criteria", []):
+        if isinstance(criterion, dict) and isinstance(criterion.get("description"), str):
+            text_parts.append(criterion["description"])
+    normalized = " ".join(text_parts).lower()
+    return any(marker in normalized for marker in SUPPORT_FEATURE_MARKERS)
+
+
+def _example_issues(owner_type: str, owner_id: str, examples: object, feature_id_set: set[str]) -> list[dict]:
+    """Validate conceptual examples attached to a component or integration point."""
+    if not isinstance(examples, list):
+        return [{"owner_type": owner_type, "owner_id": owner_id, "issue": "examples_must_be_list"}]
+    if not examples:
+        return [{"owner_type": owner_type, "owner_id": owner_id, "issue": "missing_examples"}]
+
+    issues: list[dict] = []
+    for index, example in enumerate(examples):
+        if not isinstance(example, dict):
+            issues.append(
+                {
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "example_index": index,
+                    "issue": "example_must_be_mapping",
+                }
+            )
+            continue
+
+        missing = [field_name for field_name in REQUIRED_EXAMPLE_FIELDS if field_name not in example]
+        if missing:
+            issues.append(
+                {
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "example_index": index,
+                    "issue": "missing_example_fields",
+                    "missing_fields": missing,
+                }
+            )
+
+        for field_name in ("name", "scenario", "expected_outcome"):
+            if field_name in example and not str(example.get(field_name, "")).strip():
+                issues.append(
+                    {
+                        "owner_type": owner_type,
+                        "owner_id": owner_id,
+                        "example_index": index,
+                        "issue": "blank_example_field",
+                        "field": field_name,
+                    }
+                )
+
+        feature_refs = example.get("feature_refs", [])
+        if not isinstance(feature_refs, list) or not feature_refs:
+            issues.append(
+                {
+                    "owner_type": owner_type,
+                    "owner_id": owner_id,
+                    "example_index": index,
+                    "issue": "example_feature_refs_must_be_non_empty_list",
+                }
+            )
+            continue
+        for feature_id in feature_refs:
+            if feature_id not in feature_id_set:
+                issues.append(
+                    {
+                        "owner_type": owner_type,
+                        "owner_id": owner_id,
+                        "example_index": index,
+                        "issue": "unknown_example_feature_ref",
+                        "feature_id": feature_id,
+                    }
+                )
+    return issues
 
 
 def build_report(architecture_design_path: Path, feature_spec_path: Path, requirements_inventory_path: Path) -> dict:
@@ -103,11 +293,12 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
     checks.append(
         {
             "id": "top_level_keys",
-            "status": "pass" if artifact_shape != "invalid" else "fail",
+            "status": "pass" if artifact_shape == "architecture_design" else "fail",
             "expected": {
                 "architecture_design": EXPECTED_ARCHITECTURE_DESIGN_TOP_LEVEL_KEYS,
                 "structured_architecture": [
                     "components",
+                    "related_artifacts",
                     "integration_points",
                     "rationale",
                 ],
@@ -117,18 +308,34 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
         }
     )
 
+    feature_ids = [feature["id"] for feature in feature_spec.get("features", [])]
+    feature_id_set = set(feature_ids)
+
     component_ids: list[str] = []
+    components_by_id: dict[str, dict] = {}
     component_field_issues: list[dict] = []
+    example_issues: list[dict] = []
     expertise_issues: list[dict] = []
     coherence_issues: list[dict] = []
+    support_artifact_component_issues: list[dict] = []
     simulation_target_issues: list[dict] = []
+    related_artifacts = architecture_design.get("related_artifacts", [])
+    if not isinstance(related_artifacts, list):
+        related_artifacts = []
+    integration_points = architecture_design.get("integration_points", [])
+    if not isinstance(integration_points, list):
+        integration_points = []
     for component in architecture_design.get("components", []):
         component_id = component.get("id", "(missing-id)")
         if isinstance(component_id, str):
             component_ids.append(component_id)
+            components_by_id[component_id] = component
         missing = [field_name for field_name in REQUIRED_COMPONENT_FIELDS if field_name not in component]
         if missing:
             component_field_issues.append({"component_id": component_id, "missing_fields": missing})
+        example_issues.extend(
+            _example_issues("component", str(component_id), component.get("examples"), feature_id_set)
+        )
         expertise = component.get("expected_expertise", [])
         if not isinstance(expertise, list) or not expertise:
             expertise_issues.append({"component_id": component_id, "issue": "missing_expected_expertise"})
@@ -162,6 +369,38 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
             simulation_target_issues.append(
                 {"component_id": component_id, "issue": "non_runtime_component_marked_simulation_target", "role": role}
             )
+        if _is_support_artifact_component(component):
+            support_artifact_component_issues.append(
+                {
+                    "component_id": component_id,
+                    "issue": "support_artifact_modeled_as_component",
+                    "role": component.get("role"),
+                    "technology": component.get("technology"),
+                    "runtime": component.get("runtime"),
+                }
+            )
+        if component.get("simulation_target") is True:
+            boundary = str(component.get("simulation_boundary", "")).strip().lower()
+            if boundary not in SIMULATABLE_BOUNDARIES:
+                simulation_target_issues.append(
+                    {
+                        "component_id": component_id,
+                        "issue": "simulation_target_without_simulatable_boundary",
+                        "simulation_boundary": component.get("simulation_boundary"),
+                    }
+                )
+    for component_id, component in components_by_id.items():
+        if component.get("simulation_target") is True and not _has_real_runtime_consumer(
+            component_id,
+            components_by_id,
+            integration_points,
+        ):
+            simulation_target_issues.append(
+                {
+                    "component_id": component_id,
+                    "issue": "simulation_target_without_real_runtime_consumer",
+                }
+            )
 
     duplicate_components = sorted(component_id for component_id in set(component_ids) if component_ids.count(component_id) > 1)
     checks.append(
@@ -188,13 +427,19 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
     )
     checks.append(
         {
+            "id": "support_artifacts_not_components",
+            "status": "pass" if not support_artifact_component_issues else "fail",
+            "details": support_artifact_component_issues,
+        }
+    )
+    checks.append(
+        {
             "id": "simulation_target_classification",
             "status": "pass" if not simulation_target_issues else "fail",
             "details": simulation_target_issues,
         }
     )
 
-    feature_ids = [feature["id"] for feature in feature_spec.get("features", [])]
     coverage: dict[str, list[str]] = {feature_id: [] for feature_id in feature_ids}
     empty_features_served: list[str] = []
     for component in architecture_design.get("components", []):
@@ -215,6 +460,85 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
         }
     )
 
+    related_artifact_ids: list[str] = []
+    related_artifact_issues: list[dict] = []
+    related_artifact_coverage: dict[str, list[str]] = {feature_id: [] for feature_id in feature_ids}
+    for artifact in related_artifacts:
+        artifact_id = artifact.get("id", "(missing-id)") if isinstance(artifact, dict) else "(non-mapping)"
+        if not isinstance(artifact, dict):
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "related_artifact_must_be_mapping"})
+            continue
+        if isinstance(artifact_id, str):
+            related_artifact_ids.append(artifact_id)
+        if not isinstance(artifact_id, str) or not re.fullmatch(r"ART-\d{3}", artifact_id):
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "invalid_artifact_id"})
+        missing = [field_name for field_name in REQUIRED_RELATED_ARTIFACT_FIELDS if field_name not in artifact]
+        if missing:
+            related_artifact_issues.append(
+                {"artifact_id": artifact_id, "issue": "missing_fields", "missing_fields": missing}
+            )
+            continue
+        if not str(artifact.get("name", "")).strip():
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "blank_name"})
+        if not str(artifact.get("artifact_type", "")).strip():
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "blank_artifact_type"})
+        if "path" in artifact:
+            related_artifact_issues.append(
+                {
+                    "artifact_id": artifact_id,
+                    "issue": "architecture_related_artifact_must_not_specify_path",
+                    "path": artifact.get("path"),
+                }
+            )
+        scope = str(artifact.get("scope", "")).strip().lower()
+        if scope not in {"system", "component"}:
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "invalid_scope", "scope": artifact.get("scope")})
+        related_components = artifact.get("related_components", [])
+        if not isinstance(related_components, list):
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "related_components_must_be_list"})
+            related_components = []
+        if scope == "component" and not related_components:
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "component_scoped_artifact_without_component"})
+        for component_id in related_components:
+            if component_id not in component_ids:
+                related_artifact_issues.append(
+                    {"artifact_id": artifact_id, "issue": "unknown_related_component", "component_id": component_id}
+                )
+        artifact_features = artifact.get("features_served", [])
+        if not isinstance(artifact_features, list) or not artifact_features:
+            related_artifact_issues.append({"artifact_id": artifact_id, "issue": "missing_features_served"})
+            artifact_features = []
+        for feature_id in artifact_features:
+            if feature_id not in feature_id_set:
+                related_artifact_issues.append(
+                    {"artifact_id": artifact_id, "issue": "unknown_feature", "feature_id": feature_id}
+                )
+                continue
+            related_artifact_coverage.setdefault(feature_id, []).append(str(artifact_id))
+    duplicate_related_artifacts = sorted(
+        artifact_id for artifact_id in set(related_artifact_ids) if related_artifact_ids.count(artifact_id) > 1
+    )
+    support_feature_ids = [
+        str(feature.get("id"))
+        for feature in feature_spec.get("features", [])
+        if isinstance(feature.get("id"), str) and _is_support_feature(feature)
+    ]
+    missing_support_artifact_coverage = [
+        feature_id for feature_id in support_feature_ids if not related_artifact_coverage.get(feature_id)
+    ]
+    checks.append(
+        {
+            "id": "related_artifacts",
+            "status": "pass"
+            if not related_artifact_issues and not duplicate_related_artifacts and not missing_support_artifact_coverage
+            else "fail",
+            "details": related_artifact_issues,
+            "duplicate_artifact_ids": duplicate_related_artifacts,
+            "missing_support_feature_refs": missing_support_artifact_coverage,
+            "coverage": related_artifact_coverage,
+        }
+    )
+
     integration_ids: list[str] = []
     integration_issues: list[dict] = []
     for integration_point in architecture_design.get("integration_points", []):
@@ -222,6 +546,9 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
         if isinstance(integration_id, str):
             integration_ids.append(integration_id)
         missing = [field_name for field_name in REQUIRED_INTEGRATION_FIELDS if field_name not in integration_point]
+        example_issues.extend(
+            _example_issues("integration_point", str(integration_id), integration_point.get("examples"), feature_id_set)
+        )
         if missing:
             integration_issues.append({"integration_id": integration_id, "issue": "missing_fields", "missing_fields": missing})
             continue
@@ -245,6 +572,13 @@ def build_report(architecture_design_path: Path, feature_spec_path: Path, requir
             "status": "pass" if not integration_issues and not duplicate_integrations else "fail",
             "details": integration_issues,
             "duplicate_integration_ids": duplicate_integrations,
+        }
+    )
+    checks.append(
+        {
+            "id": "architecture_examples",
+            "status": "pass" if not example_issues else "fail",
+            "details": example_issues,
         }
     )
 

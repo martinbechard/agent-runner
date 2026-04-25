@@ -137,6 +137,8 @@ def _prepare_application_worktree(
     workspace_arg: str | None,
     change_id: str | None,
     branch_name_arg: str | None,
+    base_branch_arg: str | None,
+    target_branch_arg: str | None,
 ) -> tuple[Path, str]:
     """Create or reuse the application worktree for one change run."""
     repo = application_repo.resolve()
@@ -182,11 +184,14 @@ def _prepare_application_worktree(
         for line in _git(["branch", "--list"], cwd=repo_root).splitlines()
         if line.strip()
     }
+    base_ref = base_branch_arg or target_branch_arg
     worktree_args = ["worktree", "add", str(workspace)]
     if branch_name in existing_branches:
         worktree_args.append(branch_name)
     else:
         worktree_args.extend(["-b", branch_name])
+        if base_ref is not None:
+            worktree_args.append(base_ref)
     try:
         _git(worktree_args, cwd=repo_root)
     except RuntimeError as exc:
@@ -354,6 +359,8 @@ def cmd_run(args: argparse.Namespace) -> int:
                 workspace_arg=args.workspace,
                 change_id=args.change_id,
                 branch_name_arg=args.branch_name,
+                base_branch_arg=args.base_branch,
+                target_branch_arg=args.target_branch,
             )
         else:
             workspace = _resolve_workspace(args.workspace, requirements_path)
@@ -404,6 +411,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         debug=args.debug,
         escalation_policy=escalation_policy,
         max_cross_ref_retries=args.max_cross_ref_retries,
+        skip_target_merge=args.skip_target_merge,
+        target_branch=args.target_branch,
+        base_commit=None,
     )
 
     _print_banner("Methodology Runner -- Starting pipeline")
@@ -411,6 +421,10 @@ def cmd_run(args: argparse.Namespace) -> int:
     if args.application_repo is not None:
         sys.stdout.write(f"Application:  {Path(args.application_repo).resolve()}\n")
         sys.stdout.write(f"Branch:       {branch_name}\n")
+    if args.target_branch is not None:
+        sys.stdout.write(f"Target:       {args.target_branch}\n")
+    if args.skip_target_merge:
+        sys.stdout.write("Target merge: skipped\n")
     sys.stdout.write(f"Workspace:    {workspace}\n")
     if phases_to_run is None:
         sys.stdout.write("Phases:       all\n")
@@ -681,6 +695,9 @@ def cmd_resume(args: argparse.Namespace) -> int:
         debug=args.debug,
         escalation_policy=escalation_policy,
         max_cross_ref_retries=args.max_cross_ref_retries,
+        skip_target_merge=args.skip_target_merge,
+        target_branch=args.target_branch,
+        base_commit=None,
     )
 
     _print_banner("Methodology Runner -- Resuming pipeline")
@@ -697,6 +714,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
     if config.model:
         sys.stdout.write(f"Model:        {config.model}\n")
     sys.stdout.write(f"Backend:      {config.backend}\n")
+    if config.target_branch is not None:
+        sys.stdout.write(f"Target:       {config.target_branch}\n")
+    if config.skip_target_merge:
+        sys.stdout.write("Target merge: skipped\n")
     sys.stdout.write("\n")
     sys.stdout.flush()
 
@@ -842,6 +863,30 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
     run_cmd.add_argument(
+        "--target-branch",
+        default=None,
+        help=(
+            "Target branch that receives the finalized change. Also used as "
+            "the default base for a new application worktree branch."
+        ),
+    )
+    run_cmd.add_argument(
+        "--base-branch",
+        default=None,
+        help=(
+            "Branch or commit used as the base when creating a new application "
+            "worktree branch. Defaults to --target-branch when provided."
+        ),
+    )
+    run_cmd.add_argument(
+        "--skip-target-merge",
+        action="store_true",
+        help=(
+            "Finalize the feature branch and write a target-merge handoff "
+            "without merging back to the target branch."
+        ),
+    )
+    run_cmd.add_argument(
         "--backend",
         choices=["claude", "codex"],
         default=None,
@@ -936,6 +981,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         help="Model to use (overrides the saved model from the prior run).",
+    )
+    resume_cmd.add_argument(
+        "--target-branch",
+        default=None,
+        help="Target branch that receives the finalized change.",
+    )
+    resume_cmd.add_argument(
+        "--skip-target-merge",
+        action="store_true",
+        help="Resume without merging the finalized branch back to the target branch.",
     )
     resume_cmd.add_argument(
         "--max-iterations",

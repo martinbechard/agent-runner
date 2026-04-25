@@ -201,6 +201,213 @@ Review.
     assert len(path_check["details"]) == 2
 
 
+def test_phase_6_validation_rejects_unavailable_required_files(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Slice
+
+### Required Files
+
+project-coding-guidance.md
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
+then implement the smallest slice needed. Record stdout, stderr, and exit code
+outcomes. Follow project-local best practices and add meaningful file-level,
+type-level, and function-level comments or docstrings. Keep documentation as
+steady-state documentation without relying on an older or previous state.
+Update the README with setup and operation entries including prerequisites,
+setup, run commands, and verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow)
+
+    assert report["overall_status"] == "fail"
+    workflow_check = next(check for check in report["checks"] if check["id"] == "workflow_prompt")
+    required_check = next(
+        check for check in workflow_check["checks"]
+        if check["id"] == "required_files_available"
+    )
+    assert required_check["status"] == "fail"
+    assert required_check["missing"] == [
+        {
+            "prompt_index": 1,
+            "title": "Build Slice",
+            "line": 8,
+            "path": "project-coding-guidance.md",
+        }
+    ]
+
+
+def test_phase_6_validation_accepts_required_file_created_by_earlier_prompt(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Slice
+
+### Checks Files
+
+generated_config.py
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
+then implement the smallest slice needed. Record stdout, stderr, and exit code
+outcomes. Follow project-local best practices and add meaningful file-level,
+type-level, and function-level comments or docstrings. Keep documentation as
+steady-state documentation without relying on an older or previous state.
+Update the README with setup and operation entries including prerequisites,
+setup, run commands, and verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Required Files
+
+generated_config.py
+
+### Generation Prompt
+
+Run full verification and record stdout, stderr, and exit code.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow)
+
+    assert report["overall_status"] == "pass"
+
+
+def test_phase_6_validation_requires_solution_design_implementation_file_paths(
+    tmp_path: Path,
+) -> None:
+    solution_design = _write(
+        tmp_path / "docs" / "design" / "solution-design.yaml",
+        """components:
+  - id: "CMP-001"
+    name: "CLI"
+    responsibility: "Owns runtime behavior."
+    technology: "Python 3"
+    feature_realization_map:
+      FT-001: "Runs the CLI."
+    dependencies: []
+    processing_functions: []
+    ui_surfaces: []
+implementation_files:
+  - path: "app.py"
+    role: "source"
+    component_refs: ["CMP-001"]
+    artifact_ref: null
+    features_supported: ["FT-001"]
+    purpose: "Runtime source."
+  - path: "README.md"
+    role: "readme"
+    component_refs: ["CMP-001"]
+    artifact_ref: "ART-001"
+    features_supported: ["FT-001"]
+    purpose: "Run documentation."
+  - path: "tests/test_cli.py"
+    role: "test"
+    component_refs: ["CMP-001"]
+    artifact_ref: "ART-002"
+    features_supported: ["FT-001"]
+    purpose: "CLI test."
+interactions: []
+""",
+    )
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Slice
+
+### Checks Files
+
+README.md
+hello.py
+tests/test_hello.py
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
+then implement the smallest slice needed. Record stdout, stderr, and exit code
+outcomes. Follow project-local best practices and add meaningful file-level,
+type-level, and function-level comments or docstrings. Keep documentation as
+steady-state documentation without relying on an older or previous state.
+Update the README with setup and operation entries including prerequisites,
+setup, run commands, and verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow, solution_design_path=solution_design)
+
+    assert report["overall_status"] == "fail"
+    workflow_check = next(check for check in report["checks"] if check["id"] == "workflow_prompt")
+    implementation_file_check = next(
+        check for check in workflow_check["checks"]
+        if check["id"] == "solution_design_implementation_file_usage_signal"
+    )
+    assert implementation_file_check["status"] == "fail"
+    assert implementation_file_check["missing_implementation_file_paths"] == [
+        {
+            "artifact_ref": None,
+            "path": "app.py",
+            "role": "source",
+        },
+        {
+            "artifact_ref": "ART-002",
+            "path": "tests/test_cli.py",
+            "role": "test",
+        }
+    ]
+
+
 def test_phase_6_validation_rejects_loose_tdd_wording_and_missing_output_details(
     tmp_path: Path,
 ) -> None:
@@ -302,6 +509,47 @@ Review.
         check for check in workflow_check["checks"] if check["id"] == "delivery_quality_signal"
     )
     assert delivery_check["status"] == "fail"
+
+
+def test_phase_6_validation_accepts_previous_behavior_steady_state_wording(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Slice
+
+### Generation Prompt
+
+Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
+then implement the smallest slice needed. Record stdout, stderr, and exit code
+outcomes. Follow project-local best practices and add meaningful file-level,
+type-level, and function-level comments or docstrings. Keep documentation as
+steady-state documentation without relying on previous behavior. Update the
+README with setup and operation entries including prerequisites, setup, run
+commands, and verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Perform final verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow)
+
+    assert report["overall_status"] == "pass"
 
 
 def test_phase_6_validation_rejects_assumed_baseline_wording(

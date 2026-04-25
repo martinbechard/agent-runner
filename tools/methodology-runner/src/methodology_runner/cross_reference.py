@@ -249,26 +249,56 @@ Prior phase outputs:
 ### 1. Traceability
 Read {output_path}.  For each CMP-* component:
 - Read its features_served list.
+- Read its examples list.
 - For each FT-NNN, verify it exists in Phase 1.
+- For each example feature_refs entry, verify it exists in Phase 1.
 Flag any component with an empty features_served list or non-existent feature refs.
+For each ART-* related artifact:
+- Read its artifact_type, scope, related_components, and features_served.
+- Verify each related component exists as a CMP-* component unless scope is
+  system and related_components is intentionally empty.
+- Verify each FT-NNN in features_served exists in Phase 1.
+Flag README, documentation, automated-test, test-suite, verification-script,
+or report features that have no related artifact entry.
 
 ### 2. Coverage
 Read docs/features/feature-specification.yaml.  Collect all FT-NNN IDs.
 For each FT-NNN, verify it appears in at least one component's
 features_served list.  Flag any untraced features.
+For support-artifact features, also verify the FT-NNN appears in at least one
+related_artifacts entry.
 
 ### 3. Consistency
 Verify that:
 - All CMP-NNN IDs are unique.
+- All ART-NNN IDs are unique.
 - All IP-NNN IDs are unique.
 - Every component in an integration_point's between list exists as a component.
 - Every component has a non-empty expected_expertise list.
+- Every component has at least one conceptual example with name, scenario,
+  expected_outcome, and feature_refs.
+- Every related_artifacts entry has a system or component scope and no concrete
+  file or directory path; Phase 3 solution design owns project-relative paths.
 - The rationale field is non-empty and explains decomposition choices.
+- README files, documentation, automated tests, test suites, and verification
+  scripts are modeled as related_artifacts, not architecture components, unless
+  the source request explicitly asks for them as runtime services or
+  independently implemented system components.
+- A component marked simulation_target: true has at least one integration point
+  where another real runtime or implementation component consumes it. Human
+  instructions, README content, tests, and verification artifacts do not by
+  themselves justify simulating a provider component.
 
 ### 4. Integration
 - Flag components with no features_served entries.
 - Verify integration_points reference two distinct components each.
-- Verify technology choices are coherent with frameworks listed.\
+- Verify each integration_point has at least one conceptual flow example with
+  name, scenario, expected_outcome, and feature_refs. If there are no real
+  cross-component interactions, no integration point is required.
+- Verify technology choices are coherent with frameworks listed.
+- Verify a single coherent application with no external service, provider,
+  library, or API dependency uses simulation_target: false,
+  simulation_boundary: none, and no integration points.\
 """,
 
     # ------------------------------------------------------------------
@@ -287,11 +317,19 @@ Read {output_path}.  For each CMP-* component:
 - Read its feature_realization_map.
 - For each FT-NNN key, verify the FT-NNN exists in Phase 1.
 Flag any CMP-* with an empty feature_realization_map or non-existent feature refs.
+For each implementation_files entry:
+- Verify path and purpose are non-empty.
+- Verify every component_refs entry exists as a CMP-* component.
+- Verify artifact_ref is null or an ART-* declared by Phase 2.
+- Verify every features_supported entry exists in Phase 1.
 
 ### 2. Coverage
 Read docs/features/feature-specification.yaml.  Collect all FT-NNN IDs.
 For each FT-NNN, verify it appears in at least one component's
 feature_realization_map.  Flag any untraced features.
+Verify every CMP-* component appears in at least one implementation_files
+entry. Verify every Phase 2 ART-* related artifact appears in at least one
+implementation_files entry via artifact_ref.
 
 ### 3. Consistency
 Verify that:
@@ -304,6 +342,9 @@ Verify that:
   input and output values.
 - Every specified UI surface includes an HTML mockup rather than prose-only UI
   description.
+- PH-002 related artifacts remain conceptual, and concrete source, README,
+  test, script, configuration, and documentation paths are declared in PH-003
+  implementation_files.
 
 ### 4. Integration
 - Flag orphan components (not in any feature_realization_map and not a
@@ -334,7 +375,9 @@ Flag any CTR-* with a missing or incorrect interaction_ref.
 ### 2. Coverage
 Read docs/design/solution-design.yaml.  Collect all INT-NNN IDs.
 For each INT-NNN, verify at least one CTR-* has a matching interaction_ref.
-Flag uncovered interactions.
+Flag uncovered interactions. If the solution design has no INT-* interactions,
+verify that `contracts: []` is treated as a valid empty contract set rather
+than as missing coverage.
 
 ### 3. Consistency
 Verify that:
@@ -347,6 +390,9 @@ Verify that:
 ### 4. Integration
 - Verify contracts are consistent with Phase 1 acceptance criteria.
 - Verify no contract introduces operations not implied by Phase 3 interactions.
+- Verify no contract is invented for README files, design docs, test suites,
+  reports, verification scripts, or single-component internal behavior without
+  a declared INT-* boundary.
 - Verify behavioural specs are achievable given Phase 3 component responsibilities.\
 """,
 
@@ -427,6 +473,9 @@ For each child prompt in the workflow:
 ### 2. Coverage
 - Verify the workflow covers the required implementation scope from Phases 1,
   3, 4, and 5.
+- Verify the workflow uses the concrete project paths declared in Phase 3 implementation_files
+  for source files, README files, tests, scripts,
+  configuration, and documentation.
 - Flag missing features, contracts, or simulation-backed behaviors only if
   their downstream implementation meaning is not already covered by one or more
   other child prompts.
@@ -563,29 +612,38 @@ full chain to implemented evidence. For each RI-NNN:
 1. Find which FT-* features reference it (source_inventory_refs in Phase 1).
 2. Find which CMP-* components realize those features (feature_realization_map
    in Phase 3).
-3. Find which CTR-* contracts cover the relevant behavior (Phase 4).
+3. Find which CTR-* contracts cover the relevant behavior only when the chain
+   crosses declared INT-* interaction boundaries in Phase 3.
 4. Find which SIM-* simulations modeled the behavior before implementation
    (Phase 5), if any.
 5. Find which child prompts in Phase 6 implemented and tested the behavior.
 6. Find which files or verification commands in Phase 7 are cited as evidence.
 
-Report any broken chain -- an RI-* item that cannot be traced to implemented
-evidence, or any intermediate element that is orphaned.
+Report any broken chain -- an RI-* item that cannot be traced through its
+applicable chain to implemented evidence, or any intermediate element that is
+orphaned. A chain without any relevant INT-* interaction does not require a
+CTR-* contract.
 
 ### 1. Traceability
-- Every RI-* must reach at least one verification-evidence row through the full chain.
+- Every RI-* must reach at least one verification-evidence row through the
+  applicable chain. The applicable chain includes CTR-* contracts only for
+  relevant INT-* interactions declared in Phase 3.
 - Every FT-* must be realized by at least one CMP-*.
+- Every INT-* interaction must have at least one CTR-* contract. If Phase 3
+  declares no INT-* interactions, `contracts: []` in Phase 4 is valid and must
+  not be treated as a traceability gap.
 - Every architecture component with simulation_target: true must have at
   least one SIM-* component stub.
 - The Phase 6 workflow must end with final verification and the Phase 6 run
   report must describe a truthful child-run outcome.
 
 ### 2. Coverage
-- Calculate the percentage of RI-* items with complete chains.
+- Calculate the percentage of RI-* items with complete applicable chains.
 - Flag RI-* items that are explicitly out-of-scope (acceptable gaps but
   must be documented in Phase 1's out_of_scope section).
 - Flag intermediate elements (FT, CMP, INT, CTR, SIM) not reachable from
-  any RI-*.
+  any RI-*. Do not count the absence of CTR-* elements as an orphan or coverage
+  gap when Phase 3 has no INT-* interactions.
 
 ### 3. Consistency
 - All cross-file ID references must resolve.
@@ -597,6 +655,8 @@ evidence, or any intermediate element that is orphaned.
   requirement_results rows.
 - The implementation workflow and run report must align with the verification
   evidence cited in Phase 7.
+- The implementation workflow, run report, and Phase 7 evidence must align with
+  the concrete project paths declared in Phase 3 implementation_files.
 - Treat exact runtime-generated clock values, timestamp strings, and test-run
   elapsed durations as volatile unless upstream approved artifacts explicitly
   require those exact literals. Do not fail a truthful Phase 7 rerun merely
@@ -611,6 +671,9 @@ evidence, or any intermediate element that is orphaned.
   acceptable when it remains compatible with upstream-approved behavior. Flag
   only contradiction, unsupported exclusion of upstream-required behavior, or
   broadening that no longer preserves the upstream semantic requirement.
+- Do not fail an end-to-end run merely because Phase 4 has no CTR-* contracts
+  when Phase 3 has no INT-* interactions. Conversely, do fail missing or
+  unresolved CTR-* coverage for every declared INT-* interaction.
 - No phase's output may contradict another phase's output.
 
 ## Instructions
@@ -879,8 +942,8 @@ def assemble_end_to_end_prompt() -> str:
     """Build the end-to-end verification prompt.
 
     Exposed for testing.  The verify_end_to_end function calls this
-    internally.  The template is self-contained -- it lists all seven
-    phase output paths.
+    internally.  The template is self-contained and lists all phase output
+    paths that participate in final verification.
     """
     return END_TO_END_PROMPT_TEMPLATE
 
@@ -1029,8 +1092,8 @@ def verify_end_to_end(
 ) -> CrossRefResult:
     """Run final end-to-end verification across all phases.
 
-    Called after all 7 phases complete.  Traces every requirement from
-    Phase 0 through to Phase 6 and reports any broken chains or
+    Called after all methodology phases complete.  Traces every requirement from
+    Phase 0 through to Phase 7 and reports any broken chains or
     coverage gaps.
 
     Parameters

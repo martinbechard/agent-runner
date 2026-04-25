@@ -23,6 +23,8 @@ docs/design/interface-contracts.yaml
 
 As an interface designer, you must turn the solution design interactions into
 concrete contracts and write them to docs/design/interface-contracts.yaml.
+If the solution design declares no interactions, write the explicit empty
+contract artifact instead of inventing a boundary.
 
 Context:
 <SOLUTION_DESIGN>
@@ -39,6 +41,11 @@ Module-local generator context:
 Embedded directives for this step:
 
 - Write one or more concrete contracts for every real upstream interaction.
+- A contract is for a real system boundary declared as an `INT-*` interaction.
+  Do not create contracts for README files, design docs, test suites, reports,
+  or internal behavior that the solution design did not model as an
+  interaction.
+- If `<SOLUTION_DESIGN>.interactions` is empty, write exactly `contracts: []`.
 - Define request, response, and error schemas tightly enough that simulation
   and implementation can proceed without filling obvious type holes.
 - Make behavioral expectations explicit with preconditions, postconditions,
@@ -57,6 +64,8 @@ Phase purpose:
 - Define explicit contracts for each INT-* interaction.
 - Specify concrete operations, request and response schemas, and error types.
 - Provide behavioral specs that simulations and implementation can verify.
+- Preserve an explicit empty contract set when the approved design has no
+  interactions requiring a contract.
 
 Important interpretation:
 - This phase is an elaboration layer.
@@ -103,6 +112,9 @@ Acceptance requirements:
   contracts
 - Every INT-* interaction in docs/design/solution-design.yaml must have at
   least one CTR-* contract with a matching interaction_ref.
+- If docs/design/solution-design.yaml contains no INT-* interactions,
+  docs/design/interface-contracts.yaml must be exactly an empty contract set:
+  `contracts: []`.
 - Every contract must contain:
   id
   name
@@ -169,6 +181,10 @@ Module-local judge context:
 - Review for missing contracts, type holes, weak or missing error models,
   cross-contract inconsistency, and behavioral specs too weak to drive
   simulation.
+- Treat `contracts: []` as valid when `<SOLUTION_DESIGN>` declares no
+  `INT-*` interactions. Do not require a contract for a single-component
+  internal behavior or for related artifacts such as README files, design docs,
+  test suites, reports, or verification scripts.
 - Review continuity with existing steady-state contract docs when they exist.
   Flag unjustified contract renames, operation churn, or boundary-language
   drift, but do not block deliberate evolution that is supported by the
@@ -195,6 +211,8 @@ Focus your semantic review on these failure modes:
 2. Missing contracts:
    - Flag any interaction that is still materially uncovered even if a thin
      placeholder contract exists.
+   - Do not flag missing contracts when the solution design declares no
+     interactions.
 3. Error gaps:
    - Flag operations whose likely failure modes are omitted in a way that would
      materially affect downstream simulation or implementation.

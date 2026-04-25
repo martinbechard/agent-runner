@@ -732,6 +732,8 @@ class TestPhaseCrossRefChecks:
     def test_phase_2_references_phase_1(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-002-architecture"]
         assert "feature-specification.yaml" in t
+        assert "conceptual example" in t
+        assert "expected_outcome" in t
 
     def test_phase_3_references_phase_2(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-003-solution-design"]
@@ -739,10 +741,15 @@ class TestPhaseCrossRefChecks:
         assert "processing function" in t
         assert "input and output values" in t
         assert "HTML mockup" in t
+        assert "implementation_files" in t
+        assert "PH-002 related artifacts remain conceptual" in t
 
     def test_phase_4_references_phase_3(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-004-interface-contracts"]
         assert "solution-design.yaml" in t
+        assert "no INT-* interactions" in t
+        assert "`contracts: []` is treated as a valid empty contract set" in t
+        assert "README files, design docs, test suites" in t
 
     def test_phase_5_references_phase_4(self) -> None:
         t = PHASE_CROSS_REF_CHECKS["PH-005-intelligent-simulations"]
@@ -767,6 +774,7 @@ class TestPhaseCrossRefChecks:
         assert "steady-state software" in t
         assert "README work includes typical setup" in t
         assert "component stubs" in t
+        assert "Phase 3 implementation_files" in t
         assert "artifact paths" in t
         assert "gradual implementation and gradual integration" in t
 
@@ -1105,7 +1113,7 @@ class TestConstants:
         for cat in _CATEGORY_NAMES:
             assert cat in CROSS_REF_SYSTEM_PROMPT
 
-    def test_end_to_end_template_mentions_seven_phases(self) -> None:
+    def test_end_to_end_template_mentions_eight_phases(self) -> None:
         assert "Phase 0" in END_TO_END_PROMPT_TEMPLATE
         assert "Phase 1" in END_TO_END_PROMPT_TEMPLATE
         assert "Phase 2" in END_TO_END_PROMPT_TEMPLATE
@@ -1113,6 +1121,12 @@ class TestConstants:
         assert "Phase 4" in END_TO_END_PROMPT_TEMPLATE
         assert "Phase 5" in END_TO_END_PROMPT_TEMPLATE
         assert "Phase 6" in END_TO_END_PROMPT_TEMPLATE
+        assert "Phase 7" in END_TO_END_PROMPT_TEMPLATE
+
+    def test_end_to_end_template_makes_contracts_conditional_on_interactions(self) -> None:
+        assert "applicable chain includes CTR-* contracts only" in END_TO_END_PROMPT_TEMPLATE
+        assert "Phase 3 has no INT-* interactions" in END_TO_END_PROMPT_TEMPLATE
+        assert "`contracts: []` in Phase 4 is valid" in END_TO_END_PROMPT_TEMPLATE
 
     def test_category_names_tuple(self) -> None:
         assert _CATEGORY_NAMES == (
