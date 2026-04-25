@@ -172,8 +172,11 @@ def test_ph000_cross_reference_allows_coherent_field_groups() -> None:
     text = PHASE_CROSS_REF_CHECKS["PH-000-requirements-inventory"]
 
     assert "Coverage support file: docs/requirements/requirements-inventory-coverage.yaml" in text
-    assert "use it as\nsupporting evidence for source phrases" in text
-    assert "child RI items that preserve a requirement-bearing lead-in" in text
+    assert "coverage_verdict and coverage_check mapping" in text
+    assert "Do not recompute total_upstream_phrases" in text
+    assert "supporting evidence for source phrases" in text
+    assert "child RI items that preserve a" in text
+    assert "requirement-bearing lead-in" in text
     assert "joins unrelated\n  behaviours, workflows, constraints" in text
     assert "Do not flag an RI-* item merely because it groups a coherent schema" in text
     assert "Do not require a standalone parent RI" in text

@@ -633,6 +633,17 @@ class TestAssembleCrossRefPrompt:
         assert "Consistency" in prompt
         assert "Integration" in prompt
 
+    def test_phase_0_prompt_defers_to_deterministic_coverage(self) -> None:
+        phase = PHASE_MAP["PH-000-requirements-inventory"]
+        prompt = assemble_cross_ref_prompt(phase, [])
+
+        assert "coverage_verdict" in prompt
+        assert "authoritative PH-000" in prompt
+        assert "deterministic coverage accounting" in prompt
+        assert "Do not recompute total_upstream_phrases" in prompt
+        assert "ad hoc parser" in prompt
+        assert "zero orphaned and zero invented" in prompt
+
     def test_assembles_phase_1_with_prior(self) -> None:
         phase = PHASE_MAP["PH-001-feature-specification"]
         prompt = assemble_cross_ref_prompt(

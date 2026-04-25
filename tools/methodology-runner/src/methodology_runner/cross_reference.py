@@ -175,14 +175,20 @@ Use the Read tool on both files.  Search for each verbatim_quote in the raw
 requirements using Grep.
 
 ### 2. Coverage
-Read every section and paragraph in docs/requirements/raw-requirements.md.
-Read docs/requirements/requirements-inventory-coverage.yaml and use it as
-supporting evidence for source phrases that intentionally map to grouped RI
-items or to child RI items that preserve a requirement-bearing lead-in in their
-normalized_requirement.
-Identify every statement containing shall, must, will, should, or an
-imperative verb describing system behaviour.  Verify each has at least one
-corresponding RI-* item.  Flag sections with zero RI-* coverage.
+Read docs/requirements/requirements-inventory-coverage.yaml. Treat its
+coverage_verdict and coverage_check mapping as the authoritative PH-000
+deterministic coverage accounting. Do not recompute total_upstream_phrases,
+covered, orphaned, invented, or phrase coverage with an ad hoc parser or
+alternate shall/must/will/should scan.
+Verify that coverage_verdict reports PASS with zero orphaned and zero invented
+phrases, that every mapped RI-* exists in {output_path}, and that no mapped
+phrase contradicts the referenced RI-* items.
+Use the coverage_check mapping as supporting evidence for source phrases that
+intentionally map to grouped RI items or to child RI items that preserve a
+requirement-bearing lead-in in their normalized_requirement.
+Only flag a coverage failure when the authoritative coverage_verdict fails, a
+coverage_check entry references a nonexistent RI-* item, or a source phrase's
+mapped RI-* items do not actually preserve the requirement meaning.
 
 ### 3. Consistency
 Verify that:
@@ -208,6 +214,9 @@ Phase 0 is the first phase, so integration checks are minimal:
   as "The report view must show:" when each child bullet is represented as its
   own RI, the child normalized_requirement preserves that lead-in, and the
   coverage support file maps the lead-in phrase to those child RI IDs.
+- Do not require adding a new coverage_check key for a contextual lead-in that
+  the PH-000 deterministic coverage artifact already accounts for through child
+  RI normalized_requirement text and a passing coverage_verdict.
 - Do not flag a requirement merely because it contains 'and' or 'or' inside a
   single behavior, a single acceptance check, or a result clause that depends
   on the same action.\
