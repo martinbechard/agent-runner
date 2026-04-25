@@ -397,6 +397,9 @@ def test_ph001_prompt_module_requires_local_ac_traceability() -> None:
     assert "singular/plural boundaries on security and configuration surfaces" in text
     assert "Do not drip-feed several same-feature defects across retries" in text
     assert "Source-ref only coverage" in text
+    assert "`at least one` must stay a minimum" in text
+    assert "State security boundaries as allowed operations plus rejected operations" in text
+    assert "feature that exposes\n  prompt/output/log links relies on the content-viewer feature" in text
 
 
 def test_ph005_prompt_module_requires_compile_checked_component_simulations() -> None:

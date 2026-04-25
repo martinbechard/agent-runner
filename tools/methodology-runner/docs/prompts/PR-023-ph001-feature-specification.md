@@ -61,6 +61,12 @@ Embedded directives for this step:
   feature that owns it, or put it in `out_of_scope` with a reason.
 - Declare dependencies only when one feature consumes output, state, or
   interfaces produced by another.
+- Include dependencies when a feature relies on another feature's access-control
+  boundary, viewer surface, parser output, navigation behavior, or other
+  capability to be safely usable. For example, a feature that exposes
+  prompt/output/log links relies on the content-viewer feature, and a feature
+  that reads report artifacts through viewers relies on the loading and access-
+  control feature unless it owns the same boundary itself.
 - Any `RI-*` item not represented in a feature must go to `out_of_scope`
   with a concrete reason.
 - If an `RI-*` item is qualitative and you cannot state a binary feature-level
@@ -187,6 +193,10 @@ Acceptance requirements:
   quantity such as `one`, the feature specification must preserve that exact
   bound and must not weaken it to `at least one`, `one or more`, or any other
   broader requirement.
+- Preserve minimum and maximum bounds with the same care as exact bounds.
+  `at least one` must stay a minimum and must not become `exactly one`;
+  `one or more` must not become `only one`; and `at most one` must not become
+  an unbounded plural.
 - Do not strengthen observable behavior beyond the cited `RI-*` text. If the
   source says an application prints a value to standard output, do not add
   byte-level or formatting constraints such as a required trailing newline
@@ -203,6 +213,11 @@ Acceptance requirements:
   If the source allows a set such as configured roots but also names a singular
   default or currently displayed root, keep both meanings instead of collapsing
   the set into one root or broadening the default into many defaults.
+- State security boundaries as allowed operations plus rejected operations; do
+  not write a negative constraint with an exception that accidentally permits
+  the prohibited behavior. For example, if content viewers must reject arbitrary
+  file-read requests, say what report artifacts they may read and that arbitrary
+  file reads are rejected.
 - When a source requirement names an artifact type but not a single exact
   filename, write the acceptance criterion in terms of the artifact's presence
   and role rather than a closed filename allowlist.
