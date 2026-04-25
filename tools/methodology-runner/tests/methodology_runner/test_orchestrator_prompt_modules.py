@@ -175,6 +175,7 @@ def test_ph000_cross_reference_allows_coherent_field_groups() -> None:
     assert "coverage_verdict and coverage_check mapping" in text
     assert "Do not recompute total_upstream_phrases" in text
     assert "supporting evidence for source phrases" in text
+    assert "reserved `status` metadata entry" in text
     assert "child RI items that preserve a" in text
     assert "requirement-bearing lead-in" in text
     assert "joins unrelated\n  behaviours, workflows, constraints" in text

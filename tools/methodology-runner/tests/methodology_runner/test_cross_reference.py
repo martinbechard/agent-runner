@@ -642,6 +642,8 @@ class TestAssembleCrossRefPrompt:
         assert "deterministic coverage accounting" in prompt
         assert "Do not recompute total_upstream_phrases" in prompt
         assert "ad hoc parser" in prompt
+        assert "reserved `status` metadata entry" in prompt
+        assert "non-status coverage_check entry" in prompt
         assert "zero orphaned and zero invented" in prompt
 
     def test_assembles_phase_1_with_prior(self) -> None:
