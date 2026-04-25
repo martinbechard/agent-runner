@@ -177,6 +177,10 @@ Output contract:
     it consumes, configures, fills in, or retires
   - require the same exact relevant test command to be run before and after
     the implementation change in the same prompt
+  - phrase test execution as an actual shell execution of a recognizable test
+    command such as `pnpm exec vitest run ...`, `npm test`, `pytest ...`, or
+    another project-appropriate test runner; do not rely only on response
+    formatting to imply that tests were run
   - require changed code to include appropriate file-level, type-level, and
     function-level comments or docstrings as part of project-local best
     practices
@@ -211,6 +215,11 @@ Output contract:
     - fenced code block containing the full observed stderr
     - `Exit Code: <integer>`
   - a `## Slice Result Summary` section with a brief slice outcome summary
+- Each TDD implementation child prompt must require two explicit command-report
+  blocks for the same exact test command: one observed pre-implementation
+  failing run and one observed post-implementation passing rerun. The prompt
+  must state that the child must execute the command in the shell and must not
+  simulate, summarize, or infer command results.
 - The final verification child prompt must use the same explicit command-report
   format for its verification commands and must preserve the exact command
   strings it requires.

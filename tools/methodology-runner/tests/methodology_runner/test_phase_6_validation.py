@@ -260,6 +260,52 @@ Review.
     ]
 
 
+def test_phase_6_validation_accepts_typescript_test_command_signal(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build TypeScript Slice
+
+### Generation Prompt
+
+Use TDD. Write a failing test first. Execute this exact command in the shell
+before any corresponding implementation change and record the observed failing
+run with stdout, stderr, and exit code:
+pnpm exec vitest run tests/report-parser/parse-report-source.test.ts
+Then implement the smallest slice needed. Execute that same exact command again
+after the implementation change and record the observed passing rerun with
+stdout, stderr, and exit code. Do not simulate, summarize, or infer command
+results. Follow project-local best practices and add meaningful file-level,
+type-level, and function-level comments or docstrings. Keep documentation as
+steady-state documentation without relying on an older or previous state.
+Update the README with setup and operation entries including prerequisites,
+setup, run commands, and verification commands.
+
+### Validation Prompt
+
+Review.
+
+## Prompt 2: Final Verification
+
+### Generation Prompt
+
+Run full verification.
+
+### Validation Prompt
+
+Review.
+""",
+    )
+
+    report = build_report(workflow)
+
+    assert report["overall_status"] == "pass"
+
+
 def test_phase_6_validation_accepts_required_file_created_by_earlier_prompt(
     tmp_path: Path,
 ) -> None:

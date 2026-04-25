@@ -15,6 +15,20 @@ _LEVEL3_RE = re.compile(r"^###\s+(.+?)\s*$")
 _MARKDOWN_LIST_RE = re.compile(r"^(?:[-+*]|\d+\.)\s+")
 _LOOSE_TDD_RE = re.compile(r"failing\s+or\s+tighten(?:ed|ing)?[-\s]test")
 _ASSUMED_BASELINE_RE = re.compile(r"from the current .+? behavior", re.IGNORECASE)
+_TEST_COMMAND_RE = re.compile(
+    r"\b(?:"
+    r"pytest(?:\s|$)|"
+    r"python3?\s+-m\s+unittest\b|"
+    r"(?:pnpm|npm|yarn|bun)\s+(?:exec\s+)?(?:vitest|jest|playwright|cypress|ava|tap)\b|"
+    r"(?:pnpm|npm|yarn|bun)\s+(?:run\s+)?(?:test|tests|vitest)\b|"
+    r"vitest\s+run\b|"
+    r"go\s+test\b|"
+    r"cargo\s+test\b|"
+    r"dotnet\s+test\b|"
+    r"mvn\s+test\b|"
+    r"gradle\s+test\b"
+    r")",
+)
 
 
 def _has_delivery_quality_signal(lower_text: str) -> bool:
@@ -54,6 +68,17 @@ def _has_delivery_quality_signal(lower_text: str) -> bool:
         )
     )
     return code_quality and steady_state_docs and readme_operations
+
+
+def _has_test_execution_signal(lower_text: str) -> bool:
+    """Return whether a PH-006 workflow clearly requires test command execution."""
+    return (
+        _TEST_COMMAND_RE.search(lower_text) is not None
+        or "run the relevant tests" in lower_text
+        or "run the relevant test command" in lower_text
+        or "run both the automated test command" in lower_text
+        or "execute the relevant test command" in lower_text
+    )
 
 
 def _bad_path_metadata_entries(text: str) -> list[dict]:
@@ -392,18 +417,7 @@ def _validate_workflow_prompt(
     checks.append(
         {
             "id": "test_execution_signal",
-            "status": (
-                "pass"
-                if (
-                    "pytest" in lower_text
-                    or "python3 -m unittest" in lower_text
-                    or "python -m unittest" in lower_text
-                    or "run the relevant tests" in lower_text
-                    or "run the relevant test command" in lower_text
-                    or "run both the automated test command" in lower_text
-                )
-                else "fail"
-            ),
+            "status": "pass" if _has_test_execution_signal(lower_text) else "fail",
         }
     )
     checks.append(
