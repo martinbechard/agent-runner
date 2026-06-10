@@ -28,6 +28,20 @@ Run a prompt file:
 prompt-runner run your-file.md --project-dir /path/to/project --run-dir /path/to/run
 ```
 
+Use separate defaults when generation and judging should use different model
+budgets:
+
+```bash
+prompt-runner run your-file.md \
+  --model gpt-5.3-codex-spark \
+  --judge-model gpt-5.5 \
+  --project-dir /path/to/project \
+  --run-dir /path/to/run
+```
+
+`--model` remains the fallback for both roles. `--generator-model` overrides
+only generator calls, while `--judge-model` overrides judge and selector calls.
+
 Optimize model/effort settings for a prompt file:
 
 ```bash

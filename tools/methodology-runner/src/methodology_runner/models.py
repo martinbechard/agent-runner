@@ -678,6 +678,8 @@ class ProjectState:
     # -- optional fields -----------------------------------------------------
     project_name: str = ""
     model: str | None = None
+    generator_model: str | None = None
+    judge_model: str | None = None
     backend: str = "codex"
     execution_scope: str = "all-phases"
     selected_phase_ids: list[str] | None = None
@@ -720,6 +722,8 @@ class ProjectState:
             "git_initialized": self.git_initialized,
             "project_name": self.project_name,
             "model": self.model,
+            "generator_model": self.generator_model,
+            "judge_model": self.judge_model,
             "backend": self.backend,
             "execution_scope": self.execution_scope,
             "selected_phase_ids": (
@@ -748,6 +752,8 @@ class ProjectState:
             git_initialized=d["git_initialized"],
             project_name=d.get("project_name", ""),
             model=d.get("model"),
+            generator_model=d.get("generator_model"),
+            judge_model=d.get("judge_model"),
             backend=d.get("backend", "claude"),
             execution_scope=d.get("execution_scope", "all-phases"),
             selected_phase_ids=(

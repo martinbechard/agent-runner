@@ -28,8 +28,14 @@ Run a full pipeline:
 ```bash
 methodology-runner run sample/hello-world/requests/hello-world-python-app.md \
   --workspace work/hello-world-pipeline \
-  --backend codex
+  --backend codex \
+  --model gpt-5.3-codex-spark \
+  --judge-model gpt-5.5
 ```
+
+`--model` is the fallback model for phase generators and judges.
+`--generator-model` and `--judge-model` can split those defaults; judge model
+selection also applies to cross-reference verification.
 
 Run one phase only:
 

@@ -43,10 +43,15 @@ Context:
 
 Phase purpose:
 - Turn the approved design into a granular implementation workflow.
-- Break the implementation into prompt-runner prompts that each build one
-  small TDD slice.
+- Break the implementation into prompt-runner prompts that each build the
+  smallest independently verifiable artifact set.
+- Only bundle files into the same child prompt when they must change together
+  to produce one coherent verification result. If a source file, test file,
+  README, verification script, configuration file, or project-hygiene file can
+  be verified independently, give it its own child prompt or its own clearly
+  scoped verification step.
 - Require each slice to write or update real project files and run the
-  relevant tests before moving on.
+  verification that is appropriate for the artifacts changed before moving on.
 - End with a final child-workflow prompt that runs the full verification
   commands for the implemented system.
 - Preserve the PH-003 implementation file contract. PH-002 architecture is
@@ -109,14 +114,47 @@ Important implementation discipline:
   It must not rely on any parent-phase execution report such as
   `docs/implementation/implementation-run-report.yaml` as evidence for child
   prompt success or failure.
-- Each child prompt must follow TDD discipline:
+- Use the verification mode that matches the artifact being changed:
+  - Behavior-changing code prompts must follow TDD discipline:
+    1. write or tighten the test that defines the new or stricter behavior
+    2. run the exact test command for that slice and record a failing result
+       before the corresponding implementation change
+    3. implement the smallest code change that makes that same exact test
+       command pass
+    4. rerun that same exact test command and record the passing result
+  - Executable support or integration prompts, such as verification scripts,
+    startup scripts, adapters, or dependency-injection wiring, must use an
+    executable red/green check when possible: run the exact command that
+    demonstrates the missing or broken support behavior, make the support
+    change, then rerun the same exact command and record the passing result.
+  - Documentation, README, configuration, and project-hygiene prompts must use
+    targeted artifact checks instead of being labeled as TDD slices unless they
+    also introduce a real executable contract test for those artifacts. Examples
+    include checking README sections, verifying required ignore patterns, or
+    running a documentation/configuration linter when the project already has
+    one.
+  - Final verification prompts must run the completed system's verification
+    commands and report exact evidence; they are not TDD prompts.
+- Keep the verification mode visible in each child prompt. Use one of these
+  lines in every child prompt's Generation Prompt:
+  - `Verification mode: TDD behavior slice`
+  - `Verification mode: executable support check`
+  - `Verification mode: deterministic artifact check`
+  - `Verification mode: final verification`
+- Behavior-changing code prompts must follow this TDD discipline:
   1. write or tighten the test that defines the new or stricter behavior
   2. run the exact test command for that slice and record a failing result
      before the corresponding implementation change
   3. implement the smallest code change that makes that same exact test
      command pass
   4. rerun that same exact test command and record the passing result
+- Every behavior-changing code child prompt must include this literal sentence in its
+  Generation Prompt and Validation Prompt:
+  `This is a TDD slice: write the test first, run the failing test before the implementation change, then make the same exact test pass.`
 - Keep each child prompt small enough that a failure is local and obvious.
+- Do not label documentation-only, configuration-only, repository-hygiene, or
+  support-script-only prompts as TDD slices unless the prompt also creates or
+  tightens a real executable test for the behavior that artifact owns.
 - Do not create separate planning tables when the same information can be
   expressed directly as prompt order and prompt instructions.
 - Require changed code to follow project-local best practices, including
@@ -135,6 +173,9 @@ Important implementation discipline:
   reader has now. Do not write docs that depend on knowing an older or previous
   behavior unless the upstream request explicitly asks for migration notes,
   release notes, or historical change documentation.
+- Every child prompt that creates or updates documentation must include this
+  literal sentence in its Generation Prompt and Validation Prompt:
+  `Changed documentation must be steady-state documentation that does not rely on reader knowledge of a previous state.`
 - For application deliverables, require the README to contain the typical setup
   and operation entries a user or maintainer needs: prerequisites,
   installation or setup, configuration and environment variables when
@@ -180,31 +221,21 @@ Output contract:
   - one final verification prompt that runs the full verification commands
 - Each child prompt must contain both a Generation Prompt and a Validation
   Prompt.
-- Each implementation child prompt must:
+- Each child prompt must:
   - name the concrete project files it is expected to create or update
+  - group only files that need to change together for a single verification
+    result; otherwise split source, tests, README, scripts, configuration, and
+    hygiene artifacts into separate prompts with their own focused checks
   - name any SIM-* component stub, interface path, implementation path,
     usage instructions, created simulation artifact paths, and compile command
     it consumes, configures, fills in, or retires
-  - require the same exact relevant test command to be run before and after
-    the implementation change in the same prompt
-  - phrase test execution as an actual shell execution of a recognizable test
-    command such as `pnpm exec vitest run ...`, `npm test`, `pytest ...`, or
-    another project-appropriate test runner; do not rely only on response
-    formatting to imply that tests were run
-  - require changed code to include appropriate file-level, type-level, and
-    function-level comments or docstrings as part of project-local best
-    practices
-  - include the exact sentence
-    `Require changed code to follow project-local best practices, including meaningful file-level, type-level, and function-level comments or docstrings where appropriate.`
-    in that child prompt's Generation Prompt and Validation Prompt
-  - require changed documentation to be steady-state documentation rather than
-    transitional prose about a previous software state
-  - require application README updates to include setup and operation entries
-    when the implemented system is an application
-  - require package-managed applications or libraries to create or update the
-    repository ignore file before dependency installation artifacts can be
-    committed, covering dependency directories, build outputs, coverage output,
-    framework caches, and runner-local state
+  - state exactly one verification mode using one of:
+    - `Verification mode: TDD behavior slice`
+    - `Verification mode: executable support check`
+    - `Verification mode: deterministic artifact check`
+    - `Verification mode: final verification`
+  - require the artifact-appropriate verification command or deterministic
+    check to be executed and reported
   - require an explicit generator response structure with exactly these
     section headings:
     - `## Files Created Or Updated`
@@ -217,6 +248,50 @@ Output contract:
     - exact exit code
   - stay grounded in FT-* / AC-* / CMP-* / CTR-* / SIM-* references when they
     materially affect the slice
+- Each behavior-changing code child prompt must:
+  - require the same exact relevant test command to be run before and after
+    the implementation change in the same prompt
+  - include the exact TDD sentence
+    `This is a TDD slice: write the test first, run the failing test before the implementation change, then make the same exact test pass.`
+    in that child prompt's Generation Prompt and Validation Prompt
+  - phrase test execution as an actual shell execution of a recognizable test
+    command such as `pnpm exec vitest run ...`, `npm test`, `pytest ...`, or
+    another project-appropriate test runner; do not rely only on response
+    formatting to imply that tests were run
+- Each executable support child prompt must:
+  - run the same support command before and after the support artifact change
+    when a red/green check is possible, such as running a verification script
+    before and after creating or fixing it
+  - report the exact command, full stdout, full stderr, and exit code for both
+    the pre-change and post-change runs
+  - avoid claiming TDD unless the prompt also writes or tightens a real test
+    before the support artifact change
+- Each deterministic artifact-check child prompt must:
+  - avoid TDD language unless it writes or tightens a real executable test
+  - name the exact deterministic checks the generator must perform, such as
+    required README sections, required configuration keys, required ignore
+    patterns, or existing project-local lint/format/doc commands
+  - report command evidence when those checks are shell commands, or report the
+    checked artifact paths and exact checked conditions in the slice summary
+    when the check is a file-content inspection
+- Each child prompt that creates or updates code must:
+  - require changed code to include appropriate file-level, type-level, and
+    function-level comments or docstrings as part of project-local best
+    practices
+  - include the exact sentence
+    `Require changed code to follow project-local best practices, including meaningful file-level, type-level, and function-level comments or docstrings where appropriate.`
+    in that child prompt's Generation Prompt and Validation Prompt
+  - require changed documentation to be steady-state documentation rather than
+    transitional prose about a previous software state
+  - include the exact documentation sentence
+    `Changed documentation must be steady-state documentation that does not rely on reader knowledge of a previous state.`
+    in every child prompt that creates or updates documentation
+  - require application README updates to include setup and operation entries
+    when the implemented system is an application
+  - require package-managed applications or libraries to create or update the
+    repository ignore file before dependency installation artifacts can be
+    committed, covering dependency directories, build outputs, coverage output,
+    framework caches, and runner-local state
 - Each child prompt that runs commands must define a concrete response format
   that uses exactly:
   - a `## Files Created Or Updated` section listing files only
@@ -229,11 +304,14 @@ Output contract:
     - fenced code block containing the full observed stderr
     - `Exit Code: <integer>`
   - a `## Slice Result Summary` section with a brief slice outcome summary
-- Each TDD implementation child prompt must require two explicit command-report
+- Each TDD behavior child prompt must require two explicit command-report
   blocks for the same exact test command: one observed pre-implementation
   failing run and one observed post-implementation passing rerun. The prompt
   must state that the child must execute the command in the shell and must not
   simulate, summarize, or infer command results.
+- Each executable support child prompt with a red/green command must require
+  two explicit command-report blocks for the same exact support command: one
+  observed pre-change failing run and one observed post-change passing rerun.
 - The final verification child prompt must use the same explicit command-report
   format for its verification commands and must preserve the exact command
   strings it requires.
@@ -278,6 +356,12 @@ Acceptance requirements:
   convention, or helper documents in `### Required Files`.
 - At least one implementation prompt must explicitly require the test-defining
   change to be followed by a failing test run before code changes.
+- The workflow must explicitly state artifact-appropriate verification modes in
+  child prompts rather than labeling every child prompt as a TDD slice.
+- Child prompts must be as granular as possible around independently
+  verifiable artifact sets. Do not bundle source, tests, README, scripts,
+  configuration, and repository hygiene into one prompt unless those files must
+  change together to satisfy one verification result.
 - When PH-005 declares component simulations, at least one implementation prompt
   must use or retire a declared simulation through its explicit interface rather
   than treating the simulation as a test-suite artifact.
@@ -404,11 +488,17 @@ Focus your semantic review on these failure modes:
      workflow revision unless the upstream artifacts are themselves
      contradictory.
 2. Broken TDD cadence:
-   - Flag child prompts that add code without first adding or tightening the
-     test that defines the new behavior.
+   - Flag behavior-changing code prompts that add code without first adding or
+     tightening the test that defines the new behavior.
+   - Flag child prompts that label documentation, configuration,
+     repository-hygiene, or support-script-only work as TDD without a real
+     executable test for the behavior that artifact owns.
 3. Overlarge slices:
    - Flag prompts that bundle too much unrelated implementation work into one
      step.
+   - Flag prompts that bundle independently verifiable source, test, README,
+     script, configuration, or hygiene artifacts when the files do not need to
+     change together for one verification result.
 4. Traceability gaps:
    - Flag child prompts whose implementation work is not materially grounded in
      the upstream FT-* / AC-* / CMP-* / CTR-* / SIM-* artifacts.
@@ -461,7 +551,16 @@ Focus your semantic review on these failure modes:
      without creating or updating a repository ignore file such as `.gitignore`
      to exclude dependency directories, build outputs, coverage output,
      framework caches, and runner-local state from source control.
-13. Simulation misuse:
+13. Wrong verification mode:
+   - Flag workflows that fail to distinguish behavior-code TDD, executable
+     support checks, deterministic artifact checks, and final verification.
+   - Flag support-script prompts that only run an unrelated unit test before
+     and after instead of executing the support command they are adding or
+     fixing, unless the unrelated test is the only meaningful project-local
+     executable check and the prompt says why.
+   - Flag documentation, README, configuration, or `.gitignore` prompts that
+     lack targeted artifact checks for the content they change.
+14. Simulation misuse:
    - Flag workflows that treat PH-005 simulations as test-suite simulations
      instead of component stubs with explicit interfaces.
    - Flag workflows that ignore declared simulation interfaces when building a
@@ -534,6 +633,9 @@ Use this prompt-runner command base:
 Current methodology backend:
 `{{methodology_backend}}`
 
+Prompt-runner run options:
+`{{prompt_runner_run_options}}`
+
 Current project worktree:
 `{{run_dir}}`
 
@@ -549,9 +651,9 @@ Execution rules:
   `{{prompt_runner_command}} parse docs/implementation/implementation-workflow.md`
 - If the child workflow already has useful progress in this worktree, resume
   it with:
-  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --backend {{methodology_backend}} --run-dir {{run_dir}} --resume {{run_dir}} --no-project-organiser`
+  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md {{prompt_runner_run_options}} --run-dir {{run_dir}} --resume {{run_dir}} --no-project-organiser`
 - Otherwise run it fresh with:
-  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md --backend {{methodology_backend}} --run-dir {{run_dir}} --no-project-organiser`
+  `{{prompt_runner_command}} run docs/implementation/implementation-workflow.md {{prompt_runner_run_options}} --run-dir {{run_dir}} --no-project-organiser`
 - After that first invocation, inspect the resulting child summary, halt
   reason, and live project files. If the child run halted but the live
   child-workflow state has already corrected the reported blocker or the child

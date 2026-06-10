@@ -15,6 +15,12 @@ _LEVEL3_RE = re.compile(r"^###\s+(.+?)\s*$")
 _MARKDOWN_LIST_RE = re.compile(r"^(?:[-+*]|\d+\.)\s+")
 _LOOSE_TDD_RE = re.compile(r"failing\s+or\s+tighten(?:ed|ing)?[-\s]test")
 _ASSUMED_BASELINE_RE = re.compile(r"from the current .+? behavior", re.IGNORECASE)
+_VERIFICATION_MODE_LINES = (
+    "Verification mode: TDD behavior slice",
+    "Verification mode: executable support check",
+    "Verification mode: deterministic artifact check",
+    "Verification mode: final verification",
+)
 _TEST_COMMAND_RE = re.compile(
     r"\b(?:"
     r"pytest(?:\s|$)|"
@@ -33,7 +39,12 @@ _TEST_COMMAND_RE = re.compile(
 
 def _has_delivery_quality_signal(lower_text: str) -> bool:
     file_comment = "file-level" in lower_text or "file comment" in lower_text
-    type_comment = "type-level" in lower_text or "type comment" in lower_text
+    type_comment = (
+        "type-level" in lower_text
+        or "type comment" in lower_text
+        or "type annotation" in lower_text
+        or "type-annotated" in lower_text
+    )
     function_comment = "function-level" in lower_text or "function comment" in lower_text
     comments = "comment" in lower_text or "docstring" in lower_text
     code_quality = (
@@ -51,6 +62,8 @@ def _has_delivery_quality_signal(lower_text: str) -> bool:
             or "older" in lower_text
             or "previous behavior" in lower_text
             or "prior behavior" in lower_text
+            or "migration-history" in lower_text
+            or "historical comparison" in lower_text
         )
     )
     readme_operations = (
@@ -63,11 +76,32 @@ def _has_delivery_quality_signal(lower_text: str) -> bool:
         and (
             "operation" in lower_text
             or "operate" in lower_text
+            or "operating note" in lower_text
             or "run or start" in lower_text
             or "run/start" in lower_text
         )
     )
     return code_quality and steady_state_docs and readme_operations
+
+
+def _has_tdd_signal(lower_text: str) -> bool:
+    """Return whether a workflow requires a real red-to-green test cadence."""
+    if (
+        "failing test" in lower_text
+        or "test first" in lower_text
+        or "tdd" in lower_text
+        or "red-to-green" in lower_text
+    ):
+        return True
+    has_pre_failure = (
+        "pre-implementation" in lower_text
+        and ("fail" in lower_text or "not passing" in lower_text)
+    )
+    has_post_pass = (
+        "post-implementation" in lower_text
+        and ("pass" in lower_text or "passing" in lower_text)
+    )
+    return has_pre_failure and has_post_pass
 
 
 def _has_test_execution_signal(lower_text: str) -> bool:
@@ -164,6 +198,59 @@ def _child_prompt_file_sections(text: str) -> list[dict]:
             current_prompt["checks_files"].append(entry)
 
     return prompts
+
+
+def _child_prompt_blocks(text: str) -> list[dict]:
+    """Return child prompt text blocks keyed by prompt index and title."""
+    prompts: list[dict] = []
+    current_prompt: dict | None = None
+    current_lines: list[str] = []
+
+    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+        prompt_match = _PROMPT_TITLE_RE.match(raw_line)
+        if prompt_match is not None:
+            if current_prompt is not None:
+                current_prompt["text"] = "\n".join(current_lines)
+                prompts.append(current_prompt)
+            current_prompt = {
+                "prompt_index": int(prompt_match.group(1)),
+                "title": prompt_match.group(2).strip(),
+                "line": line_number,
+            }
+            current_lines = [raw_line]
+            continue
+
+        if current_prompt is not None:
+            current_lines.append(raw_line)
+
+    if current_prompt is not None:
+        current_prompt["text"] = "\n".join(current_lines)
+        prompts.append(current_prompt)
+
+    return prompts
+
+
+def _verification_mode_signal_check(text: str) -> dict:
+    """Check that each child prompt declares its artifact verification mode."""
+    missing_modes: list[dict] = []
+    for prompt in _child_prompt_blocks(text):
+        prompt_text = prompt["text"]
+        if any(mode_line in prompt_text for mode_line in _VERIFICATION_MODE_LINES):
+            continue
+        missing_modes.append(
+            {
+                "prompt_index": prompt["prompt_index"],
+                "title": prompt["title"],
+                "line": prompt["line"],
+            }
+        )
+
+    return {
+        "id": "verification_mode_signal",
+        "status": "pass" if not missing_modes else "fail",
+        "accepted_modes": list(_VERIFICATION_MODE_LINES),
+        "missing": missing_modes,
+    }
 
 
 def _workflow_workspace_root(path: Path) -> Path:
@@ -387,19 +474,12 @@ def _validate_workflow_prompt(
             "actual_prompt_count": prompt_count,
         }
     )
+    checks.append(_verification_mode_signal_check(text))
 
     checks.append(
         {
             "id": "tdd_signal",
-            "status": (
-                "pass"
-                if (
-                    "failing test" in text.lower()
-                    or "test first" in text.lower()
-                    or "tdd" in text.lower()
-                )
-                else "fail"
-            ),
+            "status": "pass" if _has_tdd_signal(lower_text) else "fail",
         }
     )
     checks.append(

@@ -85,6 +85,84 @@ def test_cli_backend_overrides_config(tmp_path: Path, monkeypatch):
     assert captured["config"].backend == "claude"
 
 
+def test_cli_uses_role_model_defaults_from_config(tmp_path: Path, monkeypatch):
+    from prompt_runner import __main__ as m
+
+    (tmp_path / "prompt-runner.toml").write_text(
+        "[run]\n"
+        "backend = \"codex\"\n"
+        "model = \"gpt-5.3-codex-spark\"\n"
+        "judge_model = \"gpt-5.5\"\n",
+        encoding="utf-8",
+    )
+    pfile = _prompt_file(tmp_path / "pr.md")
+
+    captured: dict = {}
+
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
+        class DummyClient:
+            pass
+        return DummyClient()
+
+    def fake_run_pipeline(**kwargs):
+        captured["config"] = kwargs["config"]
+        from prompt_runner.runner import PipelineResult
+        return PipelineResult(prompt_results=[], halted_early=False, halt_reason=None)
+
+    monkeypatch.setattr(m, "make_client", fake_make_client)
+    monkeypatch.setattr(m, "run_pipeline", fake_run_pipeline)
+
+    rc = m.main([
+        "run", str(pfile),
+        "--dry-run",
+        "--run-dir", str(tmp_path / "out"),
+    ])
+
+    assert rc == 0
+    assert captured["config"].model == "gpt-5.3-codex-spark"
+    assert captured["config"].generator_model is None
+    assert captured["config"].judge_model == "gpt-5.5"
+
+
+def test_cli_role_model_flags_override_config(tmp_path: Path, monkeypatch):
+    from prompt_runner import __main__ as m
+
+    (tmp_path / "prompt-runner.toml").write_text(
+        "[run]\n"
+        "generator_model = \"configured-generator\"\n"
+        "judge_model = \"configured-judge\"\n",
+        encoding="utf-8",
+    )
+    pfile = _prompt_file(tmp_path / "pr.md")
+
+    captured: dict = {}
+
+    def fake_make_client(backend, *, dry_run=False, verbose=False):
+        class DummyClient:
+            pass
+        return DummyClient()
+
+    def fake_run_pipeline(**kwargs):
+        captured["config"] = kwargs["config"]
+        from prompt_runner.runner import PipelineResult
+        return PipelineResult(prompt_results=[], halted_early=False, halt_reason=None)
+
+    monkeypatch.setattr(m, "make_client", fake_make_client)
+    monkeypatch.setattr(m, "run_pipeline", fake_run_pipeline)
+
+    rc = m.main([
+        "run", str(pfile),
+        "--dry-run",
+        "--run-dir", str(tmp_path / "out"),
+        "--generator-model", "cli-generator",
+        "--judge-model", "cli-judge",
+    ])
+
+    assert rc == 0
+    assert captured["config"].generator_model == "cli-generator"
+    assert captured["config"].judge_model == "cli-judge"
+
+
 def test_invalid_config_reports_error(tmp_path: Path, capsys):
     from prompt_runner import __main__ as m
 

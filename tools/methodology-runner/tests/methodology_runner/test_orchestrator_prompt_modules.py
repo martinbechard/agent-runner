@@ -235,6 +235,8 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
         requirements_path=tmp_path / "req.md",
         workspace_dir=workspace,
         backend="codex",
+        model="gpt-5.3-codex-spark",
+        judge_model="gpt-5.5",
         debug=4,
     )
     captured: dict[str, object] = {}
@@ -273,6 +275,8 @@ def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_proj
     assert captured["worktree_dir"] == workspace
     run_config = captured["config"]
     assert run_config.debug == 4
+    assert run_config.model == "gpt-5.3-codex-spark"
+    assert run_config.judge_model == "gpt-5.5"
     assert run_config.generator_prelude is None
     assert run_config.judge_prelude is None
     assert run_config.placeholder_values == {
@@ -288,6 +292,8 @@ def test_phase_placeholder_values_include_ph006_prompt_runner_command() -> None:
         requirements_path=Path("req.md"),
         workspace_dir=Path("workspace"),
         backend="codex",
+        model="gpt-5.3-codex-spark",
+        judge_model="gpt-5.5",
     )
     values = _phase_placeholder_values(phase, config)
 
@@ -298,6 +304,9 @@ def test_phase_placeholder_values_include_ph006_prompt_runner_command() -> None:
         f"{shlex.quote(sys.executable)} -m prompt_runner"
     )
     assert values["methodology_backend"] == "codex"
+    assert values["prompt_runner_run_options"] == (
+        "--backend codex --model gpt-5.3-codex-spark --judge-model gpt-5.5"
+    )
 
 
 def test_phase_placeholder_values_include_ph000_bootstrap_command() -> None:
@@ -326,6 +335,19 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
     text = prompt_path.read_text(encoding="utf-8")
 
     assert "same exact test command" in text
+    assert "smallest independently verifiable artifact set" in text
+    assert "Only bundle files into the same child prompt when they must change together" in text
+    assert "Verification mode: TDD behavior slice" in text
+    assert "Verification mode: executable support check" in text
+    assert "Verification mode: deterministic artifact check" in text
+    assert "Verification mode: final verification" in text
+    assert "Do not label documentation-only, configuration-only, repository-hygiene, or\n  support-script-only prompts as TDD slices" in text
+    assert "Documentation, README, configuration, and project-hygiene prompts must use\n    targeted artifact checks" in text
+    assert "support-script prompts that only run an unrelated unit test before\n     and after" in text
+    assert (
+        "This is a TDD slice: write the test first, run the failing test before "
+        "the implementation change, then make the same exact test pass."
+    ) in text
     assert "--solution-design\ndocs/design/solution-design.yaml" in text
     assert "--simulations\ndocs/simulations/simulation-definitions.yaml" in text
     assert "failing or tightened-test outcome" not in text
@@ -368,7 +390,12 @@ def test_ph006_prompt_module_enforces_exact_tdd_and_report_evidence_contract() -
         "docstrings where appropriate."
     ) in text
     assert "steady-state software" in text
+    assert (
+        "Changed documentation must be steady-state documentation that does not "
+        "rely on reader knowledge of a previous state."
+    ) in text
     assert "typical setup\n  and operation entries" in text
+    assert "{{prompt_runner_run_options}}" in text
     assert "authoritative handoff for gradual implementation" in text
     assert "simulation artifact paths" in text
     assert "configuration, startup command, import path, service URL" in text

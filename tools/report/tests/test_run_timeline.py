@@ -6,6 +6,14 @@ import sys
 from pathlib import Path
 
 
+SPARK_PRICING_MODEL = "gpt-5.3-codex-spark"
+SPARK_LOG_INPUT_TOKENS = 1000
+SPARK_LOG_CACHED_INPUT_TOKENS = 500
+SPARK_LOG_OUTPUT_TOKENS = 200
+ZERO_COST_USD = 0.0
+SPARK_ZERO_RATE_PER_MILLION = 0.0
+
+
 def _load_module():
     tool_root = Path(__file__).resolve().parents[1]
     script_path = tool_root / "scripts" / "run-timeline.py"
@@ -97,6 +105,42 @@ def test_parse_log_estimates_codex_cost_from_pricing_table():
     detail = module._finalize_detail(detail)
     assert detail.cost_estimated is True
     assert detail.cost_usd > 0
+
+
+def test_parse_log_estimates_zero_cost_for_spark_token_bucket(tmp_path):
+    module = _load_module()
+    pricing = json.loads(module.PRICING_FILE.read_text(encoding="utf-8"))
+    assert pricing["models"][SPARK_PRICING_MODEL]["input_per_million"] == SPARK_ZERO_RATE_PER_MILLION
+    assert pricing["models"][SPARK_PRICING_MODEL]["cached_input_per_million"] == SPARK_ZERO_RATE_PER_MILLION
+    assert pricing["models"][SPARK_PRICING_MODEL]["output_per_million"] == SPARK_ZERO_RATE_PER_MILLION
+
+    log_path = tmp_path / "spark.stdout.log"
+    log_path.write_text(
+        "\n".join(
+            [
+                '{"type":"thread.started","thread_id":"abc"}',
+                (
+                    '{"type":"turn.completed","usage":{'
+                    f'"input_tokens":{SPARK_LOG_INPUT_TOKENS},'
+                    f'"cached_input_tokens":{SPARK_LOG_CACHED_INPUT_TOKENS},'
+                    f'"output_tokens":{SPARK_LOG_OUTPUT_TOKENS}'
+                    "}}"
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    log_path.with_suffix(".meta.json").write_text(
+        json.dumps({"model": SPARK_PRICING_MODEL}),
+        encoding="utf-8",
+    )
+
+    detail = module.parse_log(log_path)
+
+    assert detail.model == SPARK_PRICING_MODEL
+    assert detail.cost_estimated is True
+    assert detail.cost_usd == ZERO_COST_USD
 
 
 def test_parse_log_uses_metadata_sidecar_for_model(tmp_path):

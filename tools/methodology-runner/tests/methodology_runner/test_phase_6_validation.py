@@ -23,6 +23,7 @@ implementation-workflow
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the
 smallest slice needed. Record stdout, stderr, and exit code outcomes.
@@ -41,6 +42,7 @@ Review the new test-first slice.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Run the relevant tests and perform final verification of the assembled
 implementation.
 
@@ -217,6 +219,7 @@ project-coding-guidance.md
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the smallest slice needed. Record stdout, stderr, and exit code
 outcomes. Follow project-local best practices and add meaningful file-level,
@@ -233,6 +236,7 @@ Review.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Perform final verification.
 
 ### Validation Prompt
@@ -272,6 +276,7 @@ implementation-workflow
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first. Execute this exact command in the shell
 before any corresponding implementation change and record the observed failing
 run with stdout, stderr, and exit code:
@@ -293,6 +298,7 @@ Review.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Run full verification.
 
 ### Validation Prompt
@@ -322,6 +328,7 @@ generated_config.py
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the smallest slice needed. Record stdout, stderr, and exit code
 outcomes. Follow project-local best practices and add meaningful file-level,
@@ -342,6 +349,7 @@ generated_config.py
 
 ### Generation Prompt
 
+Verification mode: final verification
 Run full verification and record stdout, stderr, and exit code.
 
 ### Validation Prompt
@@ -407,6 +415,7 @@ tests/test_hello.py
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the smallest slice needed. Record stdout, stderr, and exit code
 outcomes. Follow project-local best practices and add meaningful file-level,
@@ -423,6 +432,7 @@ Review.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Perform final verification.
 
 ### Validation Prompt
@@ -528,6 +538,7 @@ implementation-workflow
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the smallest slice needed. Record stdout, stderr, and exit code
 outcomes.
@@ -540,6 +551,7 @@ Review.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Perform final verification.
 
 ### Validation Prompt
@@ -569,6 +581,7 @@ implementation-workflow
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_hello.py,
 then implement the smallest slice needed. Record stdout, stderr, and exit code
 outcomes. Follow project-local best practices and add meaningful file-level,
@@ -585,11 +598,66 @@ Review.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Perform final verification.
 
 ### Validation Prompt
 
 Review.
+""",
+    )
+
+    report = build_report(workflow)
+
+    assert report["overall_status"] == "pass"
+
+
+def test_phase_6_validation_accepts_red_green_and_operating_notes_wording(
+    tmp_path: Path,
+) -> None:
+    workflow = _write(
+        tmp_path / "docs" / "implementation" / "implementation-workflow.md",
+        """### Module
+implementation-workflow
+
+## Prompt 1: Build Slice
+
+### Generation Prompt
+
+Verification mode: TDD behavior slice
+Implement the first executable slice with strict red-to-green order. First,
+create tests/test_main.py only, then run python3 -m unittest tests/test_main.py
+and capture a pre-implementation command result that is not passing. After the
+pre-run evidence, create main.py and rerun the same command as a
+post-implementation passing run. Capture stdout, stderr, and exit code.
+Require changed code to follow project-local best practices, including
+meaningful file-level docstrings, type annotations, and function-level
+docstrings where appropriate.
+
+## Prompt 2: Add Documentation
+
+### Generation Prompt
+
+Verification mode: deterministic artifact check
+Create README.md as steady-state documentation with no migration-history
+language. Include Prerequisites, Setup and execution notes, Run command,
+Test/verification command, and Common operating notes.
+
+### Validation Prompt
+
+Review the generated README and command evidence.
+
+## Prompt 3: Final Verification
+
+### Generation Prompt
+
+Verification mode: final verification
+Run full verification with python3 -m unittest tests/test_main.py and capture
+stdout, stderr, and exit code.
+
+### Validation Prompt
+
+Review final verification.
 """,
     )
 
@@ -666,6 +734,7 @@ implementation-workflow
 
 ### Generation Prompt
 
+Verification mode: TDD behavior slice
 Use TDD. Write a failing test first, run python3 -m unittest test_clock.py,
 then implement the consumer slice. Record stdout, stderr, and exit code
 outcomes. Use SIM-001 with simulations/interfaces/clock_provider.py and
@@ -685,6 +754,7 @@ Review.
 
 ### Generation Prompt
 
+Verification mode: final verification
 Perform final verification.
 
 ### Validation Prompt

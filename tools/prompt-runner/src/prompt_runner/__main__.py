@@ -146,6 +146,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
     backend = args.backend or file_config.run.backend or "claude"
     model = args.model or file_config.run.model
+    generator_model = args.generator_model or file_config.run.generator_model
+    judge_model = args.judge_model or file_config.run.judge_model
 
     generator_prelude: str | None = None
     judge_prelude: str | None = None
@@ -238,6 +240,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         backend=backend,
         max_iterations=args.max_iterations,
         model=model,
+        generator_model=generator_model,
+        judge_model=judge_model,
         debug=args.debug,
         only=selected_prompt,
         judge_only=args.judge_only,
@@ -347,6 +351,8 @@ def _cmd_optimize(args: argparse.Namespace) -> int:
 
     backend = args.backend or file_config.optimize.backend or file_config.run.backend or "codex"
     model = args.model or file_config.run.model
+    generator_model = args.generator_model or file_config.run.generator_model
+    judge_model = args.judge_model or file_config.run.judge_model
 
     generator_prelude: str | None = None
     judge_prelude: str | None = None
@@ -401,6 +407,8 @@ def _cmd_optimize(args: argparse.Namespace) -> int:
         backend=backend,
         max_iterations=args.max_iterations,
         model=model,
+        generator_model=generator_model,
+        judge_model=judge_model,
         debug=args.debug,
         dry_run=False,
         verbose=args.verbose,
@@ -565,6 +573,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Passed through as --model to the selected backend CLI.",
     )
     run_cmd.add_argument(
+        "--generator-model",
+        default=None,
+        help=(
+            "Model for generator calls. Defaults to [run].generator_model, "
+            "then --model/[run].model."
+        ),
+    )
+    run_cmd.add_argument(
+        "--judge-model",
+        default=None,
+        help=(
+            "Model for judge and selector calls. Defaults to [run].judge_model, "
+            "then --model/[run].model."
+        ),
+    )
+    run_cmd.add_argument(
         "--only",
         type=int,
         default=None,
@@ -696,6 +720,22 @@ def _build_parser() -> argparse.ArgumentParser:
             "Default baseline model for prompts that do not already carry "
             "[MODEL:...]. Required when the source prompts otherwise have no "
             "effective model."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--generator-model",
+        default=None,
+        help=(
+            "Default generator model for optimization baseline and candidates "
+            "that do not override their model."
+        ),
+    )
+    optimize_cmd.add_argument(
+        "--judge-model",
+        default=None,
+        help=(
+            "Default judge and selector model for optimization baseline and "
+            "candidates that do not override their model."
         ),
     )
     optimize_cmd.add_argument(

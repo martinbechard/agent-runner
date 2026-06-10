@@ -292,6 +292,8 @@ class PipelineConfig:
     workspace_dir: Path | None = None
     backend: str = "codex"
     model: str | None = None
+    generator_model: str | None = None
+    judge_model: str | None = None
     resume: bool = False
     phases_to_run: list[str] | None = None
     max_prompt_runner_iterations: int | None = None
@@ -715,6 +717,8 @@ def _create_initial_state(
         git_initialized=True,
         project_name=config.requirements_path.stem,
         model=config.model,
+        generator_model=config.generator_model,
+        judge_model=config.judge_model,
         backend=config.backend,
         execution_scope=(
             "selected-phases"
@@ -1484,6 +1488,8 @@ def _invoke_prompt_runner_library(
         backend=config.backend,
         max_iterations=max_iters,
         model=config.model,
+        generator_model=config.generator_model,
+        judge_model=config.judge_model,
         debug=config.debug,
         generator_prelude=generator_prelude,
         judge_prelude=judge_prelude,
@@ -1603,7 +1609,20 @@ def _phase_placeholder_values(
             f"{shlex.quote(sys.executable)} -m prompt_runner"
         )
         values["methodology_backend"] = config.backend
+        values["prompt_runner_run_options"] = _prompt_runner_run_options(config)
     return values
+
+
+def _prompt_runner_run_options(config: PipelineConfig) -> str:
+    """Return shell-safe prompt-runner flags inherited by child workflows."""
+    parts = ["--backend", config.backend]
+    if config.model:
+        parts.extend(["--model", config.model])
+    if config.generator_model:
+        parts.extend(["--generator-model", config.generator_model])
+    if config.judge_model:
+        parts.extend(["--judge-model", config.judge_model])
+    return " ".join(shlex.quote(part) for part in parts)
 
 
 def _resolve_bundled_skills_root() -> Path:
@@ -1876,7 +1895,7 @@ def _run_single_phase(
                 workspace=workspace,
                 completed_phases=completed_ids,
                 backend=config.backend,
-                model=config.model,
+                model=config.judge_model or config.model,
                 claude_client=claude_client,
             )
         except CrossReferenceError as exc:
@@ -2330,7 +2349,7 @@ def run_pipeline(
                     end_to_end_result = verify_end_to_end(
                         workspace=workspace,
                         backend=config.backend,
-                        model=config.model,
+                        model=config.judge_model or config.model,
                         claude_client=claude_client,
                     )
                 except CrossReferenceError as exc:

@@ -1277,6 +1277,62 @@ def test_pair_effort_override_wins_over_default_effort(tmp_path: Path):
     assert jud_call.effort == "high"
 
 
+def test_role_specific_models_route_generator_and_judge_calls(tmp_path: Path):
+    from prompt_runner.claude_client import FakeClaudeClient
+    from prompt_runner.runner import RunConfig, run_prompt
+
+    pair = _pair(1, "Alpha")
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=tmp_path / "run",
+        config=RunConfig(
+            backend="codex",
+            model="fallback-model",
+            generator_model="generator-model",
+            judge_model="judge-model",
+        ),
+        claude_client=client,
+        run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    gen_call, jud_call = client.received
+    assert gen_call.model == "generator-model"
+    assert jud_call.model == "judge-model"
+
+
+def test_pair_model_override_still_wins_for_both_roles(tmp_path: Path):
+    from prompt_runner.claude_client import FakeClaudeClient
+    from prompt_runner.runner import RunConfig, run_prompt
+
+    pair = PromptPair(
+        **{
+            **_pair(1, "Alpha").__dict__,
+            "model_override": "pair-model",
+        }
+    )
+    client = FakeClaudeClient(scripted=[_pass_response(), _judge_pass()])
+    run_prompt(
+        pair=pair,
+        prior_artifacts=[],
+        run_dir=tmp_path / "run",
+        config=RunConfig(
+            backend="codex",
+            generator_model="generator-model",
+            judge_model="judge-model",
+        ),
+        claude_client=client,
+        run_id="myrun",
+        worktree_dir=_worktree(tmp_path),
+    )
+
+    gen_call, jud_call = client.received
+    assert gen_call.model == "pair-model"
+    assert jud_call.model == "pair-model"
+
+
 def test_session_ids_are_deterministic(tmp_path: Path):
     """Iteration 2's --resume must use the same session ID that iteration 1
     created with --session-id, so the mapping from logical label to UUID

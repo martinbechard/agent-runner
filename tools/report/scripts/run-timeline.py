@@ -37,6 +37,7 @@ POPUP_TRUNCATE_CHARS = 20_000_000  # 20 MB
 MIN_BAR_PCT = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
+PRICING_RATE_KEYS = ("input_per_million", "cached_input_per_million", "output_per_million")
 
 
 # ---------------------------------------------------------------------------
@@ -521,9 +522,23 @@ def _load_pricing_table() -> dict[str, dict[str, float]]:
         return {}
     table: dict[str, dict[str, float]] = {}
     for model, prices in models.items():
-        if isinstance(prices, dict):
-            table[model.lower()] = prices
+        rate_row = _coerce_pricing_rates(prices)
+        if rate_row is not None:
+            table[model.lower()] = rate_row
     return table
+
+
+def _coerce_pricing_rates(prices: object) -> dict[str, float] | None:
+    """Return numeric token rates only when a model has complete pricing."""
+    if not isinstance(prices, dict):
+        return None
+    rate_row: dict[str, float] = {}
+    for key in PRICING_RATE_KEYS:
+        value = prices.get(key)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            return None
+        rate_row[key] = float(value)
+    return rate_row
 
 
 def _normalize_model_name(model: str) -> str:

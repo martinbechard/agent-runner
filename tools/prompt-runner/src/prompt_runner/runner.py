@@ -195,6 +195,11 @@ class RunConfig:
     """Agent backend to use for prompt execution."""
     max_iterations: int = MAX_ITERATIONS_DEFAULT
     model: str | None = None
+    """Legacy default model used for both roles when no role-specific model is set."""
+    generator_model: str | None = None
+    """Default model for generator calls. Falls back to ``model`` when unset."""
+    judge_model: str | None = None
+    """Default model for judge and selector calls. Falls back to ``model`` when unset."""
     default_effort: str | None = "medium"
     """Default reasoning effort for backend calls when a prompt pair does not
     override effort explicitly via ``[EFFORT:...]``."""
@@ -347,6 +352,8 @@ class PromptMetrics:
     output_tokens: int
     total_tokens: int
     model: str | None = None
+    generator_model: str | None = None
+    judge_model: str | None = None
     effort: str | None = None
 
 
@@ -1278,8 +1285,20 @@ def _prompt_metrics_payload(metrics: PromptMetrics) -> dict[str, object]:
         "output_tokens": metrics.output_tokens,
         "total_tokens": metrics.total_tokens,
         "model": metrics.model,
+        "generator_model": metrics.generator_model,
+        "judge_model": metrics.judge_model,
         "effort": metrics.effort,
     }
+
+
+def _effective_generator_model(pair: PromptPair, config: RunConfig) -> str | None:
+    """Return the model used for generator calls for *pair*."""
+    return pair.model_override or config.generator_model or config.model
+
+
+def _effective_judge_model(pair: PromptPair, config: RunConfig) -> str | None:
+    """Return the model used for judge-like calls for *pair*."""
+    return pair.model_override or config.judge_model or config.model
 
 
 def _write_prompt_metrics(run_dir: Path, pair: PromptPair, metrics: PromptMetrics) -> None:
@@ -1580,8 +1599,9 @@ def _run_interactive_prompt(
         argv = ["claude"]
         if config.dangerously_skip_permissions:
             argv.append("--dangerously-skip-permissions")
-    if config.model:
-        argv.extend(["--model", config.model])
+    interactive_model = _effective_generator_model(pair, config)
+    if interactive_model:
+        argv.extend(["--model", interactive_model])
     argv.append(mission)
 
     print(
@@ -1642,7 +1662,9 @@ def _run_interactive_prompt(
         cached_input_tokens=0,
         output_tokens=0,
         total_tokens=0,
-        model=pair.model_override or config.model,
+        model=interactive_model,
+        generator_model=interactive_model,
+        judge_model=None,
         effort=pair.effort_override or config.default_effort,
     )
     _write_prompt_metrics(run_dir, pair, metrics)
@@ -1763,7 +1785,7 @@ def run_prompt(
             prompt=gen_msg,
             session_id=fork_new_session,
             new_session=(is_first and not use_fork) or stateless_revisions,
-            model=pair.model_override or config.model,
+            model=_effective_generator_model(pair, config),
             effort=pair.effort_override or config.default_effort,
             module_log_path=module_log_path,
             iteration=iteration_number,
@@ -1880,7 +1902,7 @@ def run_prompt(
             prompt=jud_msg,
             session_id=jud_session,
             new_session=is_first or stateless_revisions,
-            model=pair.model_override or config.model,
+            model=_effective_judge_model(pair, config),
             effort=pair.effort_override or config.default_effort,
             module_log_path=module_log_path,
             iteration=iteration_number,
@@ -1966,7 +1988,13 @@ def run_prompt(
         cached_input_tokens=usage_totals.cached_input_tokens,
         output_tokens=usage_totals.output_tokens,
         total_tokens=usage_totals.total_tokens,
-        model=pair.model_override or config.model,
+        model=_effective_generator_model(pair, config),
+        generator_model=_effective_generator_model(pair, config),
+        judge_model=(
+            _effective_judge_model(pair, config)
+            if pair.validation_prompt
+            else None
+        ),
         effort=pair.effort_override or config.default_effort,
     )
     _write_prompt_metrics(run_dir, pair, metrics)
@@ -2097,7 +2125,7 @@ def _run_judge_only_prompt(
         prompt=jud_msg,
         session_id=jud_session,
         new_session=True,
-        model=pair.model_override or config.model,
+        model=_effective_judge_model(pair, config),
         effort=pair.effort_override or config.default_effort,
         module_log_path=module_log_path,
         iteration=iteration_number,
@@ -2146,7 +2174,9 @@ def _run_judge_only_prompt(
         cached_input_tokens=usage_totals.cached_input_tokens,
         output_tokens=usage_totals.output_tokens,
         total_tokens=usage_totals.total_tokens,
-        model=pair.model_override or config.model,
+        model=_effective_judge_model(pair, config),
+        generator_model=None,
+        judge_model=_effective_judge_model(pair, config),
         effort=pair.effort_override or config.default_effort,
     )
     _write_prompt_metrics(run_dir, pair, metrics)
@@ -3114,6 +3144,10 @@ def _run_fork_point(
             cmd.extend(["--var", f"{key}={value}"])
         if config.model:
             cmd.extend(["--model", config.model])
+        if config.generator_model:
+            cmd.extend(["--generator-model", config.generator_model])
+        if config.judge_model:
+            cmd.extend(["--judge-model", config.judge_model])
         if config.generator_prelude:
             prelude_path = _run_files_dir(variant_run_dir) / "generator-prelude.txt"
             _write(prelude_path, config.generator_prelude)
@@ -3320,7 +3354,7 @@ def _run_fork_point(
             prompt=selector_message,
             session_id=selector_session,
             new_session=(attempt == 1 or config.backend == "codex"),
-            model=config.model,
+            model=_effective_judge_model(selector_pair, config),
             effort=config.default_effort,
             module_log_path=_module_log_path(run_dir, selector_pair),
             iteration=attempt,
@@ -3976,6 +4010,8 @@ def _write_manifest(
             "backend": config.backend,
             "max_iterations": config.max_iterations,
             "model": config.model,
+            "generator_model": config.generator_model,
+            "judge_model": config.judge_model,
             "default_effort": config.default_effort,
             "only": config.only,
             "judge_only": config.judge_only,

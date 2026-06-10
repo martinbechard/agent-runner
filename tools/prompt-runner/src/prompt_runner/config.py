@@ -17,6 +17,8 @@ _CONFIG_NAMES: tuple[str, ...] = ("prompt-runner.toml", ".prompt-runner.toml")
 class RunDefaults:
     backend: str | None = None
     model: str | None = None
+    generator_model: str | None = None
+    judge_model: str | None = None
 
 
 @dataclass(frozen=True)
@@ -144,11 +146,22 @@ def _parse_run_defaults(config_path: Path, data: dict) -> RunDefaults:
 
     backend = run_table.get("backend")
     model = run_table.get("model")
+    generator_model = run_table.get("generator_model")
+    judge_model = run_table.get("judge_model")
     if backend is not None and not isinstance(backend, str):
         raise _error(config_path, "run.backend must be a string.")
     if model is not None and not isinstance(model, str):
         raise _error(config_path, "run.model must be a string.")
-    return RunDefaults(backend=backend, model=model)
+    if generator_model is not None and not isinstance(generator_model, str):
+        raise _error(config_path, "run.generator_model must be a string.")
+    if judge_model is not None and not isinstance(judge_model, str):
+        raise _error(config_path, "run.judge_model must be a string.")
+    return RunDefaults(
+        backend=backend,
+        model=model,
+        generator_model=generator_model,
+        judge_model=judge_model,
+    )
 
 
 def _parse_duration_table(

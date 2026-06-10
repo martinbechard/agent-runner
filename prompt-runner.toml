@@ -1,2 +1,3 @@
 [run]
 backend = "codex"
+judge_model = "gpt-5.5"

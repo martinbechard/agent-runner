@@ -53,6 +53,8 @@ def _make_project_state(
     *,
     phase_statuses: dict[str, PhaseStatus] | None = None,
     model: str | None = None,
+    generator_model: str | None = None,
+    judge_model: str | None = None,
 ) -> ProjectState:
     """Build a minimal ProjectState and save it to the workspace."""
     from methodology_runner.phases import PHASES
@@ -80,6 +82,8 @@ def _make_project_state(
         started_at="2026-04-08T12:00:00Z",
         git_initialized=True,
         model=model,
+        generator_model=generator_model,
+        judge_model=judge_model,
         phases=phase_states,
     )
 
@@ -368,6 +372,8 @@ class TestBuildParser:
         assert args.branch_name is None
         assert args.backend is None
         assert args.model is None
+        assert args.generator_model is None
+        assert args.judge_model is None
         assert args.max_iterations is None
         assert args.debug == 0
         assert args.phases is None
@@ -386,6 +392,8 @@ class TestBuildParser:
             "--base-branch", "main",
             "--skip-target-merge",
             "--model", "opus",
+            "--generator-model", "spark",
+            "--judge-model", "gpt-5.5",
             "--max-iterations", "5",
             "--debug", "4",
             "--phases",
@@ -401,6 +409,8 @@ class TestBuildParser:
         assert args.base_branch == "main"
         assert args.skip_target_merge is True
         assert args.model == "opus"
+        assert args.generator_model == "spark"
+        assert args.judge_model == "gpt-5.5"
         assert args.max_iterations == 5
         assert args.debug == 4
         assert (
@@ -415,11 +425,15 @@ class TestBuildParser:
         args = parser.parse_args([
             "resume", "/tmp/ws",
             "--model", "sonnet",
+            "--generator-model", "spark",
+            "--judge-model", "gpt-5.5",
             "--debug",
             "--escalation-policy", "human-review",
         ])
         assert args.workspace_dir == "/tmp/ws"
         assert args.model == "sonnet"
+        assert args.generator_model == "spark"
+        assert args.judge_model == "gpt-5.5"
         assert args.debug == 3
         assert args.escalation_policy == "human-review"
 
@@ -489,7 +503,9 @@ class TestCmdRun:
         req = tmp_path / "req.md"
         req.write_text("# Requirements\n")
         (tmp_path / "prompt-runner.toml").write_text(
-            "[run]\nbackend = \"codex\"\n",
+            "[run]\n"
+            "backend = \"codex\"\n"
+            "judge_model = \"gpt-5.5\"\n",
             encoding="utf-8",
         )
         parser = _build_parser()
@@ -521,6 +537,7 @@ class TestCmdRun:
                 orch_mod.run_pipeline = original_run
 
         assert captured_config[0].backend == "codex"
+        assert captured_config[0].judge_model == "gpt-5.5"
 
     def test_run_prepares_application_worktree_when_repo_requested(self, tmp_path: Path) -> None:
         req = tmp_path / "change-002-add-datetime.md"
@@ -1252,6 +1269,54 @@ class TestCmdResume:
                 orch_mod.run_pipeline = original_run
 
         assert captured_config[0].model == "override-model"
+
+    def test_resume_role_model_overrides(self, tmp_path: Path) -> None:
+        workspace = tmp_path / "ws"
+        workspace.mkdir()
+        _make_project_state(
+            workspace,
+            model="saved-model",
+            generator_model="saved-generator",
+            judge_model="saved-judge",
+        )
+        parser = _build_parser()
+        args = parser.parse_args([
+            "resume",
+            str(workspace),
+            "--generator-model",
+            "override-generator",
+            "--judge-model",
+            "override-judge",
+        ])
+
+        from methodology_runner.orchestrator import PipelineConfig, PipelineResult
+
+        captured_config: list[PipelineConfig] = []
+        mock_result = PipelineResult(
+            workspace_dir=workspace,
+            phase_results=[],
+            halted_early=False,
+            halt_reason=None,
+            end_to_end_result=None,
+            wall_time_seconds=1.0,
+        )
+
+        def capturing_run(config: PipelineConfig) -> PipelineResult:
+            captured_config.append(config)
+            return mock_result
+
+        with patch("methodology_runner.cli.check_backend_cli", return_value=None):
+            import methodology_runner.orchestrator as orch_mod
+            original_run = orch_mod.run_pipeline
+            orch_mod.run_pipeline = capturing_run
+            try:
+                cmd_resume(args)
+            finally:
+                orch_mod.run_pipeline = original_run
+
+        assert captured_config[0].model == "saved-model"
+        assert captured_config[0].generator_model == "override-generator"
+        assert captured_config[0].judge_model == "override-judge"
 
     def test_reset_requires_exactly_one_phase(self, tmp_path: Path) -> None:
         workspace = tmp_path / "ws"

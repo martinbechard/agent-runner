@@ -31,7 +31,7 @@ from .models import (
     PhaseStatus,
     ProjectState,
 )
-from prompt_runner.config import resolve_default_backend
+from prompt_runner.config import load_config, resolve_default_backend
 from prompt_runner.client_factory import check_backend_cli
 
 # ---------------------------------------------------------------------------
@@ -343,7 +343,11 @@ def cmd_run(args: argparse.Namespace) -> int:
         _print_error(f"Requirements file not found: {requirements_path}")
         return EXIT_USAGE_ERROR
 
+    prompt_runner_defaults = load_config(requirements_path).run
     backend = resolve_default_backend(requirements_path, args.backend)
+    model = args.model or prompt_runner_defaults.model
+    generator_model = args.generator_model or prompt_runner_defaults.generator_model
+    judge_model = args.judge_model or prompt_runner_defaults.judge_model
 
     # Pre-flight checks for external dependencies
     backend_err = check_backend_cli(backend)
@@ -404,7 +408,9 @@ def cmd_run(args: argparse.Namespace) -> int:
         requirements_path=requirements_path,
         workspace_dir=workspace,
         backend=backend,
-        model=args.model,
+        model=model,
+        generator_model=generator_model,
+        judge_model=judge_model,
         resume=False,
         phases_to_run=phases_to_run,
         max_prompt_runner_iterations=args.max_iterations,
@@ -430,8 +436,12 @@ def cmd_run(args: argparse.Namespace) -> int:
         sys.stdout.write("Phases:       all\n")
     else:
         sys.stdout.write(f"Phases:       {', '.join(phases_to_run)}\n")
-    if args.model:
-        sys.stdout.write(f"Model:        {args.model}\n")
+    if model:
+        sys.stdout.write(f"Model:        {model}\n")
+    if generator_model:
+        sys.stdout.write(f"Generator:    {generator_model}\n")
+    if judge_model:
+        sys.stdout.write(f"Judge:        {judge_model}\n")
     sys.stdout.write(f"Backend:      {backend}\n")
     sys.stdout.write("\n")
     sys.stdout.flush()
@@ -537,6 +547,10 @@ def cmd_status(args: argparse.Namespace) -> int:
         sys.stdout.write(f"Current methodology phase: {state.current_phase}\n")
     if state.model:
         sys.stdout.write(f"Model:         {state.model}\n")
+    if state.generator_model:
+        sys.stdout.write(f"Generator:     {state.generator_model}\n")
+    if state.judge_model:
+        sys.stdout.write(f"Judge:         {state.judge_model}\n")
     sys.stdout.write("\n")
 
     pending_manual = _pending_manual_lifecycle_phase_ids(state)
@@ -689,6 +703,8 @@ def cmd_resume(args: argparse.Namespace) -> int:
         workspace_dir=workspace,
         backend=backend,
         model=args.model or state.model,
+        generator_model=args.generator_model or state.generator_model,
+        judge_model=args.judge_model or state.judge_model,
         resume=True,
         phases_to_run=phases_to_run,
         max_prompt_runner_iterations=args.max_iterations,
@@ -713,6 +729,10 @@ def cmd_resume(args: argparse.Namespace) -> int:
         sys.stdout.write(f"Phases:       {', '.join(phases_to_run)}\n")
     if config.model:
         sys.stdout.write(f"Model:        {config.model}\n")
+    if config.generator_model:
+        sys.stdout.write(f"Generator:    {config.generator_model}\n")
+    if config.judge_model:
+        sys.stdout.write(f"Judge:        {config.judge_model}\n")
     sys.stdout.write(f"Backend:      {config.backend}\n")
     if config.target_branch is not None:
         sys.stdout.write(f"Target:       {config.target_branch}\n")
@@ -902,6 +922,22 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Model to use with the selected backend CLI.",
     )
     run_cmd.add_argument(
+        "--generator-model",
+        default=None,
+        help=(
+            "Model to use for generator calls. Defaults to [run].generator_model, "
+            "then --model/[run].model."
+        ),
+    )
+    run_cmd.add_argument(
+        "--judge-model",
+        default=None,
+        help=(
+            "Model to use for judge and cross-reference calls. Defaults to "
+            "[run].judge_model, then --model/[run].model."
+        ),
+    )
+    run_cmd.add_argument(
         "--max-iterations",
         type=int,
         default=None,
@@ -981,6 +1017,16 @@ def _build_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         help="Model to use (overrides the saved model from the prior run).",
+    )
+    resume_cmd.add_argument(
+        "--generator-model",
+        default=None,
+        help="Generator model to use (overrides the saved generator model).",
+    )
+    resume_cmd.add_argument(
+        "--judge-model",
+        default=None,
+        help="Judge model to use (overrides the saved judge model).",
     )
     resume_cmd.add_argument(
         "--target-branch",
