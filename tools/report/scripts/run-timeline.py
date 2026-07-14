@@ -30,6 +30,7 @@ import io
 import json
 import re
 import sys
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -1530,8 +1531,59 @@ def _cost_summary(cost: CostAssessment) -> str:
     return "Cost unavailable"
 
 
+def _format_detail_ms(milliseconds: int | None) -> str:
+    if milliseconds is None:
+        return "—"
+    if milliseconds < 1000:
+        return f"{milliseconds}ms"
+    return _format_ms(milliseconds)
+
+
+def _tool_activity_summary(tools: list[ToolInterval]) -> tuple[str, str]:
+    if not tools:
+        return "—", "0 calls · 0s"
+    counts = Counter(tool.tool_name for tool in tools)
+    names = ", ".join(
+        f"{name} × {count}"
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    call_label = "call" if len(tools) == 1 else "calls"
+    duration = _format_detail_ms(sum(tool.duration_ms for tool in tools))
+    return names, f"{len(tools):,} {call_label} · {duration}"
+
+
+def _turn_offset_label(run: CodexRunMetrics, turn: AgentTurn) -> str:
+    run_start = _parse_iso_datetime(run.wall_started_at)
+    turn_start = _parse_iso_datetime(turn.started_at)
+    if run_start is None or turn_start is None:
+        return "T+—"
+    seconds = max(0, (turn_start - run_start).total_seconds())
+    return f"T+{_fmt_duration(seconds)}"
+
+
+def _timeline_style(run: CodexRunMetrics, started_at: str, ended_at: str) -> str:
+    run_start = _parse_iso_datetime(run.wall_started_at)
+    start = _parse_iso_datetime(started_at)
+    end = _parse_iso_datetime(ended_at)
+    if run_start is None or start is None or end is None or run.wall_time_ms <= 0:
+        return "left:0%;width:0.5%"
+    total_seconds = run.wall_time_ms / 1000
+    left = min(100.0, max(0.0, (start - run_start).total_seconds() / total_seconds * 100))
+    width = max(0.5, (end - start).total_seconds() / total_seconds * 100)
+    width = min(100.0 - left, width)
+    return f"left:{left:.3f}%;width:{width:.3f}%"
+
+
 def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
-    """Render a compact privacy-safe Markdown summary for `run`."""
+    """Render a privacy-safe Markdown summary with execution detail."""
+    turn_count = sum(len(thread.turns) for thread in run.threads)
+    response_count = sum(len(thread.responses) for thread in run.threads)
+    tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
+    cached_share = (
+        run.usage_totals.cached_input_tokens / run.usage_totals.input_tokens * 100
+        if run.usage_totals.input_tokens
+        else 0
+    )
     lines = [
         "# Codex Rollout Metrics",
         "",
@@ -1539,22 +1591,57 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         f"- State: `{run.state}`",
         f"- Observed at: `{run.observed_at}`",
         f"- Threads: {len(run.threads)}",
+        f"- Turns: {turn_count}",
+        f"- Responses: {response_count}",
+        f"- Matched tool calls: {tool_count}",
         f"- Processed tokens: {run.usage_totals.processed_tokens:,}",
+        f"- Cached input share: {cached_share:.1f}%",
         f"- Wall time: {_format_ms(run.wall_time_ms)}",
         f"- Agent time: {_format_ms(run.agent_time_ms)}",
         f"- Active interval union: {_format_ms(run.active_time_ms)}",
         f"- Peak concurrency: {run.peak_concurrency}",
         f"- Cost: {_cost_summary(run.cost)}",
         "",
-        "| Thread | Parent | State | Model | Input | Cached | Output | Processed |",
-        "|---|---|---|---|---:|---:|---:|---:|",
+        "| Thread | Agent / path | State | Turns | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
+        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for thread in run.threads:
+        agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         lines.append(
-            f"| {thread.thread_id} | {thread.parent_thread_id or '-'} | "
-            f"{thread.terminal_state} | {thread.model or '-'} | "
+            f"| {thread.thread_id} | {thread.agent_path or thread.agent_nickname or '-'} | "
+            f"{thread.terminal_state} | {len(thread.turns)} | {len(thread.tool_intervals)} | "
+            f"{_format_ms(agent_time_ms)} | "
             f"{thread.token_totals.input_tokens} | {thread.token_totals.cached_input_tokens} | "
-            f"{thread.token_totals.output_tokens} | {thread.token_totals.processed_tokens} |"
+            f"{thread.token_totals.uncached_input_tokens} | {thread.token_totals.output_tokens} | "
+            f"{thread.token_totals.reasoning_tokens} | {thread.token_totals.processed_tokens} |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |",
+            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
+    for unit in run.work_units:
+        member_turns = [
+            turn
+            for thread in run.threads
+            for turn in thread.turns
+            if (turn.work_unit_id or "unattributed") == unit.work_unit_id
+        ]
+        member_keys = {(turn.thread_id, turn.turn_id) for turn in member_turns}
+        tools = [
+            tool
+            for thread in run.threads
+            for tool in thread.tool_intervals
+            if (tool.thread_id, tool.turn_id or "") in member_keys
+        ]
+        lines.append(
+            f"| {unit.work_unit_id} | {len(member_turns)} | "
+            f"{_format_ms(sum(turn.duration_ms for turn in member_turns))} | {len(tools)} | "
+            f"{unit.usage.input_tokens} | {unit.usage.cached_input_tokens} | "
+            f"{unit.usage.uncached_input_tokens} | {unit.usage.output_tokens} | "
+            f"{unit.usage.reasoning_tokens} | {unit.usage.processed_tokens} |"
         )
     lines.extend(
         [
@@ -1573,25 +1660,88 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
 
 
 def render_codex_rollout_html(run: CodexRunMetrics) -> str:
-    """Render `run` hierarchy and confidence views without source content."""
-    thread_rows = []
+    """Render methodology-style execution detail without source content."""
+    turn_count = sum(len(thread.turns) for thread in run.threads)
+    response_count = sum(len(thread.responses) for thread in run.threads)
+    tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
+    cached_share = (
+        run.usage_totals.cached_input_tokens / run.usage_totals.input_tokens * 100
+        if run.usage_totals.input_tokens
+        else 0
+    )
+    composition_total = run.usage_totals.processed_tokens or 1
+    cached_width = run.usage_totals.cached_input_tokens / composition_total * 100
+    fresh_width = run.usage_totals.uncached_input_tokens / composition_total * 100
+    output_width = run.usage_totals.output_tokens / composition_total * 100
+    thread_details = []
     for thread in run.threads:
-        thread_rows.append(
-            "<tr>"
-            f"<td>{_escape_html(thread.thread_id)}</td>"
-            f"<td>{_escape_html(thread.parent_thread_id or '—')}</td>"
-            f"<td>{_escape_html(thread.agent_path or '—')}</td>"
-            f"<td>{_escape_html(thread.terminal_state)}</td>"
-            f"<td>{_escape_html(thread.model or '—')}</td>"
-            f"<td>{thread.token_totals.input_tokens:,}</td>"
-            f"<td>{thread.token_totals.cached_input_tokens:,}</td>"
-            f"<td>{thread.token_totals.output_tokens:,}</td>"
-            f"<td>{thread.token_totals.reasoning_tokens:,}</td>"
-            f"<td>{thread.token_totals.processed_tokens:,}</td>"
-            "</tr>"
+        thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
+        turn_rows = []
+        for turn in thread.turns:
+            tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
+            tool_names, tool_total = _tool_activity_summary(tools)
+            turn_rows.append(
+                "<tr>"
+                f"<td><code>{_escape_html(turn.turn_id)}</code></td>"
+                f"<td>{_turn_offset_label(run, turn)}</td>"
+                f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
+                f"<td>{_format_detail_ms(turn.time_to_first_token_ms)}</td>"
+                f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
+                f"<td>{_escape_html(turn.work_unit_id or 'unattributed')}</td>"
+                f"<td>{_escape_html(turn.activity or '—')}</td>"
+                f"<td>{turn.usage.input_tokens:,}</td>"
+                f"<td>{turn.usage.cached_input_tokens:,}</td>"
+                f"<td>{turn.usage.uncached_input_tokens:,}</td>"
+                f"<td>{turn.usage.output_tokens:,}</td>"
+                f"<td>{turn.usage.reasoning_tokens:,}</td>"
+                f"<td>{turn.usage.processed_tokens:,}</td>"
+                f"<td title=\"{_escape_html(tool_total)}\">{_escape_html(tool_names)}</td>"
+                "</tr>"
+            )
+        turn_rows_html = "".join(turn_rows) or '<tr><td colspan="14">No turns recorded</td></tr>'
+        agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
+        thread_details.append(
+            '<details class="thread-detail">'
+            "<summary>"
+            f'<span class="thread-name">{_escape_html(agent_label)}</span>'
+            f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span>'
+            f'<span>{len(thread.turns)} turns</span>'
+            f'<span>{_escape_html(thread_tools_total)}</span>'
+            f'<span>{thread.token_totals.processed_tokens:,} tokens</span>'
+            '<span class="timeline-track">'
+            f'<span class="timeline-bar" style="{_timeline_style(run, thread.started_at, thread.last_observed_at)}"></span>'
+            "</span>"
+            "</summary>"
+            '<div class="thread-meta">'
+            f"Thread <code>{_escape_html(thread.thread_id)}</code> · "
+            f"parent <code>{_escape_html(thread.parent_thread_id or '—')}</code> · "
+            f"model {_escape_html(thread.model or '—')} · "
+            f"tools {_escape_html(thread_tools_label)}"
+            "</div>"
+            "<h3>Turn activity</h3>"
+            '<div class="table-scroll"><table class="turn-table"><thead><tr>'
+            "<th>Turn</th><th>T+</th><th>Duration</th><th>TTFT</th><th>State</th>"
+            "<th>Work unit</th><th>Activity</th><th>Input</th><th>Cached</th>"
+            "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Tools</th>"
+            f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
+            "</details>"
         )
     work_rows = []
     for unit in run.work_units:
+        member_turns = [
+            turn
+            for thread in run.threads
+            for turn in thread.turns
+            if (turn.work_unit_id or "unattributed") == unit.work_unit_id
+        ]
+        member_keys = {(turn.thread_id, turn.turn_id) for turn in member_turns}
+        tools = [
+            tool
+            for thread in run.threads
+            for tool in thread.tool_intervals
+            if (tool.thread_id, tool.turn_id or "") in member_keys
+        ]
+        processed_share = unit.usage.processed_tokens / composition_total * 100
         work_rows.append(
             "<tr>"
             f"<td>{_escape_html(unit.work_unit_id)}</td>"
@@ -1599,7 +1749,16 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             f"<td>{_escape_html(unit.lane_id or '—')}</td>"
             f"<td>{_escape_html(unit.activity or '—')}</td>"
             f"<td>{_escape_html(unit.attribution_confidence)}</td>"
+            f"<td>{len(member_turns):,}</td>"
+            f"<td>{_format_ms(sum(turn.duration_ms for turn in member_turns))}</td>"
+            f"<td>{len(tools):,}</td>"
+            f"<td>{unit.usage.input_tokens:,}</td>"
+            f"<td>{unit.usage.cached_input_tokens:,}</td>"
+            f"<td>{unit.usage.uncached_input_tokens:,}</td>"
+            f"<td>{unit.usage.output_tokens:,}</td>"
+            f"<td>{unit.usage.reasoning_tokens:,}</td>"
             f"<td>{unit.usage.processed_tokens:,}</td>"
+            f"<td>{processed_share:.1f}%</td>"
             f"<td>{_escape_html(_cost_summary(unit.cost))}</td>"
             "</tr>"
         )
@@ -1621,20 +1780,48 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Codex Rollout Metrics</title>
 <style>
-body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; color: #333; }}
+body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; color: #263238; background:#fafbfc; }}
+h1 {{ margin-bottom:.25em; }}
+h2 {{ margin-top:30px; }}
+h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
-.metric {{ background:#f4f6f8; border-radius:6px; padding:12px; }}
+.metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
 .label {{ color:#666; font-size:.82em; }}
 .value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
-table {{ border-collapse:collapse; width:100%; margin:18px 0; }}
-th,td {{ border-bottom:1px solid #ddd; padding:7px; text-align:left; }}
-th {{ color:#555; font-size:.85em; }}
+table {{ border-collapse:collapse; width:100%; margin:10px 0; background:#fff; }}
+th,td {{ border-bottom:1px solid #e1e6ea; padding:7px; text-align:left; white-space:nowrap; }}
+th {{ color:#546e7a; font-size:.8em; background:#f5f7f8; position:sticky; top:0; }}
+td {{ font-size:.85em; }}
+.table-scroll {{ overflow:auto; max-height:65vh; border:1px solid #e1e6ea; border-radius:5px; }}
 .notice {{ background:#fff8dc; border-left:4px solid #d6a700; padding:10px; }}
+.token-composition {{ display:flex; height:18px; overflow:hidden; border-radius:5px; background:#e8edf0; max-width:900px; }}
+.token-segment {{ min-width:1px; }}
+.cached {{ background:#3498db; }} .fresh {{ background:#95a5a6; }} .output {{ background:#e74c3c; }}
+.composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
+.execution-note {{ color:#607d8b; font-size:.88em; }}
+.thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
+.thread-detail > summary {{ display:grid; grid-template-columns:minmax(250px,2fr) auto auto auto auto minmax(180px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
+.thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
+.thread-name {{ font-weight:600; overflow-wrap:anywhere; }}
+.thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
+.thread-detail h3, .thread-detail .table-scroll {{ margin-left:13px; margin-right:13px; }}
+.thread-detail .table-scroll {{ margin-bottom:13px; }}
+.timeline-track {{ position:relative; display:block; height:12px; background:#e8edf0; border-radius:3px; min-width:180px; }}
+.timeline-bar {{ position:absolute; top:0; bottom:0; background:#4a90d9; border-radius:3px; }}
+.state {{ display:inline-block; border-radius:10px; padding:2px 7px; background:#eceff1; font-size:.82em; }}
+.state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
+.state-aborted {{ background:#fdecea; color:#b3261e; }}
+.state-active, .state-live {{ background:#fff3cd; color:#7a5b00; }}
+.diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
+code {{ font-size:.9em; }}
+@media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>Codex Rollout Metrics</h1>
 <p>Root <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
+<div class="metric"><div class="label">Turns / responses</div><div class="value">{turn_count:,} / {response_count:,}</div></div>
+<div class="metric"><div class="label">Matched tool calls</div><div class="value">{tool_count:,}</div></div>
 <div class="metric"><div class="label">Wall time</div><div class="value">{_format_ms(run.wall_time_ms)}</div></div>
 <div class="metric"><div class="label">Summed agent time</div><div class="value">{_format_ms(run.agent_time_ms)}</div></div>
 <div class="metric"><div class="label">Active interval union</div><div class="value">{_format_ms(run.active_time_ms)}</div></div>
@@ -1642,13 +1829,21 @@ th {{ color:#555; font-size:.85em; }}
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
 </div>
 <p class="notice">{_escape_html(_cost_summary(run.cost))}. Critical path: {_format_ms(run.critical_path_ms)} ({_escape_html(run.critical_path_method)}).</p>
-<h2>Thread hierarchy</h2>
-<table><thead><tr><th>Thread</th><th>Parent</th><th>Agent path</th><th>State</th><th>Model</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th><th>Processed</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table>
+<h2>Token composition</h2>
+<div class="token-composition" title="Processed token composition">
+<span class="token-segment cached" style="width:{cached_width:.3f}%"></span>
+<span class="token-segment fresh" style="width:{fresh_width:.3f}%"></span>
+<span class="token-segment output" style="width:{output_width:.3f}%"></span>
+</div>
+<div class="composition-legend">Cached input {run.usage_totals.cached_input_tokens:,} ({cached_share:.1f}% of input) · fresh input {run.usage_totals.uncached_input_tokens:,} · output {run.usage_totals.output_tokens:,} · reasoning {run.usage_totals.reasoning_tokens:,}. Cached input is part of input. Reasoning is part of output.</div>
+<h2>Execution timeline</h2>
+<p class="execution-note">Bars use the observed run interval. Expand a thread for privacy-safe turn, token, TTFT, and aggregated tool detail.</p>
+{''.join(thread_details)}
 <h2>Work units and attribution</h2>
-<table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Processed</th><th>Cost status</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table>
+<div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost status</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
 <h2>Phase and lane aggregates</h2>
-<table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table>
-<h2>Diagnostics</h2><ul>{diagnostics or '<li>None</li>'}</ul>
+<div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
+<h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
 </body></html>"""
 
 

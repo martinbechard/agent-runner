@@ -53,6 +53,12 @@ by the selected hierarchy. Unowned response deltas remain visible in an
 `unattributed` work unit and phase so every aggregate reconciles to the run
 total.
 
+The native HTML report reuses the methodology timeline's drill-down approach
+without copying transcript content. It includes token composition, observed
+thread bars, expandable per-turn duration and time-to-first-token rows,
+input/cache/output/reasoning counters, and tool-name/count/duration summaries.
+The Markdown companion includes matching thread and work-unit breakdowns.
+
 When explicit work-unit metadata is absent, the report uses the final semantic
 segment of the agent path and marks the result as inferred. Phase and lane stay
 `unattributed` when the rollout did not record them. A completed root with one

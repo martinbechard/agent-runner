@@ -239,6 +239,39 @@ def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
     assert "not an actual Codex charge" in outputs[-1]
 
 
+def test_native_codex_html_reuses_methodology_style_execution_drilldown():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    html = module.render_codex_rollout_html(run)
+
+    assert "Token composition" in html
+    assert "Execution timeline" in html
+    assert "Turn activity" in html
+    assert 'class="token-composition"' in html
+    assert 'class="thread-detail"' in html
+    assert "root-turn-1" in html
+    assert "T+0s" in html
+    assert "500ms" in html
+    assert "exec × 1" in html
+    assert "1 call · 500ms" in html
+    assert "Cached input is part of input" in html
+    assert "Reasoning is part of output" in html
+
+
+def test_native_codex_markdown_includes_turn_and_tool_breakdown():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    markdown = module.render_codex_rollout_markdown(run)
+
+    assert "- Turns: 4" in markdown
+    assert "- Matched tool calls: 1" in markdown
+    assert "| Thread | Agent / path | State | Turns | Tools | Agent time |" in markdown
+    assert "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |" in markdown
+    assert "PRIVATE-TOOL-PAYLOAD" not in markdown
+
+
 def test_native_codex_live_parser_tolerates_partial_final_line(tmp_path):
     module = _load_module()
     source = CODEX_ROLLOUT_FIXTURES / "active-partial.jsonl"
