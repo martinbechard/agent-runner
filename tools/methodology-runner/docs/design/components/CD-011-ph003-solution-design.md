@@ -51,8 +51,8 @@ This design explains how `PH-003` works from start to finish.
 
 - **RULE: RULE-3** Keep the phase directives inside the module
   - **SYNOPSIS:** The prompt module must contain the PH-003 solution-design
-    directives and embedded traceability, structured-design, and
-    structured-review guidance blocks that the generic prompt-runner roles
+    directives and embedded ar-traceability-discipline, ar-structured-design,
+    and ar-review-structured-artifact guidance blocks that the generic prompt-runner roles
     consume.
   - **BECAUSE:** The module should be self-contained and replayable.
 

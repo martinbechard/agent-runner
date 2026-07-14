@@ -114,7 +114,7 @@
 ### docs/design/components/
 - **Purpose:** Detailed design of a single component — its internal data model, exposed API, and invariants.
 - **Signals:** "this module exposes", single-component internals, "the X component", scoped data model, internal class/function decomposition.
-- **Filename pattern:** `CD-NNN-<slug>.md` for canonical markdown component designs; `CD-NNN-<slug>.yaml` for explicit YAML structured-design companions when the task specifically calls for the same component design in YAML form.
+- **Filename pattern:** `CD-NNN-<slug>.md` for canonical markdown component designs; `CD-NNN-<slug>.yaml` for explicit YAML companions using the portable user-scope `structured-design` convention when the task specifically calls for the same component design in YAML form.
 - **Example:** `CD-001-cli-runner.md`
 
 ### tools/prompt-runner/
@@ -214,7 +214,7 @@
 - **Purpose:** Canonical methodology skill definitions and bundled prompt-resource skills used by methodology-runner. Each skill lives in its own directory with a `SKILL.md` file and belongs to the methodology layer rather than to a repo-local plugin wrapper.
 - **Signals:** methodology skill definition, `SKILL.md`, phase-local or shared methodology discipline, prompt-injected bundled skill, audience is methodology generator or judge agents.
 - **Filename pattern:** `SKILL.md` inside `tools/methodology-runner/skills/<skill-name>/`.
-- **Example:** `tools/methodology-runner/skills/structured-design/SKILL.md`
+- **Example:** `tools/methodology-runner/skills/ar-structured-design/SKILL.md`
 
 ### tools/backlog-runner/
 - **Purpose:** Package root for the backlog-runner tool itself. Use this path for tool-level packaging files such as pyproject.toml, the tool README, and other root files that define how backlog-runner is installed and presented as a product.
@@ -439,7 +439,7 @@
 - 2026-04-15 — .codex/agents/ added — repository-local Codex custom agents need a canonical home separate from the older Claude-specific agent folder.
 - 2026-04-18 — .archive/ broadened — archived historical directories such as generated workflow-run trees may also move into mirrored paths under `.archive/`.
 - 2026-04-15 — .archive/ added — archived documents should leave the active tree and move into a git-ignored mirrored archive path under `.archive/`.
-- 2026-04-15 — docs/design/components/ extended — YAML structured-design companions for existing component designs need a canonical home alongside the markdown authority when explicitly requested.
+- 2026-04-15 — docs/design/components/ extended — YAML companions using the portable user-scope `structured-design` convention need a canonical home alongside the markdown authority when explicitly requested.
 - 2026-04-15 — plugins/<plugin-name>/skills/<skill-name>/agents/ added — skill UI metadata such as `agents/openai.yaml` is distinct from the skill definition and needs its own category under each skill folder.
 - 2026-04-14 — .prompt-runner/runs/<run-id>/ added — run-scoped generated prompt-runner artifacts need a canonical home distinct from reference docs and temporary scratch work.
 - 2026-04-14 — work/ added — temporary working directories and scratch artifacts should not live under docs/ because docs/ is reserved for reference material.

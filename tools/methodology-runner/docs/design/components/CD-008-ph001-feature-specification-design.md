@@ -98,7 +98,7 @@ This section describes the phase steps.
     - **AGENT:** `Generator Agent`
       - **SYNOPSIS:** Embedded generator definition in the PH-001 module.
       - **BECAUSE:** The generator setup is fixed for this phase.
-      - **SKILLS:** `traceability-discipline`
+      - **SKILLS:** `ar-traceability-discipline`
         - **SYNOPSIS:** Preserve source meaning, keep coverage explicit, and
           keep every `RI-*` item traceable.
         - **BECAUSE:** `PH-001` must stay grounded in the source inventory.
@@ -111,7 +111,7 @@ This section describes the phase steps.
     - **AGENT:** `Judge Agent`
       - **SYNOPSIS:** Embedded judge definition in the PH-001 module.
       - **BECAUSE:** The judge setup is fixed for this phase.
-      - **SKILLS:** `traceability-discipline`
+      - **SKILLS:** `ar-traceability-discipline`
         - **BECAUSE:** The judge also needs the same traceability rules.
       - **RULE:** Prompt-local feature review directives
         - **SYNOPSIS:** The module itself defines the PH-001 review passes for
@@ -126,7 +126,7 @@ This section describes the phase steps.
         - **USES:** `Generator Agent`
           - **BECAUSE:** The prompt pair should use the embedded generator
             definition already declared in the prompt module.
-        - **USES:** `traceability-discipline`
+        - **USES:** `ar-traceability-discipline`
           - **BECAUSE:** The generator needs the traceability discipline
             already defined under the generator agent definition.
         - **USES:** prompt-local PH-001 grouping directives
@@ -144,7 +144,7 @@ This section describes the phase steps.
         - **USES:** `Judge Agent`
           - **BECAUSE:** The prompt pair should use the embedded judge
             definition already declared in the prompt module.
-        - **USES:** `traceability-discipline`
+        - **USES:** `ar-traceability-discipline`
           - **BECAUSE:** The judge needs the traceability discipline already
             defined under the judge agent definition.
         - **USES:** prompt-local PH-001 review directives

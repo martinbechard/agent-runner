@@ -99,16 +99,16 @@ The current prompt modules do not directly reference `.run-files/...` or
 
 | Raw Path | In-Run Path Template | Root Row | Current Role | Current Status | Recommended Lifecycle Handling |
 |---|---|---:|---|---|---|
-| `../../../skills/structured-design/SKILL.md` | `~/dev/agent-runner/tools/methodology-runner/skills/structured-design/SKILL.md` | 1 | Bundled methodology reference resource | Active and consistent | Keep in tool repo |
-| `../../../skills/structured-review/SKILL.md` | `~/dev/agent-runner/tools/methodology-runner/skills/structured-review/SKILL.md` | 1 | Bundled methodology reference resource | Active and consistent | Keep in tool repo |
+| `../../../skills/ar-structured-design/SKILL.md` | `~/dev/agent-runner/tools/methodology-runner/skills/ar-structured-design/SKILL.md` | 1 | Bundled methodology reference resource | Active and consistent | Keep in tool repo |
+| `../../../skills/ar-review-structured-artifact/SKILL.md` | `~/dev/agent-runner/tools/methodology-runner/skills/ar-review-structured-artifact/SKILL.md` | 1 | Bundled methodology reference resource | Active and consistent | Keep in tool repo |
 | `docs/requirements/raw-requirements.md` | `<application worktree>/docs/requirements/raw-requirements.md` | 2 | Source input copied into the run worktree | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/request/` if the request itself should remain part of repo history |
 | `docs/requirements/requirements-inventory.yaml` | `<application worktree>/docs/requirements/requirements-inventory.yaml` | 2 | PH-000 working artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` |
 | `docs/requirements/requirements-inventory-coverage.yaml` | `<application worktree>/docs/requirements/requirements-inventory-coverage.yaml` | 2 | PH-000 coverage support artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` if coverage evidence should be preserved |
-| `docs/features/feature-specification.yaml` | `<application worktree>/docs/features/feature-specification.yaml` | 2 | PH-001 working artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` and integrate the durable feature view into a subject-based markdown doc under `docs/features/` using the `structured-design` skill |
+| `docs/features/feature-specification.yaml` | `<application worktree>/docs/features/feature-specification.yaml` | 2 | PH-001 working artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` and integrate the durable feature view into a subject-based markdown doc under `docs/features/` using the portable user-scope `structured-design` skill |
 | `docs/architecture/architecture-design.yaml` | `<application worktree>/docs/architecture/architecture-design.yaml` | 2 | PH-002 prompt output and PH-003 prompt input in the current prompt corpus | Active in prompt modules but inconsistent with the phase registry and validators | Do not treat as the single authoritative Phase 2 path; reconcile the naming split before standardizing persistent promotion |
 | `docs/architecture/stack-manifest.yaml` | `<application worktree>/docs/architecture/stack-manifest.yaml` | 2 | Phase 2 output in `phases.py`, cross-reference, and phase-2 validation | Active in registry, cross-reference, and validation but not yet aligned with PH-002 / PH-003 prompt modules | Do not treat as the single authoritative Phase 2 path until the prompt corpus is aligned |
-| `docs/design/solution-design.yaml` | `<application worktree>/docs/design/solution-design.yaml` | 2 | PH-003 working artifact | Active and consistent apart from the upstream Phase 2 naming split | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` and integrate the durable design view into a subject-based markdown doc under `docs/design/` using the `structured-design` skill |
-| `docs/design/interface-contracts.yaml` | `<application worktree>/docs/design/interface-contracts.yaml` | 2 | PH-004 working artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` and integrate the durable interface view into a subject-based markdown doc under `docs/contracts/` using the `structured-design` skill |
+| `docs/design/solution-design.yaml` | `<application worktree>/docs/design/solution-design.yaml` | 2 | PH-003 working artifact | Active and consistent apart from the upstream Phase 2 naming split | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` and integrate the durable design view into a subject-based markdown doc under `docs/design/` using the portable user-scope `structured-design` skill |
+| `docs/design/interface-contracts.yaml` | `<application worktree>/docs/design/interface-contracts.yaml` | 2 | PH-004 working artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/` and integrate the durable interface view into a subject-based markdown doc under `docs/contracts/` using the portable user-scope `structured-design` skill |
 | `docs/simulations/simulation-definitions.yaml` | `<application worktree>/docs/simulations/simulation-definitions.yaml` | 2 | PH-005 working artifact | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/analysis/`; promote only if the application keeps a durable human-readable testing or verification doc outside `docs/changes/` |
 | `docs/implementation/implementation-workflow.md` | `<application worktree>/docs/implementation/implementation-workflow.md` | 2 | PH-006 working artifact used to drive the child prompt-runner | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/execution/` |
 | `docs/implementation/implementation-run-report.yaml` | `<application worktree>/docs/implementation/implementation-run-report.yaml` | 2 | PH-006 execution record | Active and consistent | Keep a change-specific copy under `docs/changes/<change-id>/execution/` |
@@ -263,7 +263,7 @@ Permanent docs outside `docs/changes/` should follow these rules:
 
 - use markdown, not methodology phase YAML, for the human-facing steady-state
   doc layer
-- write or update those markdown docs with the `structured-design` skill
+- write or update those markdown docs with the portable user-scope `structured-design` skill
 - choose filenames by stable subject:
   - feature docs by user-visible capability or workflow
   - design docs by component, ownership boundary, or subsystem
@@ -407,7 +407,7 @@ This worked example uses one explicit filesystem layout and does not vary it:
 | Concrete phase ID used for runner-state examples | `PH-000-requirements-inventory` |
 | Concrete prompt-runner module used for runner-state examples | `requirements-inventory` |
 | Cross-reference retries in this example | none |
-| Common steady-state doc authoring method | markdown files written or updated with the `structured-design` skill |
+| Common steady-state doc authoring method | markdown files written or updated with the portable user-scope `structured-design` skill |
 | Common steady-state markdown docs retained in this example | exactly `/Users/martinbechard/dev/hello-clock/docs/features/console-display.md`, `/Users/martinbechard/dev/hello-clock/docs/design/console-application.md`, and `/Users/martinbechard/dev/hello-clock/docs/contracts/stdout-output.md` after both runs |
 
 This example intentionally fixes the Phase 2 path to
@@ -422,8 +422,8 @@ This table instantiates the abstract path forms from `STR-001-6`,
 
 | Generic Form | Run 1 Concrete Path | Run 2 Concrete Path |
 |---|---|---|
-| `../../../skills/structured-design/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/structured-design/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/structured-design/SKILL.md` |
-| `../../../skills/structured-review/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/structured-review/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/structured-review/SKILL.md` |
+| `../../../skills/ar-structured-design/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/ar-structured-design/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/ar-structured-design/SKILL.md` |
+| `../../../skills/ar-review-structured-artifact/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/ar-review-structured-artifact/SKILL.md` | `/Users/martinbechard/dev/agent-runner/tools/methodology-runner/skills/ar-review-structured-artifact/SKILL.md` |
 | `docs/requirements/raw-requirements.md` | `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/requirements/raw-requirements.md` | `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/requirements/raw-requirements.md` |
 | `docs/features/feature-specification.yaml` | `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/features/feature-specification.yaml` | `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/feature-specification.yaml` |
 | `docs/architecture/architecture-design.yaml` | `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/architecture/architecture-design.yaml` | `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/architecture/architecture-design.yaml` |
@@ -540,7 +540,7 @@ Run 1 instantiates the lifecycle phases like this:
     their kept contents now exist under `docs/changes/`.
 - `LC-005 Steady-State Integration`
   - Integrate the change into the common steady-state markdown docs with the
-    `structured-design` skill at these exact paths:
+    portable user-scope `structured-design` skill at these exact paths:
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/features/console-display.md`
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/design/console-application.md`
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-001-hello-world/docs/contracts/stdout-output.md`
@@ -712,7 +712,7 @@ Run 2 instantiates the lifecycle phases like this:
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/contracts/stdout-output.md`
 - `LC-005 Steady-State Integration`
   - Integrate the change into the common steady-state markdown docs with the
-    `structured-design` skill at these exact paths:
+    portable user-scope `structured-design` skill at these exact paths:
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/features/console-display.md`
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/design/console-application.md`
     - `/Users/martinbechard/dev/hello-clock-worktrees/change-002-add-datetime/docs/contracts/stdout-output.md`

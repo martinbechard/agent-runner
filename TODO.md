@@ -58,4 +58,6 @@
 - Re-test PH-002 variant `E` after the prompt and validator alignment.
 - Confirm the PH-002 variant run closes cleanly and writes summary/verdict files.
 - If PH-002 variant `E` passes cleanly, chain its architecture output into PH-003.
-- Re-test PH-003 with `structured-design` and `structured-review` active in the prompt.
+- Re-test PH-003 with `ar-structured-design`,
+  `ar-review-structured-artifact`, and `ar-traceability-discipline` active in
+  the prompt.

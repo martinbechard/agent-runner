@@ -16,48 +16,48 @@ version: 1
 phases:
   PH-000-requirements-inventory:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-001-feature-specification:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-002-architecture:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-003-solution-design:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-004-interface-contracts:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-005-intelligent-simulations:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-006-incremental-implementation:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
 
   PH-007-verification-sweep:
     generator_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline
     judge_baseline:
-      - traceability-discipline
+      - ar-traceability-discipline

@@ -56,8 +56,8 @@ This design explains how `PH-002` works from start to finish.
   - **SYNOPSIS:** The artifact must use top-level `components`, `integration_points`, and `rationale`, with `CMP-*` components, `features_served` lists, and explicit `simulation_target` classification.
   - **BECAUSE:** Deterministic validation, cross-reference checks, and `PH-003` consume that compact schema directly.
 
-- **RULE: RULE-4B** Do not emit structured-design architecture sections as the artifact schema
-  - **SYNOPSIS:** The prompt may use structured-design guidance for clear rationale, but must not output `finality`, `system_shape.modules`, `MODULE-*`, `supports`, `definition_of_good`, or `test_cases` as substitutes for the PH-002 schema.
+- **RULE: RULE-4B** Do not emit ar-structured-design architecture sections as the artifact schema
+  - **SYNOPSIS:** The prompt may use ar-structured-design guidance for clear rationale, but must not output `finality`, `system_shape.modules`, `MODULE-*`, `supports`, `definition_of_good`, or `test_cases` as substitutes for the PH-002 schema.
   - **BECAUSE:** Those shapes can be readable, but they do not satisfy the actual phase contract used downstream.
 
 ## 4. Workflow

@@ -97,7 +97,7 @@ This section describes the phase steps.
     - **AGENT:** `Generator Agent`
       - **SYNOPSIS:** Embedded generator definition in the PH-000 module.
       - **BECAUSE:** The generator setup is fixed for this phase.
-      - **SKILLS:** `traceability-discipline`
+      - **SKILLS:** `ar-traceability-discipline`
         - **SYNOPSIS:** Enforce exact quotes, source locations, coverage
           mapping, and assumption handling.
         - **BECAUSE:** PH-000 must stay close to the source text.
@@ -109,7 +109,7 @@ This section describes the phase steps.
     - **AGENT:** `Judge Agent`
       - **SYNOPSIS:** Embedded judge definition in the PH-000 module.
       - **BECAUSE:** The judge setup is fixed for this phase.
-      - **SKILLS:** `traceability-discipline`
+      - **SKILLS:** `ar-traceability-discipline`
         - **BECAUSE:** The judge also needs the same quote and source rules.
       - **RULE:** Prompt-local review directives
         - **SYNOPSIS:** The module itself defines the PH-000 review passes,
@@ -125,7 +125,7 @@ This section describes the phase steps.
         - **USES:** `Generator Agent`
           - **BECAUSE:** The prompt pair should use the embedded generator
             definition already declared in the prompt module.
-        - **USES:** `traceability-discipline`
+        - **USES:** `ar-traceability-discipline`
           - **BECAUSE:** The generator needs the traceability discipline
             already defined under the generator agent definition.
         - **USES:** prompt-local PH-000 extraction directives
@@ -148,7 +148,7 @@ This section describes the phase steps.
         - **USES:** `Judge Agent`
           - **BECAUSE:** The prompt pair should use the embedded judge
             definition already declared in the prompt module.
-        - **USES:** `traceability-discipline`
+        - **USES:** `ar-traceability-discipline`
           - **BECAUSE:** The judge needs the traceability discipline already
             defined under the judge agent definition.
         - **USES:** prompt-local PH-000 review directives
@@ -286,7 +286,7 @@ This section lists the tests the phase design expects.
 
 - **TEST CASE: TC-2** Embedded agent definitions
   - **SYNOPSIS:** Confirm the PH-000 module contains both `Generator Agent`
-    and `Judge Agent`, the shared `traceability-discipline` skill, and the
+    and `Judge Agent`, the shared `ar-traceability-discipline` skill, and the
     PH-000-specific prompt-local directives.
   - **BECAUSE:** The module is supposed to be self-contained.
 
