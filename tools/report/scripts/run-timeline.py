@@ -1,4 +1,9 @@
 #!/usr/bin/env python3
+# Copyright (c) 2026 Martin.Bechard@DevConsult.ca
+# AI attribution: Modified with AI assistance.
+# Responsibility: Generate privacy-safe cross-tool and native Codex rollout reports.
+# Design: docs/design/components/CD-001-codex-rollout-metrics.md
+
 """Generate an HTML timeline report for a methodology-runner workspace or
 a prompt-runner run directory (with or without variant forks).
 
@@ -19,10 +24,13 @@ The path can be:
 from __future__ import annotations
 
 import argparse
+import csv
+import hashlib
+import io
 import json
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from copy import deepcopy
@@ -38,6 +46,8 @@ MIN_BAR_PCT = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
 PRICING_RATE_KEYS = ("input_per_million", "cached_input_per_million", "output_per_million")
+CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
+CODEX_ROLLOUT_PARSER_VERSION = "1.0.0"
 
 
 # ---------------------------------------------------------------------------
@@ -193,12 +203,1327 @@ class ComparisonManifest:
 
 @dataclass
 class ReportDocument:
+    """Backend-neutral render input for legacy timelines or one native Codex run."""
+
     run_title: str
     workspace: Path
     timelines: list[PhaseTimeline] = field(default_factory=list)
     shared_steps: list[Step] = field(default_factory=list)
     fork_sections: list[ForkSection] = field(default_factory=list)
     nav_links: list[tuple[str, str]] = field(default_factory=list)
+    codex_run: CodexRunMetrics | None = None
+
+
+@dataclass
+class UsageTotals:
+    """Exclusive token counters with cached and reasoning subset semantics."""
+
+    input_tokens: int = 0
+    cached_input_tokens: int = 0
+    uncached_input_tokens: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    processed_tokens: int = 0
+
+    def __add__(self, other: UsageTotals) -> UsageTotals:
+        """Add disjoint usage accounting units without changing subset semantics."""
+        return UsageTotals(
+            input_tokens=self.input_tokens + other.input_tokens,
+            cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            uncached_input_tokens=self.uncached_input_tokens + other.uncached_input_tokens,
+            output_tokens=self.output_tokens + other.output_tokens,
+            reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
+            processed_tokens=self.processed_tokens + other.processed_tokens,
+        )
+
+    def subtract(self, previous: UsageTotals) -> UsageTotals:
+        """Return an exclusive cumulative delta from an earlier snapshot."""
+        return UsageTotals(
+            input_tokens=self.input_tokens - previous.input_tokens,
+            cached_input_tokens=self.cached_input_tokens - previous.cached_input_tokens,
+            uncached_input_tokens=self.uncached_input_tokens - previous.uncached_input_tokens,
+            output_tokens=self.output_tokens - previous.output_tokens,
+            reasoning_tokens=self.reasoning_tokens - previous.reasoning_tokens,
+            processed_tokens=self.processed_tokens - previous.processed_tokens,
+        )
+
+    def is_monotonic_from(self, previous: UsageTotals) -> bool:
+        """Return whether every cumulative counter is at least its prior value."""
+        return all(
+            current >= earlier
+            for current, earlier in zip(
+                asdict(self).values(),
+                asdict(previous).values(),
+            )
+        )
+
+
+@dataclass
+class ResponseUsage:
+    """One positive exclusive response delta with source provenance."""
+
+    event_timestamp: str
+    usage: UsageTotals
+    turn_id: str | None
+    source_path: str
+    source_ordinal: int
+    derivation_method: str = "cumulative-delta"
+    attribution_confidence: str = "exact"
+
+
+@dataclass
+class AgentTurn:
+    """One task interval and the response usage attributable to it."""
+
+    thread_id: str
+    turn_id: str
+    started_at: str = ""
+    completed_at: str = ""
+    duration_ms: int = 0
+    time_to_first_token_ms: int | None = None
+    outcome: str = "active"
+    usage: UsageTotals = field(default_factory=UsageTotals)
+    run_id: str = ""
+    phase_id: str = ""
+    lane_id: str = ""
+    work_unit_id: str = ""
+    activity: str = ""
+    attribution_confidence: str = "unattributed"
+    attribution_reason: str = "no explicit or reliable work identifier"
+    source_path: str = ""
+    source_ordinal: int = 0
+
+
+@dataclass
+class ToolInterval:
+    """A content-free tool timing record matched by call identifier."""
+
+    thread_id: str
+    turn_id: str | None
+    tool_name: str
+    started_at: str
+    completed_at: str
+    duration_ms: int
+    derivation_method: str
+    attribution_confidence: str
+    source_path: str
+    source_start_ordinal: int
+    source_end_ordinal: int
+
+
+@dataclass
+class CodexThreadMetrics:
+    """Normalized metrics for one native Codex rollout accounting boundary."""
+
+    thread_id: str
+    parent_thread_id: str = ""
+    agent_path: str = ""
+    agent_nickname: str = ""
+    model: str = ""
+    plan_type: str = ""
+    recorded_cost_usd: float | None = None
+    started_at: str = ""
+    last_observed_at: str = ""
+    token_totals: UsageTotals = field(default_factory=UsageTotals)
+    unattributed_usage: UsageTotals = field(default_factory=UsageTotals)
+    responses: list[ResponseUsage] = field(default_factory=list)
+    turns: list[AgentTurn] = field(default_factory=list)
+    tool_intervals: list[ToolInterval] = field(default_factory=list)
+    terminal_state: str = "indeterminate"
+    source_path: str = ""
+    diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass
+class SourceManifestEntry:
+    """Identity and optional immutable digest for one source rollout."""
+
+    thread_id: str
+    path: str
+    size_bytes: int
+    modified_at_ns: int
+    sha256: str = ""
+
+
+@dataclass
+class CostAssessment:
+    """Recorded or estimated monetary status without implying a Codex charge."""
+
+    status: str
+    currency: str = "USD"
+    pricing_model: str = ""
+    pricing_version: str = ""
+    pricing_digest: str = ""
+    input_cost: float | None = None
+    cached_input_cost: float | None = None
+    output_cost: float | None = None
+    total_cost: float | None = None
+    method: str = "unavailable"
+
+
+@dataclass
+class WorkUnitMetrics:
+    """Turn-owned semantic aggregation with explicit attribution confidence."""
+
+    work_unit_id: str
+    phase_id: str
+    lane_id: str
+    activity: str
+    turn_ids: list[str]
+    usage: UsageTotals
+    allocation_method: str
+    attribution_confidence: str
+    cost: CostAssessment
+
+
+@dataclass
+class PhaseLaneMetrics:
+    """A concurrency-aware phase and lane aggregation of owned turns."""
+
+    phase_id: str
+    lane_id: str
+    work_unit_ids: list[str]
+    turn_ids: list[str]
+    wall_started_at: str
+    wall_ended_at: str
+    wall_time_ms: int
+    active_time_ms: int
+    agent_time_ms: int
+    usage: UsageTotals
+    confidence_counts: dict[str, int]
+    cost: CostAssessment
+
+
+@dataclass
+class CodexRunMetrics:
+    """A root rollout and its closed descendant set with auditable aggregates."""
+
+    run_id: str
+    root_thread_id: str
+    state: str
+    observed_at: str
+    wall_started_at: str
+    wall_ended_at: str
+    wall_time_ms: int
+    agent_time_ms: int
+    active_time_ms: int
+    tool_time_ms: int
+    critical_path_ms: int
+    critical_path_method: str
+    peak_concurrency: int
+    usage_totals: UsageTotals
+    threads: list[CodexThreadMetrics]
+    work_units: list[WorkUnitMetrics]
+    phase_lanes: list[PhaseLaneMetrics]
+    cost: CostAssessment
+    source_manifest: list[SourceManifestEntry]
+    diagnostics: list[str]
+    parser_version: str = CODEX_ROLLOUT_PARSER_VERSION
+    format_version: str = CODEX_ROLLOUT_FORMAT
+    pricing_version: str = ""
+    pricing_digest: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Native Codex Desktop rollout parser and aggregation
+# ---------------------------------------------------------------------------
+
+
+def _usage_from_snapshot(snapshot: object) -> UsageTotals | None:
+    if not isinstance(snapshot, dict):
+        return None
+    values: dict[str, int] = {}
+    for key in (
+        "input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_output_tokens",
+    ):
+        raw = snapshot.get(key, 0)
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+            return None
+        values[key] = raw
+    input_tokens = values["input_tokens"]
+    cached_tokens = min(input_tokens, values["cached_input_tokens"])
+    output_tokens = values["output_tokens"]
+    reasoning_tokens = min(output_tokens, values["reasoning_output_tokens"])
+    return UsageTotals(
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_tokens,
+        uncached_input_tokens=input_tokens - cached_tokens,
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning_tokens,
+        processed_tokens=input_tokens + output_tokens,
+    )
+
+
+def _usage_is_zero(usage: UsageTotals) -> bool:
+    return usage.processed_tokens == 0
+
+
+def _usage_nonnegative_difference(current: UsageTotals, previous: UsageTotals) -> UsageTotals:
+    if not current.is_monotonic_from(previous):
+        return UsageTotals()
+    return current.subtract(previous)
+
+
+def _parse_jsonl_append_safe(path: Path) -> tuple[list[tuple[int, dict[str, object]]], list[str]]:
+    records: list[tuple[int, dict[str, object]]] = []
+    diagnostics: list[str] = []
+    try:
+        raw = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as exc:
+        return [], [f"unreadable rollout {path}: {exc}"]
+    lines = raw.splitlines()
+    for ordinal, line in enumerate(lines, start=1):
+        stripped = line.strip()
+        if not stripped:
+            continue
+        try:
+            value = json.loads(stripped)
+        except json.JSONDecodeError:
+            if ordinal == len(lines):
+                diagnostics.append(f"incomplete final JSONL line at {path}:{ordinal}")
+            else:
+                diagnostics.append(f"malformed JSONL record at {path}:{ordinal}")
+            continue
+        if isinstance(value, dict):
+            records.append((ordinal, value))
+        else:
+            diagnostics.append(f"non-object JSONL record at {path}:{ordinal}")
+    return records, diagnostics
+
+
+def _spawn_metadata(payload: dict[str, object]) -> tuple[str, str, str]:
+    source = payload.get("source")
+    if not isinstance(source, dict):
+        return "", "", ""
+    subagent = source.get("subagent")
+    if not isinstance(subagent, dict):
+        return "", "", ""
+    thread_spawn = subagent.get("thread_spawn")
+    if not isinstance(thread_spawn, dict):
+        return "", "", ""
+    return (
+        str(thread_spawn.get("parent_thread_id") or ""),
+        str(thread_spawn.get("agent_path") or ""),
+        str(thread_spawn.get("agent_nickname") or ""),
+    )
+
+
+def _rollout_identity(path: Path) -> tuple[str, str, str, str] | None:
+    records, _ = _parse_jsonl_append_safe(path)
+    for _, record in records:
+        if record.get("type") != "session_meta":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        thread_id = str(payload.get("id") or payload.get("session_id") or "")
+        if not thread_id:
+            continue
+        parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
+        return thread_id, parent_thread_id, agent_path, agent_nickname
+    return None
+
+
+def _metadata_value(payload: dict[str, object], context: dict[str, object], key: str) -> str:
+    value = payload.get(key)
+    if value is None or value == "":
+        value = context.get(key)
+    return str(value) if value is not None else ""
+
+
+def _turn_attribution(
+    payload: dict[str, object],
+    context: dict[str, object],
+    *,
+    agent_path: str,
+    agent_nickname: str,
+) -> tuple[dict[str, str], str, str]:
+    fields = {
+        key: _metadata_value(payload, context, key)
+        for key in ("run_id", "phase_id", "lane_id", "work_unit_id", "activity")
+    }
+    if any(fields.values()):
+        return fields, "exact", "explicit task or turn metadata"
+    inferred = agent_nickname or (agent_path.rsplit("/", 1)[-1] if agent_path else "")
+    if inferred:
+        fields["work_unit_id"] = inferred
+        return fields, "inferred", "spawn-time agent identity"
+    return fields, "unattributed", "no explicit or reliable work identifier"
+
+
+def _extract_tool_wall_time_ms(output: object) -> int | None:
+    value = output
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    if not isinstance(value, dict):
+        return None
+    raw = value.get("wall_time_seconds")
+    if not isinstance(raw, (int, float)) or isinstance(raw, bool) or raw < 0:
+        return None
+    return round(float(raw) * 1000)
+
+
+def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
+    metadata = payload.get("internal_chat_message_metadata_passthrough")
+    if isinstance(metadata, dict) and metadata.get("turn_id"):
+        return str(metadata["turn_id"])
+    if len(active_turns) == 1:
+        return next(iter(active_turns))
+    return None
+
+
+def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
+    """Parse one native Codex Desktop rollout without retaining content fields.
+
+    The returned counters belong only to this thread. Cumulative token events
+    become exclusive response deltas; duplicate snapshots and a partial final
+    JSONL record are tolerated and surfaced through diagnostics.
+    """
+    path = path.resolve()
+    records, diagnostics = _parse_jsonl_append_safe(path)
+    thread_id = ""
+    parent_thread_id = ""
+    agent_path = ""
+    agent_nickname = ""
+    model = ""
+    plan_type = ""
+    timestamps: list[str] = []
+    contexts: dict[str, dict[str, object]] = {}
+    active_turns: dict[str, AgentTurn] = {}
+    turns_by_id: dict[str, AgentTurn] = {}
+    turns: list[AgentTurn] = []
+    responses: list[ResponseUsage] = []
+    tools: list[ToolInterval] = []
+    pending_tools: dict[str, tuple[str, str, str | None, int]] = {}
+    previous_usage = UsageTotals()
+    final_usage = UsageTotals()
+    recorded_cost_usd: float | None = None
+    saw_usage = False
+    unknown_event_counts: dict[str, int] = {}
+
+    for ordinal, record in records:
+        timestamp = str(record.get("timestamp") or "")
+        if timestamp:
+            timestamps.append(timestamp)
+        record_type = str(record.get("type") or "")
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            unknown_event_counts[record_type or "missing-type"] = (
+                unknown_event_counts.get(record_type or "missing-type", 0) + 1
+            )
+            continue
+
+        if record_type == "session_meta":
+            candidate_id = str(payload.get("id") or payload.get("session_id") or "")
+            if candidate_id and not thread_id:
+                thread_id = candidate_id
+                parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
+            elif candidate_id and candidate_id != thread_id:
+                diagnostics.append(
+                    f"replayed session_meta ignored at {path}:{ordinal}: {candidate_id}"
+                )
+            continue
+
+        if record_type == "turn_context":
+            turn_id = str(payload.get("turn_id") or "")
+            if turn_id:
+                contexts[turn_id] = payload
+                existing_turn = turns_by_id.get(turn_id)
+                if existing_turn is not None:
+                    fields, confidence, reason = _turn_attribution(
+                        {},
+                        payload,
+                        agent_path=agent_path,
+                        agent_nickname=agent_nickname,
+                    )
+                    if confidence == "exact":
+                        existing_turn.run_id = fields["run_id"]
+                        existing_turn.phase_id = fields["phase_id"]
+                        existing_turn.lane_id = fields["lane_id"]
+                        existing_turn.work_unit_id = fields["work_unit_id"]
+                        existing_turn.activity = fields["activity"]
+                        existing_turn.attribution_confidence = confidence
+                        existing_turn.attribution_reason = reason
+            if payload.get("model"):
+                model = str(payload["model"])
+            continue
+
+        if record_type == "event_msg":
+            event_type = str(payload.get("type") or "")
+            if event_type == "task_started":
+                turn_id = str(payload.get("turn_id") or f"unmatched-start-{ordinal}")
+                if turn_id in active_turns or turn_id in turns_by_id:
+                    diagnostics.append(f"repeated task_started for {turn_id} at {path}:{ordinal}")
+                    continue
+                context = contexts.get(turn_id, {})
+                fields, confidence, reason = _turn_attribution(
+                    payload,
+                    context,
+                    agent_path=agent_path,
+                    agent_nickname=agent_nickname,
+                )
+                turn = AgentTurn(
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    started_at=str(payload.get("started_at") or timestamp),
+                    run_id=fields["run_id"],
+                    phase_id=fields["phase_id"],
+                    lane_id=fields["lane_id"],
+                    work_unit_id=fields["work_unit_id"],
+                    activity=fields["activity"],
+                    attribution_confidence=confidence,
+                    attribution_reason=reason,
+                    source_path=str(path),
+                    source_ordinal=ordinal,
+                )
+                active_turns[turn_id] = turn
+                turns_by_id[turn_id] = turn
+                turns.append(turn)
+                continue
+
+            if event_type == "token_count":
+                info = payload.get("info")
+                total_snapshot = info.get("total_token_usage") if isinstance(info, dict) else None
+                current_usage = _usage_from_snapshot(total_snapshot)
+                rate_limits = payload.get("rate_limits")
+                if isinstance(rate_limits, dict) and rate_limits.get("plan_type"):
+                    plan_type = str(rate_limits["plan_type"])
+                if current_usage is None:
+                    diagnostics.append(f"invalid token_count at {path}:{ordinal}")
+                    continue
+                direct_cost = info.get("total_cost_usd") if isinstance(info, dict) else None
+                if isinstance(direct_cost, (int, float)) and not isinstance(direct_cost, bool):
+                    recorded_cost_usd = float(direct_cost)
+                if saw_usage and current_usage == previous_usage:
+                    continue
+                if saw_usage and not current_usage.is_monotonic_from(previous_usage):
+                    diagnostics.append(f"cumulative token counter reset at {path}:{ordinal}")
+                    responses.clear()
+                    for turn in turns:
+                        turn.usage = UsageTotals()
+                    previous_usage = UsageTotals()
+                delta = current_usage.subtract(previous_usage)
+                if not _usage_is_zero(delta):
+                    turn_id = next(iter(active_turns)) if len(active_turns) == 1 else None
+                    confidence = "exact" if turn_id else "unattributed"
+                    response = ResponseUsage(
+                        event_timestamp=timestamp,
+                        usage=delta,
+                        turn_id=turn_id,
+                        source_path=str(path),
+                        source_ordinal=ordinal,
+                        attribution_confidence=confidence,
+                    )
+                    responses.append(response)
+                    if turn_id and turn_id in turns_by_id:
+                        turns_by_id[turn_id].usage = turns_by_id[turn_id].usage + delta
+                previous_usage = current_usage
+                final_usage = current_usage
+                saw_usage = True
+                continue
+
+            if event_type in {"task_complete", "turn_aborted"}:
+                turn_id = str(payload.get("turn_id") or "")
+                turn = active_turns.pop(turn_id, None)
+                if turn is None:
+                    if turn_id in turns_by_id:
+                        diagnostics.append(f"replayed terminal event for {turn_id} at {path}:{ordinal}")
+                        continue
+                    fields, confidence, reason = _turn_attribution(
+                        payload,
+                        contexts.get(turn_id, {}),
+                        agent_path=agent_path,
+                        agent_nickname=agent_nickname,
+                    )
+                    turn = AgentTurn(
+                        thread_id=thread_id,
+                        turn_id=turn_id or f"unmatched-terminal-{ordinal}",
+                        run_id=fields["run_id"],
+                        phase_id=fields["phase_id"],
+                        lane_id=fields["lane_id"],
+                        work_unit_id=fields["work_unit_id"],
+                        activity=fields["activity"],
+                        attribution_confidence="bounded" if confidence == "exact" else confidence,
+                        attribution_reason=f"terminal event without start; {reason}",
+                        source_path=str(path),
+                        source_ordinal=ordinal,
+                    )
+                    turns_by_id[turn.turn_id] = turn
+                    turns.append(turn)
+                turn.completed_at = str(payload.get("completed_at") or timestamp)
+                duration = payload.get("duration_ms", 0)
+                turn.duration_ms = int(duration) if isinstance(duration, (int, float)) else 0
+                ttft = payload.get("time_to_first_token_ms")
+                turn.time_to_first_token_ms = int(ttft) if isinstance(ttft, (int, float)) else None
+                turn.outcome = "complete" if event_type == "task_complete" else "aborted"
+                continue
+
+            if event_type not in {"agent_status", "user_message", "rate_limit_event"}:
+                unknown_event_counts[event_type or "missing-event-type"] = (
+                    unknown_event_counts.get(event_type or "missing-event-type", 0) + 1
+                )
+            continue
+
+        if record_type == "inter_agent_communication_metadata":
+            if payload.get("trigger_turn") is True and len(active_turns) > 1:
+                retained = max(active_turns.values(), key=lambda turn: turn.source_ordinal)
+                discarded_ids = set(active_turns) - {retained.turn_id}
+                active_turns = {retained.turn_id: retained}
+                turns = [turn for turn in turns if turn.turn_id not in discarded_ids]
+                for discarded_id in discarded_ids:
+                    turns_by_id.pop(discarded_id, None)
+                responses = [
+                    response for response in responses if response.turn_id not in discarded_ids
+                ]
+                diagnostics.append(
+                    "ignored replayed parent trigger turn(s): "
+                    + ", ".join(sorted(discarded_ids))
+                )
+            continue
+
+        if record_type == "response_item":
+            item_type = str(payload.get("type") or "")
+            if item_type in {"function_call", "custom_tool_call"}:
+                call_id = str(payload.get("call_id") or payload.get("id") or "")
+                if call_id:
+                    tool_name = str(payload.get("name") or payload.get("namespace") or "unknown")
+                    pending_tools[call_id] = (
+                        tool_name,
+                        timestamp,
+                        _event_turn_id(payload, active_turns),
+                        ordinal,
+                    )
+            elif item_type in {"function_call_output", "custom_tool_call_output"}:
+                call_id = str(payload.get("call_id") or "")
+                pending = pending_tools.pop(call_id, None)
+                if pending:
+                    tool_name, started_at, turn_id, start_ordinal = pending
+                    reported_ms = _extract_tool_wall_time_ms(payload.get("output"))
+                    elapsed_ms = _interval_ms(started_at, timestamp)
+                    duration_ms = reported_ms if reported_ms is not None else elapsed_ms
+                    tools.append(
+                        ToolInterval(
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            tool_name=tool_name,
+                            started_at=started_at,
+                            completed_at=timestamp,
+                            duration_ms=max(0, duration_ms),
+                            derivation_method=(
+                                "tool-reported-wall-time"
+                                if reported_ms is not None
+                                else "matched-event-interval"
+                            ),
+                            attribution_confidence="exact" if reported_ms is not None else "bounded",
+                            source_path=str(path),
+                            source_start_ordinal=start_ordinal,
+                            source_end_ordinal=ordinal,
+                        )
+                    )
+            continue
+
+        if record_type != "world_state":
+            unknown_event_counts[record_type or "missing-type"] = (
+                unknown_event_counts.get(record_type or "missing-type", 0) + 1
+            )
+
+    if not thread_id:
+        raise ValueError(f"No usable session_meta identity found in {path}")
+    for turn in active_turns.values():
+        turn.outcome = "active"
+    for key, count in sorted(unknown_event_counts.items()):
+        diagnostics.append(f"unknown event type {key}: {count}")
+    attributed = UsageTotals()
+    for response in responses:
+        attributed = attributed + response.usage
+    unattributed = _usage_nonnegative_difference(final_usage, attributed)
+    if attributed.processed_tokens > final_usage.processed_tokens:
+        diagnostics.append("response deltas exceed final cumulative thread total")
+    if active_turns:
+        terminal_state = "active"
+    elif turns:
+        terminal_state = turns[-1].outcome
+    else:
+        terminal_state = "indeterminate"
+    return CodexThreadMetrics(
+        thread_id=thread_id,
+        parent_thread_id=parent_thread_id,
+        agent_path=agent_path,
+        agent_nickname=agent_nickname,
+        model=model,
+        plan_type=plan_type,
+        recorded_cost_usd=recorded_cost_usd,
+        started_at=min(timestamps) if timestamps else "",
+        last_observed_at=max(timestamps) if timestamps else "",
+        token_totals=final_usage,
+        unattributed_usage=unattributed,
+        responses=responses,
+        turns=turns,
+        tool_intervals=tools,
+        terminal_state=terminal_state,
+        source_path=str(path),
+        diagnostics=diagnostics,
+    )
+
+
+def _interval_ms(started_at: str, completed_at: str) -> int:
+    start = _parse_iso_datetime(started_at)
+    end = _parse_iso_datetime(completed_at)
+    if start is None or end is None:
+        return 0
+    return max(0, round((end - start).total_seconds() * 1000))
+
+
+def _candidate_rollouts(sessions_root: Path) -> list[Path]:
+    if sessions_root.is_file():
+        return [sessions_root.resolve()]
+    if not sessions_root.exists():
+        return []
+    return sorted(path.resolve() for path in sessions_root.rglob("*.jsonl") if path.is_file())
+
+
+def _discover_rollout_paths(
+    root_thread_id: str,
+    candidate_paths: list[Path],
+) -> tuple[list[Path], list[str]]:
+    identities: dict[str, tuple[Path, str]] = {}
+    children: dict[str, list[str]] = {}
+    diagnostics: list[str] = []
+    for path in candidate_paths:
+        identity = _rollout_identity(path)
+        if identity is None:
+            continue
+        thread_id, parent_thread_id, _, _ = identity
+        if thread_id in identities and identities[thread_id][0] != path:
+            raise ValueError(
+                f"Duplicate rollout ownership for thread {thread_id}: "
+                f"{identities[thread_id][0]} and {path}"
+            )
+        identities[thread_id] = (path, parent_thread_id)
+        if parent_thread_id:
+            children.setdefault(parent_thread_id, []).append(thread_id)
+    if root_thread_id not in identities:
+        raise ValueError(f"Codex root thread not found: {root_thread_id}")
+    ordered_ids: list[str] = []
+    queue = [root_thread_id]
+    included: set[str] = set()
+    while queue:
+        thread_id = queue.pop(0)
+        if thread_id in included:
+            raise ValueError(f"Cycle detected in Codex thread hierarchy at {thread_id}")
+        included.add(thread_id)
+        ordered_ids.append(thread_id)
+        queue.extend(sorted(children.get(thread_id, [])))
+    for thread_id in ordered_ids:
+        parent_thread_id = identities[thread_id][1]
+        if thread_id != root_thread_id and parent_thread_id not in included:
+            diagnostics.append(f"missing included parent {parent_thread_id} for {thread_id}")
+    return [identities[thread_id][0] for thread_id in ordered_ids], diagnostics
+
+
+def _pricing_metadata() -> tuple[str, str]:
+    try:
+        raw_bytes = PRICING_FILE.read_bytes()
+        raw = json.loads(raw_bytes)
+    except (OSError, json.JSONDecodeError):
+        return "", ""
+    version = str(raw.get("_updated_at") or "") if isinstance(raw, dict) else ""
+    return version, hashlib.sha256(raw_bytes).hexdigest()
+
+
+def _cost_for_usage(
+    usage: UsageTotals,
+    model_usage: dict[str, UsageTotals],
+    *,
+    plan_types: set[str],
+) -> CostAssessment:
+    pricing_version, pricing_digest = _pricing_metadata()
+    if usage.processed_tokens == 0:
+        return CostAssessment(
+            status="unavailable",
+            pricing_version=pricing_version,
+            pricing_digest=pricing_digest,
+            method="no token usage",
+        )
+    pricing = _load_pricing_table()
+    unsupported = sorted(model for model in model_usage if not pricing.get(_normalize_model_name(model)))
+    if not model_usage or unsupported:
+        status = "subscription-no-charge-data" if plan_types else "unavailable"
+        return CostAssessment(
+            status=status,
+            pricing_model=", ".join(sorted(model_usage)),
+            pricing_version=pricing_version,
+            pricing_digest=pricing_digest,
+            method=(
+                "subscription telemetry has no monetary charge data"
+                if status == "subscription-no-charge-data"
+                else "model pricing unavailable"
+            ),
+        )
+    input_cost = 0.0
+    cached_cost = 0.0
+    output_cost = 0.0
+    for model, model_tokens in model_usage.items():
+        rates = pricing[_normalize_model_name(model)]
+        input_cost += model_tokens.uncached_input_tokens * rates["input_per_million"] / 1_000_000
+        cached_cost += model_tokens.cached_input_tokens * rates["cached_input_per_million"] / 1_000_000
+        output_cost += model_tokens.output_tokens * rates["output_per_million"] / 1_000_000
+    return CostAssessment(
+        status="estimated",
+        pricing_model=", ".join(sorted(model_usage)),
+        pricing_version=pricing_version,
+        pricing_digest=pricing_digest,
+        input_cost=input_cost,
+        cached_input_cost=cached_cost,
+        output_cost=output_cost,
+        total_cost=input_cost + cached_cost + output_cost,
+        method="API-equivalent token-price estimate; not an actual Codex charge",
+    )
+
+
+def _time_metrics(
+    threads: list[CodexThreadMetrics],
+) -> tuple[str, str, int, int, int, int, int]:
+    observed_starts = [
+        value
+        for value in (_parse_iso_datetime(thread.started_at) for thread in threads)
+        if value is not None
+    ]
+    observed_ends = [
+        value
+        for value in (_parse_iso_datetime(thread.last_observed_at) for thread in threads)
+        if value is not None
+    ]
+    wall_start = min(observed_starts) if observed_starts else None
+    wall_end = max(observed_ends) if observed_ends else None
+    wall_ms = (
+        max(0, round((wall_end - wall_start).total_seconds() * 1000))
+        if wall_start and wall_end
+        else 0
+    )
+    intervals: list[tuple[datetime, datetime]] = []
+    agent_time_ms = 0
+    tool_time_ms = 0
+    for thread in threads:
+        agent_time_ms += sum(turn.duration_ms for turn in thread.turns)
+        tool_time_ms += sum(tool.duration_ms for tool in thread.tool_intervals)
+        for turn in thread.turns:
+            start = _parse_iso_datetime(turn.started_at)
+            end = _parse_iso_datetime(turn.completed_at)
+            if start is not None and end is not None and end >= start:
+                intervals.append((start, end))
+    active_time_ms = 0
+    if intervals:
+        merged_start, merged_end = sorted(intervals)[0]
+        for start, end in sorted(intervals)[1:]:
+            if start <= merged_end:
+                merged_end = max(merged_end, end)
+            else:
+                active_time_ms += round((merged_end - merged_start).total_seconds() * 1000)
+                merged_start, merged_end = start, end
+        active_time_ms += round((merged_end - merged_start).total_seconds() * 1000)
+    points: list[tuple[datetime, int]] = []
+    for start, end in intervals:
+        points.append((start, 1))
+        points.append((end, -1))
+    concurrent = 0
+    peak = 0
+    for _, delta in sorted(points, key=lambda item: (item[0], item[1])):
+        concurrent += delta
+        peak = max(peak, concurrent)
+    return (
+        wall_start.isoformat() if wall_start else "",
+        wall_end.isoformat() if wall_end else "",
+        wall_ms,
+        agent_time_ms,
+        active_time_ms,
+        tool_time_ms,
+        peak,
+    )
+
+
+def _aggregate_work_units(
+    threads: list[CodexThreadMetrics],
+) -> list[WorkUnitMetrics]:
+    grouped: dict[str, list[tuple[AgentTurn, CodexThreadMetrics]]] = {}
+    for thread in threads:
+        for turn in thread.turns:
+            work_unit_id = turn.work_unit_id or "unattributed"
+            grouped.setdefault(work_unit_id, []).append((turn, thread))
+    results: list[WorkUnitMetrics] = []
+    confidence_order = {"exact": 0, "bounded": 1, "inferred": 2, "unattributed": 3}
+    for work_unit_id, members in sorted(grouped.items()):
+        usage = UsageTotals()
+        model_usage: dict[str, UsageTotals] = {}
+        plan_types: set[str] = set()
+        for turn, thread in members:
+            usage = usage + turn.usage
+            if thread.model:
+                model_usage[thread.model] = model_usage.get(thread.model, UsageTotals()) + turn.usage
+            if thread.plan_type:
+                plan_types.add(thread.plan_type)
+        worst_confidence = max(
+            (turn.attribution_confidence for turn, _ in members),
+            key=lambda item: confidence_order.get(item, 4),
+        )
+        first = members[0][0]
+        results.append(
+            WorkUnitMetrics(
+                work_unit_id=work_unit_id,
+                phase_id=first.phase_id,
+                lane_id=first.lane_id,
+                activity=first.activity,
+                turn_ids=[turn.turn_id for turn, _ in members],
+                usage=usage,
+                allocation_method=(
+                    "explicit-turn-ownership"
+                    if worst_confidence == "exact"
+                    else "inferred-turn-ownership"
+                    if worst_confidence == "inferred"
+                    else "unattributed"
+                ),
+                attribution_confidence=worst_confidence,
+                cost=_cost_for_usage(usage, model_usage, plan_types=plan_types),
+            )
+        )
+    return results
+
+
+def _aggregate_phase_lanes(
+    threads: list[CodexThreadMetrics],
+) -> list[PhaseLaneMetrics]:
+    grouped: dict[tuple[str, str], list[tuple[AgentTurn, CodexThreadMetrics]]] = {}
+    for thread in threads:
+        for turn in thread.turns:
+            key = (turn.phase_id or "unattributed", turn.lane_id or "unattributed")
+            grouped.setdefault(key, []).append((turn, thread))
+    results: list[PhaseLaneMetrics] = []
+    for (phase_id, lane_id), members in sorted(grouped.items()):
+        usage = UsageTotals()
+        model_usage: dict[str, UsageTotals] = {}
+        plan_types: set[str] = set()
+        intervals: list[tuple[datetime, datetime]] = []
+        confidence_counts: dict[str, int] = {}
+        for turn, thread in members:
+            usage = usage + turn.usage
+            if thread.model:
+                model_usage[thread.model] = model_usage.get(thread.model, UsageTotals()) + turn.usage
+            if thread.plan_type:
+                plan_types.add(thread.plan_type)
+            confidence_counts[turn.attribution_confidence] = (
+                confidence_counts.get(turn.attribution_confidence, 0) + 1
+            )
+            start = _parse_iso_datetime(turn.started_at)
+            end = _parse_iso_datetime(turn.completed_at)
+            if start is not None and end is not None and end >= start:
+                intervals.append((start, end))
+        wall_start = min((start for start, _ in intervals), default=None)
+        wall_end = max((end for _, end in intervals), default=None)
+        wall_time_ms = (
+            round((wall_end - wall_start).total_seconds() * 1000)
+            if wall_start is not None and wall_end is not None
+            else 0
+        )
+        active_time_ms = 0
+        if intervals:
+            merged_start, merged_end = sorted(intervals)[0]
+            for start, end in sorted(intervals)[1:]:
+                if start <= merged_end:
+                    merged_end = max(merged_end, end)
+                else:
+                    active_time_ms += round((merged_end - merged_start).total_seconds() * 1000)
+                    merged_start, merged_end = start, end
+            active_time_ms += round((merged_end - merged_start).total_seconds() * 1000)
+        results.append(
+            PhaseLaneMetrics(
+                phase_id=phase_id,
+                lane_id=lane_id,
+                work_unit_ids=sorted(
+                    {turn.work_unit_id or "unattributed" for turn, _ in members}
+                ),
+                turn_ids=[turn.turn_id for turn, _ in members],
+                wall_started_at=wall_start.isoformat() if wall_start else "",
+                wall_ended_at=wall_end.isoformat() if wall_end else "",
+                wall_time_ms=wall_time_ms,
+                active_time_ms=active_time_ms,
+                agent_time_ms=sum(turn.duration_ms for turn, _ in members),
+                usage=usage,
+                confidence_counts=dict(sorted(confidence_counts.items())),
+                cost=_cost_for_usage(usage, model_usage, plan_types=plan_types),
+            )
+        )
+    return results
+
+
+def _run_cost_assessment(
+    threads: list[CodexThreadMetrics],
+    usage_totals: UsageTotals,
+    model_usage: dict[str, UsageTotals],
+    plan_types: set[str],
+) -> CostAssessment:
+    used_threads = [thread for thread in threads if thread.token_totals.processed_tokens > 0]
+    if used_threads and all(thread.recorded_cost_usd is not None for thread in used_threads):
+        total = sum(thread.recorded_cost_usd or 0.0 for thread in used_threads)
+        return CostAssessment(
+            status="recorded",
+            total_cost=total,
+            method="direct source monetary telemetry",
+        )
+    return _cost_for_usage(usage_totals, model_usage, plan_types=plan_types)
+
+
+def _manifest_entry(thread: CodexThreadMetrics, *, sealed: bool) -> SourceManifestEntry:
+    path = Path(thread.source_path)
+    stat = path.stat()
+    digest = hashlib.sha256(path.read_bytes()).hexdigest() if sealed else ""
+    return SourceManifestEntry(
+        thread_id=thread.thread_id,
+        path=str(path),
+        size_bytes=stat.st_size,
+        modified_at_ns=stat.st_mtime_ns,
+        sha256=digest,
+    )
+
+
+def build_codex_rollout_run(
+    root_thread_id: str,
+    sessions_root: Path,
+    *,
+    seal: bool = False,
+    allow_aborted: bool = False,
+    observed_at: datetime | None = None,
+    candidate_paths: list[Path] | None = None,
+) -> CodexRunMetrics:
+    """Discover, parse, reconcile, and aggregate one native Codex subtree.
+
+    `sessions_root` bounds discovery. Sealing requires a stable candidate set
+    and terminal included threads, then records source and pricing digests.
+    """
+    sessions_root = sessions_root.resolve()
+    candidates = [path.resolve() for path in candidate_paths] if candidate_paths else _candidate_rollouts(sessions_root)
+    if not candidates:
+        raise ValueError(f"No Codex rollout files found under {sessions_root}")
+    initial_files = set(candidates)
+    initial_stats = {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in candidates}
+    included_paths, diagnostics = _discover_rollout_paths(root_thread_id, candidates)
+    threads = [parse_codex_rollout(path) for path in included_paths]
+    if seal:
+        final_candidates = set(candidate_paths or _candidate_rollouts(sessions_root))
+        if final_candidates != initial_files:
+            raise ValueError("Cannot seal while the Codex rollout file set is changing")
+        changed = [
+            path
+            for path in candidates
+            if initial_stats[path] != (path.stat().st_size, path.stat().st_mtime_ns)
+        ]
+        if changed:
+            raise ValueError(f"Cannot seal changing Codex rollout source: {changed[0]}")
+        invalid_states = {
+            thread.terminal_state
+            for thread in threads
+            if thread.terminal_state != "complete"
+            and not (allow_aborted and thread.terminal_state == "aborted")
+        }
+        if invalid_states:
+            states = ", ".join(sorted(invalid_states))
+            raise ValueError(f"Cannot seal active or indeterminate Codex run: {states}")
+    usage_totals = UsageTotals()
+    model_usage: dict[str, UsageTotals] = {}
+    plan_types: set[str] = set()
+    for thread in threads:
+        usage_totals = usage_totals + thread.token_totals
+        if thread.model:
+            model_usage[thread.model] = model_usage.get(thread.model, UsageTotals()) + thread.token_totals
+        if thread.plan_type:
+            plan_types.add(thread.plan_type)
+        diagnostics.extend(f"{thread.thread_id}: {item}" for item in thread.diagnostics)
+    run_states = {thread.terminal_state for thread in threads}
+    if "active" in run_states or "indeterminate" in run_states:
+        state = "live"
+    elif "aborted" in run_states:
+        state = "aborted"
+    else:
+        state = "complete"
+    if seal:
+        state = "sealed"
+    wall_start, wall_end, wall_ms, agent_ms, active_ms, tool_ms, peak = _time_metrics(threads)
+    cost = _run_cost_assessment(threads, usage_totals, model_usage, plan_types)
+    pricing_version, pricing_digest = _pricing_metadata()
+    observed = observed_at or datetime.now(timezone.utc)
+    return CodexRunMetrics(
+        run_id=root_thread_id,
+        root_thread_id=root_thread_id,
+        state=state,
+        observed_at=observed.astimezone(timezone.utc).isoformat(),
+        wall_started_at=wall_start,
+        wall_ended_at=wall_end,
+        wall_time_ms=wall_ms,
+        agent_time_ms=agent_ms,
+        active_time_ms=active_ms,
+        tool_time_ms=tool_ms,
+        critical_path_ms=wall_ms,
+        critical_path_method="inferred-observed-wall-interval",
+        peak_concurrency=peak,
+        usage_totals=usage_totals,
+        threads=threads,
+        work_units=_aggregate_work_units(threads),
+        phase_lanes=_aggregate_phase_lanes(threads),
+        cost=cost,
+        source_manifest=[_manifest_entry(thread, sealed=seal) for thread in threads],
+        diagnostics=sorted(set(diagnostics)),
+        pricing_version=pricing_version,
+        pricing_digest=pricing_digest if seal else "",
+    )
+
+
+def codex_run_to_json(run: CodexRunMetrics) -> str:
+    """Serialize `run` deterministically without transcript content.
+
+    The returned JSON ends with one newline and is suitable as a sealed source
+    manifest when `run.state` is `sealed`.
+    """
+    return json.dumps(asdict(run), indent=2, sort_keys=True, ensure_ascii=False) + "\n"
+
+
+def reprocess_sealed_codex_run(manifest_path: Path) -> CodexRunMetrics:
+    """Validate `manifest_path` and reproduce its normalized metrics.
+
+    Source, parser, or pricing digest drift raises `ValueError`; callers never
+    receive silently revised historical estimates.
+    """
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if data.get("format_version") != CODEX_ROLLOUT_FORMAT or data.get("state") != "sealed":
+        raise ValueError(f"Not a sealed Codex rollout metrics manifest: {manifest_path}")
+    sources = data.get("source_manifest")
+    if not isinstance(sources, list) or not sources:
+        raise ValueError("Sealed Codex manifest has no source files")
+    if data.get("parser_version") != CODEX_ROLLOUT_PARSER_VERSION:
+        raise ValueError(
+            "Sealed Codex parser version is unavailable: "
+            f"{data.get('parser_version')}"
+        )
+    _, current_pricing_digest = _pricing_metadata()
+    if data.get("pricing_digest") != current_pricing_digest:
+        raise ValueError("Sealed Codex pricing registry digest mismatch")
+    paths: list[Path] = []
+    for item in sources:
+        if not isinstance(item, dict) or not item.get("path") or not item.get("sha256"):
+            raise ValueError("Sealed Codex manifest has incomplete source provenance")
+        path = Path(str(item["path"])).resolve()
+        if not path.exists():
+            raise ValueError(f"Sealed Codex source not found: {path}")
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        if digest != item["sha256"]:
+            raise ValueError(f"Sealed Codex source digest mismatch: {path}")
+        paths.append(path)
+    observed_at = _parse_iso_datetime(str(data.get("observed_at") or ""))
+    return build_codex_rollout_run(
+        str(data["root_thread_id"]),
+        paths[0].parent,
+        seal=True,
+        allow_aborted=any(
+            isinstance(thread, dict) and thread.get("terminal_state") == "aborted"
+            for thread in data.get("threads", [])
+        ),
+        observed_at=observed_at,
+        candidate_paths=paths,
+    )
+
+
+def _csv_text(rows: list[list[object]]) -> str:
+    buffer = io.StringIO(newline="")
+    writer = csv.writer(buffer, lineterminator="\n")
+    writer.writerows(rows)
+    return buffer.getvalue()
+
+
+def render_codex_rollout_turn_csv(run: CodexRunMetrics) -> str:
+    """Render content-free turn metrics from `run` as newline-terminated CSV."""
+    rows: list[list[object]] = [[
+        "thread_id", "turn_id", "started_at", "completed_at", "duration_ms",
+        "time_to_first_token_ms", "outcome", "phase_id", "lane_id",
+        "work_unit_id", "activity", "attribution_confidence", "input_tokens",
+        "cached_input_tokens", "uncached_input_tokens", "output_tokens",
+        "reasoning_tokens", "processed_tokens", "source_path", "source_ordinal",
+    ]]
+    for thread in run.threads:
+        for turn in thread.turns:
+            rows.append([
+                thread.thread_id, turn.turn_id, turn.started_at, turn.completed_at,
+                turn.duration_ms, turn.time_to_first_token_ms, turn.outcome,
+                turn.phase_id, turn.lane_id, turn.work_unit_id, turn.activity,
+                turn.attribution_confidence, turn.usage.input_tokens,
+                turn.usage.cached_input_tokens, turn.usage.uncached_input_tokens,
+                turn.usage.output_tokens, turn.usage.reasoning_tokens,
+                turn.usage.processed_tokens, turn.source_path, turn.source_ordinal,
+            ])
+    return _csv_text(rows)
+
+
+def render_codex_rollout_work_unit_csv(run: CodexRunMetrics) -> str:
+    """Render work-unit usage and cost status from `run` as CSV."""
+    rows: list[list[object]] = [[
+        "work_unit_id", "phase_id", "lane_id", "activity", "turn_ids",
+        "allocation_method", "attribution_confidence", "input_tokens",
+        "cached_input_tokens", "uncached_input_tokens", "output_tokens",
+        "reasoning_tokens", "processed_tokens", "cost_status", "estimated_usd",
+    ]]
+    for unit in run.work_units:
+        rows.append([
+            unit.work_unit_id, unit.phase_id, unit.lane_id, unit.activity,
+            " ".join(unit.turn_ids), unit.allocation_method,
+            unit.attribution_confidence, unit.usage.input_tokens,
+            unit.usage.cached_input_tokens, unit.usage.uncached_input_tokens,
+            unit.usage.output_tokens, unit.usage.reasoning_tokens,
+            unit.usage.processed_tokens, unit.cost.status,
+            "" if unit.cost.total_cost is None else f"{unit.cost.total_cost:.8f}",
+        ])
+    return _csv_text(rows)
+
+
+def _format_ms(milliseconds: int) -> str:
+    return _fmt_duration(milliseconds / 1000)
+
+
+def _cost_summary(cost: CostAssessment) -> str:
+    if cost.status == "estimated" and cost.total_cost is not None:
+        return (
+            f"API-equivalent estimate: ${cost.total_cost:.6f} USD "
+            "(not an actual Codex charge)"
+        )
+    if cost.status == "subscription-no-charge-data":
+        return "Subscription usage; no monetary charge telemetry available"
+    if cost.status == "recorded" and cost.total_cost is not None:
+        return f"Recorded cost: ${cost.total_cost:.6f} USD"
+    return "Cost unavailable"
+
+
+def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
+    """Render a compact privacy-safe Markdown summary for `run`."""
+    lines = [
+        "# Codex Rollout Metrics",
+        "",
+        f"- Root thread: `{run.root_thread_id}`",
+        f"- State: `{run.state}`",
+        f"- Observed at: `{run.observed_at}`",
+        f"- Threads: {len(run.threads)}",
+        f"- Processed tokens: {run.usage_totals.processed_tokens:,}",
+        f"- Wall time: {_format_ms(run.wall_time_ms)}",
+        f"- Agent time: {_format_ms(run.agent_time_ms)}",
+        f"- Active interval union: {_format_ms(run.active_time_ms)}",
+        f"- Peak concurrency: {run.peak_concurrency}",
+        f"- Cost: {_cost_summary(run.cost)}",
+        "",
+        "| Thread | Parent | State | Model | Input | Cached | Output | Processed |",
+        "|---|---|---|---|---:|---:|---:|---:|",
+    ]
+    for thread in run.threads:
+        lines.append(
+            f"| {thread.thread_id} | {thread.parent_thread_id or '-'} | "
+            f"{thread.terminal_state} | {thread.model or '-'} | "
+            f"{thread.token_totals.input_tokens} | {thread.token_totals.cached_input_tokens} | "
+            f"{thread.token_totals.output_tokens} | {thread.token_totals.processed_tokens} |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Phase | Lane | Work units | Wall | Active | Agent | Processed |",
+            "|---|---|---|---:|---:|---:|---:|",
+        ]
+    )
+    for phase in run.phase_lanes:
+        lines.append(
+            f"| {phase.phase_id} | {phase.lane_id} | {', '.join(phase.work_unit_ids)} | "
+            f"{_format_ms(phase.wall_time_ms)} | {_format_ms(phase.active_time_ms)} | "
+            f"{_format_ms(phase.agent_time_ms)} | {phase.usage.processed_tokens} |"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def render_codex_rollout_html(run: CodexRunMetrics) -> str:
+    """Render `run` hierarchy and confidence views without source content."""
+    thread_rows = []
+    for thread in run.threads:
+        thread_rows.append(
+            "<tr>"
+            f"<td>{_escape_html(thread.thread_id)}</td>"
+            f"<td>{_escape_html(thread.parent_thread_id or '—')}</td>"
+            f"<td>{_escape_html(thread.agent_path or '—')}</td>"
+            f"<td>{_escape_html(thread.terminal_state)}</td>"
+            f"<td>{_escape_html(thread.model or '—')}</td>"
+            f"<td>{thread.token_totals.input_tokens:,}</td>"
+            f"<td>{thread.token_totals.cached_input_tokens:,}</td>"
+            f"<td>{thread.token_totals.output_tokens:,}</td>"
+            f"<td>{thread.token_totals.reasoning_tokens:,}</td>"
+            f"<td>{thread.token_totals.processed_tokens:,}</td>"
+            "</tr>"
+        )
+    work_rows = []
+    for unit in run.work_units:
+        work_rows.append(
+            "<tr>"
+            f"<td>{_escape_html(unit.work_unit_id)}</td>"
+            f"<td>{_escape_html(unit.phase_id or '—')}</td>"
+            f"<td>{_escape_html(unit.lane_id or '—')}</td>"
+            f"<td>{_escape_html(unit.activity or '—')}</td>"
+            f"<td>{_escape_html(unit.attribution_confidence)}</td>"
+            f"<td>{unit.usage.processed_tokens:,}</td>"
+            f"<td>{_escape_html(_cost_summary(unit.cost))}</td>"
+            "</tr>"
+        )
+    phase_rows = []
+    for phase in run.phase_lanes:
+        phase_rows.append(
+            "<tr>"
+            f"<td>{_escape_html(phase.phase_id)}</td>"
+            f"<td>{_escape_html(phase.lane_id)}</td>"
+            f"<td>{_escape_html(', '.join(phase.work_unit_ids))}</td>"
+            f"<td>{_format_ms(phase.wall_time_ms)}</td>"
+            f"<td>{_format_ms(phase.active_time_ms)}</td>"
+            f"<td>{_format_ms(phase.agent_time_ms)}</td>"
+            f"<td>{phase.usage.processed_tokens:,}</td>"
+            f"<td>{_escape_html(json.dumps(phase.confidence_counts, sort_keys=True))}</td>"
+            "</tr>"
+        )
+    diagnostics = "".join(f"<li>{_escape_html(item)}</li>" for item in run.diagnostics)
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Codex Rollout Metrics</title>
+<style>
+body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; color: #333; }}
+.metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
+.metric {{ background:#f4f6f8; border-radius:6px; padding:12px; }}
+.label {{ color:#666; font-size:.82em; }}
+.value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
+table {{ border-collapse:collapse; width:100%; margin:18px 0; }}
+th,td {{ border-bottom:1px solid #ddd; padding:7px; text-align:left; }}
+th {{ color:#555; font-size:.85em; }}
+.notice {{ background:#fff8dc; border-left:4px solid #d6a700; padding:10px; }}
+</style></head><body>
+<h1>Codex Rollout Metrics</h1>
+<p>Root <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
+<div class="metrics">
+<div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
+<div class="metric"><div class="label">Wall time</div><div class="value">{_format_ms(run.wall_time_ms)}</div></div>
+<div class="metric"><div class="label">Summed agent time</div><div class="value">{_format_ms(run.agent_time_ms)}</div></div>
+<div class="metric"><div class="label">Active interval union</div><div class="value">{_format_ms(run.active_time_ms)}</div></div>
+<div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
+<div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
+</div>
+<p class="notice">{_escape_html(_cost_summary(run.cost))}. Critical path: {_format_ms(run.critical_path_ms)} ({_escape_html(run.critical_path_method)}).</p>
+<h2>Thread hierarchy</h2>
+<table><thead><tr><th>Thread</th><th>Parent</th><th>Agent path</th><th>State</th><th>Model</th><th>Input</th><th>Cached</th><th>Output</th><th>Reasoning</th><th>Processed</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table>
+<h2>Work units and attribution</h2>
+<table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Processed</th><th>Cost status</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table>
+<h2>Phase and lane aggregates</h2>
+<table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table>
+<h2>Diagnostics</h2><ul>{diagnostics or '<li>None</li>'}</ul>
+</body></html>"""
 
 
 # ---------------------------------------------------------------------------
@@ -1619,6 +2944,68 @@ class PromptRunnerRunAdapter(BaseReportAdapter):
         )
 
 
+def _is_native_codex_rollout(path: Path) -> bool:
+    return path.is_file() and _rollout_identity(path) is not None
+
+
+def _sessions_root_for_rollout(path: Path) -> Path:
+    for parent in path.resolve().parents:
+        if parent.name == "sessions":
+            return parent
+    return path.resolve().parent
+
+
+def _is_sealed_codex_manifest(path: Path) -> bool:
+    if not path.is_file() or path.suffix.lower() != ".json":
+        return False
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(data, dict)
+        and data.get("format_version") == CODEX_ROLLOUT_FORMAT
+        and data.get("state") == "sealed"
+    )
+
+
+class SealedCodexRunAdapter(BaseReportAdapter):
+    """Reproduce a native Codex report from an immutable source manifest."""
+
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return _is_sealed_codex_manifest(path)
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        run = reprocess_sealed_codex_run(path)
+        return ReportDocument(
+            run_title="Codex Rollout Metrics",
+            workspace=path,
+            codex_run=run,
+        )
+
+
+class NativeCodexRolloutAdapter(BaseReportAdapter):
+    """Build a native Codex subtree report from a selected rollout path."""
+
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return _is_native_codex_rollout(path)
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        identity = _rollout_identity(path)
+        if identity is None:
+            raise ValueError(f"No Codex thread identity found in {path}")
+        run = build_codex_rollout_run(identity[0], _sessions_root_for_rollout(path))
+        return ReportDocument(
+            run_title="Codex Rollout Metrics",
+            workspace=path,
+            codex_run=run,
+        )
+
+
 class ComparisonManifestAdapter(BaseReportAdapter):
     @staticmethod
     def matches(path: Path) -> bool:
@@ -1638,6 +3025,8 @@ class ComparisonManifestAdapter(BaseReportAdapter):
 
 
 ADAPTERS: list[type[BaseReportAdapter]] = [
+    SealedCodexRunAdapter,
+    NativeCodexRolloutAdapter,
     ComparisonManifestAdapter,
     MethodologyWorkspaceAdapter,
     PromptRunnerRunAdapter,
@@ -2840,6 +4229,9 @@ def _render_fork_section(
 def render_html(
     document: ReportDocument,
 ) -> str:
+    """Render a backend-neutral report document as a complete HTML page."""
+    if document.codex_run is not None:
+        return render_codex_rollout_html(document.codex_run)
     timelines = document.timelines
     workspace = document.workspace
     shared_steps = document.shared_steps
@@ -3100,7 +4492,7 @@ function groupIsOpen(groupId) {{
 function rowGroups(row) {{
   var raw = row.getAttribute('data-groups');
   if (!raw) return [];
-  return raw.split(/\s+/).filter(Boolean);
+  return raw.split(/\\s+/).filter(Boolean);
 }}
 function shouldRowBeVisible(row) {{
   var groups = rowGroups(row);
@@ -3291,19 +4683,125 @@ def _child_output_path(parent_output: Path, slug: str) -> Path:
     suffix = parent_output.suffix or ".html"
     return parent_output.with_name(f"{parent_output.stem}-{slug}{suffix}")
 
-def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(
-        description="Generate timeline report for a methodology-runner workspace, prompt-runner run directory, or comparison manifest."
+
+def _write_codex_outputs(
+    run: CodexRunMetrics,
+    html_output: Path,
+    *,
+    json_output: Path | None = None,
+    turn_csv_output: Path | None = None,
+    work_unit_csv_output: Path | None = None,
+    markdown_output: Path | None = None,
+) -> None:
+    html_output.parent.mkdir(parents=True, exist_ok=True)
+    html_output.write_text(render_codex_rollout_html(run), encoding="utf-8")
+    companions = (
+        (json_output, codex_run_to_json(run)),
+        (turn_csv_output, render_codex_rollout_turn_csv(run)),
+        (work_unit_csv_output, render_codex_rollout_work_unit_csv(run)),
+        (markdown_output, render_codex_rollout_markdown(run)),
     )
-    parser.add_argument("path", help="Path to analyze (workspace or run directory).")
+    for path, content in companions:
+        if path is None:
+            continue
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run the report CLI with optional explicit `argv`.
+
+    Writes caller-selected report artifacts and returns zero on success or one
+    for input, discovery, parsing, and sealing failures. Argument-contract
+    violations are handled by `argparse`.
+    """
+    parser = argparse.ArgumentParser(
+        description=(
+            "Generate timeline reports for methodology-runner, prompt-runner, "
+            "comparison manifests, or native Codex Desktop rollout hierarchies."
+        )
+    )
+    parser.add_argument("path", nargs="?", help="Path to analyze (workspace, run, rollout, or manifest).")
     parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
+    parser.add_argument("--codex-thread", help="Root Codex Desktop thread ID to report.")
+    parser.add_argument(
+        "--sessions-root",
+        help="Bounded Codex sessions root. Defaults to ~/.codex/sessions.",
+    )
+    state_group = parser.add_mutually_exclusive_group()
+    state_group.add_argument("--live", action="store_true", help="Render an append-safe live snapshot.")
+    state_group.add_argument("--seal", action="store_true", help="Seal stable terminal telemetry with digests.")
+    parser.add_argument(
+        "--seal-aborted",
+        action="store_true",
+        help="Allow explicitly aborted threads when sealing.",
+    )
+    parser.add_argument("--json-output", help="Normalized JSON output path.")
+    parser.add_argument("--turn-csv-output", help="Turn-oriented CSV output path.")
+    parser.add_argument("--work-unit-csv-output", help="Work-unit cost CSV output path.")
+    parser.add_argument("--markdown-output", help="Compact Markdown output path.")
     args = parser.parse_args(argv)
 
-    input_path = Path(args.path).resolve()
-    if not input_path.exists():
+    if not args.path and not args.codex_thread:
+        parser.error("provide a path or --codex-thread")
+    if args.path and args.codex_thread:
+        parser.error("path and --codex-thread are mutually exclusive")
+    if args.seal_aborted and not args.seal:
+        parser.error("--seal-aborted requires --seal")
+
+    input_path = Path(args.path).resolve() if args.path else None
+    if input_path is not None and not input_path.exists():
         print(f"Path not found: {input_path}", file=sys.stderr)
         return 1
 
+    native_rollout_path = input_path if input_path and _is_native_codex_rollout(input_path) else None
+    if args.codex_thread or native_rollout_path is not None:
+        if args.codex_thread:
+            root_thread_id = args.codex_thread
+            sessions_root = Path(args.sessions_root).expanduser().resolve() if args.sessions_root else (Path.home() / ".codex" / "sessions")
+        else:
+            identity = _rollout_identity(native_rollout_path)
+            if identity is None:
+                print(f"No Codex thread identity found in {native_rollout_path}", file=sys.stderr)
+                return 1
+            root_thread_id = identity[0]
+            sessions_root = (
+                Path(args.sessions_root).expanduser().resolve()
+                if args.sessions_root
+                else _sessions_root_for_rollout(native_rollout_path)
+            )
+        output = Path(args.output).resolve() if args.output else (Path.cwd() / f"{root_thread_id}-timeline.html")
+        try:
+            run = build_codex_rollout_run(
+                root_thread_id,
+                sessions_root,
+                seal=args.seal,
+                allow_aborted=args.seal_aborted,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        json_output = Path(args.json_output).resolve() if args.json_output else None
+        turn_csv_output = Path(args.turn_csv_output).resolve() if args.turn_csv_output else None
+        work_unit_csv_output = Path(args.work_unit_csv_output).resolve() if args.work_unit_csv_output else None
+        markdown_output = Path(args.markdown_output).resolve() if args.markdown_output else None
+        if args.seal:
+            json_output = json_output or output.with_suffix(".json")
+            turn_csv_output = turn_csv_output or output.with_suffix(".turns.csv")
+            work_unit_csv_output = work_unit_csv_output or output.with_suffix(".work-units.csv")
+            markdown_output = markdown_output or output.with_suffix(".md")
+        _write_codex_outputs(
+            run,
+            output,
+            json_output=json_output,
+            turn_csv_output=turn_csv_output,
+            work_unit_csv_output=work_unit_csv_output,
+            markdown_output=markdown_output,
+        )
+        print(f"Codex rollout report written to {output}")
+        return 0
+
+    assert input_path is not None
     default_output = (
         input_path.with_suffix(".html")
         if input_path.is_file()

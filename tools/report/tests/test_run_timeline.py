@@ -1,3 +1,8 @@
+# Copyright (c) 2026 Martin.Bechard@DevConsult.ca
+# AI attribution: Modified with AI assistance.
+# Responsibility: Verify cross-tool timeline and native Codex rollout reporting.
+# Design: docs/design/components/CD-001-codex-rollout-metrics.md
+
 from __future__ import annotations
 
 import importlib.util
@@ -12,6 +17,7 @@ SPARK_LOG_CACHED_INPUT_TOKENS = 500
 SPARK_LOG_OUTPUT_TOKENS = 200
 ZERO_COST_USD = 0.0
 SPARK_ZERO_RATE_PER_MILLION = 0.0
+CODEX_ROLLOUT_FIXTURES = Path(__file__).resolve().parent / "fixtures" / "codex-rollouts"
 
 
 def _load_module():
@@ -24,6 +30,268 @@ def _load_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_parse_native_codex_rollout_uses_exclusive_cumulative_deltas():
+    module = _load_module()
+
+    thread = module.parse_codex_rollout(CODEX_ROLLOUT_FIXTURES / "root.jsonl")
+
+    assert thread.thread_id == "root-thread"
+    assert thread.terminal_state == "complete"
+    assert len(thread.responses) == 2
+    assert thread.responses[0].usage.input_tokens == 100
+    assert thread.responses[1].usage.input_tokens == 50
+    assert thread.token_totals.input_tokens == 150
+    assert thread.token_totals.cached_input_tokens == 60
+    assert thread.token_totals.uncached_input_tokens == 90
+    assert thread.token_totals.output_tokens == 30
+    assert thread.token_totals.reasoning_tokens == 8
+    assert thread.token_totals.processed_tokens == 180
+    assert thread.unattributed_usage.processed_tokens == 0
+
+
+def test_discover_native_codex_run_aggregates_only_closed_descendant_set():
+    module = _load_module()
+
+    run = module.build_codex_rollout_run(
+        "root-thread",
+        CODEX_ROLLOUT_FIXTURES,
+        observed_at=module._parse_iso_datetime("2026-07-14T00:00:20Z"),
+    )
+
+    assert [thread.thread_id for thread in run.threads] == [
+        "root-thread",
+        "child-thread",
+        "nested-thread",
+    ]
+    assert run.usage_totals.processed_tokens == 800
+    assert run.usage_totals.processed_tokens > run.threads[0].token_totals.processed_tokens
+    assert "sibling-thread" not in {thread.thread_id for thread in run.threads}
+    assert run.wall_time_ms == 18_000
+    assert run.active_time_ms == 12_000
+    assert run.agent_time_ms == 19_000
+    assert run.peak_concurrency == 2
+    child = next(thread for thread in run.threads if thread.thread_id == "child-thread")
+    assert [turn.turn_id for turn in child.turns] == ["child-turn"]
+    assert child.terminal_state == "complete"
+    assert any("replayed session_meta ignored" in item for item in child.diagnostics)
+    assert any("ignored replayed parent trigger" in item for item in child.diagnostics)
+    phases = {(phase.phase_id, phase.lane_id): phase for phase in run.phase_lanes}
+    assert phases[("module-design", "authoring")].usage.processed_tokens == 250
+    assert phases[("module-design", "review")].usage.processed_tokens == 370
+    assert phases[("module-design", "authoring")].active_time_ms == 7_000
+
+
+def test_native_codex_work_units_prefer_explicit_ids_over_agent_path():
+    module = _load_module()
+
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    units = {unit.work_unit_id: unit for unit in run.work_units}
+
+    assert "M-001" in units
+    assert units["M-001"].phase_id == "module-design"
+    assert units["M-001"].attribution_confidence == "exact"
+    assert "module-a" not in units
+
+
+def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
+    module = _load_module()
+
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    outputs = [
+        module.codex_run_to_json(run),
+        module.render_codex_rollout_markdown(run),
+        module.render_codex_rollout_turn_csv(run),
+        module.render_codex_rollout_work_unit_csv(run),
+        module.render_codex_rollout_html(run),
+    ]
+
+    for output in outputs:
+        assert "PRIVATE-PROMPT-CONTENT" not in output
+        assert "PRIVATE-REASONING-CONTENT" not in output
+        assert "PRIVATE-TOOL-PAYLOAD" not in output
+        assert "PRIVATE-FINAL-CONTENT" not in output
+    assert run.cost.status == "estimated"
+    assert "API-equivalent estimate" in outputs[-1]
+    assert "not an actual Codex charge" in outputs[-1]
+
+
+def test_native_codex_live_parser_tolerates_partial_final_line(tmp_path):
+    module = _load_module()
+    source = CODEX_ROLLOUT_FIXTURES / "active-partial.jsonl"
+    target = tmp_path / source.name
+    target.write_bytes(source.read_bytes())
+
+    first = module.build_codex_rollout_run("active-thread", tmp_path)
+
+    assert first.state == "live"
+    assert first.threads[0].terminal_state == "active"
+    assert first.threads[0].token_totals.processed_tokens == 12
+    assert any("incomplete final JSONL line" in item for item in first.diagnostics)
+
+    with target.open("a", encoding="utf-8") as stream:
+        stream.write(
+            '\n{"timestamp":"2026-07-14T01:00:03Z","type":"event_msg",'
+            '"payload":{"type":"task_complete","turn_id":"active-turn",'
+            '"completed_at":"2026-07-14T01:00:03Z","duration_ms":3000,'
+            '"time_to_first_token_ms":250,"last_agent_message":"PRIVATE-FINAL-CONTENT"}}\n'
+        )
+
+    second = module.build_codex_rollout_run("active-thread", tmp_path)
+    assert second.state == "complete"
+    assert second.threads[0].terminal_state == "complete"
+    assert second.usage_totals.processed_tokens == 12
+
+
+def test_sealed_native_codex_run_reproduces_from_source_manifest(tmp_path):
+    module = _load_module()
+    sealed = module.build_codex_rollout_run(
+        "root-thread",
+        CODEX_ROLLOUT_FIXTURES,
+        seal=True,
+        observed_at=module._parse_iso_datetime("2026-07-14T00:00:20Z"),
+    )
+    manifest_path = tmp_path / "sealed.json"
+    manifest_path.write_text(module.codex_run_to_json(sealed), encoding="utf-8")
+
+    reproduced = module.reprocess_sealed_codex_run(manifest_path)
+
+    assert reproduced.state == "sealed"
+    assert module.codex_run_to_json(reproduced) == module.codex_run_to_json(sealed)
+    assert all(source.sha256 for source in reproduced.source_manifest)
+    assert reproduced.pricing_digest
+
+
+def test_native_codex_unsupported_subscription_model_has_no_monetary_estimate(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "unsupported.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T02:00:00Z","type":"session_meta","payload":{"id":"unsupported-thread","source":"user"}}',
+                '{"timestamp":"2026-07-14T02:00:00Z","type":"turn_context","payload":{"model":"internal-subscription-model","turn_id":"u1"}}',
+                '{"timestamp":"2026-07-14T02:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"u1","started_at":"2026-07-14T02:00:00Z"}}',
+                '{"timestamp":"2026-07-14T02:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}},"rate_limits":{"plan_type":"pro","credits":null}}}',
+                '{"timestamp":"2026-07-14T02:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","completed_at":"2026-07-14T02:00:02Z","duration_ms":2000,"time_to_first_token_ms":100}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("unsupported-thread", tmp_path)
+
+    assert run.cost.status == "subscription-no-charge-data"
+    assert run.cost.total_cost is None
+
+
+def test_main_writes_native_codex_machine_outputs_and_sealed_manifest(tmp_path):
+    module = _load_module()
+    html_path = tmp_path / "report.html"
+
+    rc = module.main(
+        [
+            "--codex-thread",
+            "root-thread",
+            "--sessions-root",
+            str(CODEX_ROLLOUT_FIXTURES),
+            "--seal",
+            "--output",
+            str(html_path),
+        ]
+    )
+
+    assert rc == 0
+    assert html_path.exists()
+    assert html_path.with_suffix(".json").exists()
+    assert html_path.with_suffix(".turns.csv").exists()
+    assert html_path.with_suffix(".work-units.csv").exists()
+    assert html_path.with_suffix(".md").exists()
+    assert "API-equivalent estimate" in html_path.read_text(encoding="utf-8")
+
+
+def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "interrupted.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"session_meta","payload":{"id":"interrupted-thread","source":"user"}}',
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"turn_context","payload":{"model":"gpt-5.4-mini","turn_id":"t1"}}',
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t1","started_at":"2026-07-14T03:00:00Z"}}',
+                '{"timestamp":"2026-07-14T03:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"t2","started_at":"2026-07-14T03:00:01Z","work_unit_id":"RECOVERY","activity":"correct"}}',
+                '{"timestamp":"2026-07-14T03:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":5,"output_tokens":4,"reasoning_output_tokens":2,"total_tokens":24}}}}',
+                '{"timestamp":"2026-07-14T03:00:03Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"t1","completed_at":"2026-07-14T03:00:03Z","duration_ms":3000,"reason":"interrupted"}}',
+                '{"timestamp":"2026-07-14T03:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"t2","completed_at":"2026-07-14T03:00:04Z","duration_ms":3000,"time_to_first_token_ms":200}}',
+                '{"timestamp":"2026-07-14T03:00:05Z","type":"event_msg","payload":{"type":"task_started","turn_id":"stale","started_at":"2026-07-14T03:00:05Z"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("interrupted-thread", tmp_path)
+
+    assert run.state == "live"
+    assert run.usage_totals.processed_tokens == 24
+    assert run.threads[0].responses[0].turn_id is None
+    assert [turn.outcome for turn in run.threads[0].turns] == ["aborted", "complete", "active"]
+    assert run.threads[0].unattributed_usage.processed_tokens == 0
+
+
+def test_native_codex_hierarchy_rejects_cycles(tmp_path):
+    module = _load_module()
+    for thread_id, parent_id in (("cycle-a", "cycle-b"), ("cycle-b", "cycle-a")):
+        (tmp_path / f"{thread_id}.jsonl").write_text(
+            json.dumps(
+                {
+                    "timestamp": "2026-07-14T04:00:00Z",
+                    "type": "session_meta",
+                    "payload": {
+                        "id": thread_id,
+                        "source": {
+                            "subagent": {
+                                "thread_spawn": {"parent_thread_id": parent_id}
+                            }
+                        },
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+    try:
+        module.build_codex_rollout_run("cycle-a", tmp_path)
+    except ValueError as exc:
+        assert "Cycle detected" in str(exc)
+    else:
+        raise AssertionError("expected cycle rejection")
+
+
+def test_native_codex_prefers_complete_direct_cost_telemetry(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "recorded.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T05:00:00Z","type":"session_meta","payload":{"id":"recorded-thread","source":"user"}}',
+                '{"timestamp":"2026-07-14T05:00:00Z","type":"turn_context","payload":{"model":"internal-model","turn_id":"r1"}}',
+                '{"timestamp":"2026-07-14T05:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"r1","started_at":"2026-07-14T05:00:00Z"}}',
+                '{"timestamp":"2026-07-14T05:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_cost_usd":0.125,"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}}}}',
+                '{"timestamp":"2026-07-14T05:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"r1","completed_at":"2026-07-14T05:00:02Z","duration_ms":2000,"time_to_first_token_ms":100}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("recorded-thread", tmp_path)
+
+    assert run.cost.status == "recorded"
+    assert run.cost.total_cost == 0.125
+    assert "Recorded cost" in module.render_codex_rollout_html(run)
 
 
 def test_detect_log_backend_codex():

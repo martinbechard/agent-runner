@@ -1,0 +1,9 @@
+{"timestamp":"2026-07-14T00:00:02Z","type":"session_meta","payload":{"id":"child-thread","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root-thread","agent_path":"/root/module-a","agent_nickname":"module-a","depth":1}}}}}
+{"timestamp":"2026-07-14T00:00:02Z","type":"session_meta","payload":{"id":"root-thread","source":"user"}}
+{"timestamp":"2026-07-14T00:00:02Z","type":"event_msg","payload":{"type":"task_started","turn_id":"replayed-parent-turn","started_at":"2026-07-14T00:00:02Z"}}
+{"timestamp":"2026-07-14T00:00:02Z","type":"turn_context","payload":{"model":"gpt-5.4-mini","turn_id":"replayed-parent-turn"}}
+{"timestamp":"2026-07-14T00:00:02Z","type":"event_msg","payload":{"type":"task_started","turn_id":"child-turn","started_at":"2026-07-14T00:00:02Z","run_id":"run-02","phase_id":"module-design","lane_id":"authoring","work_unit_id":"M-001","activity":"author"}}
+{"timestamp":"2026-07-14T00:00:02Z","type":"turn_context","payload":{"model":"gpt-5.4-mini","turn_id":"child-turn","run_id":"run-02","phase_id":"module-design","lane_id":"authoring","work_unit_id":"M-001","activity":"author"}}
+{"timestamp":"2026-07-14T00:00:02Z","type":"inter_agent_communication_metadata","payload":{"trigger_turn":true}}
+{"timestamp":"2026-07-14T00:00:08Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":200,"cached_input_tokens":100,"output_tokens":50,"reasoning_output_tokens":10,"total_tokens":250}},"rate_limits":{"plan_type":"pro","credits":null}}}
+{"timestamp":"2026-07-14T00:00:09Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"child-turn","completed_at":"2026-07-14T00:00:09Z","duration_ms":7000,"time_to_first_token_ms":400}}
