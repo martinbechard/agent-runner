@@ -46,6 +46,19 @@ Use `--seal-aborted` only when an aborted run is intentionally the archival
 boundary. A sealed JSON companion can later be passed as `<path>` to validate
 its source digests and reproduce the normalized report.
 
+Native Codex reports normalize both ISO and Unix-epoch turn timestamps. Spawned
+rollouts replay a cumulative parent prefix; the parser excludes that prefix at
+the first child trigger boundary so descendant totals contain only usage owned
+by the selected hierarchy. Unowned response deltas remain visible in an
+`unattributed` work unit and phase so every aggregate reconciles to the run
+total.
+
+When explicit work-unit metadata is absent, the report uses the final semantic
+segment of the agent path and marks the result as inferred. Phase and lane stay
+`unattributed` when the rollout did not record them. A completed root with one
+or more aborted descendants is reported as `complete-with-aborted-children`,
+distinct from an aborted root.
+
 Cost labels distinguish API-equivalent estimates from actual charges. If a
 Codex subscription model has no supported price, token and time metrics remain
 available while monetary status is reported as unavailable or subscription

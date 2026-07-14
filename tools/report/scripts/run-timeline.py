@@ -47,7 +47,7 @@ REPO_ROOT = Path(__file__).resolve().parents[3]
 PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
 PRICING_RATE_KEYS = ("input_per_million", "cached_input_per_million", "output_per_million")
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.0.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.1.0"
 
 
 # ---------------------------------------------------------------------------
@@ -547,7 +547,7 @@ def _turn_attribution(
     }
     if any(fields.values()):
         return fields, "exact", "explicit task or turn metadata"
-    inferred = agent_nickname or (agent_path.rsplit("/", 1)[-1] if agent_path else "")
+    inferred = (agent_path.rsplit("/", 1)[-1] if agent_path else "") or agent_nickname
     if inferred:
         fields["work_unit_id"] = inferred
         return fields, "inferred", "spawn-time agent identity"
@@ -602,9 +602,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     tools: list[ToolInterval] = []
     pending_tools: dict[str, tuple[str, str, str | None, int]] = {}
     previous_usage = UsageTotals()
-    final_usage = UsageTotals()
     recorded_cost_usd: float | None = None
     saw_usage = False
+    spawn_boundary_seen = False
     unknown_event_counts: dict[str, int] = {}
 
     for ordinal, record in records:
@@ -671,7 +671,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 turn = AgentTurn(
                     thread_id=thread_id,
                     turn_id=turn_id,
-                    started_at=str(payload.get("started_at") or timestamp),
+                    started_at=_normalize_timestamp(payload.get("started_at"), timestamp),
                     run_id=fields["run_id"],
                     phase_id=fields["phase_id"],
                     lane_id=fields["lane_id"],
@@ -704,9 +704,6 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                     continue
                 if saw_usage and not current_usage.is_monotonic_from(previous_usage):
                     diagnostics.append(f"cumulative token counter reset at {path}:{ordinal}")
-                    responses.clear()
-                    for turn in turns:
-                        turn.usage = UsageTotals()
                     previous_usage = UsageTotals()
                 delta = current_usage.subtract(previous_usage)
                 if not _usage_is_zero(delta):
@@ -724,7 +721,6 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                     if turn_id and turn_id in turns_by_id:
                         turns_by_id[turn_id].usage = turns_by_id[turn_id].usage + delta
                 previous_usage = current_usage
-                final_usage = current_usage
                 saw_usage = True
                 continue
 
@@ -756,7 +752,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                     )
                     turns_by_id[turn.turn_id] = turn
                     turns.append(turn)
-                turn.completed_at = str(payload.get("completed_at") or timestamp)
+                turn.completed_at = _normalize_timestamp(payload.get("completed_at"), timestamp)
                 duration = payload.get("duration_ms", 0)
                 turn.duration_ms = int(duration) if isinstance(duration, (int, float)) else 0
                 ttft = payload.get("time_to_first_token_ms")
@@ -771,20 +767,33 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             continue
 
         if record_type == "inter_agent_communication_metadata":
-            if payload.get("trigger_turn") is True and len(active_turns) > 1:
-                retained = max(active_turns.values(), key=lambda turn: turn.source_ordinal)
-                discarded_ids = set(active_turns) - {retained.turn_id}
-                active_turns = {retained.turn_id: retained}
-                turns = [turn for turn in turns if turn.turn_id not in discarded_ids]
-                for discarded_id in discarded_ids:
-                    turns_by_id.pop(discarded_id, None)
-                responses = [
-                    response for response in responses if response.turn_id not in discarded_ids
-                ]
-                diagnostics.append(
-                    "ignored replayed parent trigger turn(s): "
-                    + ", ".join(sorted(discarded_ids))
-                )
+            if (
+                payload.get("trigger_turn") is True
+                and parent_thread_id
+                and not spawn_boundary_seen
+            ):
+                spawn_boundary_seen = True
+                if len(active_turns) > 1:
+                    retained = max(active_turns.values(), key=lambda turn: turn.source_ordinal)
+                    active_turns = {retained.turn_id: retained}
+                replayed_turn_ids = set(turns_by_id) - set(active_turns)
+                if replayed_turn_ids:
+                    diagnostics.append(
+                        "ignored replayed parent trigger turn(s): "
+                        + ", ".join(sorted(replayed_turn_ids))
+                    )
+                turns = list(active_turns.values())
+                turns_by_id = {turn.turn_id: turn for turn in turns}
+                if not _usage_is_zero(previous_usage):
+                    diagnostics.append(
+                        "excluded inherited cumulative token baseline: "
+                        f"{previous_usage.processed_tokens} processed tokens"
+                    )
+                responses.clear()
+                tools.clear()
+                pending_tools.clear()
+                for turn in turns:
+                    turn.usage = UsageTotals()
             continue
 
         if record_type == "response_item":
@@ -839,12 +848,19 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         turn.outcome = "active"
     for key, count in sorted(unknown_event_counts.items()):
         diagnostics.append(f"unknown event type {key}: {count}")
-    attributed = UsageTotals()
+    owned_usage = UsageTotals()
     for response in responses:
-        attributed = attributed + response.usage
-    unattributed = _usage_nonnegative_difference(final_usage, attributed)
-    if attributed.processed_tokens > final_usage.processed_tokens:
-        diagnostics.append("response deltas exceed final cumulative thread total")
+        owned_usage = owned_usage + response.usage
+    turn_usage = UsageTotals()
+    for turn in turns:
+        turn_usage = turn_usage + turn.usage
+    unattributed = _usage_nonnegative_difference(owned_usage, turn_usage)
+    if turn_usage.processed_tokens > owned_usage.processed_tokens:
+        diagnostics.append("turn usage exceeds owned response deltas")
+    if turns and all(not turn.phase_id and not turn.lane_id for turn in turns):
+        diagnostics.append(
+            f"phase and lane metadata unavailable for {len(turns)} owned turn(s)"
+        )
     if active_turns:
         terminal_state = "active"
     elif turns:
@@ -861,7 +877,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         recorded_cost_usd=recorded_cost_usd,
         started_at=min(timestamps) if timestamps else "",
         last_observed_at=max(timestamps) if timestamps else "",
-        token_totals=final_usage,
+        token_totals=owned_usage,
         unattributed_usage=unattributed,
         responses=responses,
         turns=turns,
@@ -1092,6 +1108,53 @@ def _aggregate_work_units(
                 cost=_cost_for_usage(usage, model_usage, plan_types=plan_types),
             )
         )
+    unattributed_usage = UsageTotals()
+    unattributed_model_usage: dict[str, UsageTotals] = {}
+    unattributed_plan_types: set[str] = set()
+    for thread in threads:
+        unattributed_usage = unattributed_usage + thread.unattributed_usage
+        if thread.model:
+            unattributed_model_usage[thread.model] = (
+                unattributed_model_usage.get(thread.model, UsageTotals())
+                + thread.unattributed_usage
+            )
+        if thread.plan_type:
+            unattributed_plan_types.add(thread.plan_type)
+    if not _usage_is_zero(unattributed_usage):
+        existing = next(
+            (unit for unit in results if unit.work_unit_id == "unattributed"),
+            None,
+        )
+        if existing is None:
+            results.append(
+                WorkUnitMetrics(
+                    work_unit_id="unattributed",
+                    phase_id="unattributed",
+                    lane_id="unattributed",
+                    activity="",
+                    turn_ids=[],
+                    usage=unattributed_usage,
+                    allocation_method="unattributed-response-usage",
+                    attribution_confidence="unattributed",
+                    cost=_cost_for_usage(
+                        unattributed_usage,
+                        unattributed_model_usage,
+                        plan_types=unattributed_plan_types,
+                    ),
+                )
+            )
+        else:
+            existing.usage = existing.usage + unattributed_usage
+            existing.phase_id = "unattributed"
+            existing.lane_id = "unattributed"
+            existing.allocation_method = "unattributed-response-usage"
+            existing.attribution_confidence = "unattributed"
+            existing.cost = _cost_for_usage(
+                existing.usage,
+                unattributed_model_usage,
+                plan_types=unattributed_plan_types,
+            )
+    results.sort(key=lambda unit: unit.work_unit_id)
     return results
 
 
@@ -1158,6 +1221,64 @@ def _aggregate_phase_lanes(
                 cost=_cost_for_usage(usage, model_usage, plan_types=plan_types),
             )
         )
+    unattributed_usage = UsageTotals()
+    unattributed_model_usage: dict[str, UsageTotals] = {}
+    unattributed_plan_types: set[str] = set()
+    unattributed_threads = 0
+    for thread in threads:
+        if _usage_is_zero(thread.unattributed_usage):
+            continue
+        unattributed_threads += 1
+        unattributed_usage = unattributed_usage + thread.unattributed_usage
+        if thread.model:
+            unattributed_model_usage[thread.model] = (
+                unattributed_model_usage.get(thread.model, UsageTotals())
+                + thread.unattributed_usage
+            )
+        if thread.plan_type:
+            unattributed_plan_types.add(thread.plan_type)
+    if not _usage_is_zero(unattributed_usage):
+        existing = next(
+            (
+                phase
+                for phase in results
+                if phase.phase_id == "unattributed" and phase.lane_id == "unattributed"
+            ),
+            None,
+        )
+        if existing is None:
+            results.append(
+                PhaseLaneMetrics(
+                    phase_id="unattributed",
+                    lane_id="unattributed",
+                    work_unit_ids=["unattributed"],
+                    turn_ids=[],
+                    wall_started_at="",
+                    wall_ended_at="",
+                    wall_time_ms=0,
+                    active_time_ms=0,
+                    agent_time_ms=0,
+                    usage=unattributed_usage,
+                    confidence_counts={"unattributed": unattributed_threads},
+                    cost=_cost_for_usage(
+                        unattributed_usage,
+                        unattributed_model_usage,
+                        plan_types=unattributed_plan_types,
+                    ),
+                )
+            )
+        else:
+            existing.usage = existing.usage + unattributed_usage
+            existing.work_unit_ids = sorted(set(existing.work_unit_ids) | {"unattributed"})
+            existing.confidence_counts["unattributed"] = (
+                existing.confidence_counts.get("unattributed", 0) + unattributed_threads
+            )
+            existing.cost = _cost_for_usage(
+                existing.usage,
+                unattributed_model_usage,
+                plan_types=unattributed_plan_types,
+            )
+    results.sort(key=lambda phase: (phase.phase_id, phase.lane_id))
     return results
 
 
@@ -1244,10 +1365,15 @@ def build_codex_rollout_run(
             plan_types.add(thread.plan_type)
         diagnostics.extend(f"{thread.thread_id}: {item}" for item in thread.diagnostics)
     run_states = {thread.terminal_state for thread in threads}
+    root_state = next(
+        thread.terminal_state for thread in threads if thread.thread_id == root_thread_id
+    )
     if "active" in run_states or "indeterminate" in run_states:
         state = "live"
-    elif "aborted" in run_states:
+    elif root_state == "aborted":
         state = "aborted"
+    elif "aborted" in run_states:
+        state = "complete-with-aborted-children"
     else:
         state = "complete"
     if seal:
@@ -1931,13 +2057,34 @@ def _mtime(path: Path) -> datetime:
     return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
 
 
-def _parse_iso_datetime(raw: str | None) -> datetime | None:
-    if not raw:
+def _parse_iso_datetime(raw: object) -> datetime | None:
+    if raw is None or raw == "" or isinstance(raw, bool):
         return None
+    if isinstance(raw, (int, float)):
+        value = float(raw)
+        if abs(value) >= 100_000_000_000:
+            value /= 1000
+        try:
+            return datetime.fromtimestamp(value, tz=timezone.utc)
+        except (OverflowError, OSError, ValueError):
+            return None
+    text = str(raw).strip()
+    if re.fullmatch(r"-?\d+(?:\.\d+)?", text):
+        return _parse_iso_datetime(float(text))
     try:
-        return datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
     except ValueError:
         return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
+
+
+def _normalize_timestamp(raw: object, fallback: object = "") -> str:
+    parsed = _parse_iso_datetime(raw)
+    if parsed is None:
+        parsed = _parse_iso_datetime(fallback)
+    if parsed is not None:
+        return parsed.astimezone(timezone.utc).isoformat()
+    return str(raw or fallback or "")
 
 
 def _load_log_metadata(log_path: Path) -> dict[str, object]:

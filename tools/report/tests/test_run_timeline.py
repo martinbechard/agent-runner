@@ -95,6 +95,128 @@ def test_native_codex_work_units_prefer_explicit_ids_over_agent_path():
     assert "module-a" not in units
 
 
+def test_native_codex_numeric_epoch_turn_timestamps_drive_concurrency(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "numeric-timestamps.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T07:29:14Z","type":"session_meta","payload":{"id":"numeric-thread","source":"user"}}',
+                '{"timestamp":"2026-07-14T07:29:14Z","type":"event_msg","payload":{"type":"task_started","turn_id":"numeric-turn","started_at":1784004554}}',
+                '{"timestamp":"2026-07-14T07:29:15Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}}}}',
+                '{"timestamp":"2026-07-14T07:29:16Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"numeric-turn","completed_at":1784004556,"duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("numeric-thread", tmp_path)
+
+    assert run.active_time_ms == 2_000
+    assert run.peak_concurrency == 1
+    assert run.threads[0].turns[0].started_at == "2026-07-14T04:49:14+00:00"
+    assert run.threads[0].turns[0].completed_at == "2026-07-14T04:49:16+00:00"
+
+
+def test_native_codex_spawn_boundary_excludes_inherited_cumulative_usage(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "spawned.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T08:00:00Z","type":"session_meta","payload":{"id":"spawned-thread","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","agent_path":"/root/project_bootstrapper/pass1_frontend_app","agent_nickname":"Tesla"}}}}}',
+                '{"timestamp":"2026-07-14T08:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"parent-turn","started_at":1784006400}}',
+                '{"timestamp":"2026-07-14T08:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":100,"cached_input_tokens":80,"output_tokens":20,"reasoning_output_tokens":5,"total_tokens":120}}}}',
+                '{"timestamp":"2026-07-14T08:00:01Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"parent-turn","completed_at":1784006401,"duration_ms":1000}}',
+                '{"timestamp":"2026-07-14T08:00:02Z","type":"event_msg","payload":{"type":"task_started","turn_id":"child-turn","started_at":1784006402}}',
+                '{"timestamp":"2026-07-14T08:00:02Z","type":"inter_agent_communication_metadata","payload":{"trigger_turn":true}}',
+                '{"timestamp":"2026-07-14T08:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":125,"cached_input_tokens":90,"output_tokens":25,"reasoning_output_tokens":7,"total_tokens":150}}}}',
+                '{"timestamp":"2026-07-14T08:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"child-turn","completed_at":1784006404,"duration_ms":2000}}',
+                '{"timestamp":"2026-07-14T08:00:05Z","type":"event_msg","payload":{"type":"task_started","turn_id":"child-turn-2","started_at":1784006405}}',
+                '{"timestamp":"2026-07-14T08:00:05Z","type":"inter_agent_communication_metadata","payload":{"trigger_turn":true}}',
+                '{"timestamp":"2026-07-14T08:00:06Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":140,"cached_input_tokens":100,"output_tokens":30,"reasoning_output_tokens":8,"total_tokens":170}}}}',
+                '{"timestamp":"2026-07-14T08:00:07Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"child-turn-2","completed_at":1784006407,"duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("spawned-thread", tmp_path)
+    thread = run.threads[0]
+
+    assert thread.token_totals.input_tokens == 40
+    assert thread.token_totals.output_tokens == 10
+    assert thread.token_totals.processed_tokens == 50
+    assert thread.unattributed_usage.processed_tokens == 0
+    assert [turn.turn_id for turn in thread.turns] == ["child-turn", "child-turn-2"]
+    assert run.agent_time_ms == 4_000
+    assert run.active_time_ms == 4_000
+    assert {unit.work_unit_id for unit in run.work_units} == {"pass1_frontend_app"}
+    assert sum(unit.usage.processed_tokens for unit in run.work_units) == 50
+    assert any("excluded inherited cumulative token baseline" in item for item in thread.diagnostics)
+
+
+def test_native_codex_unattributed_usage_reconciles_in_all_aggregates(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "unattributed.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T09:00:00Z","type":"session_meta","payload":{"id":"unattributed-thread","source":"user"}}',
+                '{"timestamp":"2026-07-14T09:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one","started_at":"2026-07-14T09:00:00Z"}}',
+                '{"timestamp":"2026-07-14T09:00:01Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two","started_at":"2026-07-14T09:00:01Z"}}',
+                '{"timestamp":"2026-07-14T09:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":5,"output_tokens":4,"reasoning_output_tokens":2,"total_tokens":24}}}}',
+                '{"timestamp":"2026-07-14T09:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one","completed_at":"2026-07-14T09:00:03Z","duration_ms":3000}}',
+                '{"timestamp":"2026-07-14T09:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"two","completed_at":"2026-07-14T09:00:04Z","duration_ms":3000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("unattributed-thread", tmp_path)
+
+    assert run.usage_totals.processed_tokens == 24
+    assert run.threads[0].unattributed_usage.processed_tokens == 24
+    assert sum(unit.usage.processed_tokens for unit in run.work_units) == 24
+    assert sum(phase.usage.processed_tokens for phase in run.phase_lanes) == 24
+    assert run.work_units[0].work_unit_id == "unattributed"
+
+
+def test_native_codex_completed_root_reports_aborted_children_separately(tmp_path):
+    module = _load_module()
+    root = tmp_path / "root.jsonl"
+    child = tmp_path / "child.jsonl"
+    root.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"session_meta","payload":{"id":"root","source":"user"}}',
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"root-turn","started_at":"2026-07-14T10:00:00Z"}}',
+                '{"timestamp":"2026-07-14T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"root-turn","completed_at":"2026-07-14T10:00:02Z","duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    child.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"session_meta","payload":{"id":"child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root"}}}}}',
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"child-turn","started_at":"2026-07-14T10:00:00Z"}}',
+                '{"timestamp":"2026-07-14T10:00:01Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"child-turn","completed_at":"2026-07-14T10:00:01Z","duration_ms":1000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("root", tmp_path)
+
+    assert run.state == "complete-with-aborted-children"
+
+
 def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
     module = _load_module()
 
@@ -237,7 +359,7 @@ def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_pat
     assert run.usage_totals.processed_tokens == 24
     assert run.threads[0].responses[0].turn_id is None
     assert [turn.outcome for turn in run.threads[0].turns] == ["aborted", "complete", "active"]
-    assert run.threads[0].unattributed_usage.processed_tokens == 0
+    assert run.threads[0].unattributed_usage.processed_tokens == 24
 
 
 def test_native_codex_hierarchy_rejects_cycles(tmp_path):
