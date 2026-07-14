@@ -257,6 +257,38 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "1 call · 500ms" in html
     assert "Cached input is part of input" in html
     assert "Reasoning is part of output" in html
+    root_turn_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
+    assert "<th>Work unit</th>" in root_turn_table
+    assert "<th>Activity</th>" in root_turn_table
+
+
+def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "constant-metadata.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T12:00:00Z","type":"session_meta","payload":{"id":"reviewer-thread","source":{"subagent":{"thread_spawn":{"parent_thread_id":"outside","agent_path":"/root/reviewer","agent_nickname":"Review"}}}}}',
+                '{"timestamp":"2026-07-14T12:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one","started_at":"2026-07-14T12:00:00Z"}}',
+                '{"timestamp":"2026-07-14T12:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":2,"reasoning_output_tokens":1,"total_tokens":12}}}}',
+                '{"timestamp":"2026-07-14T12:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one","completed_at":"2026-07-14T12:00:02Z","duration_ms":2000}}',
+                '{"timestamp":"2026-07-14T12:00:03Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two","started_at":"2026-07-14T12:00:03Z"}}',
+                '{"timestamp":"2026-07-14T12:00:04Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":4,"output_tokens":4,"reasoning_output_tokens":2,"total_tokens":24}}}}',
+                '{"timestamp":"2026-07-14T12:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"two","completed_at":"2026-07-14T12:00:05Z","duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run = module.build_codex_rollout_run("reviewer-thread", tmp_path)
+
+    html = module.render_codex_rollout_html(run)
+    turn_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
+
+    assert "<th>Work unit</th>" not in turn_table
+    assert "<th>Activity</th>" not in turn_table
+    assert "Work unit reviewer for all turns" in html
+    assert "Activity not recorded" in html
 
 
 def test_native_codex_html_identifies_agents_and_runtime_nicknames():

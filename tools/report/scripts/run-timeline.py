@@ -1712,10 +1712,28 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
     thread_details = []
     for thread in run.threads:
         thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
+        work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
+        show_work_unit = len(work_units) > 1
+        show_activity = any(turn.activity for turn in thread.turns)
+        metadata_notes = []
+        if len(work_units) == 1:
+            metadata_notes.append(
+                f"Work unit {_escape_html(next(iter(work_units)))} for all turns"
+            )
+        if thread.turns and not show_activity:
+            metadata_notes.append("Activity not recorded")
         turn_rows = []
         for turn in thread.turns:
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
+            work_unit_cell = (
+                f"<td>{_escape_html(turn.work_unit_id or 'unattributed')}</td>"
+                if show_work_unit
+                else ""
+            )
+            activity_cell = (
+                f"<td>{_escape_html(turn.activity)}</td>" if show_activity else ""
+            )
             turn_rows.append(
                 "<tr>"
                 f"<td><code>{_escape_html(turn.turn_id)}</code></td>"
@@ -1723,8 +1741,8 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
                 f"<td>{_format_detail_ms(turn.time_to_first_token_ms)}</td>"
                 f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
-                f"<td>{_escape_html(turn.work_unit_id or 'unattributed')}</td>"
-                f"<td>{_escape_html(turn.activity or '—')}</td>"
+                f"{work_unit_cell}"
+                f"{activity_cell}"
                 f"<td>{turn.usage.input_tokens:,}</td>"
                 f"<td>{turn.usage.cached_input_tokens:,}</td>"
                 f"<td>{turn.usage.uncached_input_tokens:,}</td>"
@@ -1734,7 +1752,15 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f"<td title=\"{_escape_html(tool_total)}\">{_escape_html(tool_names)}</td>"
                 "</tr>"
             )
-        turn_rows_html = "".join(turn_rows) or '<tr><td colspan="14">No turns recorded</td></tr>'
+        turn_column_count = 12 + int(show_work_unit) + int(show_activity)
+        turn_rows_html = "".join(turn_rows) or (
+            f'<tr><td colspan="{turn_column_count}">No turns recorded</td></tr>'
+        )
+        optional_headers = (
+            ("<th>Work unit</th>" if show_work_unit else "")
+            + ("<th>Activity</th>" if show_activity else "")
+        )
+        metadata_note = " · ".join(metadata_notes)
         agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
         thread_details.append(
             '<details class="thread-detail">'
@@ -1753,11 +1779,12 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             f"parent <code>{_escape_html(thread.parent_thread_id or '—')}</code> · "
             f"model {_escape_html(thread.model or '—')} · "
             f"tools {_escape_html(thread_tools_label)}"
+            f"{' · ' + metadata_note if metadata_note else ''}"
             "</div>"
             "<h3>Turn activity</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             "<th>Turn</th><th>T+</th><th>Duration</th><th>TTFT</th><th>State</th>"
-            "<th>Work unit</th><th>Activity</th><th>Input</th><th>Cached</th>"
+            f"{optional_headers}<th>Input</th><th>Cached</th>"
             "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Tools</th>"
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</details>"
