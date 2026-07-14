@@ -1574,6 +1574,23 @@ def _timeline_style(run: CodexRunMetrics, started_at: str, ended_at: str) -> str
     return f"left:{left:.3f}%;width:{width:.3f}%"
 
 
+def _agent_assignment(thread: CodexThreadMetrics) -> str:
+    if thread.agent_path:
+        return thread.agent_path.rstrip("/").rsplit("/", 1)[-1]
+    return thread.agent_nickname or "root"
+
+
+def _parent_agent_assignment(
+    run: CodexRunMetrics,
+    thread: CodexThreadMetrics,
+) -> str:
+    parent = next(
+        (candidate for candidate in run.threads if candidate.thread_id == thread.parent_thread_id),
+        None,
+    )
+    return _agent_assignment(parent) if parent is not None else "outside selected run"
+
+
 def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     """Render a privacy-safe Markdown summary with execution detail."""
     turn_count = sum(len(thread.turns) for thread in run.threads)
@@ -1602,14 +1619,15 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         f"- Peak concurrency: {run.peak_concurrency}",
         f"- Cost: {_cost_summary(run.cost)}",
         "",
-        "| Thread | Agent / path | State | Turns | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
-        "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "| Assignment | Runtime nickname | Parent assignment | State | Turns | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
+        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for thread in run.threads:
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         lines.append(
-            f"| {thread.thread_id} | {thread.agent_path or thread.agent_nickname or '-'} | "
-            f"{thread.terminal_state} | {len(thread.turns)} | {len(thread.tool_intervals)} | "
+            f"| {_agent_assignment(thread)} | {thread.agent_nickname or '-'} | "
+            f"{_parent_agent_assignment(run, thread)} | {thread.terminal_state} | "
+            f"{len(thread.turns)} | {len(thread.tool_intervals)} | "
             f"{_format_ms(agent_time_ms)} | "
             f"{thread.token_totals.input_tokens} | {thread.token_totals.cached_input_tokens} | "
             f"{thread.token_totals.uncached_input_tokens} | {thread.token_totals.output_tokens} | "
@@ -1673,6 +1691,24 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
     cached_width = run.usage_totals.cached_input_tokens / composition_total * 100
     fresh_width = run.usage_totals.uncached_input_tokens / composition_total * 100
     output_width = run.usage_totals.output_tokens / composition_total * 100
+    agent_rows = []
+    for thread in run.threads:
+        agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
+        run_share = thread.token_totals.processed_tokens / composition_total * 100
+        agent_rows.append(
+            "<tr>"
+            f"<td><strong>{_escape_html(_agent_assignment(thread))}</strong><br><code>{_escape_html(thread.agent_path or '—')}</code></td>"
+            f"<td>{_escape_html(thread.agent_nickname or '—')}</td>"
+            f"<td>{_escape_html(_parent_agent_assignment(run, thread))}</td>"
+            f"<td><span class=\"state state-{_escape_html(thread.terminal_state)}\">{_escape_html(thread.terminal_state)}</span></td>"
+            f"<td>{_escape_html(thread.model or '—')}</td>"
+            f"<td>{len(thread.turns):,}</td>"
+            f"<td>{_format_ms(agent_time_ms)}</td>"
+            f"<td>{len(thread.tool_intervals):,}</td>"
+            f"<td>{thread.token_totals.processed_tokens:,}</td>"
+            f"<td>{run_share:.1f}%</td>"
+            "</tr>"
+        )
     thread_details = []
     for thread in run.threads:
         thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
@@ -1820,6 +1856,7 @@ code {{ font-size:.9em; }}
 <p>Root <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
+<div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
 <div class="metric"><div class="label">Turns / responses</div><div class="value">{turn_count:,} / {response_count:,}</div></div>
 <div class="metric"><div class="label">Matched tool calls</div><div class="value">{tool_count:,}</div></div>
 <div class="metric"><div class="label">Wall time</div><div class="value">{_format_ms(run.wall_time_ms)}</div></div>
@@ -1836,6 +1873,9 @@ code {{ font-size:.9em; }}
 <span class="token-segment output" style="width:{output_width:.3f}%"></span>
 </div>
 <div class="composition-legend">Cached input {run.usage_totals.cached_input_tokens:,} ({cached_share:.1f}% of input) · fresh input {run.usage_totals.uncached_input_tokens:,} · output {run.usage_totals.output_tokens:,} · reasoning {run.usage_totals.reasoning_tokens:,}. Cached input is part of input. Reasoning is part of output.</div>
+<h2>Agents used</h2>
+<p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nickname is Codex's per-thread label, not a reusable custom-agent role; the rollout adapter does not infer a custom-agent definition when telemetry does not declare one.</p>
+<div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Runtime nickname</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2>Execution timeline</h2>
 <p class="execution-note">Bars use the observed run interval. Expand a thread for privacy-safe turn, token, TTFT, and aggregated tool detail.</p>
 {''.join(thread_details)}

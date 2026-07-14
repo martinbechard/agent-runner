@@ -259,6 +259,21 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "Reasoning is part of output" in html
 
 
+def test_native_codex_html_identifies_agents_and_runtime_nicknames():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    html = module.render_codex_rollout_html(run)
+
+    assert "Agents used" in html
+    assert "Assignment" in html
+    assert "Runtime nickname" in html
+    assert "module-a" in html
+    assert "reviewer" in html
+    assert "Agent path is the recorded assignment hierarchy" in html
+    assert "Runtime nickname is Codex's per-thread label" in html
+
+
 def test_native_codex_markdown_includes_turn_and_tool_breakdown():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
@@ -267,7 +282,7 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
 
     assert "- Turns: 4" in markdown
     assert "- Matched tool calls: 1" in markdown
-    assert "| Thread | Agent / path | State | Turns | Tools | Agent time |" in markdown
+    assert "| Assignment | Runtime nickname | Parent assignment | State | Turns | Tools | Agent time |" in markdown
     assert "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |" in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
 

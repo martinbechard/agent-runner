@@ -55,9 +55,10 @@ total.
 
 The native HTML report reuses the methodology timeline's drill-down approach
 without copying transcript content. It includes token composition, observed
-thread bars, expandable per-turn duration and time-to-first-token rows,
+thread bars, an agent inventory derived from recorded assignment paths and
+runtime nicknames, expandable per-turn duration and time-to-first-token rows,
 input/cache/output/reasoning counters, and tool-name/count/duration summaries.
-The Markdown companion includes matching thread and work-unit breakdowns.
+The Markdown companion includes matching agent and work-unit breakdowns.
 
 When explicit work-unit metadata is absent, the report uses the final semantic
 segment of the agent path and marks the result as inferred. Phase and lane stay
