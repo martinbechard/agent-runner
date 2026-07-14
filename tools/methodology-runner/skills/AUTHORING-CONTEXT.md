@@ -105,16 +105,15 @@ STRONG — test with a notification service (not in any skill):
 
 ---
 
-## PH-000 field names: verbatim_quote + source_location
+## Traceability must respect each phase schema
 
 ```
-traceability-discipline uses placeholder names: <source-quote>, <source-ref>
-PH-000 maps these to: verbatim_quote, source_location
-PH-001+ maps these to: source_quote, source_refs
+WRONG — ar-traceability-discipline imposes one generic field vocabulary:
+  Result: phase artifacts gain unsupported fields and fail deterministic validation.
 
-The traceability skill's Transform 1 shows PH-000 fields with inline
-comments mapping to the placeholders. No separate "mapping" section
-needed — the examples teach the mapping.
+RIGHT — the phase schema owns concrete evidence fields:
+  Result: PH-000 can use verbatim extraction fields, later phases can use their
+  defined identifier mappings, and no shared skill invents extra output keys.
 ```
 
 ---
@@ -137,14 +136,16 @@ Without this, assumed specifics silently become confirmed scope.
 ## Division of labor: phase-local prompt rules + shared skills
 
 ```
-WRONG — a phase-local prompt or phase-local skill repeats traceability mechanics:
-  Result: contradictions when traceability-discipline evolves.
+WRONG — a phase-local prompt and ar-traceability-discipline define competing
+traceability schemas:
+  Result: the generator cannot satisfy both contracts.
 
-RIGHT — phase-local prompt text carries one-off phase rules, while shared skills
-own only the cross-prompt discipline:
+RIGHT — phase-local prompt text owns concrete fields and coverage rules, while
+the shared runner skill owns only semantic traceability discipline:
   - PH-000 prompt: document walking, compound splitting, categories,
     section-level omissions, category discrimination
-  - traceability-discipline: Quote Test, coverage_check, phantom detection
+  - ar-traceability-discipline: real reference resolution, supported coverage,
+    qualifier preservation, and unsupported-scope detection
   No overlap. No contradictions.
 ```
 

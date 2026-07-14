@@ -38,12 +38,15 @@ You may choose technology and architecture details that are coherent with the
 feature specification and requirements, but do not invent extra scope.
 
 Keep it as small as the feature set allows.
-The output schema below is authoritative. The structured-design directives are
+The output schema below is authoritative. The ar-structured-design directives are
 only supporting guidance for clear rationale and decomposition; do not emit the
-structured-design architecture shape when it conflicts with this phase schema.
+ar-structured-design architecture shape when it conflicts with this phase schema.
 <Structured design directives>
-{{INCLUDE:skills/structured-design/SKILL.md}}
+{{INCLUDE:skills/ar-structured-design/SKILL.md}}
 </Structured design directives>
+<Traceability directives>
+{{INCLUDE:skills/ar-traceability-discipline/SKILL.md}}
+</Traceability directives>
 
 Requirements:
 
@@ -230,13 +233,16 @@ Focus on material defects only:
   runtime or implementation component
 - structure that does not clearly express the architecture in the required
   PH-002 schema
-- structure that incorrectly emits structured-design item types instead of the
+- structure that incorrectly emits ar-structured-design item types instead of the
   required PH-002 schema
 
 Review rules:
-<Structured review directives>
-{{INCLUDE:skills/structured-review/SKILL.md}}
-</Structured review directives>
+<Structured artifact review directives>
+{{INCLUDE:skills/ar-review-structured-artifact/SKILL.md}}
+</Structured artifact review directives>
+<Traceability directives>
+{{INCLUDE:skills/ar-traceability-discipline/SKILL.md}}
+</Traceability directives>
 
 
 - Accept a simple architecture if it is coherent and sufficient.
@@ -254,7 +260,7 @@ Review rules:
   top-level `components`, `related_artifacts`, `integration_points`, and
   `rationale`.
 - Reject artifacts that use `MODULE-*` entries, `supports` lists, or
-  structured-design sections such as `system_shape`, `finality`,
+  ar-structured-design sections such as `system_shape`, `finality`,
   `definition_of_good`, or `test_cases` as substitutes for `CMP-*`
   components with `features_served`.
 - Reject any component without `expected_expertise`, or any integration point

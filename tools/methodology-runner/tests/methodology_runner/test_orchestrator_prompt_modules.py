@@ -1,6 +1,7 @@
 """Tests for methodology-runner prompt-module execution path."""
 from __future__ import annotations
 
+import hashlib
 import shlex
 import subprocess
 import sys
@@ -76,9 +77,10 @@ def test_phase_prompts_do_not_depend_on_external_agent_assets() -> None:
     package_root = tool_root / "src" / "methodology_runner"
     prompt_dir = package_root / "prompts"
     bundled_skill_paths = [
-        tool_root / "skills" / "structured-design" / "SKILL.md",
-        tool_root / "skills" / "structured-review" / "SKILL.md",
-        tool_root / "skills" / "structured-review" / "references" / "generic-structured-document-checklist.md",
+        tool_root / "skills" / "ar-structured-design" / "SKILL.md",
+        tool_root / "skills" / "ar-review-structured-artifact" / "SKILL.md",
+        tool_root / "skills" / "ar-review-structured-artifact" / "references" / "review-checklist-structured.md",
+        tool_root / "skills" / "ar-traceability-discipline" / "SKILL.md",
     ]
 
     for skill_path in bundled_skill_paths:
@@ -90,8 +92,46 @@ def test_phase_prompts_do_not_depend_on_external_agent_assets() -> None:
     ):
         text = prompt_path.read_text(encoding="utf-8")
         assert "agent-assets/skills" not in text
-        assert "{{INCLUDE:skills/structured-design/SKILL.md}}" in text
-        assert "{{INCLUDE:skills/structured-review/SKILL.md}}" in text
+        assert "{{INCLUDE:skills/ar-structured-design/SKILL.md}}" in text
+        assert "{{INCLUDE:skills/ar-review-structured-artifact/SKILL.md}}" in text
+        assert text.count("{{INCLUDE:skills/ar-traceability-discipline/SKILL.md}}") == 2
+
+
+def test_bundled_authoring_skills_use_current_names() -> None:
+    skills_root = Path(__file__).resolve().parents[2] / "skills"
+
+    assert (skills_root / "generator-creator" / "SKILL.md").exists()
+    assert (skills_root / "judge-creation" / "SKILL.md").exists()
+    assert not (skills_root / "artifact-generator").exists()
+    assert not (skills_root / "structured-review").exists()
+
+
+def test_runner_adapted_skills_use_ar_prefix() -> None:
+    skills_root = Path(__file__).resolve().parents[2] / "skills"
+
+    for skill_name in (
+        "ar-structured-design",
+        "ar-review-structured-artifact",
+        "ar-traceability-discipline",
+    ):
+        text = (skills_root / skill_name / "SKILL.md").read_text(encoding="utf-8")
+        assert f"name: {skill_name}" in text
+
+    assert not (skills_root / "structured-design").exists()
+    assert not (skills_root / "review-structured-artifact").exists()
+    assert not (skills_root / "traceability-discipline").exists()
+
+
+def test_bundled_skill_snapshots_match_declared_sources() -> None:
+    skills_root = Path(__file__).resolve().parents[2] / "skills"
+    expected_digests = {
+        "generator-creator/SKILL.md": "80b07b13a43922c58e4960332a83d1a878c1d3491e2c181cddbce84932078ddc",
+        "judge-creation/SKILL.md": "4525cd4c4a7c4d161ce8aef329100c730a62f67204ae735b0fb90cad657b8f48",
+    }
+
+    for relative_path, expected_digest in expected_digests.items():
+        content = (skills_root / relative_path).read_bytes()
+        assert hashlib.sha256(content).hexdigest() == expected_digest, relative_path
 
 
 def test_ph002_prompt_module_requires_compact_architecture_schema() -> None:
@@ -137,7 +177,7 @@ def test_ph002_prompt_module_requires_compact_architecture_schema() -> None:
     assert "The provider may be internal to the same local or deployable application" in text
     assert 'simulation_target: false' in text
     assert "Do not use `MODULE-*`" in text
-    assert "structured-design sections such as `system_shape`, `finality`" in text
+    assert "ar-structured-design sections such as `system_shape`, `finality`" in text
     assert "as substitutes for `CMP-*`\n  components with `features_served`" in text
     assert "documentation, verification, or test-suite\n  components" in text
     assert "Reject missing `related_artifacts` coverage" in text
@@ -212,8 +252,9 @@ def test_phase_path_mappings_resolve_bundled_skill_root() -> None:
     skills_root = _resolve_bundled_skills_root()
 
     assert path_mappings["skills/"] == str(skills_root)
-    assert (skills_root / "structured-design" / "SKILL.md").exists()
-    assert (skills_root / "structured-review" / "SKILL.md").exists()
+    assert (skills_root / "ar-structured-design" / "SKILL.md").exists()
+    assert (skills_root / "ar-review-structured-artifact" / "SKILL.md").exists()
+    assert (skills_root / "ar-traceability-discipline" / "SKILL.md").exists()
 
 
 def test_invoke_prompt_runner_uses_prompt_module_as_source_and_workspace_as_project(

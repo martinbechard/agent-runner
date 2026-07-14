@@ -4,11 +4,11 @@ It has before/after examples for each lesson. Key patterns:
 - Hybrid structure (procedure + transforms) > either alone
 - Schema shape drives behavior > prose instructions
 - Rules fighting agent defaults need: rule + example + counter-example
-- Quote Test + Invention Traps suppress all phantoms. Always include.
+- Schema-respecting reference checks and invention traps suppress unsupported claims.
 - No flowcharts as primary structure — they create blind spots
 - Test with novel sources, not the skill's own examples
-- Phase skills defer traceability to traceability-discipline
-- Reference traceability-discipline/SKILL.md as format exemplar
+- Phase prompts own traceability fields; ar-traceability-discipline owns semantic grounding
+- Reference ar-traceability-discipline/SKILL.md for runner-specific traceability rules
 - Go as long as quality requires. There is NO line-count limit.
 
 ## MANDATORY: Authoring methodology — do NOT skip this

@@ -35,8 +35,9 @@ This exercises the packaged prompt/runtime path through the checked-in
 
 | # | Skill ID | Role |
 |---|----------|------|
-| 1 | structured-design | Inline prompt directives for architecture and solution-design generation. |
-| 2 | structured-review | Inline prompt directives for structured review and checklist-driven judging. |
+| 1 | ar-structured-design | Agent-runner directives for architecture and solution-design generation. |
+| 2 | ar-review-structured-artifact | Agent-runner directives for evidence-backed structured review and judging. |
+| 3 | ar-traceability-discipline | Agent-runner directives for schema-respecting source coverage and justification. |
 
 ## Local Authoring Material
 
@@ -44,7 +45,8 @@ The root `tools/methodology-runner/skills/` tree still contains methodology
 authoring/reference material such as:
 
 - `judge-creation`
-- `traceability-discipline`
+- `generator-creator`
+- `ar-traceability-discipline`
 - `authoring-prelude.txt`
 - `AUTHORING-CONTEXT.md`
 
@@ -57,14 +59,28 @@ tools/methodology-runner/skills/
   README.md
   AUTHORING-CONTEXT.md
   authoring-prelude.txt
+  generator-creator/SKILL.md
   judge-creation/SKILL.md
-  traceability-discipline/SKILL.md
+  ar-traceability-discipline/SKILL.md
 
 tools/methodology-runner/skills/
-  structured-design/SKILL.md
-  structured-review/SKILL.md
-  structured-review/references/generic-structured-document-checklist.md
+  ar-structured-design/SKILL.md
+  ar-review-structured-artifact/SKILL.md
+  ar-review-structured-artifact/references/review-checklist-structured.md
 ```
+
+## Source Alignment
+
+- `ar-structured-design` and `ar-review-structured-artifact` are adapted from
+  the corresponding `dev-methodology` source skills. The prefix makes their
+  runner-specific output and verdict boundaries distinct from user-scope
+  skills with portable semantics.
+- `generator-creator` and `judge-creation` are synchronized from their current
+  user-scope authoring skills.
+- `ar-traceability-discipline` is methodology-runner-owned because it must obey
+  the runner's phase-specific schemas and deterministic validators.
+- Runtime prompt modules include bundled copies through the `skills/` path
+  mapping. They do not load these resources from a user-scope skill directory.
 
 ## License
 

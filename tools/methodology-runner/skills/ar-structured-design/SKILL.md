@@ -1,5 +1,5 @@
 ---
-name: structured-design
+name: ar-structured-design
 description: |
   Use this skill when you need to write or revise a structured design,
   architecture, prompt-chain document, or plan using explicit item types such
@@ -8,11 +8,21 @@ description: |
   SYNOPSIS for the item's role, BECAUSE to justify the exact parent assertion,
   and CHAIN-OF-THOUGHT only as the bridge from the parent item to that
   BECAUSE. Use embedded IDs on root-level items when review or
-  cross-reference matters. This skill returns markdown text only.
-version: 0.7.0
+  cross-reference matters. In methodology-runner, the phase-specific artifact
+  schema and output format remain authoritative.
+metadata:
+  category: development-practice
 ---
 
 # Structured Design
+
+## Methodology-Runner Boundary
+
+This is the agent-runner adaptation of the portable `structured-design` skill.
+When a phase prompt embeds it, the phase's artifact path, output schema, field
+order, and file format are authoritative. Apply the design and justification
+rules without substituting this skill's generic markdown section model for the
+required phase schema.
 
 Write structured markdown using explicit item types and nested assertion lines.
 
@@ -92,6 +102,8 @@ Component design should answer:
 - what steps it follows
 - what rules it must obey
 - how we know it is good
+
+For process-heavy components, identify meaningful input and output boundaries, transformations, dispatch decisions, failure ownership, and cohesive sub-processes. Split a process when parts change independently or have distinct contracts; do not split only to make the diagram larger.
 
 Component design should assume the architecture is already chosen. It should
 not quietly redesign the system boundary unless the task is explicitly to
@@ -399,7 +411,7 @@ Distinguish:
 - If a skill is specific to exactly one methodology phase, name it with a
   `phNNN-` prefix such as `ph000-requirements-extraction`.
 - If a skill is intended to be shared across phases or artifact types, keep a
-  generic name such as `traceability-discipline`.
+  runner-specific name such as `ar-traceability-discipline`.
 
 ## Recommended Section Order
 

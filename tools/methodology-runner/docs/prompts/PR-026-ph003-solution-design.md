@@ -40,8 +40,11 @@ Context:
 Module-local generator context:
 Embedded directives for this step:
 <Structured design directives>
-{{INCLUDE:skills/structured-design/SKILL.md}}
+{{INCLUDE:skills/ar-structured-design/SKILL.md}}
 </Structured design directives>
+<Traceability directives>
+{{INCLUDE:skills/ar-traceability-discipline/SKILL.md}}
+</Traceability directives>
 
 
 - Preserve the phase-2 architecture component boundaries. Do not invent, split,
@@ -256,9 +259,12 @@ Value and fidelity standard:
 
 Module-local judge context:
 Embedded directives for this step:
-<Structured review directives>
-{{INCLUDE:skills/structured-review/SKILL.md}}
-</Structured review directives>
+<Structured artifact review directives>
+{{INCLUDE:skills/ar-review-structured-artifact/SKILL.md}}
+</Structured artifact review directives>
+<Traceability directives>
+{{INCLUDE:skills/ar-traceability-discipline/SKILL.md}}
+</Traceability directives>
 
 
 - Review for responsibility overlap, weak or missing feature realization,
