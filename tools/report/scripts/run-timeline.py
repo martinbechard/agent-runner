@@ -2962,7 +2962,7 @@ def render_codex_rollout_html(
                 '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
-                f'<div class="metric"><div class="label">T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
+                f'<div class="metric"><div class="label">Start T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
                 f'<div class="metric"><div class="label">Duration</div><div class="value">{_format_detail_ms(turn.duration_ms)}</div></div>'
                 f'{ttft_metric}'
                 f'<div class="metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div></div>'

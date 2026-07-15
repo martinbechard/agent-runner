@@ -1015,6 +1015,8 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     )[0]
     assert 'href="#execution-timeline">close</a>' in root_turn_overlay
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
+    assert '<div class="label">Start T+</div>' in root_turn_overlay
+    assert '<div class="label">T+</div>' not in root_turn_overlay
     assert "Time to first token" in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
     assert "Arguments are compact, secret-redacted summaries" not in root_turn_overlay
