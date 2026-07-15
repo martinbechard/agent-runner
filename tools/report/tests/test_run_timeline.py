@@ -351,6 +351,8 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert "Time to first token" in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
+    assert "Arguments are compact, secret-redacted summaries" not in root_turn_overlay
+    assert '<p class="execution-note">' not in root_turn_overlay
     tool_table = root_turn_overlay.split('<div class="table-scroll">', 1)[1].split(
         "</table>", 1
     )[0]

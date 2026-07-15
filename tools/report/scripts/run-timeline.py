@@ -1964,13 +1964,6 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_escape_html(thread.model or "—")}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 "</div>"
-                '<p class="execution-note">'
-                f"Work unit {_escape_html(turn.work_unit_id or 'unattributed')} · "
-                f"Activity {_escape_html(turn.activity or 'not recorded')} · "
-                "T+ is measured from run start. Arguments are compact, secret-redacted summaries; "
-                "results remain excluded. A timing note appears only when timing is not the normal "
-                "matched-event bound."
-                "</p>"
                 '<div class="table-scroll"><table><thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
