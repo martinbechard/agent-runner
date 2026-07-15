@@ -463,6 +463,13 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "Turns / responses" not in html
     agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
     assert "<td>python</td><td>reviewer</td>" in agent_table
+    task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
+    assert "<th>TTFT</th>" not in task_span_table
+    assert "<th>Cache read</th><th>Cache write</th><th>Fresh</th>" in task_span_table
+    assert (
+        "<td>17</td><td>5</td><td>2</td><td>10</td>"
+        "<td>3</td><td>0</td><td>20</td>" in task_span_table
+    )
     assert "<th>Task spans</th>" in html
     assert "task span task-1" in html
     assert "Write 2 files" in html
@@ -488,6 +495,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     main_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
+    assert "Time to first token" not in main_overlay
     main_tool_table = main_overlay.split('<div class="table-scroll">', 1)[1]
     assert "<td>$0.01</td>" in main_tool_table
     assert (
