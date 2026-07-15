@@ -115,6 +115,16 @@
   avoid dates, owner names, and status words in the filename.
 - **Example:** `modularize-report-tool-for-concurrent-maintenance.md`
 
+### docs/holding/
+- **Purpose:** Visible work packages and handoff proposals that are real but
+  must not be dispatched as implementation work in this repository.
+- **Signals:** external-owner handoff, cross-repository enhancement proposal,
+  deferred work awaiting intake, scoped proposal retained for review.
+- **Filename pattern:** `<stable-work-slug>.md` in lowercase kebab-case;
+  related sets may be kept in one self-contained handoff document when the
+  receiving owner will perform the final backlog split.
+- **Example:** `claim-skill-enhancement-set.md`
+
 ### docs/design/high-level/
 - **Purpose:** System-wide decomposition — the components that make up the system and how they interact.
 - **Signals:** component diagram, sequence diagram, "the CLI talks to the server via", system overview, end-to-end data flow, three-tier description.
@@ -441,6 +451,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-07-15 — docs/holding/ added — cross-repository proposals need a visible handoff location that the local backlog runner will not dispatch.
 - 2026-07-15 — docs/feature-backlog/ added — active project enhancements need a dispatchable queue separate from requirements, designs, and implementation plans.
 - 2026-04-24 — tools/backlog-runner/ added — backlog-runner is a sibling tool for backlog queue supervision and needs its own package, design, source, and test paths.
 - 2026-04-20 — docs/strategies/ added — durable operating guidance such as file-promotion and artifact-retention models needs a canonical home separate from one-off reviews and staged plans.
