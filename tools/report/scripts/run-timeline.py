@@ -2996,12 +2996,16 @@ def render_codex_rollout_html(
                 '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
+                '<div class="metric turn-detail-tools-metric">'
+                '<div class="label">Tools used</div>'
+                f'<div class="value">{_escape_html(tool_names)}</div>'
+                f'<span class="metric-detail">{_escape_html(tool_total)}</span>'
+                "</div>"
                 f'<div class="metric"><div class="label">Start T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
                 f'<div class="metric"><div class="label">Duration</div><div class="value">{_format_detail_ms(turn.duration_ms)}</div></div>'
                 f'{ttft_metric}'
                 f'<div class="metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div></div>'
                 f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
-                f'<div class="metric"><div class="label">Tool calls</div><div class="value">{len(tools):,}</div></div>'
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_render_turn_model_metric(thread, turn.turn_id)}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 "</div>"
@@ -3057,12 +3061,11 @@ def render_codex_rollout_html(
                 f"<td>{turn.usage.direct_input_tokens:,}</td>"
                 f"<td>{turn.usage.output_tokens:,}</td>"
                 f"<td>{turn.usage.reasoning_tokens:,}</td>"
-                f"<td title=\"{_escape_html(tool_total)}\">{_escape_html(tool_names)}</td>"
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 f"{timeline_cell}"
                 "</tr>"
             )
-        turn_column_count = 13 + int(show_work_unit) + int(show_activity)
+        turn_column_count = 12 + int(show_work_unit) + int(show_activity)
         turn_rows_html = "".join(turn_rows) or (
             f'<tr><td colspan="{turn_column_count}">No {turn_plural} recorded</td></tr>'
         )
@@ -3112,7 +3115,7 @@ def render_codex_rollout_html(
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th>"
             f"{optional_headers}<th>Input</th><th>Cache read</th><th>Cache write</th>"
-            '<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Tools</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
+            '<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</details>"
         )
@@ -3172,6 +3175,8 @@ h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
+.turn-detail-tools-metric {{ grid-column:1 / -1; }}
+.turn-detail-tools-metric .value {{ font-size:1em; white-space:normal; overflow-wrap:anywhere; }}
 .label {{ color:#666; font-size:.82em; }}
 .value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
 .metric-detail {{ display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }}

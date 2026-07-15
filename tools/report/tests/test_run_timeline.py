@@ -478,6 +478,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "<th>TTFT</th>" not in task_span_table
     assert "<th>Cache read</th><th>Cache write</th><th>Fresh</th>" in task_span_table
     assert "<th>Processed</th>" not in task_span_table
+    assert "<th>Tools</th>" not in task_span_table
+    assert "<th>Reasoning</th><th>Cost est.</th>" in task_span_table
     assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in task_span_table
     assert "recorded" not in task_span_table.lower()
     assert task_span_table.count('class="timeline-bar turn-timeline-bar"') == 1
@@ -981,6 +983,8 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "<th>TTFT</th>" not in root_turn_table
     assert "<td>500ms</td>" not in root_turn_table
     assert "<th>Processed</th>" not in root_turn_table
+    assert "<th>Tools</th>" not in root_turn_table
+    assert "<th>Reasoning</th><th>Cost est.</th>" in root_turn_table
     assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in root_turn_table
     assert (
         'class="timeline-bar turn-timeline-bar" '
@@ -1039,6 +1043,11 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert '<div class="label">Start T+</div>' in root_turn_overlay
     assert '<div class="label">T+</div>' not in root_turn_overlay
+    assert '<div class="metric turn-detail-tools-metric">' in root_turn_overlay
+    assert '<div class="label">Tools used</div><div class="value">exec × 1</div>' in root_turn_overlay
+    assert '<span class="metric-detail">1 call · 500ms</span>' in root_turn_overlay
+    assert '<div class="label">Tool calls</div>' not in root_turn_overlay
+    assert ".turn-detail-tools-metric { grid-column:1 / -1; }" in html
     assert "Time to first token" in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
     assert "Arguments are compact, secret-redacted summaries" not in root_turn_overlay
