@@ -1760,8 +1760,9 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             "</tr>"
         )
     thread_details = []
-    turn_tool_rows = []
-    for thread in run.threads:
+    tool_call_overlays = []
+    for thread_index, thread in enumerate(run.threads, start=1):
+        tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
         thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
         show_work_unit = len(work_units) > 1
@@ -1774,6 +1775,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         if thread.turns and not show_activity:
             metadata_notes.append("Activity not recorded")
         turn_rows = []
+        thread_tool_rows = []
         for turn in thread.turns:
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
@@ -1791,9 +1793,8 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 if tools
                 else '<span class="muted">No matched calls</span>'
             )
-            turn_tool_rows.append(
+            thread_tool_rows.append(
                 '<tr class="turn-tool-row">'
-                f"<td>{_escape_html(_agent_assignment(thread))}</td>"
                 f"<td><code>{_escape_html(turn.turn_id)}</code></td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
@@ -1838,6 +1839,23 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         )
         metadata_note = " · ".join(metadata_notes)
         agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
+        agent_assignment = _agent_assignment(thread)
+        thread_tool_rows_html = "".join(thread_tool_rows) or (
+            '<tr><td colspan="6">No turns recorded</td></tr>'
+        )
+        tool_call_overlays.append(
+            f'<section id="{tool_call_overlay_id}" class="tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="{tool_call_overlay_id}-title">'
+            '<div class="tool-call-panel">'
+            '<div class="tool-call-header">'
+            f'<h2 id="{tool_call_overlay_id}-title">{_escape_html(agent_assignment)} — turns and tool calls</h2>'
+            '<a class="tool-call-close" href="#execution-timeline">close</a>'
+            "</div>"
+            '<p class="execution-note">Individual calls include only the recorded tool name, duration, and attribution confidence. Arguments and results are intentionally excluded.</p>'
+            '<div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tool calls (name · duration · confidence)</th></tr></thead>'
+            f"<tbody>{thread_tool_rows_html}</tbody></table></div>"
+            "</div>"
+            "</section>"
+        )
         thread_details.append(
             '<details class="thread-detail">'
             "<summary>"
@@ -1856,6 +1874,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             f"model {_escape_html(thread.model or '—')} · "
             f"tools {_escape_html(thread_tools_label)}"
             f"{' · ' + metadata_note if metadata_note else ''}"
+            f' · <a class="drilldown-link" href="#{tool_call_overlay_id}">View turns and tool calls</a>'
             "</div>"
             "<h3>Turn activity</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
@@ -2015,7 +2034,7 @@ code {{ font-size:.9em; }}
 <p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nickname is Codex's per-thread label, not a reusable custom-agent role; the rollout adapter does not infer a custom-agent definition when telemetry does not declare one.</p>
 <div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Runtime nickname</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
-<p class="execution-note">Bars use the observed run interval. Expand a thread for privacy-safe turn, token, TTFT, and aggregated tool detail. <a class="drilldown-link" href="#turn-tool-call-list">View all turns and tool calls</a>.</p>
+<p class="execution-note">Bars use the observed run interval. Expand an agent for privacy-safe turn, token, TTFT, aggregated tool detail, and its individual tool-call drilldown.</p>
 {''.join(thread_details)}
 <h2>Work units and attribution</h2>
 <div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
@@ -2028,13 +2047,7 @@ code {{ font-size:.9em; }}
 <div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Codex credits / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
 </div>
 </section>
-<section id="turn-tool-call-list" class="tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="turn-tool-call-title">
-<div class="tool-call-panel">
-<div class="tool-call-header"><h2 id="turn-tool-call-title">All turns and tool calls</h2><a class="tool-call-close" href="#execution-timeline">close</a></div>
-<p class="execution-note">Individual calls include only the recorded tool name, duration, and attribution confidence. Arguments and results are intentionally excluded.</p>
-<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tool calls (name · duration · confidence)</th></tr></thead><tbody>{''.join(turn_tool_rows) or '<tr><td colspan="7">No turns recorded</td></tr>'}</tbody></table></div>
-</div>
-</section>
+{''.join(tool_call_overlays)}
 <h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
 </body></html>"""
 
