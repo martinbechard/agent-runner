@@ -1168,12 +1168,17 @@ def test_native_codex_cost_display_is_compact_and_rounded():
         status="estimated",
         total_cost=1.330343,
     )
+    recorded_cost = module.CostAssessment(
+        status="recorded",
+        total_cost=1.330343,
+    )
 
     assert module._cost_summary(cost) == (
         "API-equivalent estimate: $1.33 USD "
         "(estimate, not an actual Codex charge or invoice)"
     )
     assert module._compact_cost_summary(cost) == "$1.33"
+    assert module._compact_cost_summary(recorded_cost) == "$1.33"
 
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     html = module.render_codex_rollout_html(run)

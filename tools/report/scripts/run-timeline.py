@@ -2436,7 +2436,7 @@ def _compact_cost_summary(cost: CostAssessment) -> str:
     if cost.status == "estimated" and cost.total_cost is not None:
         return f"${cost.total_cost:.2f}"
     if cost.status == "recorded" and cost.total_cost is not None:
-        return f"${cost.total_cost:.2f} recorded"
+        return f"${cost.total_cost:.2f}"
     if cost.status == "subscription-no-charge-data":
         return "subscription"
     return "—"
