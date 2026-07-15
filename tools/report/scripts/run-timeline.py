@@ -2749,22 +2749,6 @@ def _agent_inventory_threads(
     return ordered
 
 
-def _direct_subagent_assignments(
-    run: CodexRunMetrics,
-    thread: CodexThreadMetrics,
-) -> list[str]:
-    """Return the recorded direct child assignments inside the selected run."""
-
-    return sorted(
-        {
-            _agent_assignment(candidate)
-            for candidate in run.threads
-            if candidate.parent_thread_id == thread.thread_id
-        },
-        key=str.casefold,
-    )
-
-
 def _inventory_text(values: list[str]) -> str:
     """Render compact agent-inventory values without implying missing evidence."""
 
@@ -2833,8 +2817,8 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     lines.extend(
         [
             "",
-            f"| Assignment | Skills used | Subagents invoked | {turn_column_label} | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
-            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            f"| Assignment | Skills used | {turn_column_label} | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
+            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for thread, depth in _agent_inventory_threads(run):
@@ -2842,7 +2826,6 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         assignment_label = f'{"↳ " * depth}{_agent_assignment_label(thread)}'
         lines.append(
             f"| {assignment_label} | {_inventory_text(thread.skills_used)} | "
-            f"{_inventory_text(_direct_subagent_assignments(run, thread))} | "
             f"{len(thread.turns)} | {len(thread.tool_intervals)} | "
             f"{_format_ms(agent_time_ms)} | "
             f"{thread.token_totals.input_tokens} | {thread.token_totals.cached_input_tokens} | "
@@ -2905,15 +2888,19 @@ def render_codex_rollout_html(
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         run_share = thread.token_totals.processed_tokens / composition_total * 100
         skills_used = _inventory_text(thread.skills_used)
-        subagents_invoked = _inventory_text(_direct_subagent_assignments(run, thread))
+        hierarchy_label = (
+            "Top-level assignment."
+            if agent_depth == 0
+            else f"Nested assignment, depth {agent_depth}."
+        )
         agent_rows.append(
             "<tr>"
-            '<td class="agent-assignment-cell">'
-            f'<div class="agent-assignment" data-depth="{agent_depth}" style="--agent-depth:{agent_depth}">'
+            f'<td class="agent-assignment-cell" data-depth="{agent_depth}" style="--agent-depth:{agent_depth}">'
+            f'<span class="visually-hidden">{hierarchy_label}</span>'
+            '<div class="agent-assignment">'
             f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
             f"<br><code>{_escape_html(thread.agent_path or '—')}</code></div></td>"
             f'<td class="agent-skills-cell">{_escape_html(skills_used)}</td>'
-            f'<td class="agent-subagents-cell">{_escape_html(subagents_invoked)}</td>'
             f"<td>{_escape_html(thread.model or '—')}</td>"
             f"<td>{len(thread.turns):,}</td>"
             f"<td>{_format_ms(agent_time_ms)}</td>"
@@ -3207,13 +3194,13 @@ def render_codex_rollout_html(
                 '<col class="turn-detail-offset-column">'
                 '<col class="turn-detail-cost-column">'
                 '<col class="turn-detail-model-column">'
-                '<col class="turn-detail-tool-column">'
+                '<col class="turn-detail-activity-column">'
                 '<col class="turn-detail-arguments-column">'
                 '<col class="turn-detail-result-column">'
                 f"{timing_note_column}</colgroup>"
                 '<thead><tr><th>#</th><th>T+</th>'
                 '<th title="Cost of the model response on this row; tool execution has no separately recorded model cost">Cost</th>'
-                '<th>Model</th><th>Tool</th><th>Arguments</th><th>Result</th>'
+                '<th>Model</th><th>Activity</th><th>Arguments</th><th>Result</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
@@ -3346,7 +3333,7 @@ def render_codex_rollout_html(
         else ""
     )
     agent_note = (
-        "Agent rows follow the recorded assignment hierarchy. Nested rows are indented under their parent assignment. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles. Skills are listed only when a SKILL.md reference appears in recorded tool arguments; subagents are direct descendants in the selected run."
+        "Agent rows follow the recorded assignment hierarchy. Nested rows are indented under their parent assignment. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles. Skills are listed only when a SKILL.md reference appears in recorded tool arguments."
         if is_codex
         else (
             "This Junie IDE chain contains one main agent. User tasks are the durable "
@@ -3358,7 +3345,7 @@ def render_codex_rollout_html(
         else (
             "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities. Nested rows are indented under their parent assignment. "
             "User tasks count unique TaskStartedEvent IDs; task spans count each participating agent once per task, so delegated work appears in both the parent and custom-agent rows. "
-            "Model responses count LlmResponseMetadataEvent records. Skills are listed only when a SKILL.md reference appears in recorded tool arguments; subagents are direct descendants in the selected run."
+            "Model responses count LlmResponseMetadataEvent records. Skills are listed only when a SKILL.md reference appears in recorded tool arguments."
         )
     )
     execution_note = (
@@ -3384,6 +3371,7 @@ body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#faf
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
+.visually-hidden {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
 .label {{ color:#666; font-size:.82em; }}
@@ -3403,19 +3391,18 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
-.agent-table .agent-assignment-column {{ width:22%; }}
-.agent-table .agent-skills-column {{ width:24%; }}
-.agent-table .agent-subagents-column {{ width:16%; }}
-.agent-table .agent-model-column {{ width:9%; }}
+.agent-table .agent-assignment-column {{ width:30%; }}
+.agent-table .agent-skills-column {{ width:30%; }}
+.agent-table .agent-model-column {{ width:10%; }}
 .agent-table .agent-count-column {{ width:6%; }}
-.agent-table .agent-time-column {{ width:7%; }}
+.agent-table .agent-time-column {{ width:8%; }}
 .agent-table .agent-tools-column {{ width:5%; }}
 .agent-table .agent-processed-column {{ width:7%; }}
 .agent-table .agent-share-column {{ width:4%; }}
 .agent-table th {{ white-space:normal; }}
 .agent-table td {{ vertical-align:top; }}
-.agent-table .agent-assignment-cell, .agent-table .agent-skills-cell, .agent-table .agent-subagents-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
-.agent-assignment {{ padding-left:calc(var(--agent-depth) * 20px); }}
+.agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
+.agent-assignment-cell {{ --agent-indent:calc(var(--agent-depth) * 20px); padding-left:calc(7px + var(--agent-indent)); background:linear-gradient(to right,#0d47a1 0 var(--agent-indent),transparent var(--agent-indent)); }}
 .agents-heading {{ position:relative; display:flex; align-items:center; margin-top:30px; }}
 .agents-heading h2 {{ margin:0; }}
 .agent-info {{ position:static; margin-left:8px; }}
@@ -3479,14 +3466,14 @@ td {{ font-size:.85em; }}
 .turn-detail-table .turn-detail-offset-column {{ width:7%; }}
 .turn-detail-table .turn-detail-cost-column {{ width:7%; }}
 .turn-detail-table .turn-detail-model-column {{ width:14%; }}
-.turn-detail-table .turn-detail-tool-column {{ width:9%; }}
+.turn-detail-table .turn-detail-activity-column {{ width:9%; }}
 .turn-detail-table .turn-detail-arguments-column,
 .turn-detail-table .turn-detail-result-column {{ width:29.5%; }}
 .turn-detail-table.has-timing .turn-detail-index-column {{ width:3%; }}
 .turn-detail-table.has-timing .turn-detail-offset-column {{ width:6%; }}
 .turn-detail-table.has-timing .turn-detail-cost-column {{ width:7%; }}
 .turn-detail-table.has-timing .turn-detail-model-column {{ width:12%; }}
-.turn-detail-table.has-timing .turn-detail-tool-column {{ width:8%; }}
+.turn-detail-table.has-timing .turn-detail-activity-column {{ width:8%; }}
 .turn-detail-table.has-timing .turn-detail-arguments-column,
 .turn-detail-table.has-timing .turn-detail-result-column {{ width:24%; }}
 .turn-detail-table.has-timing .turn-detail-timing-column {{ width:16%; }}
@@ -3519,7 +3506,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 <div class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
-<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-subagents-column"><col class="agent-model-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-tools-column"><col class="agent-processed-column"><col class="agent-share-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>Subagents invoked</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-model-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-tools-column"><col class="agent-processed-column"><col class="agent-share-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}

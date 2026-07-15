@@ -643,7 +643,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "Turns / responses" not in html
     agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
     assert '<td class="agent-skills-cell">python</td>' in agent_table
-    assert '<td class="agent-subagents-cell">reviewer</td>' in agent_table
+    assert "Subagents invoked" not in agent_table
     task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>TTFT</th>" not in task_span_table
     assert "<th>Cache read</th><th>Cache write</th><th>Fresh</th>" in task_span_table
@@ -671,7 +671,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert (
         '<th>#</th><th>T+</th><th title="Cost of the model response on this row; '
         'tool execution has no separately recorded model cost">Cost</th>'
-        '<th>Model</th><th>Tool</th>'
+        '<th>Model</th><th>Activity</th>'
     ) in custom_tool_table
     assert "<td>$0.02</td>" in custom_tool_table
     assert '<span class="activity-name">input</span>' in custom_tool_table
@@ -883,7 +883,7 @@ def test_turn_model_tile_lists_mixed_models_and_tool_rows_show_event_order_model
     )[0]
 
     assert 'mixed (2 models)<span class="metric-detail">gpt-main · gpt-helper</span>' in overlay
-    assert '<th>Model</th><th>Tool</th>' in overlay
+    assert '<th>Model</th><th>Activity</th>' in overlay
     assert '<td><code class="model-name">gpt-main</code></td>' in overlay
     assert '<td><code class="model-name">gpt-helper</code></td>' in overlay
     assert (
@@ -1370,7 +1370,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert '<col class="turn-detail-timing-column">' in tool_table
     assert "<th>T+</th>" in tool_table
     assert '>Cost</th>' in tool_table
-    assert '<th>Model</th><th>Tool</th>' in tool_table
+    assert '<th>Model</th><th>Activity</th>' in tool_table
     assert "Cost to T+" not in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
@@ -1450,21 +1450,27 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "<th>Parent assignment</th>" not in agent_table
     assert "<th>State</th>" not in agent_table
     assert "<th>Skills used</th>" in agent_table
-    assert "<th>Subagents invoked</th>" in agent_table
+    assert "<th>Subagents invoked</th>" not in agent_table
     assert '<col class="agent-skills-column">' in agent_table
     assert ".agent-table { table-layout:fixed; min-width:1200px; }" in html
-    assert ".agent-table .agent-skills-column { width:24%; }" in html
-    assert ".agent-table .agent-subagents-column { width:16%; }" in html
+    assert ".agent-table .agent-assignment-column { width:30%; }" in html
+    assert ".agent-table .agent-skills-column { width:30%; }" in html
+    assert "agent-subagents-column" not in html
     assert ".agent-table td { vertical-align:top; }" in html
+    assert (
+        ".agent-assignment-cell { --agent-indent:calc(var(--agent-depth) * 20px); "
+        "padding-left:calc(7px + var(--agent-indent)); background:linear-gradient(to right,#0d47a1 0 var(--agent-indent),transparent var(--agent-indent)); }"
+    ) in html
     agent_rows = agent_table.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("</tr>")
-    assert 'class="agent-assignment" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
+    assert 'class="agent-assignment-cell" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
+    assert '<span class="visually-hidden">Top-level assignment.</span>' in agent_rows[0]
     assert '<strong>root</strong>' in agent_rows[0]
     assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
-    assert '<td class="agent-subagents-cell">module-a</td>' in agent_rows[0]
-    assert 'class="agent-assignment" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
+    assert 'class="agent-assignment-cell" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
+    assert '<span class="visually-hidden">Nested assignment, depth 1.</span>' in agent_rows[1]
     assert '<strong>module-a (module-a)</strong>' in agent_rows[1]
-    assert '<td class="agent-subagents-cell">reviewer</td>' in agent_rows[1]
-    assert 'class="agent-assignment" data-depth="2" style="--agent-depth:2"' in agent_rows[2]
+    assert 'class="agent-assignment-cell" data-depth="2" style="--agent-depth:2"' in agent_rows[2]
+    assert '<span class="visually-hidden">Nested assignment, depth 2.</span>' in agent_rows[2]
     assert '<strong>reviewer (reviewer)</strong>' in agent_rows[2]
 
 
@@ -1477,13 +1483,14 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
     assert "- Turns: 4" in markdown
     assert "- Matched tool calls: 1" in markdown
     assert (
-        "| Assignment | Skills used | Subagents invoked | "
+        "| Assignment | Skills used | "
         "Turns | Tools | Agent time |" in markdown
     )
+    assert "Subagents invoked" not in markdown
     assert "Parent assignment" not in markdown
-    assert "| root | careful-coding · python | module-a |" in markdown
-    assert "| ↳ module-a (module-a) | — | reviewer |" in markdown
-    assert "| ↳ ↳ reviewer (reviewer) | — | — |" in markdown
+    assert "| root | careful-coding · python | 2 |" in markdown
+    assert "| ↳ module-a (module-a) | — | 1 |" in markdown
+    assert "| ↳ ↳ reviewer (reviewer) | — | 1 |" in markdown
     assert "| Work unit |" not in markdown
     assert "| Phase | Lane | Work units |" not in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
