@@ -388,6 +388,63 @@ def test_native_codex_unsupported_subscription_model_has_no_monetary_estimate(tm
     assert run.cost.total_cost is None
 
 
+def test_pricing_registry_contains_current_codex_and_claude_rates():
+    module = _load_module()
+    pricing = json.loads(module.PRICING_FILE.read_text(encoding="utf-8"))
+    models = pricing["models"]
+
+    assert pricing["_updated_at"] == "2026-07-14"
+    assert models["gpt-5.6-sol"]["input_per_million"] == 5.0
+    assert models["gpt-5.6-sol"]["cached_input_per_million"] == 0.5
+    assert models["gpt-5.6-sol"]["output_per_million"] == 30.0
+    assert models["gpt-5.6-sol"]["codex_credits_input_per_million"] == 125.0
+    assert models["gpt-5.6-terra"]["codex_credits_output_per_million"] == 375.0
+    assert models["gpt-5.6-luna"]["codex_credits_cached_input_per_million"] == 2.5
+    assert models["claude-opus-4-8"]["output_per_million"] == 25.0
+    assert models["claude-sonnet-5"]["input_per_million"] == 2.0
+    assert models["claude-haiku-4-5"]["cached_input_per_million"] == 0.1
+
+
+def test_native_codex_cost_includes_api_usd_and_codex_credit_estimates():
+    module = _load_module()
+    usage = module.UsageTotals(
+        input_tokens=2_000_000,
+        cached_input_tokens=1_000_000,
+        uncached_input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        processed_tokens=3_000_000,
+    )
+
+    cost = module._cost_for_usage(
+        usage,
+        {"gpt-5.6-sol": usage},
+        plan_types={"pro"},
+    )
+
+    assert cost.status == "estimated"
+    assert cost.total_cost == 35.5
+    assert cost.estimated_credits == 887.5
+    assert "Codex token-rate credits" in cost.method
+
+
+def test_native_codex_html_restores_model_pricing_table():
+    module = _load_module()
+    run = module.build_codex_rollout_run(
+        "root-thread",
+        CODEX_ROLLOUT_FIXTURES,
+        observed_at=module._parse_iso_datetime("2026-07-14T00:00:20Z"),
+    )
+
+    html = module.render_codex_rollout_html(run)
+
+    assert "<h2>Model pricing</h2>" in html
+    assert "API USD / 1M tokens" in html
+    assert "Codex credits / 1M tokens" in html
+    assert "GPT-5.6 Sol" in html
+    assert "Claude Sonnet 5" in html
+    assert "Long-context and fast-mode multipliers are not inferred" in html
+
+
 def test_main_writes_native_codex_machine_outputs_and_sealed_manifest(tmp_path):
     module = _load_module()
     html_path = tmp_path / "report.html"

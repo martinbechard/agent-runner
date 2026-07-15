@@ -47,8 +47,13 @@ MIN_BAR_PCT = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
 PRICING_RATE_KEYS = ("input_per_million", "cached_input_per_million", "output_per_million")
+CODEX_CREDIT_RATE_KEYS = (
+    "codex_credits_input_per_million",
+    "codex_credits_cached_input_per_million",
+    "codex_credits_output_per_million",
+)
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.1.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.2.0"
 
 
 # ---------------------------------------------------------------------------
@@ -359,6 +364,7 @@ class CostAssessment:
     cached_input_cost: float | None = None
     output_cost: float | None = None
     total_cost: float | None = None
+    estimated_credits: float | None = None
     method: str = "unavailable"
 
 
@@ -986,11 +992,24 @@ def _cost_for_usage(
     input_cost = 0.0
     cached_cost = 0.0
     output_cost = 0.0
+    estimated_credits = 0.0 if plan_types else None
     for model, model_tokens in model_usage.items():
         rates = pricing[_normalize_model_name(model)]
         input_cost += model_tokens.uncached_input_tokens * rates["input_per_million"] / 1_000_000
         cached_cost += model_tokens.cached_input_tokens * rates["cached_input_per_million"] / 1_000_000
         output_cost += model_tokens.output_tokens * rates["output_per_million"] / 1_000_000
+        if estimated_credits is not None:
+            if not all(key in rates for key in CODEX_CREDIT_RATE_KEYS):
+                estimated_credits = None
+            else:
+                estimated_credits += (
+                    model_tokens.uncached_input_tokens
+                    * rates["codex_credits_input_per_million"]
+                    + model_tokens.cached_input_tokens
+                    * rates["codex_credits_cached_input_per_million"]
+                    + model_tokens.output_tokens
+                    * rates["codex_credits_output_per_million"]
+                ) / 1_000_000
     return CostAssessment(
         status="estimated",
         pricing_model=", ".join(sorted(model_usage)),
@@ -1000,7 +1019,12 @@ def _cost_for_usage(
         cached_input_cost=cached_cost,
         output_cost=output_cost,
         total_cost=input_cost + cached_cost + output_cost,
-        method="API-equivalent token-price estimate; not an actual Codex charge",
+        estimated_credits=estimated_credits,
+        method=(
+            "API-equivalent USD and Codex token-rate credits; estimates only"
+            if estimated_credits is not None
+            else "API-equivalent token-price estimate; not an actual Codex charge"
+        ),
     )
 
 
@@ -1520,10 +1544,10 @@ def _format_ms(milliseconds: int) -> str:
 
 def _cost_summary(cost: CostAssessment) -> str:
     if cost.status == "estimated" and cost.total_cost is not None:
-        return (
-            f"API-equivalent estimate: ${cost.total_cost:.6f} USD "
-            "(not an actual Codex charge)"
-        )
+        summary = f"API-equivalent estimate: ${cost.total_cost:.6f} USD"
+        if cost.estimated_credits is not None:
+            summary += f"; Codex rate-card estimate: {cost.estimated_credits:,.2f} credits"
+        return summary + " (estimates, not an actual Codex charge or invoice)"
     if cost.status == "subscription-no-charge-data":
         return "Subscription usage; no monetary charge telemetry available"
     if cost.status == "recorded" and cost.total_cost is not None:
@@ -1619,9 +1643,27 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         f"- Peak concurrency: {run.peak_concurrency}",
         f"- Cost: {_cost_summary(run.cost)}",
         "",
-        "| Assignment | Runtime nickname | Parent assignment | State | Turns | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
-        "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        "## Model pricing",
+        "",
+        "Rates are per 1M tokens in input / cached input / output order. USD is API-equivalent; Codex credits use the subscription rate card where published. Long-context and fast-mode multipliers are not inferred from aggregate telemetry.",
+        "",
+        "| Provider | Model | API USD / 1M tokens | Codex credits / 1M tokens | Note |",
+        "|---|---|---:|---:|---|",
     ]
+    for model, prices in _pricing_reference_rows():
+        lines.append(
+            f"| {prices.get('provider', '-')} | {prices.get('display_name', model)} | "
+            f"{_rate_triplet(prices, PRICING_RATE_KEYS, '$')} | "
+            f"{_rate_triplet(prices, CODEX_CREDIT_RATE_KEYS)} | "
+            f"{prices.get('pricing_note', '')} |"
+        )
+    lines.extend(
+        [
+            "",
+            "| Assignment | Runtime nickname | Parent assignment | State | Turns | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+        ]
+    )
     for thread in run.threads:
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         lines.append(
@@ -1840,6 +1882,22 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             "</tr>"
         )
     diagnostics = "".join(f"<li>{_escape_html(item)}</li>" for item in run.diagnostics)
+    pricing_rows = []
+    for model, prices in _pricing_reference_rows():
+        pricing_rows.append(
+            "<tr>"
+            f"<td>{_escape_html(str(prices.get('provider', '—')))}</td>"
+            f"<td><strong>{_escape_html(str(prices.get('display_name', model)))}</strong><br><code>{_escape_html(model)}</code></td>"
+            f"<td>{_escape_html(_rate_triplet(prices, PRICING_RATE_KEYS, '$'))}</td>"
+            f"<td>{_escape_html(_rate_triplet(prices, CODEX_CREDIT_RATE_KEYS))}</td>"
+            f"<td>{_escape_html(str(prices.get('pricing_note', '')) or '—')}</td>"
+            "</tr>"
+        )
+    pricing_registry = _load_pricing_registry()
+    pricing_version = str(pricing_registry.get("_updated_at", ""))
+    openai_source = str(pricing_registry.get("_source", ""))
+    codex_source = str(pricing_registry.get("_codex_rate_card_source", ""))
+    anthropic_source = str(pricing_registry.get("_anthropic_source", ""))
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Codex Rollout Metrics</title>
 <style>
@@ -1900,6 +1958,9 @@ code {{ font-size:.9em; }}
 <span class="token-segment output" style="width:{output_width:.3f}%"></span>
 </div>
 <div class="composition-legend">Cached input {run.usage_totals.cached_input_tokens:,} ({cached_share:.1f}% of input) · fresh input {run.usage_totals.uncached_input_tokens:,} · output {run.usage_totals.output_tokens:,} · reasoning {run.usage_totals.reasoning_tokens:,}. Cached input is part of input. Reasoning is part of output.</div>
+<h2>Model pricing</h2>
+<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Codex credits use the published token-based subscription rate card where available. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a>, <a href="{_escape_html(codex_source)}">Codex rate card</a>, and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>
+<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Codex credits / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
 <h2>Agents used</h2>
 <p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nickname is Codex's per-thread label, not a reusable custom-agent role; the rollout adapter does not infer a custom-agent definition when telemetry does not declare one.</p>
 <div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Runtime nickname</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
@@ -2225,11 +2286,17 @@ def parse_log(path: Path) -> CallDetail:
 
 
 @lru_cache(maxsize=1)
-def _load_pricing_table() -> dict[str, dict[str, float]]:
+def _load_pricing_registry() -> dict[str, object]:
     try:
         raw = json.loads(PRICING_FILE.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return {}
+    return raw if isinstance(raw, dict) else {}
+
+
+@lru_cache(maxsize=1)
+def _load_pricing_table() -> dict[str, dict[str, float]]:
+    raw = _load_pricing_registry()
     models = raw.get("models", {})
     if not isinstance(models, dict):
         return {}
@@ -2237,7 +2304,14 @@ def _load_pricing_table() -> dict[str, dict[str, float]]:
     for model, prices in models.items():
         rate_row = _coerce_pricing_rates(prices)
         if rate_row is not None:
-            table[model.lower()] = rate_row
+            model_key = model.lower()
+            table[model_key] = rate_row
+            if isinstance(prices, dict):
+                aliases = prices.get("aliases", [])
+                if isinstance(aliases, list):
+                    for alias in aliases:
+                        if isinstance(alias, str) and alias.strip():
+                            table[alias.strip().lower()] = rate_row
     return table
 
 
@@ -2251,7 +2325,39 @@ def _coerce_pricing_rates(prices: object) -> dict[str, float] | None:
         if not isinstance(value, (int, float)) or isinstance(value, bool):
             return None
         rate_row[key] = float(value)
+    credit_values = [prices.get(key) for key in CODEX_CREDIT_RATE_KEYS]
+    if all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in credit_values):
+        for key, value in zip(CODEX_CREDIT_RATE_KEYS, credit_values):
+            rate_row[key] = float(value)
     return rate_row
+
+
+def _pricing_reference_rows() -> list[tuple[str, dict[str, object]]]:
+    """Return canonical display rows from the versioned pricing registry."""
+    models = _load_pricing_registry().get("models", {})
+    if not isinstance(models, dict):
+        return []
+    rows = [
+        (model, prices)
+        for model, prices in models.items()
+        if isinstance(model, str)
+        and isinstance(prices, dict)
+        and _coerce_pricing_rates(prices) is not None
+    ]
+    return sorted(
+        rows,
+        key=lambda item: (
+            str(item[1].get("provider", "")),
+            str(item[1].get("display_name", item[0])),
+        ),
+    )
+
+
+def _rate_triplet(prices: dict[str, object], keys: tuple[str, str, str], prefix: str = "") -> str:
+    values = [prices.get(key) for key in keys]
+    if not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values):
+        return "—"
+    return " / ".join(f"{prefix}{float(value):g}" for value in values)
 
 
 def _normalize_model_name(model: str) -> str:

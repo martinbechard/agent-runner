@@ -155,7 +155,7 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Sum of exclusive work-unit metrics.
 
 - **ENTITY: ENTITY-7** Cost assessment
-  - **SYNOPSIS:** Monetary status and optional API-equivalent estimate for one aggregation unit.
+  - **SYNOPSIS:** Monetary status plus optional API-equivalent USD and Codex credit estimates for one aggregation unit.
   - **FIELD:** `status`
     - **SYNOPSIS:** `recorded`, `estimated`, `subscription-no-charge-data`, or `unavailable`.
   - **FIELD:** `pricing_model` and `pricing_version`
@@ -164,6 +164,8 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Separately calculated components; reasoning is not charged twice when it is included in output.
   - **FIELD:** `total_cost`
     - **SYNOPSIS:** Sum of available cost components with currency and estimate label.
+  - **FIELD:** `estimated_credits`
+    - **SYNOPSIS:** Codex subscription credits calculated from the published token-based rate card when every used model has a complete credit-rate entry.
 
 ## 4. Structure And Execution
 
@@ -215,14 +217,14 @@ flowchart LR
   - **GAP:** A dependency-accurate critical path is unavailable when logs do not identify the work-unit handoff that unblocked downstream work; report observed elapsed time and mark the critical path inferred in that case.
 
 - **MODULE: MODULE-6** Cost assessor
-  - **SYNOPSIS:** Reuse `docs/reference/openai-model-pricing.json` for optional API-equivalent estimates and preserve unavailable actual-charge status.
-  - **READS:** Normalized model IDs, token categories, pricing entries, pricing effective date, and any direct cost field a source exposes.
-  - **PRODUCES:** Component and total estimates with formula, model mapping, currency, and pricing version.
+  - **SYNOPSIS:** Reuse `docs/reference/openai-model-pricing.json` for optional API-equivalent USD and Codex credit estimates while preserving unavailable actual-charge status.
+  - **READS:** Normalized model IDs and aliases, token categories, provider pricing entries, Codex credit entries, pricing effective date, and any direct cost field a source exposes.
+  - **PRODUCES:** Component and total USD estimates, optional credit estimates, formula, model mapping, currency, and pricing version.
   - **GAP:** Internal or subscription-only model identifiers may have no supported price; those rows remain unavailable rather than being mapped to a convenient public model.
 
 - **MODULE: MODULE-7** Report integration
   - **SYNOPSIS:** Feed normalized metrics into the existing timeline report model and renderer while adding hierarchy and confidence views.
-  - **PRODUCES:** Interactive HTML, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary.
+  - **PRODUCES:** Interactive HTML with a model-rate reference table, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
   - **SUPPORTS:** Live refresh and sealed archive generation from the same normalized data model.
 
 - **PROCESS: PROCESS-1** Discover and parse a run
@@ -241,8 +243,8 @@ flowchart LR
   - **BECAUSE:** An incomplete semantic breakdown is more trustworthy than a complete-looking allocation built from stale thread names.
 
 - **PROCESS: PROCESS-4** Calculate optional cost
-  - **SYNOPSIS:** Multiply uncached input, cached input, and output by matching per-million rates when a supported price exists; prefer direct cost if the source records it.
-  - **PRODUCES:** Recorded or estimated cost separately from subscription and unavailable states.
+  - **SYNOPSIS:** Multiply uncached input, cached input, and output by matching per-million USD and Codex-credit rates when supported; prefer direct cost if the source records it.
+  - **PRODUCES:** Recorded or estimated USD, optional credit consumption, and explicit subscription or unavailable states.
 
 - **PROCESS: PROCESS-5** Seal a completed report
   - **SYNOPSIS:** Re-scan until the descendant set and source sizes are stable, reject active or indeterminate threads unless the caller explicitly seals an aborted run, write source digests and report artifacts, then mark the snapshot sealed.
@@ -320,7 +322,7 @@ These conditions define an acceptable implementation and report.
   - **BECAUSE:** A run can consume many agent-hours while finishing in a shorter elapsed interval.
 
 - **REQUIREMENT: REQ-6** Honest cost reporting
-  - **SYNOPSIS:** Direct cost, API-equivalent estimate, subscription usage, and unavailable pricing are visually and structurally distinct.
+  - **SYNOPSIS:** Direct cost, API-equivalent USD, Codex credit estimates, subscription usage, and unavailable pricing are visually and structurally distinct.
   - **BECAUSE:** Token telemetry is sufficient for some estimates but not proof of an actual charge.
 
 - **REQUIREMENT: REQ-7** Live report stability
@@ -372,8 +374,8 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** Phase allocation follows explicit identifiers rather than stale `agent_path`.
 
 - **TASK: TEST-9** Estimate supported model cost
-  - **SYNOPSIS:** Map uncached input, cached input, and output to a versioned pricing entry.
-  - **VALIDATES:** Component calculations, per-million conversion, currency, estimate label, and pricing digest.
+  - **SYNOPSIS:** Map uncached input, cached input, and output to versioned provider and Codex rate-card entries.
+  - **VALIDATES:** Component calculations, per-million conversion, currency, credit estimate, estimate labels, pricing table rendering, and pricing digest.
 
 - **TASK: TEST-10** Refuse unsupported model pricing
   - **SYNOPSIS:** Use an internal model identifier absent from the registry and a Pro subscription rate-limit record with null credits.
