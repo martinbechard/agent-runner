@@ -60,9 +60,10 @@ AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
 TOOL_RESULT_PREVIEW_CHARS = 200
+TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.0.0"
+JUNIE_SESSION_PARSER_VERSION = "1.1.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -333,6 +334,7 @@ class ToolInterval:
     source_path: str
     source_start_ordinal: int
     source_end_ordinal: int
+    argument_content: str = ""
     result_summary: str = ""
     result_content: str = ""
 
@@ -716,6 +718,16 @@ def _sanitize_unstructured_argument(value: str) -> str:
     return _truncate_argument_summary(" ".join(summary.split()) or "—")
 
 
+def _tool_argument_content(value: str) -> str:
+    """Return bounded, secret-redacted source arguments for local disclosure."""
+
+    content = _redact_unstructured_text(value)
+    if len(content) <= TOOL_ARGUMENT_RAW_CHARS:
+        return content
+    omitted = len(content) - TOOL_ARGUMENT_RAW_CHARS
+    return content[:TOOL_ARGUMENT_RAW_CHARS] + f"\n… [{omitted:,} chars omitted]"
+
+
 def _sanitize_result_value(value: object) -> object:
     if isinstance(value, dict):
         sanitized: dict[str, object] = {}
@@ -1021,13 +1033,15 @@ def _render_tool_argument(
     tool: ToolInterval,
     config: ToolFormatterConfig,
 ) -> str:
-    raw = _escape_html(tool.argument_summary)
     formatted = _format_tool_argument(tool.tool_name, tool.argument_summary, config)
     if formatted is None:
-        return f'<code class="tool-arguments">{raw}</code>'
+        return f'<code class="tool-arguments">{_escape_html(tool.argument_summary)}</code>'
+    raw_source = tool.argument_content or tool.argument_summary
+    raw = _escape_html(raw_source)
+    raw_label = "raw source command (redacted)" if tool.argument_content else "raw"
     return (
         f'<div class="tool-argument-formatted">{_escape_html(formatted.summary)}</div>'
-        '<details class="tool-argument-raw"><summary>raw</summary>'
+        f'<details class="tool-argument-raw"><summary>{raw_label}</summary>'
         f'<code class="tool-arguments">{raw}</code></details>'
     )
 
@@ -4209,7 +4223,9 @@ def _junie_shell_write_paths(command: str) -> list[str]:
     return paths
 
 
-def _junie_tool_payload(agent_event: dict[str, object]) -> tuple[str, str, object] | None:
+def _junie_tool_payload(
+    agent_event: dict[str, object],
+) -> tuple[str, str, str, object] | None:
     kind = str(agent_event.get("kind") or "")
     if kind == "TerminalBlockUpdatedEvent":
         command = str(agent_event.get("command") or "—")
@@ -4226,17 +4242,24 @@ def _junie_tool_payload(agent_event: dict[str, object]) -> tuple[str, str, objec
                         }
                     }
                 ),
+                _tool_argument_content(command),
                 agent_event.get("output") or agent_event.get("presentableOutput") or "",
             )
         return (
             "exec",
             _sanitize_unstructured_argument(command),
+            _tool_argument_content(command),
             agent_event.get("output") or agent_event.get("presentableOutput") or "",
         )
     if kind == "ToolBlockUpdatedEvent":
         tool_name = str(agent_event.get("toolType") or "tool").lower()
         argument = agent_event.get("text") or agent_event.get("details") or "—"
-        return tool_name, _sanitize_unstructured_argument(str(argument)), agent_event.get("details") or ""
+        return (
+            tool_name,
+            _sanitize_unstructured_argument(str(argument)),
+            "",
+            agent_event.get("details") or "",
+        )
     if kind == "ViewFilesBlockUpdatedEvent":
         files = agent_event.get("files")
         paths = [
@@ -4247,6 +4270,7 @@ def _junie_tool_payload(agent_event: dict[str, object]) -> tuple[str, str, objec
         return (
             "read",
             _tool_argument_summary({"input": {"files": paths}}),
+            "",
             agent_event.get("details") or "",
         )
     if kind == "FileChangesBlockUpdatedEvent":
@@ -4260,6 +4284,7 @@ def _junie_tool_payload(agent_event: dict[str, object]) -> tuple[str, str, objec
         return (
             "apply_patch",
             _tool_argument_summary({"input": {"files": paths}}),
+            "",
             agent_event.get("details") or "",
         )
     return None
@@ -4493,7 +4518,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             payload = _junie_tool_payload(final_event)
             if payload is None:
                 continue
-            tool_name, argument_summary, raw_result = payload
+            tool_name, argument_summary, argument_content, raw_result = payload
             result_content = _tool_result_content(raw_result)
             tools.append(
                 ToolInterval(
@@ -4509,6 +4534,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                     source_path=str(events_path),
                     source_start_ordinal=start_ordinal,
                     source_end_ordinal=end_ordinal,
+                    argument_content=argument_content,
                     result_summary=_tool_result_summary(result_content),
                     result_content=result_content,
                 )

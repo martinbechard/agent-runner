@@ -367,6 +367,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
+    assert run.parser_version == "1.1.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
@@ -388,7 +389,9 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     terminal = main.tool_intervals[0]
     assert terminal.tool_name == "exec"
     assert "API_TOKEN=[redacted]" in terminal.argument_summary
+    assert "API_TOKEN=[redacted]" in terminal.argument_content
     assert "PRIVATE" not in terminal.argument_summary
+    assert "PRIVATE" not in terminal.argument_content
     assert "password=[redacted]" in terminal.result_content
     assert "PRIVATE" not in terminal.result_content
     write = main.tool_intervals[1]
@@ -396,6 +399,9 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "docs/architecture/example.md" in write.argument_summary
     assert "docs/wiki/index.md" in write.argument_summary
     assert "ignored-example.md" not in write.argument_summary
+    assert "cat > docs/architecture/example.md <<'DOC_EOF'" in write.argument_content
+    assert "# Example" in write.argument_content
+    assert "cat > ignored-example.md <<'NOT_A_COMMAND'" in write.argument_content
 
     html = module.render_html(document)
     assert "Junie run" in html
@@ -410,6 +416,9 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "task span task-1" in html
     assert "Write 2 files" in html
     assert "docs/architecture/example.md" in html
+    assert "raw source command (redacted)" in html
+    assert "cat &gt; docs/architecture/example.md &lt;&lt;'DOC_EOF'" in html
+    assert "# Example" in html
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
 
