@@ -262,6 +262,21 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "<th>Activity</th>" in root_turn_table
 
 
+def test_native_codex_html_links_to_privacy_safe_turn_tool_call_list():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    html = module.render_codex_rollout_html(run)
+
+    assert 'href="#turn-tool-call-list"' in html
+    assert 'id="turn-tool-call-list"' in html
+    assert "All turns and tool calls" in html
+    assert html.count('class="turn-tool-row"') == 4
+    assert '<code>root-turn-1</code>' in html
+    assert '<code>exec</code> · 500ms · exact' in html
+    assert "PRIVATE-TOOL-PAYLOAD" not in html
+
+
 def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp_path):
     module = _load_module()
     rollout = tmp_path / "constant-metadata.jsonl"

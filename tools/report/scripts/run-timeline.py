@@ -1752,6 +1752,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             "</tr>"
         )
     thread_details = []
+    turn_tool_rows = []
     for thread in run.threads:
         thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
@@ -1768,6 +1769,31 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         for turn in thread.turns:
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
+            tool_items = (
+                '<ol class="tool-call-items">'
+                + "".join(
+                    "<li>"
+                    f"<code>{_escape_html(tool.tool_name)}</code> · "
+                    f"{_escape_html(_format_detail_ms(tool.duration_ms))} · "
+                    f"{_escape_html(tool.attribution_confidence)}"
+                    "</li>"
+                    for tool in tools
+                )
+                + "</ol>"
+                if tools
+                else '<span class="muted">No matched calls</span>'
+            )
+            turn_tool_rows.append(
+                '<tr class="turn-tool-row">'
+                f"<td>{_escape_html(_agent_assignment(thread))}</td>"
+                f"<td><code>{_escape_html(turn.turn_id)}</code></td>"
+                f"<td>{_turn_offset_label(run, turn)}</td>"
+                f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
+                f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
+                f"<td>{len(tools):,}</td>"
+                f"<td>{tool_items}</td>"
+                "</tr>"
+            )
             work_unit_cell = (
                 f"<td>{_escape_html(turn.work_unit_id or 'unattributed')}</td>"
                 if show_work_unit
@@ -1920,6 +1946,8 @@ td {{ font-size:.85em; }}
 .cached {{ background:#3498db; }} .fresh {{ background:#95a5a6; }} .output {{ background:#e74c3c; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
+.drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
+.drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
 .thread-detail > summary {{ display:grid; grid-template-columns:minmax(250px,2fr) auto auto auto auto minmax(180px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
 .thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
@@ -1933,6 +1961,16 @@ td {{ font-size:.85em; }}
 .state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
 .state-aborted {{ background:#fdecea; color:#b3261e; }}
 .state-active, .state-live {{ background:#fff3cd; color:#7a5b00; }}
+.tool-call-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:rgba(25,35,45,.62); }}
+.tool-call-overlay:target {{ display:flex; }}
+.tool-call-panel {{ width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
+.tool-call-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
+.tool-call-header h2 {{ margin:0; }}
+.tool-call-close {{ color:#b3261e; font-weight:600; text-decoration:none; }}
+.tool-call-panel .table-scroll {{ max-height:calc(92vh - 80px); }}
+.tool-call-items {{ margin:0; padding-left:20px; }}
+.tool-call-items li {{ margin:2px 0; }}
+.muted {{ color:#78909c; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-size:.9em; }}
 @media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
@@ -1964,13 +2002,20 @@ code {{ font-size:.9em; }}
 <h2>Agents used</h2>
 <p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nickname is Codex's per-thread label, not a reusable custom-agent role; the rollout adapter does not infer a custom-agent definition when telemetry does not declare one.</p>
 <div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Runtime nickname</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
-<h2>Execution timeline</h2>
-<p class="execution-note">Bars use the observed run interval. Expand a thread for privacy-safe turn, token, TTFT, and aggregated tool detail.</p>
+<h2 id="execution-timeline">Execution timeline</h2>
+<p class="execution-note">Bars use the observed run interval. Expand a thread for privacy-safe turn, token, TTFT, and aggregated tool detail. <a class="drilldown-link" href="#turn-tool-call-list">View all turns and tool calls</a>.</p>
 {''.join(thread_details)}
 <h2>Work units and attribution</h2>
 <div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost status</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
 <h2>Phase and lane aggregates</h2>
 <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
+<section id="turn-tool-call-list" class="tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="turn-tool-call-title">
+<div class="tool-call-panel">
+<div class="tool-call-header"><h2 id="turn-tool-call-title">All turns and tool calls</h2><a class="tool-call-close" href="#execution-timeline">close</a></div>
+<p class="execution-note">Individual calls include only the recorded tool name, duration, and attribution confidence. Arguments and results are intentionally excluded.</p>
+<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tool calls (name · duration · confidence)</th></tr></thead><tbody>{''.join(turn_tool_rows) or '<tr><td colspan="7">No turns recorded</td></tr>'}</tbody></table></div>
+</div>
+</section>
 <h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
 </body></html>"""
 

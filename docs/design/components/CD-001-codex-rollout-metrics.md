@@ -224,7 +224,7 @@ flowchart LR
 
 - **MODULE: MODULE-7** Report integration
   - **SYNOPSIS:** Feed normalized metrics into the existing timeline report model and renderer while adding hierarchy and confidence views.
-  - **PRODUCES:** Interactive HTML with a model-rate reference table, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
+  - **PRODUCES:** Interactive HTML with a model-rate reference table and a linked all-turn tool-call drilldown, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
   - **SUPPORTS:** Live refresh and sealed archive generation from the same normalized data model.
 
 - **PROCESS: PROCESS-1** Discover and parse a run
@@ -314,7 +314,7 @@ These conditions define an acceptable implementation and report.
   - **BECAUSE:** The complete multi-agent run is the primary reporting boundary.
 
 - **REQUIREMENT: REQ-4** Useful finest-grain evidence
-  - **SYNOPSIS:** Users can inspect response deltas, agent turns, threads, work units, phases, and the whole run, with raw provenance and confidence at every level.
+  - **SYNOPSIS:** Users can inspect response deltas, agent turns, individual matched tool calls, threads, work units, phases, and the whole run, with provenance and confidence at every level.
   - **BECAUSE:** Aggregate totals alone do not reveal which work consumed resources.
 
 - **REQUIREMENT: REQ-5** Honest time reporting
@@ -400,6 +400,10 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 - **TASK: TEST-15** Enforce privacy defaults
   - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, and final-message text in a source fixture.
   - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics and provenance but none of the sensitive content.
+
+- **TASK: TEST-16** Open the all-turn tool-call drilldown
+  - **SYNOPSIS:** Follow the execution-timeline link to a single overlay grouping every matched tool call by agent turn.
+  - **VALIDATES:** Turn identity, timing, state, individual tool names, tool durations, and attribution confidence are visible while arguments and results remain excluded.
 
 ## 8. Proposed Modifications
 
