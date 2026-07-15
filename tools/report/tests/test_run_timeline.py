@@ -508,7 +508,7 @@ def test_pricing_registry_contains_current_codex_and_claude_rates():
     assert models["claude-haiku-4-5"]["cached_input_per_million"] == 0.1
 
 
-def test_native_codex_cost_includes_api_usd_and_codex_credit_estimates():
+def test_native_codex_cost_uses_api_usd_without_credit_estimates():
     module = _load_module()
     usage = module.UsageTotals(
         input_tokens=2_000_000,
@@ -526,8 +526,8 @@ def test_native_codex_cost_includes_api_usd_and_codex_credit_estimates():
 
     assert cost.status == "estimated"
     assert cost.total_cost == 35.5
-    assert cost.estimated_credits == 887.5
-    assert "Codex token-rate credits" in cost.method
+    assert not hasattr(cost, "estimated_credits")
+    assert cost.method == "API-equivalent token-price estimate; not an actual Codex charge"
 
 
 def test_native_codex_cost_display_is_compact_and_rounded():
@@ -535,19 +535,22 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     cost = module.CostAssessment(
         status="estimated",
         total_cost=1.330343,
-        estimated_credits=33.256,
     )
 
     assert module._cost_summary(cost) == (
-        "API-equivalent estimate: $1.33 USD; Codex rate-card estimate: "
-        "33.26 credits (estimates, not an actual Codex charge or invoice)"
+        "API-equivalent estimate: $1.33 USD "
+        "(estimate, not an actual Codex charge or invoice)"
     )
-    assert module._compact_cost_summary(cost) == "$1.33 · 33.26 credits"
+    assert module._compact_cost_summary(cost) == "$1.33"
 
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     html = module.render_codex_rollout_html(run)
     assert html.count("not an actual Codex charge or invoice") == 1
     assert "<th>Cost estimate</th>" in html
+    assert "Codex rate-card estimate" not in html
+    assert "credits" not in html.lower()
+    markdown = module.render_codex_rollout_markdown(run)
+    assert "credits" not in markdown.lower()
 
 
 def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_costs():
@@ -575,20 +578,17 @@ def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_cos
     root_detail = html.split('<details class="thread-detail">', 1)[1].split(
         "</details>", 1
     )[0]
-    assert (
-        'title="Agent cost estimate">cost $40.50 · 1,012.50 credits'
-        in root_detail
-    )
+    assert 'title="Agent cost estimate">cost $40.50' in root_detail
     assert "<th>Cost estimate</th>" in root_detail
-    assert "$35.50 · 887.50 credits" in root_detail
-    assert "$5.00 · 125.00 credits" in root_detail
+    assert "$35.50" in root_detail
+    assert "$5.00" in root_detail
     root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
     assert "Model" in root_turn_overlay
     assert "gpt-5.6-sol" in root_turn_overlay
     assert "Cost estimate" in root_turn_overlay
-    assert "$35.50 · 887.50 credits" in root_turn_overlay
+    assert "$35.50" in root_turn_overlay
 
 
 def test_native_codex_html_opens_model_pricing_in_new_tab():
@@ -608,7 +608,7 @@ def test_native_codex_html_opens_model_pricing_in_new_tab():
     assert 'id="model-pricing" class="model-pricing-overlay"' in html
     assert '<h2 id="model-pricing-title">Model pricing</h2>' in html
     assert "API USD / 1M tokens" in html
-    assert "Codex credits / 1M tokens" in html
+    assert "Codex credits / 1M tokens" not in html
     assert "GPT-5.6 Sol" in html
     assert "Claude Sonnet 5" in html
     assert "Long-context and fast-mode multipliers are not inferred" in html

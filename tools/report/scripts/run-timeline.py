@@ -53,7 +53,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.3.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.4.0"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
@@ -374,7 +374,6 @@ class CostAssessment:
     cached_input_cost: float | None = None
     output_cost: float | None = None
     total_cost: float | None = None
-    estimated_credits: float | None = None
     method: str = "unavailable"
 
 
@@ -1107,24 +1106,11 @@ def _cost_for_usage(
     input_cost = 0.0
     cached_cost = 0.0
     output_cost = 0.0
-    estimated_credits = 0.0 if plan_types else None
     for model, model_tokens in model_usage.items():
         rates = pricing[_normalize_model_name(model)]
         input_cost += model_tokens.uncached_input_tokens * rates["input_per_million"] / 1_000_000
         cached_cost += model_tokens.cached_input_tokens * rates["cached_input_per_million"] / 1_000_000
         output_cost += model_tokens.output_tokens * rates["output_per_million"] / 1_000_000
-        if estimated_credits is not None:
-            if not all(key in rates for key in CODEX_CREDIT_RATE_KEYS):
-                estimated_credits = None
-            else:
-                estimated_credits += (
-                    model_tokens.uncached_input_tokens
-                    * rates["codex_credits_input_per_million"]
-                    + model_tokens.cached_input_tokens
-                    * rates["codex_credits_cached_input_per_million"]
-                    + model_tokens.output_tokens
-                    * rates["codex_credits_output_per_million"]
-                ) / 1_000_000
     return CostAssessment(
         status="estimated",
         pricing_model=", ".join(sorted(model_usage)),
@@ -1134,12 +1120,7 @@ def _cost_for_usage(
         cached_input_cost=cached_cost,
         output_cost=output_cost,
         total_cost=input_cost + cached_cost + output_cost,
-        estimated_credits=estimated_credits,
-        method=(
-            "API-equivalent USD and Codex token-rate credits; estimates only"
-            if estimated_credits is not None
-            else "API-equivalent token-price estimate; not an actual Codex charge"
-        ),
+        method="API-equivalent token-price estimate; not an actual Codex charge",
     )
 
 
@@ -1669,10 +1650,10 @@ def _format_ms(milliseconds: int) -> str:
 
 def _cost_summary(cost: CostAssessment) -> str:
     if cost.status == "estimated" and cost.total_cost is not None:
-        summary = f"API-equivalent estimate: ${cost.total_cost:.2f} USD"
-        if cost.estimated_credits is not None:
-            summary += f"; Codex rate-card estimate: {cost.estimated_credits:,.2f} credits"
-        return summary + " (estimates, not an actual Codex charge or invoice)"
+        return (
+            f"API-equivalent estimate: ${cost.total_cost:.2f} USD "
+            "(estimate, not an actual Codex charge or invoice)"
+        )
     if cost.status == "subscription-no-charge-data":
         return "Subscription usage; no monetary charge telemetry available"
     if cost.status == "recorded" and cost.total_cost is not None:
@@ -1683,10 +1664,7 @@ def _cost_summary(cost: CostAssessment) -> str:
 def _compact_cost_summary(cost: CostAssessment) -> str:
     """Format repeated table cells without restating the report disclaimer."""
     if cost.status == "estimated" and cost.total_cost is not None:
-        summary = f"${cost.total_cost:.2f}"
-        if cost.estimated_credits is not None:
-            summary += f" · {cost.estimated_credits:,.2f} credits"
-        return summary
+        return f"${cost.total_cost:.2f}"
     if cost.status == "recorded" and cost.total_cost is not None:
         return f"${cost.total_cost:.2f} recorded"
     if cost.status == "subscription-no-charge-data":
@@ -1796,16 +1774,15 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         "",
         "## Model pricing",
         "",
-        "Rates are per 1M tokens in input / cached input / output order. USD is API-equivalent; Codex credits use the subscription rate card where published. Long-context and fast-mode multipliers are not inferred from aggregate telemetry.",
+        "Rates are per 1M tokens in input / cached input / output order. USD is API-equivalent. Long-context and fast-mode multipliers are not inferred from aggregate telemetry.",
         "",
-        "| Provider | Model | API USD / 1M tokens | Codex credits / 1M tokens | Note |",
-        "|---|---|---:|---:|---|",
+        "| Provider | Model | API USD / 1M tokens | Note |",
+        "|---|---|---:|---|",
     ]
     for model, prices in _pricing_reference_rows():
         lines.append(
             f"| {prices.get('provider', '-')} | {prices.get('display_name', model)} | "
             f"{_rate_triplet(prices, PRICING_RATE_KEYS, '$')} | "
-            f"{_rate_triplet(prices, CODEX_CREDIT_RATE_KEYS)} | "
             f"{prices.get('pricing_note', '')} |"
         )
     lines.extend(
@@ -2133,14 +2110,12 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             f"<td>{_escape_html(str(prices.get('provider', '—')))}</td>"
             f"<td><strong>{_escape_html(str(prices.get('display_name', model)))}</strong><br><code>{_escape_html(model)}</code></td>"
             f"<td>{_escape_html(_rate_triplet(prices, PRICING_RATE_KEYS, '$'))}</td>"
-            f"<td>{_escape_html(_rate_triplet(prices, CODEX_CREDIT_RATE_KEYS))}</td>"
             f"<td>{_escape_html(str(prices.get('pricing_note', '')) or '—')}</td>"
             "</tr>"
         )
     pricing_registry = _load_pricing_registry()
     pricing_version = str(pricing_registry.get("_updated_at", ""))
     openai_source = str(pricing_registry.get("_source", ""))
-    codex_source = str(pricing_registry.get("_codex_rate_card_source", ""))
     anthropic_source = str(pricing_registry.get("_anthropic_source", ""))
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Codex Rollout Metrics</title>
@@ -2233,8 +2208,8 @@ code {{ font-size:.9em; }}
 <section id="model-pricing" class="model-pricing-overlay" role="dialog" aria-modal="true" aria-labelledby="model-pricing-title">
 <div class="model-pricing-panel">
 <div class="model-pricing-header"><h2 id="model-pricing-title">Model pricing</h2><span class="execution-note">Close this tab to return to the report.</span></div>
-<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Codex credits use the published token-based subscription rate card where available. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a>, <a href="{_escape_html(codex_source)}">Codex rate card</a>, and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>
-<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Codex credits / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
+<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a> and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>
+<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
 </div>
 </section>
 {''.join(tool_call_overlays)}

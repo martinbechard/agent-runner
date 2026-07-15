@@ -155,7 +155,7 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Sum of exclusive work-unit metrics.
 
 - **ENTITY: ENTITY-7** Cost assessment
-  - **SYNOPSIS:** Monetary status plus optional API-equivalent USD and Codex credit estimates for one aggregation unit.
+  - **SYNOPSIS:** Monetary status plus an optional API-equivalent USD estimate for one aggregation unit.
   - **FIELD:** `status`
     - **SYNOPSIS:** `recorded`, `estimated`, `subscription-no-charge-data`, or `unavailable`.
   - **FIELD:** `pricing_model` and `pricing_version`
@@ -164,8 +164,7 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Separately calculated components; reasoning is not charged twice when it is included in output.
   - **FIELD:** `total_cost`
     - **SYNOPSIS:** Sum of available cost components with currency and estimate label.
-  - **FIELD:** `estimated_credits`
-    - **SYNOPSIS:** Codex subscription credits calculated from the published token-based rate card when every used model has a complete credit-rate entry.
+  - **RULE:** Reports do not derive or display Codex credit estimates because rollout telemetry does not establish a run-specific credit charge or balance.
 
 ## 4. Structure And Execution
 
