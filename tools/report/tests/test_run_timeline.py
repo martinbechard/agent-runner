@@ -305,6 +305,20 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "<th>Activity</th>" in root_turn_table
 
 
+def test_native_codex_report_uses_backend_neutral_title():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    html = module.render_codex_rollout_html(run)
+    markdown = module.render_codex_rollout_markdown(run)
+
+    assert "<title>Agent Execution Metrics</title>" in html
+    assert "<h1>Agent Execution Metrics</h1>" in html
+    assert markdown.startswith("# Agent Execution Metrics\n")
+    assert "Codex Rollout Metrics" not in html
+    assert "Codex Rollout Metrics" not in markdown
+
+
 def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)

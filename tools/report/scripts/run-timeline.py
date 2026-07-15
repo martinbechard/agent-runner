@@ -54,6 +54,7 @@ CODEX_CREDIT_RATE_KEYS = (
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
 CODEX_ROLLOUT_PARSER_VERSION = "1.4.0"
+AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
@@ -1755,7 +1756,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         else 0
     )
     lines = [
-        "# Codex Rollout Metrics",
+        f"# {AGENT_EXECUTION_METRICS_TITLE}",
         "",
         f"- Root thread: `{run.root_thread_id}`",
         f"- State: `{run.state}`",
@@ -2118,7 +2119,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
     openai_source = str(pricing_registry.get("_source", ""))
     anthropic_source = str(pricing_registry.get("_anthropic_source", ""))
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>Codex Rollout Metrics</title>
+<html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
 <style>
 body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; color: #263238; background:#fafbfc; }}
 h1 {{ margin-bottom:.25em; }}
@@ -2173,7 +2174,7 @@ td {{ font-size:.85em; }}
 code {{ font-size:.9em; }}
 @media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 </style></head><body>
-<h1>Codex Rollout Metrics</h1>
+<h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
 <p>Root <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
@@ -3738,7 +3739,7 @@ class SealedCodexRunAdapter(BaseReportAdapter):
     def build(path: Path) -> ReportDocument:
         run = reprocess_sealed_codex_run(path)
         return ReportDocument(
-            run_title="Codex Rollout Metrics",
+            run_title=AGENT_EXECUTION_METRICS_TITLE,
             workspace=path,
             codex_run=run,
         )
@@ -3758,7 +3759,7 @@ class NativeCodexRolloutAdapter(BaseReportAdapter):
             raise ValueError(f"No Codex thread identity found in {path}")
         run = build_codex_rollout_run(identity[0], _sessions_root_for_rollout(path))
         return ReportDocument(
-            run_title="Codex Rollout Metrics",
+            run_title=AGENT_EXECUTION_METRICS_TITLE,
             workspace=path,
             codex_run=run,
         )
