@@ -63,7 +63,7 @@ TOOL_RESULT_PREVIEW_CHARS = 200
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.4.0"
+JUNIE_SESSION_PARSER_VERSION = "1.5.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -240,10 +240,11 @@ class ReportDocument:
 
 @dataclass
 class UsageTotals:
-    """Exclusive token counters with cached and reasoning subset semantics."""
+    """Exclusive token counters with cache and reasoning subset semantics."""
 
     input_tokens: int = 0
     cached_input_tokens: int = 0
+    cache_create_input_tokens: int = 0
     uncached_input_tokens: int = 0
     output_tokens: int = 0
     reasoning_tokens: int = 0
@@ -254,6 +255,9 @@ class UsageTotals:
         return UsageTotals(
             input_tokens=self.input_tokens + other.input_tokens,
             cached_input_tokens=self.cached_input_tokens + other.cached_input_tokens,
+            cache_create_input_tokens=(
+                self.cache_create_input_tokens + other.cache_create_input_tokens
+            ),
             uncached_input_tokens=self.uncached_input_tokens + other.uncached_input_tokens,
             output_tokens=self.output_tokens + other.output_tokens,
             reasoning_tokens=self.reasoning_tokens + other.reasoning_tokens,
@@ -265,11 +269,20 @@ class UsageTotals:
         return UsageTotals(
             input_tokens=self.input_tokens - previous.input_tokens,
             cached_input_tokens=self.cached_input_tokens - previous.cached_input_tokens,
+            cache_create_input_tokens=(
+                self.cache_create_input_tokens - previous.cache_create_input_tokens
+            ),
             uncached_input_tokens=self.uncached_input_tokens - previous.uncached_input_tokens,
             output_tokens=self.output_tokens - previous.output_tokens,
             reasoning_tokens=self.reasoning_tokens - previous.reasoning_tokens,
             processed_tokens=self.processed_tokens - previous.processed_tokens,
         )
+
+    @property
+    def direct_input_tokens(self) -> int:
+        """Return uncached input excluding tokens written to a provider cache."""
+
+        return max(0, self.uncached_input_tokens - self.cache_create_input_tokens)
 
     def is_monotonic_from(self, previous: UsageTotals) -> bool:
         """Return whether every cumulative counter is at least its prior value."""
@@ -2739,8 +2752,9 @@ def render_codex_rollout_html(
                 activity for activity in turn_activities if activity.activity_type == "input"
             ]
             input_result = (
-                f'<div class="activity-summary">{turn.usage.cached_input_tokens:,} cached · '
-                f'{turn.usage.uncached_input_tokens:,} fresh</div>'
+                f'<div class="activity-summary">{turn.usage.direct_input_tokens:,} input · '
+                f'{turn.usage.cached_input_tokens:,} cache-read · '
+                f'{turn.usage.cache_create_input_tokens:,} cache-create</div>'
             )
             if input_activities:
                 input_result += "".join(
@@ -2781,9 +2795,9 @@ def render_codex_rollout_html(
                     turn_activities,
                 )
                 model_arguments = (
-                    f'<div class="activity-summary">{response.usage.input_tokens:,} input · '
-                    f'{response.usage.cached_input_tokens:,} cached · '
-                    f'{response.usage.uncached_input_tokens:,} fresh</div>'
+                    f'<div class="activity-summary">{response.usage.direct_input_tokens:,} input · '
+                    f'{response.usage.cached_input_tokens:,} cache-read · '
+                    f'{response.usage.cache_create_input_tokens:,} cache-create</div>'
                     + _render_model_activity_disclosure(
                         prompt_fragments,
                         raw_label="raw arguments",
@@ -4755,11 +4769,13 @@ def _junie_usage(value: object) -> UsageTotals | None:
             return None
         counters[key] = raw
     cached = counters["cacheInputTokens"]
-    uncached = counters["inputTokens"] + counters["cacheCreateTokens"]
+    cache_create = counters["cacheCreateTokens"]
+    uncached = counters["inputTokens"] + cache_create
     output = counters["outputTokens"]
     return UsageTotals(
         input_tokens=cached + uncached,
         cached_input_tokens=cached,
+        cache_create_input_tokens=cache_create,
         uncached_input_tokens=uncached,
         output_tokens=output,
         reasoning_tokens=0,
@@ -4917,8 +4933,6 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
     responses: dict[str, list[ResponseUsage]] = {}
     models: dict[str, Counter[str]] = {}
     recorded_costs: dict[str, float] = {}
-    saw_cache_create = False
-
     for ordinal, record in records:
         timestamp = _normalize_timestamp(record.get("timestampMs"))
         kind = str(record.get("kind") or "")
@@ -5025,7 +5039,6 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             if usage is None or not isinstance(model_usage, dict):
                 diagnostics.append(f"invalid Junie model usage at line {ordinal}")
                 continue
-            saw_cache_create = saw_cache_create or bool(model_usage.get("cacheCreateTokens"))
             raw_cost = model_usage.get("cost")
             response_cost = (
                 float(raw_cost)
@@ -5224,8 +5237,6 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
     for thread in threads:
         usage_totals = usage_totals + thread.token_totals
         diagnostics.extend(f"{_agent_assignment(thread)}: {item}" for item in thread.diagnostics)
-    if saw_cache_create:
-        diagnostics.append("Junie cache-create tokens are included in fresh input")
     wall_start, wall_end, wall_ms, agent_ms, active_ms, tool_ms, peak = _time_metrics(threads)
     used_threads = [thread for thread in threads if thread.token_totals.processed_tokens]
     has_complete_cost = bool(used_threads) and all(

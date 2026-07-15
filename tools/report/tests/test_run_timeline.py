@@ -394,14 +394,16 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
-    assert run.parser_version == "1.4.0"
+    assert run.parser_version == "1.5.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
     assert sum(len(thread.tool_intervals) for thread in run.threads) == 3
     assert run.usage_totals.input_tokens == 28
     assert run.usage_totals.cached_input_tokens == 11
+    assert run.usage_totals.cache_create_input_tokens == 3
     assert run.usage_totals.uncached_input_tokens == 17
+    assert run.usage_totals.direct_input_tokens == 14
     assert run.usage_totals.output_tokens == 5
     assert run.usage_totals.processed_tokens == 33
     assert run.cost.status == "recorded"
@@ -471,6 +473,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<span class="activity-name">model</span>' in custom_tool_table
     assert '<span class="activity-name">output</span>' in custom_tool_table
     assert "claude-reviewer" in custom_tool_table
+    assert "4 input · 6 cache-read · 1 cache-create" in custom_tool_table
     main_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
@@ -489,6 +492,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     )[1].split("</tr>", 1)[0]
     assert "<summary>raw arguments</summary>" in main_model_row
     assert "Synthetic prompt API_TOKEN=[redacted]" in main_model_row
+    assert "10 input · 5 cache-read · 2 cache-create" in main_model_row
     assert "<summary>raw result</summary>" in main_model_row
     assert "Inspect the project before running the command." in main_model_row
     assert "recorded</td>" not in main_tool_table
