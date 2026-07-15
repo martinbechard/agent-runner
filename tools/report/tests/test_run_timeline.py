@@ -627,7 +627,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
         "<td>3</td><td>0</td>" in task_span_table
     )
     assert "<th>Task spans</th>" in html
-    assert "task span task-1" in html
+    assert "Task span task-1" in html
     assert "Write 2 files" in html
     assert "docs/architecture/example.md" in html
     assert "raw source command (redacted)" in html
@@ -1268,7 +1268,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert "root — turns and tool calls" in html
     assert "module-a — turns and tool calls" in html
     assert "reviewer — turns and tool calls" in html
-    assert "root — turn root-turn-1" in html
+    assert "root — Turn root-turn-1" in html
     assert "All turns and tool calls" not in html
     assert "<th>Agent</th>" not in html
     assert html.count('class="turn-tool-row"') == 4
@@ -1290,6 +1290,15 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert '<span class="metric-detail">1 call · 500ms</span>' in root_turn_overlay
     assert '<div class="label">Tool calls</div>' not in root_turn_overlay
     assert ".turn-detail-tools-metric { grid-column:1 / -1; }" in html
+    assert (
+        ".tool-call-panel { display:flex; flex-direction:column; "
+        "box-sizing:border-box;"
+    ) in html
+    assert (
+        ".tool-call-panel .table-scroll { flex:1 1 auto; min-height:0; "
+        "max-height:none; }"
+    ) in html
+    assert ".turn-detail-panel .table-scroll" not in html
     assert "Time to first token" in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
     assert "Arguments are compact, secret-redacted summaries" not in root_turn_overlay

@@ -3013,7 +3013,7 @@ def render_codex_rollout_html(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
                 '<div class="tool-call-panel turn-detail-panel">'
                 '<div class="tool-call-header">'
-                f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_singular} {_escape_html(turn.turn_id)}</h2>'
+                f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_singular.capitalize()} {_escape_html(turn.turn_id)}</h2>'
                 '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
@@ -3295,13 +3295,12 @@ td {{ font-size:.85em; }}
 .model-pricing-panel .table-scroll {{ max-height:calc(92vh - 110px); }}
 .tool-call-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:rgba(25,35,45,.62); }}
 .tool-call-overlay:target {{ display:flex; }}
-.tool-call-panel {{ width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
+.tool-call-panel {{ display:flex; flex-direction:column; box-sizing:border-box; width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
 .turn-detail-panel {{ width:min(1500px,94vw); }}
 .tool-call-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
 .tool-call-header h2 {{ margin:0; }}
 .tool-call-close {{ color:#b3261e; font-weight:600; text-decoration:none; }}
-.tool-call-panel .table-scroll {{ max-height:calc(92vh - 80px); }}
-.turn-detail-panel .table-scroll {{ max-height:calc(92vh - 180px); }}
+.tool-call-panel .table-scroll {{ flex:1 1 auto; min-height:0; max-height:none; }}
 .turn-detail-table {{ min-width:900px; margin:0; table-layout:fixed; }}
 .turn-detail-table th, .turn-detail-table td {{ vertical-align:top; white-space:normal; }}
 .turn-detail-table .turn-detail-index-column {{ width:4%; }}
