@@ -1952,7 +1952,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 '<div class="tool-call-panel turn-detail-panel">'
                 '<div class="tool-call-header">'
                 f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — turn {_escape_html(turn.turn_id)}</h2>'
-                f'<a class="tool-call-close" href="#{tool_call_overlay_id}">back to agent</a>'
+                '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
                 f'<div class="metric"><div class="label">T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'

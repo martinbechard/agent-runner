@@ -347,7 +347,8 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
-    assert 'href="#turn-tool-call-list-1"' in root_turn_overlay
+    assert 'href="#execution-timeline">close</a>' in root_turn_overlay
+    assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert "Time to first token" in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
     tool_table = root_turn_overlay.split('<div class="table-scroll">', 1)[1].split(
@@ -356,6 +357,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert "<th>T+</th>" in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
+    assert "<th>Confidence</th>" not in tool_table
     assert "<th>Timing note</th>" in tool_table
     assert (
         '<tr class="turn-detail-tool-row"><td>1</td><td>T+3s</td>'
