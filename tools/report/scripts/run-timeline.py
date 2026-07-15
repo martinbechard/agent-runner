@@ -3008,6 +3008,19 @@ def render_codex_rollout_html(
                 if is_junie
                 else f"<td>{_format_detail_ms(turn.time_to_first_token_ms)}</td>"
             )
+            timeline_label = (
+                f"{turn_singular.capitalize()} {_turn_offset_label(run, turn)} · "
+                f"{_format_detail_ms(turn.duration_ms)}"
+            )
+            timeline_end = turn.completed_at or thread.last_observed_at
+            timeline_cell = (
+                '<td class="turn-timeline-cell">'
+                '<span class="timeline-track turn-timeline-track" role="img" '
+                f'aria-label="{_escape_html(timeline_label)}">'
+                '<span class="timeline-bar turn-timeline-bar" '
+                f'style="{_timeline_style(run, turn.started_at, timeline_end)}"></span>'
+                "</span></td>"
+            )
             turn_rows.append(
                 "<tr>"
                 f"<td>{turn_link}</td>"
@@ -3023,9 +3036,9 @@ def render_codex_rollout_html(
                 f"<td>{turn.usage.direct_input_tokens:,}</td>"
                 f"<td>{turn.usage.output_tokens:,}</td>"
                 f"<td>{turn.usage.reasoning_tokens:,}</td>"
-                f"<td>{turn.usage.processed_tokens:,}</td>"
                 f"<td title=\"{_escape_html(tool_total)}\">{_escape_html(tool_names)}</td>"
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
+                f"{timeline_cell}"
                 "</tr>"
             )
         turn_column_count = 13 + int(not is_junie) + int(show_work_unit) + int(show_activity)
@@ -3080,7 +3093,7 @@ def render_codex_rollout_html(
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th>{ttft_header}<th>State</th>"
             f"{optional_headers}<th>Input</th><th>Cache read</th><th>Cache write</th>"
-            "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Tools</th><th>Cost estimate</th>"
+            '<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Tools</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</details>"
         )
@@ -3126,9 +3139,9 @@ def render_codex_rollout_html(
         )
     )
     execution_note = (
-        "Bars share a common run-wide time axis and show each agent's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table."
+        "Bars share a common run-wide time axis and show each agent and turn's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table."
         if is_codex
-        else "Bars share a common run-wide time axis and show each agent's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
+        else "Bars share a common run-wide time axis and show each agent and task span's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
     )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
@@ -3174,7 +3187,7 @@ td {{ font-size:.85em; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
-.thread-detail > summary {{ display:grid; grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px minmax(220px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
+.thread-detail > summary {{ display:grid; grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px minmax(220px,20%); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
 .thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
 .thread-name {{ font-weight:600; overflow-wrap:anywhere; }}
 .thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
@@ -3182,6 +3195,8 @@ td {{ font-size:.85em; }}
 .thread-detail .table-scroll {{ margin-bottom:13px; }}
 .timeline-track {{ position:relative; display:block; height:12px; background:#e8edf0; border-radius:3px; min-width:180px; }}
 .timeline-bar {{ position:absolute; top:0; bottom:0; background:#4a90d9; border-radius:3px; }}
+.turn-table .turn-timeline-header, .turn-table .turn-timeline-cell {{ width:20%; min-width:220px; }}
+.turn-table .turn-timeline-track {{ width:100%; min-width:220px; }}
 .state {{ display:inline-block; border-radius:10px; padding:2px 7px; background:#eceff1; font-size:.82em; }}
 .state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
 .state-aborted {{ background:#fdecea; color:#b3261e; }}

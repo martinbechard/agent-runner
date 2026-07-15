@@ -466,9 +466,13 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>TTFT</th>" not in task_span_table
     assert "<th>Cache read</th><th>Cache write</th><th>Fresh</th>" in task_span_table
+    assert "<th>Processed</th>" not in task_span_table
+    assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in task_span_table
+    assert "recorded" not in task_span_table.lower()
+    assert task_span_table.count('class="timeline-bar turn-timeline-bar"') == 1
     assert (
         "<td>17</td><td>5</td><td>2</td><td>10</td>"
-        "<td>3</td><td>0</td><td>20</td>" in task_span_table
+        "<td>3</td><td>0</td>" in task_span_table
     )
     assert "<th>Task spans</th>" in html
     assert "task span task-1" in html
@@ -917,9 +921,13 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert html.count('class="composition-output">') == 2
     assert 'class="thread-detail"' in html
     assert (
+        ".turn-table .turn-timeline-header, .turn-table .turn-timeline-cell "
+        "{ width:20%; min-width:220px; }" in html
+    )
+    assert (
         ".thread-detail > summary { display:grid; "
         "grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px "
-        "minmax(220px,1fr);"
+        "minmax(220px,20%);"
     ) in html
     assert "grid-template-columns:minmax(250px,2fr) auto auto" not in html
     assert "root-turn-1" in html
@@ -932,6 +940,16 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     root_turn_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>Work unit</th>" in root_turn_table
     assert "<th>Activity</th>" in root_turn_table
+    assert "<th>Processed</th>" not in root_turn_table
+    assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in root_turn_table
+    assert (
+        'class="timeline-bar turn-timeline-bar" '
+        'style="left:0.000%;width:22.222%"' in root_turn_table
+    )
+    assert (
+        'class="timeline-bar turn-timeline-bar" '
+        'style="left:88.889%;width:11.111%"' in root_turn_table
+    )
 
 
 def test_native_codex_report_uses_backend_neutral_title():
@@ -1257,7 +1275,7 @@ def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_cos
         "</details>", 1
     )[0]
     assert 'title="Agent cost estimate">cost $40.50' in root_detail
-    assert "<th>Cost estimate</th>" in root_detail
+    assert "<th>Cost est.</th>" in root_detail
     assert "$35.50" in root_detail
     assert "$5.00" in root_detail
     root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
