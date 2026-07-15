@@ -889,6 +889,11 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "Bars share a common run-wide time axis" in html
     assert "Turn activity" in html
     assert 'class="token-composition"' in html
+    assert ".cached { background:var(--token-cached); }" in html
+    assert ".composition-cached { color:var(--token-cached); }" in html
+    assert 'class="composition-cached">Cached input' in html
+    assert 'class="composition-fresh">fresh input' in html
+    assert html.count('class="composition-output">') == 2
     assert 'class="thread-detail"' in html
     assert (
         ".thread-detail > summary { display:grid; "
