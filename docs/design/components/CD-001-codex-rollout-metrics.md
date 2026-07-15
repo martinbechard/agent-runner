@@ -131,6 +131,14 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Recorded completion metric when available.
   - **FIELD:** `outcome`
     - **SYNOPSIS:** Complete, aborted, active, or unmatched.
+  - **FIELD:** `abort_reason`
+    - **SYNOPSIS:** The reason recorded by `turn_aborted`, when present.
+  - **FIELD:** `abort_event_timestamp`
+    - **SYNOPSIS:** Millisecond-capable source timestamp of the `turn_aborted` event, retained separately from a lower-precision `completed_at` payload for cross-thread matching.
+  - **FIELD:** `abort_initiator_thread_id`, `abort_initiator_agent_path`, `abort_initiator_turn_id`, and `abort_initiator_relationship`
+    - **SYNOPSIS:** Cross-thread provenance for an explicit `interrupt_agent` call whose target and timing match this aborted turn. A direct caller is identified as the parent; unmatched aborts do not infer an initiator.
+  - **FIELD:** `abort_request_source_path` and `abort_request_source_ordinal`
+    - **SYNOPSIS:** Source location of the matched `interrupt_agent` request for audit and reprocessing.
   - **FIELD:** `usage`
     - **SYNOPSIS:** Exclusive response deltas attributed to this turn.
   - **FIELD:** `attribution_confidence`
@@ -245,6 +253,11 @@ flowchart LR
   - **SYNOPSIS:** Derive response deltas, sum them to thread totals, sum each included thread once to the run total, and expose any remainder.
   - **VALIDATES:** `run total = sum(final local thread totals)` and `thread total = response deltas + explicit unattributed remainder`.
   - **BECAUSE:** These equalities prevent parent/child rollup assumptions and duplicated token events from inflating totals.
+
+- **PROCESS: PROCESS-2A** Reconcile explicit interruptions
+  - **SYNOPSIS:** Match an `interrupt_agent` target path and call interval to the target agent's aborted turn, then record the caller and direct-parent relationship.
+  - **VALIDATES:** Only a matching target and timestamp interval establishes explicit interruption provenance; the `turn_aborted` reason alone does not identify a caller.
+  - **BECAUSE:** An aborted outcome should distinguish a deliberate parent stop from an unattributed interruption without inventing intent.
 
 - **PROCESS: PROCESS-3** Attribute semantic work
   - **SYNOPSIS:** Apply explicit identifiers first, then exact turn ownership, then bounded inference; leave unresolved work unattributed.

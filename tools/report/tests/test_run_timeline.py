@@ -1158,7 +1158,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.9.0"
+    assert run.parser_version == "1.10.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -1741,7 +1741,82 @@ def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_pat
     assert run.usage_totals.processed_tokens == 24
     assert run.threads[0].responses[0].turn_id is None
     assert [turn.outcome for turn in run.threads[0].turns] == ["aborted", "complete", "active"]
+    assert run.threads[0].turns[0].abort_reason == "interrupted"
+    assert run.threads[0].turns[0].abort_initiator_thread_id == ""
+    assert run.threads[0].turns[0].abort_initiator_agent_path == ""
     assert run.threads[0].unattributed_usage.processed_tokens == 24
+
+
+def test_native_codex_records_explicit_parent_interrupt_provenance(tmp_path):
+    module = _load_module()
+    root = tmp_path / "root.jsonl"
+    coordinator = tmp_path / "coordinator.jsonl"
+    worker = tmp_path / "worker.jsonl"
+    root.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"session_meta","payload":{"id":"root","source":"user"}}',
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"root-turn","started_at":"2026-07-14T03:00:00Z"}}',
+                '{"timestamp":"2026-07-14T03:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"root-turn","completed_at":"2026-07-14T03:00:04Z","duration_ms":4000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    coordinator.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"session_meta","payload":{"id":"coordinator","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root","agent_path":"/root/coordinator"}}}}}',
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"coordinator-turn","started_at":"2026-07-14T03:00:00Z"}}',
+                '{"timestamp":"2026-07-14T03:00:00.900Z","type":"response_item","payload":{"type":"function_call","name":"interrupt_agent","arguments":"{\\"target\\":\\"/root/coordinator/worker\\"}","call_id":"interrupt-call","internal_chat_message_metadata_passthrough":{"turn_id":"coordinator-turn"}}}',
+                '{"timestamp":"2026-07-14T03:00:01.100Z","type":"response_item","payload":{"type":"function_call_output","call_id":"interrupt-call","output":"{\\"previous_status\\":\\"running\\"}","internal_chat_message_metadata_passthrough":{"turn_id":"coordinator-turn"}}}',
+                '{"timestamp":"2026-07-14T03:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"coordinator-turn","completed_at":"2026-07-14T03:00:03Z","duration_ms":3000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    worker.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"session_meta","payload":{"id":"worker","source":{"subagent":{"thread_spawn":{"parent_thread_id":"coordinator","agent_path":"/root/coordinator/worker"}}}}}',
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"worker-turn","started_at":"2026-07-14T03:00:00Z"}}',
+                '{"timestamp":"2026-07-14T03:00:01Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"worker-turn","completed_at":"2026-07-14T03:00:01Z","duration_ms":1000,"reason":"interrupted"}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("root", tmp_path)
+    worker_thread = next(thread for thread in run.threads if thread.thread_id == "worker")
+    turn = worker_thread.turns[0]
+
+    assert turn.abort_reason == "interrupted"
+    assert turn.abort_event_timestamp == "2026-07-14T03:00:01+00:00"
+    assert turn.abort_initiator_thread_id == "coordinator"
+    assert turn.abort_initiator_agent_path == "/root/coordinator"
+    assert turn.abort_initiator_turn_id == "coordinator-turn"
+    assert turn.abort_initiator_relationship == "parent"
+    assert turn.abort_request_source_path == str(coordinator.resolve())
+    assert turn.abort_request_source_ordinal == 3
+    assert '"abort_initiator_relationship": "parent"' in module.codex_run_to_json(run)
+    assert "abort_initiator_agent_path" in module.render_codex_rollout_turn_csv(run)
+    html = module.render_codex_rollout_html(run)
+    worker_overlay = html.split('id="turn-tool-call-list-3-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert '<div class="label">Abort provenance</div>' not in worker_overlay
+    assert (
+        '<div class="metric turn-state-metric"><div class="label">State</div>'
+        in worker_overlay
+    )
+    assert "Parent interrupt · coordinator" in worker_overlay
+    assert 'title="/root/coordinator"' in worker_overlay
+    assert "turn coordinator-turn · interrupted" in worker_overlay
+    assert ".turn-state-detail { font-size:.66em;" in html
+    assert ".turn-state-source { display:block; margin-top:2px;" in html
+    assert "font-size:.58em;" in html
 
 
 def test_native_codex_completed_reviewer_findings_are_failed(tmp_path):

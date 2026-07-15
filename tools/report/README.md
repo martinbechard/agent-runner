@@ -117,6 +117,10 @@ without copying transcript content. It includes token composition, observed
 thread bars, an agent inventory derived from recorded assignment paths and
 runtime nicknames, expandable per-turn duration and time-to-first-token rows,
 input/cache/output/reasoning counters, and tool-name/count/duration summaries.
+For aborted turns, it also correlates an explicit `interrupt_agent` call from
+another included thread and shows compact caller, parent-relationship, caller-
+turn, and abort-reason details beneath the state badge when that evidence is
+available. Unmatched aborts remain unattributed.
 The Markdown companion includes matching agent and work-unit breakdowns.
 
 When explicit work-unit metadata is absent, the report uses the final semantic

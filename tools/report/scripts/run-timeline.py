@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.9.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.10.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -331,6 +331,14 @@ class AgentTurn:
     duration_ms: int = 0
     time_to_first_token_ms: int | None = None
     outcome: str = "active"
+    abort_reason: str = ""
+    abort_event_timestamp: str = ""
+    abort_initiator_thread_id: str = ""
+    abort_initiator_agent_path: str = ""
+    abort_initiator_turn_id: str = ""
+    abort_initiator_relationship: str = ""
+    abort_request_source_path: str = ""
+    abort_request_source_ordinal: int = 0
     usage: UsageTotals = field(default_factory=UsageTotals)
     run_id: str = ""
     phase_id: str = ""
@@ -1395,6 +1403,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                     agent_nickname=agent_nickname,
                     final_message=final_message,
                 )
+                if event_type == "turn_aborted":
+                    turn.abort_reason = str(payload.get("reason") or "")
+                    turn.abort_event_timestamp = _normalize_timestamp(timestamp)
                 has_recorded_output = any(
                     activity.turn_id == turn.turn_id and activity.activity_type == "output"
                     for activity in activities
@@ -2300,6 +2311,68 @@ def _manifest_entry(thread: CodexThreadMetrics, *, sealed: bool) -> SourceManife
     )
 
 
+def _interrupt_agent_target(tool: ToolInterval) -> str:
+    """Return the explicit target path from one interrupt_agent call."""
+
+    if tool.tool_name != "interrupt_agent":
+        return ""
+    try:
+        arguments = json.loads(tool.argument_summary)
+    except (json.JSONDecodeError, TypeError):
+        return ""
+    if not isinstance(arguments, dict):
+        return ""
+    target = arguments.get("target")
+    return str(target) if isinstance(target, str) else ""
+
+
+def _record_explicit_interrupt_provenance(threads: list[CodexThreadMetrics]) -> None:
+    """Attach an interrupt_agent caller to the aborted turn it stopped."""
+
+    targets = {
+        thread.agent_path: thread
+        for thread in threads
+        if thread.agent_path
+    }
+    for initiator in threads:
+        for tool in initiator.tool_intervals:
+            target = targets.get(_interrupt_agent_target(tool))
+            if target is None:
+                continue
+            interrupt_started = _parse_iso_datetime(tool.started_at)
+            interrupt_completed = _parse_iso_datetime(tool.completed_at)
+            if interrupt_started is None or interrupt_completed is None:
+                continue
+            candidates = []
+            for turn in target.turns:
+                aborted_at = _parse_iso_datetime(
+                    turn.abort_event_timestamp or turn.completed_at
+                )
+                if (
+                    turn.abort_event_timestamp
+                    and aborted_at is not None
+                    and interrupt_started <= aborted_at <= interrupt_completed
+                ):
+                    candidates.append((aborted_at, turn))
+            if not candidates:
+                continue
+            _, turn = min(
+                candidates,
+                key=lambda item: abs((item[0] - interrupt_started).total_seconds()),
+            )
+            turn.abort_initiator_thread_id = initiator.thread_id
+            turn.abort_initiator_agent_path = (
+                initiator.agent_path
+                or ("/root" if not initiator.parent_thread_id else initiator.thread_id)
+            )
+            turn.abort_initiator_turn_id = tool.turn_id or ""
+            turn.abort_initiator_relationship = (
+                "parent" if target.parent_thread_id == initiator.thread_id else "agent"
+            )
+            turn.abort_request_source_path = tool.source_path
+            turn.abort_request_source_ordinal = tool.source_start_ordinal
+
+
 def build_codex_rollout_run(
     root_thread_id: str,
     sessions_root: Path,
@@ -2322,6 +2395,7 @@ def build_codex_rollout_run(
     initial_stats = {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in candidates}
     included_paths, diagnostics = _discover_rollout_paths(root_thread_id, candidates)
     threads = [parse_codex_rollout(path) for path in included_paths]
+    _record_explicit_interrupt_provenance(threads)
     if seal:
         final_candidates = set(candidate_paths or _candidate_rollouts(sessions_root))
         if final_candidates != initial_files:
@@ -2467,8 +2541,13 @@ def render_codex_rollout_turn_csv(run: CodexRunMetrics) -> str:
     """Render content-free turn metrics from `run` as newline-terminated CSV."""
     rows: list[list[object]] = [[
         "thread_id", "turn_id", "started_at", "completed_at", "duration_ms",
-        "time_to_first_token_ms", "outcome", "phase_id", "lane_id",
-        "work_unit_id", "activity", "attribution_confidence", "input_tokens",
+        "time_to_first_token_ms", "outcome", "abort_reason",
+        "abort_event_timestamp",
+        "abort_initiator_thread_id", "abort_initiator_agent_path",
+        "abort_initiator_turn_id", "abort_initiator_relationship",
+        "abort_request_source_path", "abort_request_source_ordinal",
+        "phase_id", "lane_id", "work_unit_id", "activity",
+        "attribution_confidence", "input_tokens",
         "cached_input_tokens", "uncached_input_tokens", "output_tokens",
         "reasoning_tokens", "processed_tokens", "source_path", "source_ordinal",
     ]]
@@ -2477,6 +2556,11 @@ def render_codex_rollout_turn_csv(run: CodexRunMetrics) -> str:
             rows.append([
                 thread.thread_id, turn.turn_id, turn.started_at, turn.completed_at,
                 turn.duration_ms, turn.time_to_first_token_ms, turn.outcome,
+                turn.abort_reason, turn.abort_event_timestamp,
+                turn.abort_initiator_thread_id,
+                turn.abort_initiator_agent_path, turn.abort_initiator_turn_id,
+                turn.abort_initiator_relationship, turn.abort_request_source_path,
+                turn.abort_request_source_ordinal,
                 turn.phase_id, turn.lane_id, turn.work_unit_id, turn.activity,
                 turn.attribution_confidence, turn.usage.input_tokens,
                 turn.usage.cached_input_tokens, turn.usage.uncached_input_tokens,
@@ -2541,6 +2625,36 @@ def _format_detail_ms(milliseconds: int | None) -> str:
     if milliseconds < 1000:
         return f"{milliseconds}ms"
     return _format_ms(milliseconds)
+
+
+def _render_abort_provenance_detail(turn: AgentTurn) -> str:
+    if not (
+        turn.abort_event_timestamp
+        or turn.abort_reason
+        or turn.abort_initiator_agent_path
+    ):
+        return ""
+    if turn.abort_initiator_agent_path:
+        relationship = turn.abort_initiator_relationship or "agent"
+        initiator_name = turn.abort_initiator_agent_path.rstrip("/").rsplit("/", 1)[-1]
+        value = f"{relationship.capitalize()} interrupt · {initiator_name}"
+        detail = (
+            f"turn {turn.abort_initiator_turn_id}"
+            if turn.abort_initiator_turn_id
+            else "interrupt_agent"
+        )
+        if turn.abort_reason:
+            detail += f" · {turn.abort_reason}"
+        title = f' title="{_escape_html(turn.abort_initiator_agent_path)}"'
+    else:
+        value = "Interrupt source not recorded"
+        detail = turn.abort_reason or "No explicit interrupt_agent caller matched"
+        title = ""
+    return (
+        f'<span class="metric-detail turn-state-detail"{title}>'
+        f'{_escape_html(value)}</span>'
+        f'<span class="turn-state-source">{_escape_html(detail)}</span>'
+    )
 
 
 def _tool_activity_summary(tools: list[ToolInterval]) -> tuple[str, str]:
@@ -3066,6 +3180,7 @@ def render_codex_rollout_html(
                 if is_junie
                 else f'<div class="metric"><div class="label">Time to first token</div><div class="value">{_format_detail_ms(turn.time_to_first_token_ms)}</div></div>'
             )
+            abort_provenance_detail = _render_abort_provenance_detail(turn)
             turn_detail_overlays.append(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
                 '<div class="tool-call-panel turn-detail-panel">'
@@ -3082,7 +3197,7 @@ def render_codex_rollout_html(
                 f'<div class="metric"><div class="label">Start T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
                 f'<div class="metric"><div class="label">Duration</div><div class="value">{_format_detail_ms(turn.duration_ms)}</div></div>'
                 f'{ttft_metric}'
-                f'<div class="metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div></div>'
+                f'<div class="metric turn-state-metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div>{abort_provenance_detail}</div>'
                 f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_render_turn_model_metric(thread, turn.turn_id)}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
@@ -3274,6 +3389,8 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .label {{ color:#666; font-size:.82em; }}
 .value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
 .metric-detail {{ display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }}
+.turn-state-detail {{ font-size:.66em; line-height:1.25; }}
+.turn-state-source {{ display:block; margin-top:2px; color:#78909c; font-size:.58em; font-weight:400; line-height:1.2; overflow-wrap:anywhere; }}
 table {{ border-collapse:collapse; width:100%; margin:10px 0; background:#fff; }}
 th,td {{ border-bottom:1px solid #e1e6ea; padding:7px; text-align:left; white-space:nowrap; }}
 th {{ color:#546e7a; font-size:.8em; background:#f5f7f8; position:sticky; top:0; }}
