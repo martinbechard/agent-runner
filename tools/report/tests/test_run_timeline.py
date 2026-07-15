@@ -600,6 +600,14 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
         not in html
     )
     assert "Bars share a common run-wide time axis" in html
+    main_span_duration = module._format_detail_ms(
+        sum(turn.duration_ms for turn in main.turns)
+    )
+    custom_span_duration = module._format_detail_ms(
+        sum(turn.duration_ms for turn in custom.turns)
+    )
+    assert f"2 calls · {main_span_duration}" in html
+    assert f"1 call · {custom_span_duration}" in html
     assert "Cached input is part of input" not in html
     assert "Reasoning is part of output" not in html
     assert 'class="composition-output">output 5</span>' in html

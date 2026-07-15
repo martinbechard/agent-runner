@@ -2815,7 +2815,15 @@ def render_codex_rollout_html(
         tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
         agent_assignment = _agent_assignment(thread)
         agent_cost = _cost_for_thread_usage(thread, thread.token_totals)
-        thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
+        thread_tools_label, _ = _tool_activity_summary(thread.tool_intervals)
+        thread_call_label = "call" if len(thread.tool_intervals) == 1 else "calls"
+        thread_span_duration = _format_detail_ms(
+            sum(turn.duration_ms for turn in thread.turns)
+        )
+        thread_tools_total = (
+            f"{len(thread.tool_intervals):,} {thread_call_label} · "
+            f"{thread_span_duration}"
+        )
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
         show_work_unit = len(work_units) > 1
         show_activity = any(turn.activity for turn in thread.turns)
