@@ -350,6 +350,10 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
     html = module.render_codex_rollout_html(run)
 
     assert '<div class="tool-argument-formatted">Patch · Add · example.md</div>' in html
+    assert (
+        ".tool-argument-formatted { font-weight:600; color:#243447; "
+        "white-space:normal; overflow-wrap:anywhere; }"
+    ) in html
     assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
     assert "*** Add File: /tmp/docs/example.md" in html
     assert "<th>Result</th>" in html

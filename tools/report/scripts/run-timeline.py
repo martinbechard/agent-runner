@@ -2613,7 +2613,7 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 .tool-arguments {{ display:block; max-width:720px; white-space:normal; overflow-wrap:anywhere; }}
-.tool-argument-formatted {{ font-weight:600; color:#243447; }}
+.tool-argument-formatted {{ font-weight:600; color:#243447; white-space:normal; overflow-wrap:anywhere; }}
 .tool-argument-raw {{ margin-top:4px; }}
 .tool-argument-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
 .tool-argument-raw[open] .tool-arguments {{ margin-top:5px; }}
