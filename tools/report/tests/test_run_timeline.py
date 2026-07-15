@@ -416,11 +416,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
 
     assert "Agents used" in html
     assert "Assignment" in html
-    assert "Runtime nickname" in html
-    assert "module-a" in html
-    assert "reviewer" in html
+    assert "<th>Runtime nickname</th>" not in html
+    assert "<strong>module-a (module-a)</strong>" in html
+    assert "<strong>reviewer (reviewer)</strong>" in html
     assert "Agent path is the recorded assignment hierarchy" in html
-    assert "Runtime nickname is Codex's per-thread label" in html
+    assert "Runtime nicknames appear in parentheses" in html
 
 
 def test_native_codex_markdown_includes_turn_and_tool_breakdown():
@@ -431,7 +431,8 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
 
     assert "- Turns: 4" in markdown
     assert "- Matched tool calls: 1" in markdown
-    assert "| Assignment | Runtime nickname | Parent assignment | State | Turns | Tools | Agent time |" in markdown
+    assert "| Assignment | Parent assignment | State | Turns | Tools | Agent time |" in markdown
+    assert "| module-a (module-a) | root | complete |" in markdown
     assert "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |" in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
 
