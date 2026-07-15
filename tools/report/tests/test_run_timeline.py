@@ -444,10 +444,18 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     )[0]
     custom_tool_table = custom_overlay.split('<div class="table-scroll">', 1)[1]
     assert (
-        '<th>#</th><th>T+</th><th title="Cumulative model cost for this agent '
-        'task span through the tool source event">Cost to T+</th><th>Tool</th>'
+        '<th>#</th><th>T+</th><th title="Recorded model cost since the previous '
+        'tool row; the first row starts at the task-span boundary">Cost</th>'
+        '<th>Tool</th>'
     ) in custom_tool_table
-    assert '<td title="cumulative recorded model cost before tool call">$0.02 recorded</td>' in custom_tool_table
+    assert "<td>$0.02</td>" in custom_tool_table
+    main_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    main_tool_table = main_overlay.split('<div class="table-scroll">', 1)[1]
+    assert "<td>$0.01</td>" in main_tool_table
+    assert "<td>$0.00</td>" in main_tool_table
+    assert "recorded</td>" not in main_tool_table
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
 
@@ -810,7 +818,8 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert '<col class="turn-detail-result-column">' in tool_table
     assert '<col class="turn-detail-timing-column">' in tool_table
     assert "<th>T+</th>" in tool_table
-    assert "Cost to T+" in tool_table
+    assert '>Cost</th>' in tool_table
+    assert "Cost to T+" not in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
     assert "<th>Result</th>" in tool_table

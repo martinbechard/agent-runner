@@ -1060,12 +1060,20 @@ def _render_tool_result(tool: ToolInterval) -> str:
     )
 
 
-def _render_tool_cost_cell(thread: CodexThreadMetrics, tool: ToolInterval) -> str:
-    cost = _cost_to_tool_start(thread, tool)
-    return (
-        f'<td title="{_escape_html(cost.method)}">'
-        f"{_escape_html(_compact_cost_summary(cost))}</td>"
-    )
+def _render_tool_cost_cell(
+    thread: CodexThreadMetrics,
+    tool: ToolInterval,
+    previous_tool: ToolInterval | None,
+) -> str:
+    current = _cost_to_tool_start(thread, tool)
+    if current.total_cost is None:
+        return "<td>—</td>"
+    previous_total = 0.0
+    if previous_tool is not None:
+        previous = _cost_to_tool_start(thread, previous_tool)
+        previous_total = previous.total_cost or 0.0
+    delta = max(0.0, current.total_cost - previous_total)
+    return f"<td>${delta:.2f}</td>"
 
 
 def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
@@ -2398,7 +2406,7 @@ def render_codex_rollout_html(
                 '<tr class="turn-detail-tool-row">'
                 f"<td>{tool_index}</td>"
                 f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
-                f"{_render_tool_cost_cell(thread, tool)}"
+                f"{_render_tool_cost_cell(thread, tool, tools[tool_index - 2] if tool_index > 1 else None)}"
                 f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
                 f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                 f"<td>{_render_tool_result(tool)}</td>"
@@ -2448,7 +2456,7 @@ def render_codex_rollout_html(
                 '<col class="turn-detail-result-column">'
                 f"{timing_note_column}</colgroup>"
                 '<thead><tr><th>#</th><th>T+</th>'
-                '<th title="Cumulative model cost for this agent task span through the tool source event">Cost to T+</th>'
+                '<th title="Recorded model cost since the previous tool row; the first row starts at the task-span boundary">Cost</th>'
                 '<th>Tool</th><th>Arguments</th><th>Result</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
