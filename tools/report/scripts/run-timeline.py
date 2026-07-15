@@ -1975,6 +1975,12 @@ td {{ font-size:.85em; }}
 .state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
 .state-aborted {{ background:#fdecea; color:#b3261e; }}
 .state-active, .state-live {{ background:#fff3cd; color:#7a5b00; }}
+.model-pricing-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:#fafbfc; }}
+.model-pricing-overlay:target {{ display:flex; }}
+.model-pricing-panel {{ width:min(1200px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; }}
+.model-pricing-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
+.model-pricing-header h2 {{ margin:0; }}
+.model-pricing-panel .table-scroll {{ max-height:calc(92vh - 110px); }}
 .tool-call-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:rgba(25,35,45,.62); }}
 .tool-call-overlay:target {{ display:flex; }}
 .tool-call-panel {{ width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
@@ -2010,9 +2016,7 @@ code {{ font-size:.9em; }}
 <span class="token-segment output" style="width:{output_width:.3f}%"></span>
 </div>
 <div class="composition-legend">Cached input {run.usage_totals.cached_input_tokens:,} ({cached_share:.1f}% of input) · fresh input {run.usage_totals.uncached_input_tokens:,} · output {run.usage_totals.output_tokens:,} · reasoning {run.usage_totals.reasoning_tokens:,}. Cached input is part of input. Reasoning is part of output.</div>
-<h2>Model pricing</h2>
-<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Codex credits use the published token-based subscription rate card where available. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a>, <a href="{_escape_html(codex_source)}">Codex rate card</a>, and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>
-<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Codex credits / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
+<p class="execution-note"><a class="drilldown-link" href="#model-pricing" target="_blank" rel="noopener">Open model pricing</a>.</p>
 <h2>Agents used</h2>
 <p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nickname is Codex's per-thread label, not a reusable custom-agent role; the rollout adapter does not infer a custom-agent definition when telemetry does not declare one.</p>
 <div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Runtime nickname</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
@@ -2023,6 +2027,13 @@ code {{ font-size:.9em; }}
 <div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
 <h2>Phase and lane aggregates</h2>
 <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
+<section id="model-pricing" class="model-pricing-overlay" role="dialog" aria-modal="true" aria-labelledby="model-pricing-title">
+<div class="model-pricing-panel">
+<div class="model-pricing-header"><h2 id="model-pricing-title">Model pricing</h2><span class="execution-note">Close this tab to return to the report.</span></div>
+<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Codex credits use the published token-based subscription rate card where available. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a>, <a href="{_escape_html(codex_source)}">Codex rate card</a>, and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>
+<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Codex credits / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
+</div>
+</section>
 <section id="turn-tool-call-list" class="tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="turn-tool-call-title">
 <div class="tool-call-panel">
 <div class="tool-call-header"><h2 id="turn-tool-call-title">All turns and tool calls</h2><a class="tool-call-close" href="#execution-timeline">close</a></div>

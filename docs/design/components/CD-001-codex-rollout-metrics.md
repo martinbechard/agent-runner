@@ -224,7 +224,7 @@ flowchart LR
 
 - **MODULE: MODULE-7** Report integration
   - **SYNOPSIS:** Feed normalized metrics into the existing timeline report model and renderer while adding hierarchy and confidence views.
-  - **PRODUCES:** Interactive HTML with a model-rate reference table and a linked all-turn tool-call drilldown, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
+  - **PRODUCES:** Interactive HTML with a new-tab model-rate reference and a linked all-turn tool-call drilldown, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
   - **SUPPORTS:** Live refresh and sealed archive generation from the same normalized data model.
 
 - **PROCESS: PROCESS-1** Discover and parse a run

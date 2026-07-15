@@ -462,7 +462,7 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     assert "<th>Cost estimate</th>" in html
 
 
-def test_native_codex_html_restores_model_pricing_table():
+def test_native_codex_html_opens_model_pricing_in_new_tab():
     module = _load_module()
     run = module.build_codex_rollout_run(
         "root-thread",
@@ -472,7 +472,12 @@ def test_native_codex_html_restores_model_pricing_table():
 
     html = module.render_codex_rollout_html(run)
 
-    assert "<h2>Model pricing</h2>" in html
+    normal_flow_before_agents = html.split("<body>", 1)[1].split("<h2>Agents used</h2>", 1)[0]
+    assert "<h2>Model pricing</h2>" not in normal_flow_before_agents
+    assert 'href="#model-pricing" target="_blank" rel="noopener"' in html
+    assert "Open model pricing" in html
+    assert 'id="model-pricing" class="model-pricing-overlay"' in html
+    assert '<h2 id="model-pricing-title">Model pricing</h2>' in html
     assert "API USD / 1M tokens" in html
     assert "Codex credits / 1M tokens" in html
     assert "GPT-5.6 Sol" in html
