@@ -48,11 +48,12 @@ python tools/report/scripts/run-timeline.py \
   --output codex-run.html
 ```
 
-The default formatter config recognizes patches, agent claims, inter-agent
-messages, agent lifecycle calls, and waits. Rules are evaluated in file order.
-A rule may match the tool name plus a bounded regular expression, then extract
-display fields from named regex groups or dotted JSON paths. Retain the
-generated config with a run when an agent creates run-specific rules after
+The default formatter config recognizes patches, agent claims, repository
+checks combined with skill-file line counts, standalone skill-file line counts,
+inter-agent messages, agent lifecycle calls, and waits. Rules are evaluated in
+file order. A rule may match the tool name plus a bounded regular expression,
+then extract display fields from named regex groups or dotted JSON paths. Retain
+the generated config with a run when an agent creates run-specific rules after
 analyzing its sanitized argument summaries:
 
 ```bash

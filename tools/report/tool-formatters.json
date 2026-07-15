@@ -66,6 +66,37 @@
       }
     },
     {
+      "id": "repository-skill-sizing",
+      "match": {
+        "tool": "exec",
+        "arguments_regex": "git status --short\\s+&&\\s+git log -[0-9]+\\s+--oneline\\s+&&\\s+wc -l\\s+[^\"\\n]{0,300}/skills/[^/\"\\s]+/SKILL\\.md"
+      },
+      "fields": [
+        {
+          "name": "commit_count",
+          "regex": "git log -(?P<commit_count>[0-9]+)\\s+--oneline",
+          "group": "commit_count"
+        }
+      ],
+      "display": {
+        "parts": [
+          "Inspect repository",
+          "latest {commit_count} commits",
+          "count skill-file lines"
+        ]
+      }
+    },
+    {
+      "id": "skill-sizing",
+      "match": {
+        "tool": "exec",
+        "arguments_regex": "wc -l\\s+[^\"\\n]{0,300}/skills/[^/\"\\s]+/SKILL\\.md"
+      },
+      "display": {
+        "parts": ["Count skill-file lines"]
+      }
+    },
+    {
       "id": "send-message",
       "match": {"tool": "send_message"},
       "fields": [

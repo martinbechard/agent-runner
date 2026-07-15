@@ -472,6 +472,21 @@ def test_default_tool_formatters_cover_common_run_patterns():
         '"operation":"Write 2 files"}',
         config,
     )
+    repository_skill_sizing = module._format_tool_argument(
+        "exec",
+        'const r = await tools.exec_command({"cmd":"git status --short && '
+        'git log -2 --oneline && wc -l '
+        '/Users/example/.codex/skills/agent-claim/SKILL.md '
+        '/Users/example/.codex/skills/detect-technology-skills/SKILL.md"}); '
+        "text(r.output);",
+        config,
+    )
+    skill_sizing = module._format_tool_argument(
+        "exec",
+        "wc -l /Users/example/.codex/skills/agent-claim/SKILL.md "
+        "/Users/example/.codex/skills/code-discovery/SKILL.md",
+        config,
+    )
 
     assert patch.summary == "Patch · Add · frontend-password-reset.md"
     assert patch.rule_id == "apply-patch"
@@ -482,6 +497,12 @@ def test_default_tool_formatters_cover_common_run_patterns():
         'Write 2 files · ["docs/architecture.md","docs/wiki/index.md"]'
     )
     assert write.rule_id == "write-files"
+    assert repository_skill_sizing.summary == (
+        "Inspect repository · latest 2 commits · count skill-file lines"
+    )
+    assert repository_skill_sizing.rule_id == "repository-skill-sizing"
+    assert skill_sizing.summary == "Count skill-file lines"
+    assert skill_sizing.rule_id == "skill-sizing"
 
 
 def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure():
