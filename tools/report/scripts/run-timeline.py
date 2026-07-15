@@ -2360,6 +2360,14 @@ def render_codex_rollout_html(
                 "No matched tool calls</td></tr>"
             )
             timing_note_header = "<th>Timing note</th>" if show_timing_note else ""
+            timing_note_column = (
+                '<col class="turn-detail-timing-column">' if show_timing_note else ""
+            )
+            turn_detail_table_class = (
+                "turn-detail-table has-timing"
+                if show_timing_note
+                else "turn-detail-table"
+            )
             turn_detail_overlays.append(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
                 '<div class="tool-call-panel turn-detail-panel">'
@@ -2377,7 +2385,14 @@ def render_codex_rollout_html(
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_escape_html(thread.model or "—")}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 "</div>"
-                '<div class="table-scroll"><table><thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th><th>Result</th>'
+                f'<div class="table-scroll"><table class="{turn_detail_table_class}">'
+                '<colgroup><col class="turn-detail-index-column">'
+                '<col class="turn-detail-offset-column">'
+                '<col class="turn-detail-tool-column">'
+                '<col class="turn-detail-arguments-column">'
+                '<col class="turn-detail-result-column">'
+                f"{timing_note_column}</colgroup>"
+                '<thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th><th>Result</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
@@ -2616,11 +2631,27 @@ td {{ font-size:.85em; }}
 .tool-call-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:rgba(25,35,45,.62); }}
 .tool-call-overlay:target {{ display:flex; }}
 .tool-call-panel {{ width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
-.turn-detail-panel {{ width:min(1000px,94vw); }}
+.turn-detail-panel {{ width:min(1500px,94vw); }}
 .tool-call-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
 .tool-call-header h2 {{ margin:0; }}
 .tool-call-close {{ color:#b3261e; font-weight:600; text-decoration:none; }}
 .tool-call-panel .table-scroll {{ max-height:calc(92vh - 80px); }}
+.turn-detail-panel .table-scroll {{ max-height:calc(92vh - 180px); }}
+.turn-detail-table {{ min-width:900px; margin:0; table-layout:fixed; }}
+.turn-detail-table th, .turn-detail-table td {{ vertical-align:top; white-space:normal; }}
+.turn-detail-table .turn-detail-index-column {{ width:5%; }}
+.turn-detail-table .turn-detail-offset-column {{ width:10%; }}
+.turn-detail-table .turn-detail-tool-column {{ width:12%; }}
+.turn-detail-table .turn-detail-arguments-column,
+.turn-detail-table .turn-detail-result-column {{ width:36.5%; }}
+.turn-detail-table.has-timing .turn-detail-index-column {{ width:4%; }}
+.turn-detail-table.has-timing .turn-detail-offset-column {{ width:8%; }}
+.turn-detail-table.has-timing .turn-detail-tool-column {{ width:10%; }}
+.turn-detail-table.has-timing .turn-detail-arguments-column,
+.turn-detail-table.has-timing .turn-detail-result-column {{ width:31%; }}
+.turn-detail-table.has-timing .turn-detail-timing-column {{ width:16%; }}
+.turn-detail-table .tool-arguments,
+.turn-detail-table .tool-result-summary {{ max-width:none; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-size:.9em; }}
 @media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}

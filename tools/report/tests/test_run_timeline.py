@@ -766,6 +766,10 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     tool_table = root_turn_overlay.split('<div class="table-scroll">', 1)[1].split(
         "</table>", 1
     )[0]
+    assert '<table class="turn-detail-table has-timing">' in tool_table
+    assert '<col class="turn-detail-arguments-column">' in tool_table
+    assert '<col class="turn-detail-result-column">' in tool_table
+    assert '<col class="turn-detail-timing-column">' in tool_table
     assert "<th>T+</th>" in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
@@ -787,6 +791,9 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     bounded_tool_table = bounded_overlay.split(
         '<div class="table-scroll">', 1
     )[1].split("</table>", 1)[0]
+    assert '<table class="turn-detail-table">' in bounded_tool_table
+    assert "has-timing" not in bounded_tool_table
+    assert "turn-detail-timing-column" not in bounded_tool_table
     assert "<th>Timing note</th>" not in bounded_tool_table
     assert "bounded" not in bounded_tool_table
 
