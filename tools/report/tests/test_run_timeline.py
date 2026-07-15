@@ -905,6 +905,8 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
 
     assert "Token composition" in html
     assert "Execution timeline" in html
+    assert "Work units and attribution" not in html
+    assert "Phase and lane aggregates" not in html
     assert "Bars share a common run-wide time axis" in html
     assert "Turn activity" in html
     assert 'class="token-composition"' in html
@@ -1086,7 +1088,8 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
     )
     assert "| root | outside selected run | careful-coding · python | module-a |" in markdown
     assert "| module-a (module-a) | root | — | reviewer |" in markdown
-    assert "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |" in markdown
+    assert "| Work unit |" not in markdown
+    assert "| Phase | Lane | Work units |" not in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
 
 

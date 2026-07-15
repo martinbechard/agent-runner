@@ -2644,47 +2644,6 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
             f"{thread.token_totals.uncached_input_tokens} | {thread.token_totals.output_tokens} | "
             f"{thread.token_totals.reasoning_tokens} | {thread.token_totals.processed_tokens} |"
         )
-    lines.extend(
-        [
-            "",
-            f"| Work unit | {turn_column_label} | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |",
-            "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
-        ]
-    )
-    for unit in run.work_units:
-        member_turns = [
-            turn
-            for thread in run.threads
-            for turn in thread.turns
-            if (turn.work_unit_id or "unattributed") == unit.work_unit_id
-        ]
-        member_keys = {(turn.thread_id, turn.turn_id) for turn in member_turns}
-        tools = [
-            tool
-            for thread in run.threads
-            for tool in thread.tool_intervals
-            if (tool.thread_id, tool.turn_id or "") in member_keys
-        ]
-        lines.append(
-            f"| {unit.work_unit_id} | {len(member_turns)} | "
-            f"{_format_ms(sum(turn.duration_ms for turn in member_turns))} | {len(tools)} | "
-            f"{unit.usage.input_tokens} | {unit.usage.cached_input_tokens} | "
-            f"{unit.usage.uncached_input_tokens} | {unit.usage.output_tokens} | "
-            f"{unit.usage.reasoning_tokens} | {unit.usage.processed_tokens} |"
-        )
-    lines.extend(
-        [
-            "",
-            "| Phase | Lane | Work units | Wall | Active | Agent | Processed |",
-            "|---|---|---|---:|---:|---:|---:|",
-        ]
-    )
-    for phase in run.phase_lanes:
-        lines.append(
-            f"| {phase.phase_id} | {phase.lane_id} | {', '.join(phase.work_unit_ids)} | "
-            f"{_format_ms(phase.wall_time_ms)} | {_format_ms(phase.active_time_ms)} | "
-            f"{_format_ms(phase.agent_time_ms)} | {phase.usage.processed_tokens} |"
-        )
     return "\n".join(lines) + "\n"
 
 
@@ -3125,56 +3084,6 @@ def render_codex_rollout_html(
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</details>"
         )
-    work_rows = []
-    for unit in run.work_units:
-        member_turns = [
-            turn
-            for thread in run.threads
-            for turn in thread.turns
-            if (turn.work_unit_id or "unattributed") == unit.work_unit_id
-        ]
-        member_keys = {(turn.thread_id, turn.turn_id) for turn in member_turns}
-        tools = [
-            tool
-            for thread in run.threads
-            for tool in thread.tool_intervals
-            if (tool.thread_id, tool.turn_id or "") in member_keys
-        ]
-        processed_share = unit.usage.processed_tokens / composition_total * 100
-        work_rows.append(
-            "<tr>"
-            f"<td>{_escape_html(unit.work_unit_id)}</td>"
-            f"<td>{_escape_html(unit.phase_id or '—')}</td>"
-            f"<td>{_escape_html(unit.lane_id or '—')}</td>"
-            f"<td>{_escape_html(unit.activity or '—')}</td>"
-            f"<td>{_escape_html(unit.attribution_confidence)}</td>"
-            f"<td>{len(member_turns):,}</td>"
-            f"<td>{_format_ms(sum(turn.duration_ms for turn in member_turns))}</td>"
-            f"<td>{len(tools):,}</td>"
-            f"<td>{unit.usage.input_tokens:,}</td>"
-            f"<td>{unit.usage.cached_input_tokens:,}</td>"
-            f"<td>{unit.usage.uncached_input_tokens:,}</td>"
-            f"<td>{unit.usage.output_tokens:,}</td>"
-            f"<td>{unit.usage.reasoning_tokens:,}</td>"
-            f"<td>{unit.usage.processed_tokens:,}</td>"
-            f"<td>{processed_share:.1f}%</td>"
-            f"<td>{_escape_html(_compact_cost_summary(unit.cost))}</td>"
-            "</tr>"
-        )
-    phase_rows = []
-    for phase in run.phase_lanes:
-        phase_rows.append(
-            "<tr>"
-            f"<td>{_escape_html(phase.phase_id)}</td>"
-            f"<td>{_escape_html(phase.lane_id)}</td>"
-            f"<td>{_escape_html(', '.join(phase.work_unit_ids))}</td>"
-            f"<td>{_format_ms(phase.wall_time_ms)}</td>"
-            f"<td>{_format_ms(phase.active_time_ms)}</td>"
-            f"<td>{_format_ms(phase.agent_time_ms)}</td>"
-            f"<td>{phase.usage.processed_tokens:,}</td>"
-            f"<td>{_escape_html(json.dumps(phase.confidence_counts, sort_keys=True))}</td>"
-            "</tr>"
-        )
     diagnostics = "".join(f"<li>{_escape_html(item)}</li>" for item in run.diagnostics)
     pricing_rows = []
     for model, prices in _pricing_reference_rows():
@@ -3343,10 +3252,6 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
-<h2>Work units and attribution</h2>
-<div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
-<h2>Phase and lane aggregates</h2>
-<div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
 {pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
