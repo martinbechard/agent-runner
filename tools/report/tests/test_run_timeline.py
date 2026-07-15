@@ -484,6 +484,13 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<summary>raw reasoning</summary>' in main_tool_table
     assert 'title="Attributed from the latest preceding model response in this task span">gpt-main' in main_tool_table
     assert "Output generation aggregate" in main_tool_table
+    main_model_row = main_tool_table.split(
+        '<tr class="turn-detail-lifecycle-row turn-detail-model-row">', 1
+    )[1].split("</tr>", 1)[0]
+    assert "<summary>raw arguments</summary>" in main_model_row
+    assert "Synthetic prompt API_TOKEN=[redacted]" in main_model_row
+    assert "<summary>raw result</summary>" in main_model_row
+    assert "Inspect the project before running the command." in main_model_row
     assert "recorded</td>" not in main_tool_table
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
@@ -827,6 +834,14 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     assert "Completed with client_secret=[redacted]" in overlay
     assert '<td><code class="model-name">gpt-5.4-mini</code></td>' in overlay
     assert "Attributed from the latest preceding model response" not in overlay
+    model_row = overlay.split(
+        '<tr class="turn-detail-lifecycle-row turn-detail-model-row">', 1
+    )[1].split("</tr>", 1)[0]
+    assert "<summary>raw arguments</summary>" in model_row
+    assert "Inspect the project with API_TOKEN=[redacted]" in model_row
+    assert "<summary>raw result</summary>" in model_row
+    assert "Check password=[redacted] before running the tool" in model_row
+    assert "Completed with client_secret=[redacted]" in model_row
 
 
 def test_native_codex_identifies_encrypted_reasoning_without_exposing_it(tmp_path):

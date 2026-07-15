@@ -1804,6 +1804,93 @@ def _render_activity_detail(activity: AgentActivity, *, raw_label: str) -> str:
     )
 
 
+def _model_response_activity_groups(
+    responses: list[ResponseUsage],
+    response_index: int,
+    activities: list[AgentActivity],
+) -> tuple[list[AgentActivity], list[AgentActivity]]:
+    """Return recorded prompt and result fragments for one model response."""
+
+    response = responses[response_index]
+    previous_ordinal = (
+        responses[response_index - 1].source_ordinal if response_index else -1
+    )
+    next_ordinal = (
+        responses[response_index + 1].source_ordinal
+        if response_index + 1 < len(responses)
+        else float("inf")
+    )
+    same_source = [
+        activity
+        for activity in activities
+        if activity.source_path == response.source_path
+    ]
+    prompt_activities = [
+        activity
+        for activity in same_source
+        if activity.activity_type == "input"
+        and previous_ordinal < activity.source_ordinal < response.source_ordinal
+    ]
+    if response.derivation_method == "Junie response metadata":
+        result_activities = [
+            activity
+            for activity in same_source
+            if activity.activity_type in {"reasoning", "output"}
+            and response.source_ordinal < activity.source_ordinal < next_ordinal
+        ]
+    else:
+        result_activities = [
+            activity
+            for activity in same_source
+            if activity.activity_type in {"reasoning", "output"}
+            and previous_ordinal < activity.source_ordinal < response.source_ordinal
+        ]
+        if response_index + 1 == len(responses):
+            result_activities.extend(
+                activity
+                for activity in same_source
+                if activity.activity_type == "output"
+                and activity.source_ordinal > response.source_ordinal
+            )
+    return prompt_activities, sorted(
+        result_activities,
+        key=lambda activity: activity.source_ordinal,
+    )
+
+
+def _render_model_activity_disclosure(
+    activities: list[AgentActivity],
+    *,
+    raw_label: str,
+) -> str:
+    """Render bounded recorded fragments inside one model invocation cell."""
+
+    if not activities:
+        return ""
+    labels = {
+        "input": "prompt",
+        "reasoning": "thinking",
+        "output": "response",
+    }
+    fragments = []
+    counts: Counter[str] = Counter()
+    for activity in activities:
+        label = labels.get(activity.activity_type, activity.activity_type)
+        counts[label] += 1
+        body = activity.content or activity.summary
+        fragments.append(f"[{label}]\n{body}")
+    summary = " · ".join(
+        f"{count:,} recorded {label} fragment{'s' if count != 1 else ''}"
+        for label, count in counts.items()
+    )
+    content = _tool_argument_content("\n\n".join(fragments))
+    return (
+        f'<div class="activity-summary">{_escape_html(summary)}</div>'
+        f'<details class="activity-raw"><summary>{raw_label}</summary>'
+        f'<pre>{_escape_html(content)}</pre></details>'
+    )
+
+
 def _time_metrics(
     threads: list[CodexThreadMetrics],
 ) -> tuple[str, str, int, int, int, int, int]:
@@ -2681,28 +2768,47 @@ def render_codex_rollout_html(
                     + "</tr>",
                 )
             )
-            for response_index, response in enumerate(turn_responses, start=1):
+            for response_index, response in enumerate(turn_responses):
                 response_cost = _cost_for_response(thread, response)
                 response_cost_label = (
                     f"${response_cost.total_cost:.2f}"
                     if response_cost.total_cost is not None
                     else "—"
                 )
+                prompt_fragments, result_fragments = _model_response_activity_groups(
+                    turn_responses,
+                    response_index,
+                    turn_activities,
+                )
+                model_arguments = (
+                    f'<div class="activity-summary">{response.usage.input_tokens:,} input · '
+                    f'{response.usage.cached_input_tokens:,} cached · '
+                    f'{response.usage.uncached_input_tokens:,} fresh</div>'
+                    + _render_model_activity_disclosure(
+                        prompt_fragments,
+                        raw_label="raw arguments",
+                    )
+                )
+                model_result = (
+                    f'<div class="activity-summary">{response.usage.output_tokens:,} output · '
+                    f'{response.usage.reasoning_tokens:,} reasoning</div>'
+                    + _render_model_activity_disclosure(
+                        result_fragments,
+                        raw_label="raw result",
+                    )
+                )
                 detail_rows.append(
                     (
                         float(response.source_ordinal),
                         0,
                         '<tr class="turn-detail-lifecycle-row turn-detail-model-row">'
-                        f'<td>M{response_index}</td>'
+                        f'<td>M{response_index + 1}</td>'
                         f'<td>{_timestamp_offset_label(run, response.event_timestamp)}</td>'
                         f'<td>{response_cost_label}</td>'
                         f'<td>{_render_model_names([response.model] if response.model else [])}</td>'
                         '<td><span class="activity-name">model</span></td>'
-                        f'<td><div class="activity-summary">{response.usage.input_tokens:,} input · '
-                        f'{response.usage.cached_input_tokens:,} cached · '
-                        f'{response.usage.uncached_input_tokens:,} fresh</div></td>'
-                        f'<td><div class="activity-summary">{response.usage.output_tokens:,} output · '
-                        f'{response.usage.reasoning_tokens:,} reasoning</div></td>'
+                        f'<td>{model_arguments}</td>'
+                        f'<td>{model_result}</td>'
                         + ("<td>—</td>" if show_timing_note else "")
                         + "</tr>",
                     )
