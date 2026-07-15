@@ -430,6 +430,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "<summary>raw result</summary>" in html
     assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
+    assert "Bars share a common run-wide time axis" in html
     assert '<div class="label">User tasks</div><div class="value">1</div>' in html
     assert '<div class="label">Agent task spans</div><div class="value">2</div>' in html
     assert '<div class="label">Model responses</div><div class="value">2</div>' in html
@@ -748,9 +749,16 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
 
     assert "Token composition" in html
     assert "Execution timeline" in html
+    assert "Bars share a common run-wide time axis" in html
     assert "Turn activity" in html
     assert 'class="token-composition"' in html
     assert 'class="thread-detail"' in html
+    assert (
+        ".thread-detail > summary { display:grid; "
+        "grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px "
+        "minmax(220px,1fr);"
+    ) in html
+    assert "grid-template-columns:minmax(250px,2fr) auto auto" not in html
     assert "root-turn-1" in html
     assert "T+0s" in html
     assert "500ms" in html

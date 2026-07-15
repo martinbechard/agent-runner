@@ -2637,9 +2637,9 @@ def render_codex_rollout_html(
         )
     )
     execution_note = (
-        "Bars use the observed run interval. Agent and turn costs use each agent's recorded model and the linked pricing table."
+        "Bars share a common run-wide time axis and show each agent's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table."
         if is_codex
-        else "Bars use Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
+        else "Bars share a common run-wide time axis and show each agent's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
     )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
@@ -2677,7 +2677,7 @@ td {{ font-size:.85em; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
-.thread-detail > summary {{ display:grid; grid-template-columns:minmax(250px,2fr) auto auto auto auto auto minmax(180px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
+.thread-detail > summary {{ display:grid; grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px minmax(220px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
 .thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
 .thread-name {{ font-weight:600; overflow-wrap:anywhere; }}
 .thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
@@ -2723,7 +2723,7 @@ td {{ font-size:.85em; }}
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
-@media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
+@media (max-width:1240px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
