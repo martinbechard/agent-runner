@@ -27,9 +27,12 @@ Run the timeline tool directly from the checkout:
 python tools/report/scripts/run-timeline.py <path> [--output report.html]
 ```
 
-Report a live Codex Desktop hierarchy without copying prompt, reasoning, or
-final-message content into the report. Tool results use bounded previews and a
-collapsed, secret-redacted raw disclosure. `send_message` argument
+Report a live Codex Desktop hierarchy with lifecycle rows for input ingestion,
+model usage, available reasoning summaries, tool execution, and output
+generation. Plaintext input, reasoning summaries, and assistant output use
+bounded, secret-redacted raw disclosures. Encrypted reasoning is identified by
+size but remains opaque. Tool results use bounded previews and a collapsed,
+secret-redacted raw disclosure. `send_message` argument
 summaries include a secret-redacted 50-character message preview followed by
 the original character count. Recognized encrypted message tokens are replaced
 with an `[encrypted message, N chars]` placeholder instead of previewing
