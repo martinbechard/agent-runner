@@ -459,6 +459,11 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
     assert "Bars share a common run-wide time axis" in html
+    assert "Cached input is part of input" not in html
+    assert "Reasoning is part of output" not in html
+    assert 'class="composition-output">output 5</span>' in html
+    assert 'class="composition-reasoning">reasoning 0</span>' in html
+    assert 'class="token-segment reasoning"' not in html
     assert "View task spans and tool calls" not in html
     assert '.thread-detail > summary::before { content:"+";' in html
     assert '.thread-detail[open] > summary::before { content:"−"; }' in html
@@ -937,10 +942,17 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "Turn activity" in html
     assert 'class="token-composition"' in html
     assert ".cached { background:var(--token-cached); }" in html
+    assert ".reasoning { background:var(--token-reasoning); }" in html
     assert ".composition-cached { color:var(--token-cached); }" in html
+    assert ".composition-reasoning { color:var(--token-reasoning); }" in html
     assert 'class="composition-cached">Cached input' in html
     assert 'class="composition-fresh">fresh input' in html
-    assert html.count('class="composition-output">') == 2
+    assert html.count('class="composition-output">') == 1
+    assert html.count('class="composition-reasoning">') == 1
+    assert 'class="composition-output">output 112</span>' in html
+    assert 'class="composition-reasoning">reasoning 38</span>' in html
+    assert 'class="token-segment output" style="width:14.000%"' in html
+    assert 'class="token-segment reasoning" style="width:4.750%"' in html
     assert 'class="thread-detail"' in html
     assert (
         ".turn-table .turn-timeline-header, .turn-table .turn-timeline-cell "
@@ -959,8 +971,9 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "500ms" in html
     assert "exec × 1" in html
     assert "1 call · 500ms" in html
-    assert "Cached input is part of input" in html
-    assert "Reasoning is part of output" in html
+    assert "Cached input is part of input" not in html
+    assert "Reasoning is part of output" not in html
+    assert "% of input" not in html
     root_turn_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>Work unit</th>" in root_turn_table
     assert "<th>Activity</th>" in root_turn_table

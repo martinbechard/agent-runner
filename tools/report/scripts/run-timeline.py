@@ -2675,15 +2675,26 @@ def render_codex_rollout_html(
             f'<div class="metric"><div class="label">Model responses</div><div class="value">{response_count:,}</div></div>'
         )
     )
-    cached_share = (
-        run.usage_totals.cached_input_tokens / run.usage_totals.input_tokens * 100
-        if run.usage_totals.input_tokens
-        else 0
-    )
     composition_total = run.usage_totals.processed_tokens or 1
+    visible_output_tokens = max(
+        0, run.usage_totals.output_tokens - run.usage_totals.reasoning_tokens
+    )
     cached_width = run.usage_totals.cached_input_tokens / composition_total * 100
     fresh_width = run.usage_totals.uncached_input_tokens / composition_total * 100
-    output_width = run.usage_totals.output_tokens / composition_total * 100
+    output_width = visible_output_tokens / composition_total * 100
+    reasoning_width = run.usage_totals.reasoning_tokens / composition_total * 100
+    output_segment = (
+        '<span class="token-segment output" '
+        f'style="width:{output_width:.3f}%"></span>'
+        if visible_output_tokens
+        else ""
+    )
+    reasoning_segment = (
+        '<span class="token-segment reasoning" '
+        f'style="width:{reasoning_width:.3f}%"></span>'
+        if run.usage_totals.reasoning_tokens
+        else ""
+    )
     agent_rows = []
     for thread in run.threads:
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
@@ -3131,7 +3142,7 @@ def render_codex_rollout_html(
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
 <style>
-:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-fresh:#95a5a6; --token-output:#e74c3c; }}
+:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; }}
 body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
@@ -3149,9 +3160,9 @@ td {{ font-size:.85em; }}
 .notice {{ background:#fff8dc; border-left:4px solid #d6a700; padding:10px; }}
 .token-composition {{ display:flex; height:18px; overflow:hidden; border-radius:5px; background:#e8edf0; max-width:900px; }}
 .token-segment {{ min-width:1px; }}
-.cached {{ background:var(--token-cached); }} .fresh {{ background:var(--token-fresh); }} .output {{ background:var(--token-output); }}
+.cached {{ background:var(--token-cached); }} .fresh {{ background:var(--token-fresh); }} .output {{ background:var(--token-output); }} .reasoning {{ background:var(--token-reasoning); }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
-.composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }}
+.composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
 .model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
@@ -3245,9 +3256,10 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="token-composition" title="Processed token composition">
 <span class="token-segment cached" style="width:{cached_width:.3f}%"></span>
 <span class="token-segment fresh" style="width:{fresh_width:.3f}%"></span>
-<span class="token-segment output" style="width:{output_width:.3f}%"></span>
+{output_segment}
+{reasoning_segment}
 </div>
-<div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,} ({cached_share:.1f}% of input)</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {run.usage_totals.output_tokens:,}</span> · <span class="composition-output">reasoning {run.usage_totals.reasoning_tokens:,}</span>. Cached input is part of input. Reasoning is part of output.</div>
+<div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 <h2>Agents used</h2>
 <p class="execution-note">{_escape_html(agent_note)}</p>
