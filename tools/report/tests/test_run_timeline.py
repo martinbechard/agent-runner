@@ -394,7 +394,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
-    assert run.parser_version == "1.3.0"
+    assert run.parser_version == "1.4.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
@@ -793,6 +793,70 @@ def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
     assert run.cost.status == "estimated"
     assert "API-equivalent estimate" in outputs[-1]
     assert "not an actual Codex charge" in outputs[-1]
+
+
+def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
+    module = _load_module()
+
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    root = run.threads[0]
+
+    assert run.parser_version == "1.7.0"
+    assert [activity.activity_type for activity in root.activities] == [
+        "input",
+        "reasoning",
+        "output",
+    ]
+    assert root.activities[0].content == "Inspect the project with API_TOKEN=[redacted]"
+    assert root.activities[1].content == (
+        "Check password=[redacted] before running the tool"
+    )
+    assert root.activities[1].model == "gpt-5.4-mini"
+    assert root.activities[2].content == "Completed with client_secret=[redacted]"
+    assert root.tool_intervals[0].model == "gpt-5.4-mini"
+
+    html = module.render_codex_rollout_html(run)
+    overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "<summary>raw input</summary>" in overlay
+    assert "<summary>raw reasoning</summary>" in overlay
+    assert "<summary>raw output</summary>" in overlay
+    assert "Inspect the project with API_TOKEN=[redacted]" in overlay
+    assert "Check password=[redacted] before running the tool" in overlay
+    assert "Completed with client_secret=[redacted]" in overlay
+    assert '<td><code class="model-name">gpt-5.4-mini</code></td>' in overlay
+    assert "Attributed from the latest preceding model response" not in overlay
+
+
+def test_native_codex_identifies_encrypted_reasoning_without_exposing_it(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "encrypted.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"session_meta","payload":{"id":"encrypted-thread","source":"user"}}',
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"turn_context","payload":{"model":"gpt-5.6-sol","turn_id":"encrypted-turn"}}',
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"encrypted-turn","started_at":"2026-07-14T10:00:00Z"}}',
+                '{"timestamp":"2026-07-14T10:00:01Z","type":"response_item","payload":{"type":"reasoning","summary":[],"encrypted_content":"CIPHER-TEXT-MUST-NOT-APPEAR"}}',
+                '{"timestamp":"2026-07-14T10:00:02Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}}}}',
+                '{"timestamp":"2026-07-14T10:00:03Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"encrypted-turn","completed_at":"2026-07-14T10:00:03Z","duration_ms":3000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("encrypted-thread", tmp_path)
+    activity = run.threads[0].activities[0]
+    html = module.render_codex_rollout_html(run)
+
+    assert activity.activity_type == "reasoning"
+    assert activity.model == "gpt-5.6-sol"
+    assert activity.content == ""
+    assert "Encrypted reasoning" in activity.summary
+    assert "plaintext unavailable" in html
+    assert "CIPHER-TEXT-MUST-NOT-APPEAR" not in html
 
 
 def test_native_codex_html_reuses_methodology_style_execution_drilldown():

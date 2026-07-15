@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.6.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.7.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -63,7 +63,7 @@ TOOL_RESULT_PREVIEW_CHARS = 200
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.3.0"
+JUNIE_SESSION_PARSER_VERSION = "1.4.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -332,6 +332,7 @@ class AgentActivity:
     source_ordinal: int
     summary: str = ""
     content: str = ""
+    model: str = ""
 
 
 @dataclass
@@ -353,6 +354,7 @@ class ToolInterval:
     argument_content: str = ""
     result_summary: str = ""
     result_content: str = ""
+    model: str = ""
 
 
 @dataclass(frozen=True)
@@ -1085,13 +1087,60 @@ def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn
     return None
 
 
+def _response_item_text(payload: dict[str, object], field: str) -> str:
+    """Return the plaintext fragments recorded for one response item."""
+
+    value = payload.get(field)
+    if not isinstance(value, list):
+        return ""
+    fragments = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = item.get("text")
+        if isinstance(text, str) and text.strip():
+            fragments.append(text)
+    return "\n".join(fragments)
+
+
+def _append_codex_activity(
+    activities: list[AgentActivity],
+    *,
+    thread_id: str,
+    turn_id: str | None,
+    activity_type: str,
+    timestamp: str,
+    path: Path,
+    ordinal: int,
+    summary: str,
+    raw_text: str = "",
+    model: str = "",
+) -> None:
+    """Append one bounded, secret-redacted native Codex narrative event."""
+
+    activities.append(
+        AgentActivity(
+            thread_id=thread_id,
+            turn_id=turn_id,
+            activity_type=activity_type,
+            event_timestamp=timestamp,
+            source_path=str(path),
+            source_ordinal=ordinal,
+            summary=summary,
+            content=_tool_argument_content(raw_text) if raw_text else "",
+            model=model,
+        )
+    )
+
+
 def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
-    """Parse one native Codex Desktop rollout with bounded argument summaries.
+    """Parse one native Codex Desktop rollout with bounded local disclosures.
 
     The returned counters belong only to this thread. Cumulative token events
     become exclusive response deltas; duplicate snapshots and a partial final
-    JSONL record are tolerated and surfaced through diagnostics. Prompt,
-    reasoning, tool-result, and final-message content remains excluded.
+    JSONL record are tolerated and surfaced through diagnostics. Plaintext input,
+    reasoning summaries, tool results, and output are bounded and secret-redacted;
+    encrypted reasoning content remains opaque.
     """
     path = path.resolve()
     records, diagnostics = _parse_jsonl_append_safe(path)
@@ -1107,8 +1156,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     turns_by_id: dict[str, AgentTurn] = {}
     turns: list[AgentTurn] = []
     responses: list[ResponseUsage] = []
+    activities: list[AgentActivity] = []
     tools: list[ToolInterval] = []
-    pending_tools: dict[str, tuple[str, str, str | None, int, str]] = {}
+    pending_tools: dict[str, tuple[str, str, str | None, int, str, str]] = {}
     previous_usage = UsageTotals()
     recorded_cost_usd: float | None = None
     saw_usage = False
@@ -1267,6 +1317,28 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 ttft = payload.get("time_to_first_token_ms")
                 turn.time_to_first_token_ms = int(ttft) if isinstance(ttft, (int, float)) else None
                 turn.outcome = "complete" if event_type == "task_complete" else "aborted"
+                final_message = payload.get("last_agent_message")
+                has_recorded_output = any(
+                    activity.turn_id == turn.turn_id and activity.activity_type == "output"
+                    for activity in activities
+                )
+                if (
+                    isinstance(final_message, str)
+                    and final_message.strip()
+                    and not has_recorded_output
+                ):
+                    _append_codex_activity(
+                        activities,
+                        thread_id=thread_id,
+                        turn_id=turn.turn_id,
+                        activity_type="output",
+                        timestamp=turn.completed_at,
+                        path=path,
+                        ordinal=ordinal,
+                        summary=f"Final answer · {len(final_message):,} characters",
+                        raw_text=final_message,
+                        model=model,
+                    )
                 continue
 
             if event_type not in {"agent_status", "user_message", "rate_limit_event"}:
@@ -1299,6 +1371,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         f"{previous_usage.processed_tokens} processed tokens"
                     )
                 responses.clear()
+                activities.clear()
                 tools.clear()
                 pending_tools.clear()
                 for turn in turns:
@@ -1307,7 +1380,91 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
 
         if record_type == "response_item":
             item_type = str(payload.get("type") or "")
-            if item_type in {"function_call", "custom_tool_call"}:
+            turn_id = _event_turn_id(payload, active_turns)
+            if item_type == "message":
+                role = str(payload.get("role") or "")
+                raw_text = _response_item_text(payload, "content")
+                if raw_text and role == "user":
+                    _append_codex_activity(
+                        activities,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        activity_type="input",
+                        timestamp=timestamp,
+                        path=path,
+                        ordinal=ordinal,
+                        summary=f"User input · {len(raw_text):,} characters",
+                        raw_text=raw_text,
+                    )
+                elif raw_text and role == "assistant":
+                    phase = str(payload.get("phase") or "")
+                    label = "Final answer" if phase == "final_answer" else "Assistant output"
+                    _append_codex_activity(
+                        activities,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        activity_type="output",
+                        timestamp=timestamp,
+                        path=path,
+                        ordinal=ordinal,
+                        summary=f"{label} · {len(raw_text):,} characters",
+                        raw_text=raw_text,
+                        model=model,
+                    )
+            elif item_type == "agent_message":
+                raw_text = _response_item_text(payload, "content")
+                author = str(payload.get("author") or "")
+                recipient = str(payload.get("recipient") or "")
+                if raw_text and agent_path and recipient == agent_path:
+                    _append_codex_activity(
+                        activities,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        activity_type="input",
+                        timestamp=timestamp,
+                        path=path,
+                        ordinal=ordinal,
+                        summary=f"Delegated input from {author or 'parent'} · {len(raw_text):,} characters",
+                        raw_text=raw_text,
+                    )
+                elif raw_text and agent_path and author == agent_path:
+                    _append_codex_activity(
+                        activities,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        activity_type="output",
+                        timestamp=timestamp,
+                        path=path,
+                        ordinal=ordinal,
+                        summary=f"Agent output to {recipient or 'parent'} · {len(raw_text):,} characters",
+                        raw_text=raw_text,
+                        model=model,
+                    )
+            elif item_type == "reasoning":
+                raw_text = _response_item_text(payload, "summary")
+                encrypted_content = payload.get("encrypted_content")
+                if raw_text:
+                    summary = f"Reasoning summary · {len(raw_text):,} characters"
+                elif isinstance(encrypted_content, str) and encrypted_content:
+                    summary = (
+                        f"Encrypted reasoning · {len(encrypted_content):,} characters; "
+                        "plaintext unavailable"
+                    )
+                else:
+                    summary = "Reasoning event · no plaintext summary recorded"
+                _append_codex_activity(
+                    activities,
+                    thread_id=thread_id,
+                    turn_id=turn_id,
+                    activity_type="reasoning",
+                    timestamp=timestamp,
+                    path=path,
+                    ordinal=ordinal,
+                    summary=summary,
+                    raw_text=raw_text,
+                    model=model,
+                )
+            elif item_type in {"function_call", "custom_tool_call"}:
                 call_id = str(payload.get("call_id") or payload.get("id") or "")
                 if call_id:
                     tool_name = str(payload.get("name") or payload.get("namespace") or "unknown")
@@ -1317,12 +1474,20 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         _event_turn_id(payload, active_turns),
                         ordinal,
                         _tool_argument_summary(payload),
+                        model,
                     )
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
                 call_id = str(payload.get("call_id") or "")
                 pending = pending_tools.pop(call_id, None)
                 if pending:
-                    tool_name, started_at, turn_id, start_ordinal, argument_summary = pending
+                    (
+                        tool_name,
+                        started_at,
+                        turn_id,
+                        start_ordinal,
+                        argument_summary,
+                        tool_model,
+                    ) = pending
                     raw_output = payload.get("output")
                     reported_ms = _extract_tool_wall_time_ms(raw_output)
                     result_content = _tool_result_content(raw_output)
@@ -1348,6 +1513,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                             source_end_ordinal=ordinal,
                             result_summary=_tool_result_summary(result_content),
                             result_content=result_content,
+                            model=tool_model,
                         )
                     )
             continue
@@ -1396,6 +1562,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         unattributed_usage=unattributed,
         responses=responses,
         turns=turns,
+        activities=activities,
         tool_intervals=tools,
         terminal_state=terminal_state,
         source_path=str(path),
@@ -2481,18 +2648,20 @@ def render_codex_rollout_html(
                 key=lambda activity: activity.source_ordinal,
             )
             detail_rows: list[tuple[float, int, str]] = []
-            input_activity = next(
-                (activity for activity in turn_activities if activity.activity_type == "input"),
-                None,
-            )
+            input_activities = [
+                activity for activity in turn_activities if activity.activity_type == "input"
+            ]
             input_result = (
                 f'<div class="activity-summary">{turn.usage.cached_input_tokens:,} cached · '
                 f'{turn.usage.uncached_input_tokens:,} fresh</div>'
             )
-            if input_activity is not None:
-                input_result += _render_activity_detail(input_activity, raw_label="raw input")
-                input_ordinal = float(input_activity.source_ordinal)
-                input_timestamp = input_activity.event_timestamp
+            if input_activities:
+                input_result += "".join(
+                    _render_activity_detail(activity, raw_label="raw input")
+                    for activity in input_activities
+                )
+                input_ordinal = float(input_activities[0].source_ordinal)
+                input_timestamp = input_activities[0].event_timestamp
             else:
                 input_ordinal = float(turn.source_ordinal) - 0.5
                 input_timestamp = turn.started_at
@@ -2543,11 +2712,15 @@ def render_codex_rollout_html(
                 if activity.activity_type != "reasoning":
                     continue
                 reasoning_index += 1
-                activity_models = _models_before_source(
-                    thread,
-                    turn_id=turn.turn_id,
-                    source_path=activity.source_path,
-                    source_ordinal=activity.source_ordinal,
+                activity_models = (
+                    [activity.model]
+                    if activity.model
+                    else _models_before_source(
+                        thread,
+                        turn_id=turn.turn_id,
+                        source_path=activity.source_path,
+                        source_ordinal=activity.source_ordinal,
+                    )
                 )
                 detail_rows.append(
                     (
@@ -2557,7 +2730,7 @@ def render_codex_rollout_html(
                         f'<td>R{reasoning_index}</td>'
                         f'<td>{_timestamp_offset_label(run, activity.event_timestamp)}</td>'
                         '<td>—</td>'
-                        f'<td>{_render_model_names(activity_models, attributed=True)}</td>'
+                        f'<td>{_render_model_names(activity_models, attributed=not bool(activity.model))}</td>'
                         '<td><span class="activity-name">reasoning</span></td>'
                         '<td>—</td>'
                         f'<td>{_render_activity_detail(activity, raw_label="raw reasoning")}</td>'
@@ -2584,11 +2757,15 @@ def render_codex_rollout_html(
                     )
                 )
             for tool_index, tool in enumerate(tools, start=1):
-                tool_models = _models_before_source(
-                    thread,
-                    turn_id=turn.turn_id,
-                    source_path=tool.source_path,
-                    source_ordinal=tool.source_start_ordinal,
+                tool_models = (
+                    [tool.model]
+                    if tool.model
+                    else _models_before_source(
+                        thread,
+                        turn_id=turn.turn_id,
+                        source_path=tool.source_path,
+                        source_ordinal=tool.source_start_ordinal,
+                    )
                 )
                 detail_rows.append(
                     (
@@ -2598,7 +2775,7 @@ def render_codex_rollout_html(
                         f"<td>{tool_index}</td>"
                         f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
                         '<td>—</td>'
-                        f'<td>{_render_model_names(tool_models, attributed=True)}</td>'
+                        f'<td>{_render_model_names(tool_models, attributed=not bool(tool.model))}</td>'
                         f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
                         f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                         f"<td>{_render_tool_result(tool)}</td>"
@@ -2616,6 +2793,14 @@ def render_codex_rollout_html(
                 + [float(activity.source_ordinal) for activity in turn_activities]
                 + [float(tool.source_end_ordinal) for tool in tools]
             ) + 1
+            output_activities = [
+                activity for activity in turn_activities if activity.activity_type == "output"
+            ]
+            output_detail = (
+                _render_activity_detail(output_activities[-1], raw_label="raw output")
+                if output_activities
+                else '<div class="activity-summary">No plaintext output recorded</div>'
+            )
             detail_rows.append(
                 (
                     final_ordinal,
@@ -2625,7 +2810,8 @@ def render_codex_rollout_html(
                     f'<td>{_timestamp_offset_label(run, turn.completed_at)}</td>'
                     '<td>—</td><td>—</td>'
                     '<td><span class="activity-name">output</span></td>'
-                    '<td><div class="activity-summary">Output generation aggregate</div></td>'
+                    '<td><div class="activity-summary">Output generation aggregate</div>'
+                    f'{output_detail}</td>'
                     f'<td><div class="activity-summary">{turn.usage.output_tokens:,} model-output tokens '
                     f'across {len(turn_responses):,} responses</div></td>'
                     + ("<td>—</td>" if show_timing_note else "")
