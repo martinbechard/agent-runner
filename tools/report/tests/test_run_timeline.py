@@ -590,6 +590,13 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "<summary>raw result</summary>" in html
     assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
+    assert '<div class="agents-heading"><h2>Agents used</h2>' in html
+    assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
+    assert '<div class="agent-note-popover" role="note">' in html
+    assert (
+        '<p class="execution-note">Agent path is reconstructed from Junie'
+        not in html
+    )
     assert "Bars share a common run-wide time axis" in html
     assert "Cached input is part of input" not in html
     assert "Reasoning is part of output" not in html
@@ -747,6 +754,8 @@ def test_native_junie_ide_chain_reports_finished_tasks_without_cumulative_double
     assert "gpt-5.6-terra" in html
     assert "typescript" in html
     assert "This Junie IDE chain contains one main agent." in html
+    assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
+    assert '<div class="agent-note-popover" role="note">' in html
     assert '<p class="run-label">Synthetic Junie IDE chain</p>' in html
     assert "Task costs come directly from Junie" in html
     assert "<td>$0.10</td>" in html
@@ -1362,6 +1371,8 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     html = module.render_codex_rollout_html(run)
 
     assert "Agents used" in html
+    assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
+    assert '<div class="agent-note-popover" role="note">' in html
     assert "Assignment" in html
     assert "<th>Runtime nickname</th>" not in html
     assert "<strong>module-a (module-a)</strong>" in html
@@ -1597,7 +1608,9 @@ def test_native_codex_html_opens_model_pricing_in_new_tab():
 
     html = module.render_codex_rollout_html(run)
 
-    normal_flow_before_agents = html.split("<body>", 1)[1].split("<h2>Agents used</h2>", 1)[0]
+    normal_flow_before_agents = html.split("<body>", 1)[1].split(
+        '<div class="agents-heading"><h2>Agents used</h2>', 1
+    )[0]
     assert "<h2>Model pricing</h2>" not in normal_flow_before_agents
     assert 'href="#model-pricing" target="_blank" rel="noopener"' in html
     assert "Open model pricing" in html

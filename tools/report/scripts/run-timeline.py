@@ -3244,6 +3244,12 @@ td {{ font-size:.85em; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell, .agent-table .agent-subagents-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
 .agent-assignment {{ padding-left:calc(var(--agent-depth) * 20px); }}
+.agents-heading {{ position:relative; display:flex; align-items:center; margin-top:30px; }}
+.agents-heading h2 {{ margin:0; }}
+.agent-info {{ position:static; margin-left:8px; }}
+.agent-info > summary {{ list-style:none; color:#2563a6; cursor:pointer; font-size:1.15em; line-height:1; }}
+.agent-info > summary::-webkit-details-marker {{ display:none; }}
+.agent-note-popover {{ position:absolute; z-index:20; top:calc(100% + 8px); right:0; box-sizing:border-box; width:min(620px,calc(100vw - 4em)); padding:12px 14px; color:#455a64; background:#fff; border:1px solid #cfd8dc; border-radius:6px; box-shadow:0 8px 24px rgba(38,50,56,.18); font-size:.88em; font-weight:400; line-height:1.45; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
 .model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
@@ -3343,8 +3349,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </div>
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
-<h2>Agents used</h2>
-<p class="execution-note">{_escape_html(agent_note)}</p>
+<div class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-subagents-column"><col class="agent-model-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-tools-column"><col class="agent-processed-column"><col class="agent-share-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>Subagents invoked</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
