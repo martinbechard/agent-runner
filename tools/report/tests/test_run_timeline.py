@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -201,6 +202,137 @@ def _write_junie_session(root: Path) -> Path:
         encoding="utf-8",
     )
     return session
+
+
+def _write_junie_ide_chain(root: Path) -> Path:
+    issues = root / "issues"
+    issues.mkdir()
+    manifest = issues / "chain-test.json"
+    chain = issues / "chain-test"
+    chain.mkdir()
+    manifest.write_text(
+        json.dumps(
+            {
+                "id": {"id": "test-chain"},
+                "name": "Synthetic Junie IDE chain",
+                "created": "2026-07-15T13:26:49Z",
+                "state": "Finished",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def observation(response_id: str, usage: dict[str, int], skill: str = ""):
+        tool_uses = []
+        if skill:
+            tool_uses.append(
+                {
+                    "toolCallId": {"name": "agent_skill_read_doc"},
+                    "input": {"rawJsonObject": {"name": skill}},
+                }
+            )
+        return {
+            "assistantRequest": {
+                "answerChoiceId": response_id,
+                "usage": usage,
+                "toolUses": tool_uses,
+            }
+        }
+
+    first_observation = observation(
+        "response-0",
+        {
+            "inputTokens": 10,
+            "cacheInputTokens": 5,
+            "cacheCreateInputTokens": 2,
+            "outputTokens": 3,
+            "reasoningTokens": 1,
+        },
+        "typescript",
+    )
+    second_observation = observation(
+        "response-1",
+        {
+            "inputTokens": 4,
+            "cacheInputTokens": 6,
+            "cacheCreateInputTokens": 1,
+            "outputTokens": 2,
+            "reasoningTokens": 2,
+        },
+    )
+    task_specs = [
+        {
+            "index": 0,
+            "created": "2026-07-15T13:26:49Z",
+            "start": 1_784_122_009,
+            "cost": 0.10,
+            "description": "Synthetic prompt API_TOKEN=PRIVATE",
+            "previous": [],
+            "observations": [first_observation],
+            "steps": [
+                ("Prompt", "", "Synthetic prompt API_TOKEN=PRIVATE"),
+                ("Info", "Thinking", "Inspect the project."),
+                ("Info", "Open navbar.scss", "Opened the navbar stylesheet."),
+                ("ChatResponse", "Analysis complete", "The stylesheet was inspected."),
+            ],
+        },
+        {
+            "index": 1,
+            "created": "2026-07-15T13:26:59Z",
+            "start": 1_784_122_019,
+            "cost": 0.20,
+            "description": "Apply the contrast fix",
+            "previous": [first_observation],
+            "observations": [first_observation, second_observation],
+            "steps": [
+                ("Prompt", "", "Apply the contrast fix"),
+                ("Terminal", "Run tests", "Tests passed."),
+                ("Edit", "Edit navbar.scss", "Updated the active navigation rule."),
+                ("Report", "Fix complete", "The active navigation contrast was fixed."),
+            ],
+        },
+    ]
+    for task_spec in task_specs:
+        index = task_spec["index"]
+        task_path = chain / f"task-{index}.json"
+        task_path.write_text(
+            json.dumps(
+                {
+                    "id": {"index": index},
+                    "created": task_spec["created"],
+                    "cost": task_spec["cost"],
+                    "context": {"description": task_spec["description"]},
+                    "previousTasksInfo": {
+                        "agentState": {"observations": task_spec["previous"]}
+                    },
+                    "finalAgentState": {
+                        "isFinished": True,
+                        "modelAndApiVersion": "gpt-5.6-terra",
+                        "observations": task_spec["observations"],
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        steps = chain / f"task-{index}" / "steps"
+        steps.mkdir(parents=True)
+        for step_index, (step_type, command, description) in enumerate(task_spec["steps"]):
+            step_path = steps / f"step-{step_index}.json"
+            step_path.write_text(
+                json.dumps(
+                    {
+                        "type": step_type,
+                        "command": command,
+                        "description": description,
+                        "id": f"task-{index}-step-{step_index}",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            os.utime(step_path, (task_spec["start"] + step_index,) * 2)
+        os.utime(task_path, (task_spec["start"] + 3,) * 2)
+    os.utime(manifest, (1_784_122_022,) * 2)
+    return manifest
 
 
 def test_human_readable_durations_use_hours_at_sixty_minutes():
@@ -402,7 +534,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
-    assert run.parser_version == "1.6.0"
+    assert run.parser_version == "1.7.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
@@ -551,6 +683,107 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "recorded</td>" not in main_tool_table
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
+
+
+def test_native_junie_ide_chain_reports_finished_tasks_without_cumulative_double_counting(
+    tmp_path,
+):
+    module = _load_module()
+    manifest = _write_junie_ide_chain(tmp_path)
+
+    document = module.load_report_document(manifest)
+    run = document.codex_run
+
+    assert run is not None
+    assert run.runtime == "Junie"
+    assert run.run_id == "test-chain"
+    assert run.run_label == "Synthetic Junie IDE chain"
+    assert run.root_thread_id == "test-chain"
+    assert run.state == "complete"
+    assert run.format_version == module.JUNIE_SESSION_FORMAT
+    assert run.parser_version == "1.7.0"
+    assert len(run.threads) == 1
+    assert len(run.threads[0].turns) == 2
+    assert len(run.threads[0].responses) == 2
+    assert len(run.threads[0].tool_intervals) == 3
+    assert run.usage_totals.input_tokens == 28
+    assert run.usage_totals.cached_input_tokens == 11
+    assert run.usage_totals.cache_create_input_tokens == 3
+    assert run.usage_totals.uncached_input_tokens == 17
+    assert run.usage_totals.direct_input_tokens == 14
+    assert run.usage_totals.output_tokens == 5
+    assert run.usage_totals.reasoning_tokens == 3
+    assert run.usage_totals.processed_tokens == 33
+    assert run.cost.status == "recorded"
+    assert run.cost.total_cost == pytest.approx(0.30)
+    assert run.wall_time_ms == 13_000
+    assert run.active_time_ms == 6_000
+    assert run.agent_time_ms == 6_000
+
+    thread = run.threads[0]
+    assert thread.agent_path == "/main"
+    assert thread.model == "gpt-5.6-terra"
+    assert thread.skills_used == ["typescript"]
+    assert thread.recorded_cost_usd == pytest.approx(0.30)
+    assert [turn.outcome for turn in thread.turns] == ["complete", "complete"]
+    assert [tool.tool_name for tool in thread.tool_intervals] == [
+        "read",
+        "exec",
+        "apply_patch",
+    ]
+    assert [activity.activity_type for activity in thread.activities] == [
+        "input",
+        "reasoning",
+        "output",
+        "input",
+        "output",
+    ]
+    assert thread.activities[0].content == "Synthetic prompt API_TOKEN=[redacted]"
+
+    html = module.render_html(document)
+    assert "Junie run" in html
+    assert "Recorded cost: $0.30 USD" in html
+    assert '<div class="label">User tasks</div><div class="value">2</div>' in html
+    assert "gpt-5.6-terra" in html
+    assert "typescript" in html
+    assert "This Junie IDE chain contains one main agent." in html
+    assert '<p class="run-label">Synthetic Junie IDE chain</p>' in html
+    assert "Task costs come directly from Junie" in html
+    assert "<td>$0.10</td>" in html
+    assert "<td>$0.20</td>" in html
+    assert "API_TOKEN=[redacted]" in html
+    assert "PRIVATE" not in html
+
+
+def test_native_junie_ide_chain_cli_generates_companion_reports(tmp_path):
+    module = _load_module()
+    manifest = _write_junie_ide_chain(tmp_path)
+    output = tmp_path / "junie-ide-report.html"
+
+    rc = module.main(
+        [
+            str(manifest),
+            "--output",
+            str(output),
+            "--json-output",
+            str(tmp_path / "junie-ide-report.json"),
+            "--turn-csv-output",
+            str(tmp_path / "junie-ide-report.turns.csv"),
+            "--work-unit-csv-output",
+            str(tmp_path / "junie-ide-report.work-units.csv"),
+            "--markdown-output",
+            str(tmp_path / "junie-ide-report.md"),
+        ]
+    )
+
+    assert rc == 0
+    assert "Junie run" in output.read_text(encoding="utf-8")
+    assert (tmp_path / "junie-ide-report.json").exists()
+    assert (tmp_path / "junie-ide-report.turns.csv").exists()
+    assert (tmp_path / "junie-ide-report.work-units.csv").exists()
+    assert "Runtime: `Junie`" in (tmp_path / "junie-ide-report.md").read_text(
+        encoding="utf-8"
+    )
 
 
 def test_native_junie_session_cli_generates_html_report(tmp_path):

@@ -63,7 +63,7 @@ TOOL_RESULT_PREVIEW_CHARS = 200
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.6.0"
+JUNIE_SESSION_PARSER_VERSION = "1.7.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -519,6 +519,7 @@ class CodexRunMetrics:
     pricing_version: str = ""
     pricing_digest: str = ""
     runtime: str = "Codex"
+    run_label: str = ""
 
 
 # ---------------------------------------------------------------------------
@@ -1761,6 +1762,26 @@ def _cost_for_response(
     return _cost_for_usage(response.usage, model_usage, plan_types=plan_types)
 
 
+def _cost_for_turn(
+    thread: CodexThreadMetrics,
+    turn: AgentTurn,
+) -> CostAssessment:
+    """Return direct response cost for a task span when fully available."""
+
+    owned_responses = [
+        response for response in thread.responses if response.turn_id == turn.turn_id
+    ]
+    if owned_responses and all(
+        response.recorded_cost_usd is not None for response in owned_responses
+    ):
+        return CostAssessment(
+            status="recorded",
+            total_cost=sum(response.recorded_cost_usd or 0.0 for response in owned_responses),
+            method="sum of task-owned response costs",
+        )
+    return _cost_for_thread_usage(thread, turn.usage)
+
+
 def _models_for_turn(thread: CodexThreadMetrics, turn_id: str) -> list[str]:
     """Return turn model names in first-observed order."""
 
@@ -2759,7 +2780,7 @@ def render_codex_rollout_html(
         for turn_index, turn in enumerate(thread.turns, start=1):
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
-            turn_cost = _cost_for_thread_usage(thread, turn.usage)
+            turn_cost = _cost_for_turn(thread, turn)
             turn_detail_overlay_id = f"{tool_call_overlay_id}-{turn_index}"
             turn_link = (
                 f'<a class="drilldown-link" href="#{turn_detail_overlay_id}">'
@@ -3135,6 +3156,7 @@ def render_codex_rollout_html(
     openai_source = str(pricing_registry.get("_source", ""))
     anthropic_source = str(pricing_registry.get("_anthropic_source", ""))
     is_codex = run.runtime.lower() == "codex"
+    is_junie_ide = run.critical_path_method.startswith("Junie IDE")
     pricing_link = (
         '<p class="execution-note"><a class="drilldown-link" href="#model-pricing" '
         'target="_blank" rel="noopener">Open model pricing</a>.</p>'
@@ -3155,6 +3177,13 @@ def render_codex_rollout_html(
         "Agent rows follow the recorded assignment hierarchy. Nested rows are indented under their parent assignment. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles. Skills are listed only when a SKILL.md reference appears in recorded tool arguments; subagents are direct descendants in the selected run."
         if is_codex
         else (
+            "This Junie IDE chain contains one main agent. User tasks are the durable "
+            "task records in the selected chain; model responses are de-duplicated "
+            "assistant-request usage records. Skills are listed when Junie recorded an "
+            "agent_skill_read_doc tool use."
+        )
+        if is_junie_ide
+        else (
             "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities. Nested rows are indented under their parent assignment. "
             "User tasks count unique TaskStartedEvent IDs; task spans count each participating agent once per task, so delegated work appears in both the parent and custom-agent rows. "
             "Model responses count LlmResponseMetadataEvent records. Skills are listed only when a SKILL.md reference appears in recorded tool arguments; subagents are direct descendants in the selected run."
@@ -3163,7 +3192,17 @@ def render_codex_rollout_html(
     execution_note = (
         "Bars share a common run-wide time axis and show each agent and turn's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table."
         if is_codex
+        else (
+            "Bars share a common run-wide time axis and show the Junie IDE task spans "
+            "using task creation times and durable step completion timestamps. Task "
+            "costs come directly from Junie; response costs within each task are "
+            "allocated by processed-token share."
+        )
+        if is_junie_ide
         else "Bars share a common run-wide time axis and show each agent and task span's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
+    )
+    run_label_html = (
+        f'<p class="run-label">{_escape_html(run.run_label)}</p>' if run.run_label else ""
     )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
@@ -3281,6 +3320,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:1240px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
+{run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
@@ -4805,6 +4845,485 @@ def _junie_usage(value: object) -> UsageTotals | None:
     )
 
 
+def _junie_ide_chain_paths(path: Path) -> tuple[Path, Path] | None:
+    """Return the Junie IDE chain manifest and task directory for `path`."""
+
+    if path.is_file() and path.suffix.lower() == ".json":
+        chain_dir = path.with_suffix("")
+        manifest = path
+    elif path.is_dir():
+        chain_dir = path
+        manifest = path.with_suffix(".json")
+    else:
+        return None
+    if (
+        not manifest.is_file()
+        or not chain_dir.is_dir()
+        or not any(chain_dir.glob("task-*.json"))
+    ):
+        return None
+    return manifest, chain_dir
+
+
+def _is_native_junie_ide_chain(path: Path) -> bool:
+    resolved = _junie_ide_chain_paths(path)
+    if resolved is None:
+        return False
+    manifest, _ = resolved
+    try:
+        value = json.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(value, dict)
+        and manifest.stem.startswith("chain-")
+        and "created" in value
+        and "state" in value
+    )
+
+
+def _junie_ide_usage(value: object) -> UsageTotals | None:
+    if not isinstance(value, dict):
+        return None
+    counters: dict[str, int] = {}
+    for key in (
+        "inputTokens",
+        "cacheInputTokens",
+        "cacheCreateInputTokens",
+        "outputTokens",
+        "reasoningTokens",
+    ):
+        raw = value.get(key, 0)
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+            return None
+        counters[key] = raw
+    fresh = counters["inputTokens"]
+    cached = counters["cacheInputTokens"]
+    cache_create = counters["cacheCreateInputTokens"]
+    output = counters["outputTokens"]
+    return UsageTotals(
+        input_tokens=fresh + cached + cache_create,
+        cached_input_tokens=cached,
+        cache_create_input_tokens=cache_create,
+        uncached_input_tokens=fresh + cache_create,
+        output_tokens=output,
+        reasoning_tokens=counters["reasoningTokens"],
+        processed_tokens=fresh + cached + cache_create + output,
+    )
+
+
+def _junie_ide_observation_id(value: object) -> str:
+    if not isinstance(value, dict):
+        return ""
+    request = value.get("assistantRequest")
+    if not isinstance(request, dict):
+        return ""
+    return str(request.get("answerChoiceId") or "")
+
+
+def _junie_ide_task_index(path: Path) -> int:
+    match = re.fullmatch(r"task-(\d+)\.json", path.name)
+    return int(match.group(1)) if match else sys.maxsize
+
+
+def _junie_ide_step_index(path: Path) -> int:
+    match = re.fullmatch(r"step-(\d+)\.json", path.name)
+    return int(match.group(1)) if match else sys.maxsize
+
+
+def _junie_ide_file_timestamp(path: Path) -> str:
+    return datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc).isoformat()
+
+
+def _junie_ide_project_name(chain_dir: Path) -> str:
+    for ancestor in chain_dir.parents:
+        if ancestor.parent.name == "projects":
+            return re.sub(r"\.[0-9a-f]{8}$", "", ancestor.name)
+    return ""
+
+
+def _junie_ide_tool_name(step_type: str, command: str) -> str:
+    if step_type == "Terminal":
+        return "exec"
+    if step_type == "Edit":
+        return "apply_patch"
+    if step_type == "AskQuestion":
+        return "ask_question"
+    normalized = command.strip().lower()
+    if normalized.startswith("open "):
+        return "read"
+    if normalized.startswith("search "):
+        return "search"
+    return re.split(r"\s+", normalized, maxsplit=1)[0] or "tool"
+
+
+def parse_junie_ide_chain(path: Path) -> CodexRunMetrics:
+    """Normalize a durable Junie IDE issue chain without reading session env data."""
+
+    resolved = _junie_ide_chain_paths(path)
+    if resolved is None:
+        raise ValueError(f"No native Junie IDE task chain found at {path}")
+    manifest_path, chain_dir = resolved
+    try:
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"Cannot read Junie IDE chain manifest {manifest_path}: {exc}") from exc
+    if not isinstance(manifest, dict):
+        raise ValueError(f"Invalid Junie IDE chain manifest at {manifest_path}")
+
+    raw_chain_id = manifest.get("id")
+    if isinstance(raw_chain_id, dict):
+        chain_id = str(raw_chain_id.get("id") or raw_chain_id.get("index") or chain_dir.name)
+    else:
+        chain_id = str(raw_chain_id or chain_dir.name)
+    run_label = " · ".join(
+        item
+        for item in (
+            _junie_ide_project_name(chain_dir),
+            str(manifest.get("name") or ""),
+        )
+        if item
+    )
+    task_paths = sorted(chain_dir.glob("task-*.json"), key=_junie_ide_task_index)
+    diagnostics = [
+        "Junie IDE model response timestamps are unavailable; responses are shown "
+        "at task completion.",
+        "Junie IDE step completion times use durable file modification timestamps "
+        "normalized to step order.",
+    ]
+    turns: list[AgentTurn] = []
+    responses: list[ResponseUsage] = []
+    activities: list[AgentActivity] = []
+    tools: list[ToolInterval] = []
+    skills_used: set[str] = set()
+    models: Counter[str] = Counter()
+    recorded_cost = 0.0
+    has_complete_cost = True
+    source_manifest: list[SourceManifestEntry] = []
+    all_tasks_complete = bool(task_paths)
+
+    for task_path in task_paths:
+        try:
+            task = json.loads(task_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            diagnostics.append(f"unreadable Junie IDE task {task_path}: {exc}")
+            all_tasks_complete = False
+            continue
+        if not isinstance(task, dict):
+            diagnostics.append(f"non-object Junie IDE task {task_path}")
+            all_tasks_complete = False
+            continue
+        task_index = _junie_ide_task_index(task_path)
+        task_id = f"task-{task_index}"
+        source_base = task_index * 1_000_000
+        started_at = _normalize_timestamp(task.get("created"))
+        completed_at = _junie_ide_file_timestamp(task_path)
+        final_state = task.get("finalAgentState")
+        final_state = final_state if isinstance(final_state, dict) else {}
+        is_finished = final_state.get("isFinished") is True
+        all_tasks_complete = all_tasks_complete and is_finished
+        model = str(final_state.get("modelAndApiVersion") or "unknown")
+        models[model] += 1
+
+        raw_cost = task.get("cost")
+        task_cost = (
+            float(raw_cost)
+            if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool)
+            else None
+        )
+        if task_cost is None:
+            has_complete_cost = False
+        else:
+            recorded_cost += task_cost
+
+        previous_info = task.get("previousTasksInfo")
+        previous_state = (
+            previous_info.get("agentState") if isinstance(previous_info, dict) else None
+        )
+        previous_observations = (
+            previous_state.get("observations") if isinstance(previous_state, dict) else []
+        )
+        previous_ids = {
+            _junie_ide_observation_id(item)
+            for item in previous_observations
+            if _junie_ide_observation_id(item)
+        } if isinstance(previous_observations, list) else set()
+        final_observations = final_state.get("observations")
+        current_response_data: list[tuple[int, str, UsageTotals, dict[str, object]]] = []
+        if isinstance(final_observations, list):
+            for observation_index, observation in enumerate(final_observations):
+                response_id = _junie_ide_observation_id(observation)
+                if (
+                    not response_id
+                    or response_id in previous_ids
+                    or not isinstance(observation, dict)
+                ):
+                    continue
+                request = observation.get("assistantRequest")
+                if not isinstance(request, dict):
+                    continue
+                usage = _junie_ide_usage(request.get("usage"))
+                if usage is None:
+                    diagnostics.append(
+                        f"invalid Junie IDE response usage in {task_path.name} "
+                        f"observation {observation_index}"
+                    )
+                    continue
+                current_response_data.append((observation_index, response_id, usage, request))
+                tool_uses = request.get("toolUses")
+                if isinstance(tool_uses, list):
+                    for tool_use in tool_uses:
+                        if not isinstance(tool_use, dict):
+                            continue
+                        tool_call_id = tool_use.get("toolCallId")
+                        if (
+                            not isinstance(tool_call_id, dict)
+                            or tool_call_id.get("name") != "agent_skill_read_doc"
+                        ):
+                            continue
+                        tool_input = tool_use.get("input")
+                        raw_input = (
+                            tool_input.get("rawJsonObject")
+                            if isinstance(tool_input, dict)
+                            else None
+                        )
+                        if isinstance(raw_input, dict) and raw_input.get("name"):
+                            skills_used.add(str(raw_input["name"]))
+        task_processed = sum(item[2].processed_tokens for item in current_response_data)
+        task_usage = UsageTotals()
+        for observation_index, _, usage, _ in current_response_data:
+            response_cost = (
+                task_cost * usage.processed_tokens / task_processed
+                if task_cost is not None and task_processed
+                else None
+            )
+            responses.append(
+                ResponseUsage(
+                    event_timestamp=completed_at,
+                    usage=usage,
+                    turn_id=task_id,
+                    source_path=str(task_path),
+                    source_ordinal=source_base + 100_000 + observation_index,
+                    model=model,
+                    recorded_cost_usd=response_cost,
+                    derivation_method="Junie task cost allocated by processed-token share",
+                    attribution_confidence="exact",
+                )
+            )
+            task_usage = task_usage + usage
+
+        context = task.get("context")
+        description = context.get("description") if isinstance(context, dict) else ""
+        prompt_content = _tool_argument_content(description) if isinstance(description, str) else ""
+        if prompt_content:
+            activities.append(
+                AgentActivity(
+                    thread_id=chain_id,
+                    turn_id=task_id,
+                    activity_type="input",
+                    event_timestamp=started_at,
+                    source_path=str(task_path),
+                    source_ordinal=source_base,
+                    summary=f"Initial prompt · {len(prompt_content):,} characters",
+                    content=prompt_content,
+                    model=model,
+                )
+            )
+
+        step_paths = sorted(
+            (chain_dir / task_id / "steps").glob("step-*.json"),
+            key=_junie_ide_step_index,
+        )
+        previous_step_at = started_at
+        for step_path in step_paths:
+            try:
+                step = json.loads(step_path.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError) as exc:
+                diagnostics.append(f"unreadable Junie IDE step {step_path}: {exc}")
+                continue
+            if not isinstance(step, dict):
+                continue
+            step_index = _junie_ide_step_index(step_path)
+            ordinal = source_base + step_index + 1
+            raw_step_at = _junie_ide_file_timestamp(step_path)
+            previous_dt = _parse_iso_datetime(previous_step_at)
+            raw_step_dt = _parse_iso_datetime(raw_step_at)
+            step_at = (
+                max(previous_dt, raw_step_dt).isoformat()
+                if previous_dt is not None and raw_step_dt is not None
+                else raw_step_at
+            )
+            step_type = str(step.get("type") or "")
+            command = str(step.get("command") or "")
+            description = str(step.get("description") or "")
+            if step_type == "Info" and command.strip().lower() == "thinking":
+                content = _tool_argument_content(description)
+                if content:
+                    activities.append(
+                        AgentActivity(
+                            thread_id=chain_id,
+                            turn_id=task_id,
+                            activity_type="reasoning",
+                            event_timestamp=step_at,
+                            source_path=str(step_path),
+                            source_ordinal=ordinal,
+                            summary=_sanitize_unstructured_argument(description),
+                            content=content,
+                            model=model,
+                        )
+                    )
+            elif step_type in {"ChatResponse", "Report"}:
+                content = _tool_argument_content(description)
+                if content:
+                    activities.append(
+                        AgentActivity(
+                            thread_id=chain_id,
+                            turn_id=task_id,
+                            activity_type="output",
+                            event_timestamp=step_at,
+                            source_path=str(step_path),
+                            source_ordinal=ordinal,
+                            summary=_sanitize_unstructured_argument(command or description),
+                            content=content,
+                            model=model,
+                        )
+                    )
+            elif step_type in {"Terminal", "Edit", "AskQuestion"} or (
+                step_type == "Info" and command.strip()
+            ):
+                tool_name = _junie_ide_tool_name(step_type, command)
+                argument_content = _tool_argument_content(command or description)
+                result_content = _tool_result_content(description)
+                tools.append(
+                    ToolInterval(
+                        thread_id=chain_id,
+                        turn_id=task_id,
+                        tool_name=tool_name,
+                        started_at=previous_step_at,
+                        completed_at=step_at,
+                        duration_ms=_interval_ms(previous_step_at, step_at),
+                        derivation_method="Junie IDE preceding-step bound",
+                        attribution_confidence="bounded",
+                        argument_summary=_sanitize_unstructured_argument(command or description),
+                        source_path=str(step_path),
+                        source_start_ordinal=max(source_base, ordinal - 1),
+                        source_end_ordinal=ordinal,
+                        argument_content=argument_content,
+                        result_summary=_tool_result_summary(result_content),
+                        result_content=result_content,
+                        model=model,
+                    )
+                )
+            previous_step_at = step_at
+            step_stat = step_path.stat()
+            source_manifest.append(
+                SourceManifestEntry(
+                    thread_id=chain_id,
+                    path=str(step_path),
+                    size_bytes=step_stat.st_size,
+                    modified_at_ns=step_stat.st_mtime_ns,
+                )
+            )
+
+        turns.append(
+            AgentTurn(
+                thread_id=chain_id,
+                turn_id=task_id,
+                started_at=started_at,
+                completed_at=completed_at,
+                duration_ms=_interval_ms(started_at, completed_at),
+                outcome="complete" if is_finished else "active",
+                usage=task_usage,
+                run_id=chain_id,
+                work_unit_id="main",
+                attribution_confidence="exact",
+                attribution_reason="Junie IDE task ownership",
+                source_path=str(task_path),
+                source_ordinal=source_base,
+            )
+        )
+        task_stat = task_path.stat()
+        source_manifest.append(
+            SourceManifestEntry(
+                thread_id=chain_id,
+                path=str(task_path),
+                size_bytes=task_stat.st_size,
+                modified_at_ns=task_stat.st_mtime_ns,
+            )
+        )
+
+    if not turns:
+        raise ValueError(f"Junie IDE task chain has no readable tasks: {chain_dir}")
+    token_totals = UsageTotals()
+    for response in responses:
+        token_totals = token_totals + response.usage
+    if len(models) == 1:
+        model_label = next(iter(models))
+    else:
+        model_label = f"mixed ({len(models)} models)" if models else ""
+    thread = CodexThreadMetrics(
+        thread_id=chain_id,
+        agent_path="/main",
+        model=model_label,
+        recorded_cost_usd=recorded_cost if has_complete_cost else None,
+        started_at=min(turn.started_at for turn in turns),
+        last_observed_at=max(turn.completed_at for turn in turns),
+        token_totals=token_totals,
+        responses=sorted(responses, key=lambda item: item.source_ordinal),
+        turns=turns,
+        activities=sorted(activities, key=lambda item: item.source_ordinal),
+        tool_intervals=sorted(tools, key=lambda item: item.source_start_ordinal),
+        skills_used=sorted(skills_used, key=str.casefold),
+        terminal_state="complete" if all_tasks_complete else "active",
+        source_path=str(manifest_path),
+    )
+    wall_start, wall_end, wall_ms, agent_ms, active_ms, tool_ms, peak = _time_metrics([thread])
+    manifest_stat = manifest_path.stat()
+    source_manifest.insert(
+        0,
+        SourceManifestEntry(
+            thread_id=chain_id,
+            path=str(manifest_path),
+            size_bytes=manifest_stat.st_size,
+            modified_at_ns=manifest_stat.st_mtime_ns,
+        ),
+    )
+    return CodexRunMetrics(
+        run_id=chain_id,
+        root_thread_id=chain_id,
+        state="complete" if all_tasks_complete else "live",
+        observed_at=wall_end,
+        wall_started_at=wall_start,
+        wall_ended_at=wall_end,
+        wall_time_ms=wall_ms,
+        agent_time_ms=agent_ms,
+        active_time_ms=active_ms,
+        tool_time_ms=tool_ms,
+        critical_path_ms=wall_ms,
+        critical_path_method="Junie IDE observed task-chain interval",
+        peak_concurrency=peak,
+        usage_totals=token_totals,
+        threads=[thread],
+        work_units=_aggregate_work_units([thread]),
+        phase_lanes=_aggregate_phase_lanes([thread]),
+        cost=CostAssessment(
+            status="recorded" if has_complete_cost else "unavailable",
+            total_cost=recorded_cost if has_complete_cost else None,
+            method=(
+                "Junie IDE task cost"
+                if has_complete_cost
+                else "incomplete Junie IDE task cost metadata"
+            ),
+        ),
+        source_manifest=source_manifest,
+        diagnostics=sorted(set(diagnostics)),
+        parser_version=JUNIE_SESSION_PARSER_VERSION,
+        format_version=JUNIE_SESSION_FORMAT,
+        runtime="Junie",
+        run_label=run_label,
+    )
+
+
 def _junie_shell_write_paths(command: str) -> list[str]:
     paths: list[str] = []
     active_heredoc = ""
@@ -5448,6 +5967,22 @@ class NativeJunieSessionAdapter(BaseReportAdapter):
         )
 
 
+class NativeJunieIdeChainAdapter(BaseReportAdapter):
+    """Build an execution report from Junie IDE's durable issue-chain cache."""
+
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return _is_native_junie_ide_chain(path)
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        return ReportDocument(
+            run_title=AGENT_EXECUTION_METRICS_TITLE,
+            workspace=path,
+            codex_run=parse_junie_ide_chain(path),
+        )
+
+
 class ComparisonManifestAdapter(BaseReportAdapter):
     @staticmethod
     def matches(path: Path) -> bool:
@@ -5470,6 +6005,7 @@ ADAPTERS: list[type[BaseReportAdapter]] = [
     SealedCodexRunAdapter,
     NativeCodexRolloutAdapter,
     NativeJunieSessionAdapter,
+    NativeJunieIdeChainAdapter,
     ComparisonManifestAdapter,
     MethodologyWorkspaceAdapter,
     PromptRunnerRunAdapter,
@@ -5482,7 +6018,7 @@ def load_report_document(path: Path) -> ReportDocument:
             return adapter.build(path)
     raise ValueError(
         f"Cannot detect input type for {path}.\n"
-        f"Expected a native Codex rollout, native Junie session, comparison manifest, "
+        f"Expected a native Codex rollout, native Junie session or IDE task chain, comparison manifest, "
         f"methodology workspace with .methodology-runner/state.json, or prompt-runner run/module directory."
     )
 
