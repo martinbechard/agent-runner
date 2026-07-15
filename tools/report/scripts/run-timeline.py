@@ -1055,7 +1055,7 @@ def _render_tool_result(tool: ToolInterval) -> str:
         return f'<div class="tool-result-summary">{summary}</div>'
     return (
         f'<div class="tool-result-summary">{summary}</div>'
-        '<details class="tool-result-raw"><summary>raw result (redacted)</summary>'
+        '<details class="tool-result-raw"><summary>raw result</summary>'
         f'<pre>{_escape_html(tool.result_content)}</pre></details>'
     )
 

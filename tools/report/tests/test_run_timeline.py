@@ -372,7 +372,8 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
     assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
     assert "*** Add File: /tmp/docs/example.md" in html
     assert "<th>Result</th>" in html
-    assert "raw result (redacted)" in html
+    assert "<summary>raw result</summary>" in html
+    assert "raw result (redacted)" not in html
 
 
 def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tmp_path):
@@ -426,7 +427,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     html = module.render_html(document)
     assert "Junie run" in html
     assert "Recorded cost: $0.03 USD" in html
-    assert "raw result (redacted)" in html
+    assert "<summary>raw result</summary>" in html
+    assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
     assert '<div class="label">User tasks</div><div class="value">1</div>' in html
     assert '<div class="label">Agent task spans</div><div class="value">2</div>' in html
