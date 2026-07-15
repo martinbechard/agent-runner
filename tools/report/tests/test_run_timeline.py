@@ -459,6 +459,9 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
     assert "Bars share a common run-wide time axis" in html
+    assert "View task spans and tool calls" not in html
+    assert '.thread-detail > summary::before { content:"+";' in html
+    assert '.thread-detail[open] > summary::before { content:"−"; }' in html
     assert '<div class="label">User tasks</div><div class="value">1</div>' in html
     assert '<div class="label">Agent task spans</div><div class="value">2</div>' in html
     assert '<div class="label">Model responses</div><div class="value">2</div>' in html
@@ -948,6 +951,8 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
         "grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px "
         "minmax(220px,20%);"
     ) in html
+    assert '.thread-detail > summary::before { content:"+";' in html
+    assert '.thread-detail[open] > summary::before { content:"−"; }' in html
     assert "grid-template-columns:minmax(250px,2fr) auto auto" not in html
     assert "root-turn-1" in html
     assert "T+0s" in html
@@ -995,9 +1000,10 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
 
     assert html.count('class="tool-call-overlay agent-tool-call-overlay"') == 3
     assert html.count('class="tool-call-overlay turn-detail-overlay"') == 4
-    assert 'href="#turn-tool-call-list-1"' in html
-    assert 'href="#turn-tool-call-list-2"' in html
-    assert 'href="#turn-tool-call-list-3"' in html
+    assert 'href="#turn-tool-call-list-1"' not in html
+    assert 'href="#turn-tool-call-list-2"' not in html
+    assert 'href="#turn-tool-call-list-3"' not in html
+    assert "View turns and tool calls" not in html
     assert html.count('href="#turn-tool-call-list-1-1"') == 2
     assert "root — turns and tool calls" in html
     assert "module-a — turns and tool calls" in html

@@ -3073,7 +3073,6 @@ def render_codex_rollout_html(
             f"model {_escape_html(thread.model or '—')} · "
             f"tools {_escape_html(thread_tools_label)}"
             f"{' · ' + metadata_note if metadata_note else ''}"
-            f' · <a class="drilldown-link" href="#{tool_call_overlay_id}">View {turn_plural} and tool calls</a>'
             "</div>"
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
@@ -3173,7 +3172,10 @@ td {{ font-size:.85em; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
-.thread-detail > summary {{ display:grid; grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px minmax(220px,20%); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
+.thread-detail > summary {{ display:grid; grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px minmax(220px,20%); gap:12px; align-items:center; position:relative; padding:11px 13px 11px 40px; cursor:pointer; list-style:none; }}
+.thread-detail > summary::-webkit-details-marker {{ display:none; }}
+.thread-detail > summary::before {{ content:"+"; position:absolute; left:13px; width:18px; height:18px; display:grid; place-items:center; border:1px solid #90a4ae; border-radius:50%; color:#455a64; font-weight:700; line-height:1; }}
+.thread-detail[open] > summary::before {{ content:"−"; }}
 .thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
 .thread-name {{ font-weight:600; overflow-wrap:anywhere; }}
 .thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
