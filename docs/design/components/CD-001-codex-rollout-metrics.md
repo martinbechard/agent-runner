@@ -21,8 +21,8 @@ This section defines the outcome and boundary of the Codex rollout metrics compo
   - **BECAUSE:** Operators need progress visibility during long runs and reproducible evidence after a run finishes.
 
 - **REQUIREMENT: REQ-2** Avoid content collection by default
-  - **SYNOPSIS:** The default report reads structural metadata, counters, timestamps, agent paths, tool identifiers, and bounded status labels without copying prompts, reasoning text, tool payloads, source code, or final document bodies into metrics outputs.
-  - **BECAUSE:** Rollout files can contain private project material that is unnecessary for usage accounting.
+  - **SYNOPSIS:** The default report reads structural metadata, counters, timestamps, agent paths, tool identifiers, and compact tool-argument summaries. It redacts secret-shaped values, replaces message-like bodies with character counts, truncates long summaries, and does not copy prompts, reasoning text, raw tool payloads or results, source code, or final document bodies into metrics outputs.
+  - **BECAUSE:** Tool names alone do not explain activity, but rollout files can contain private project material and credentials that are unnecessary for usage accounting.
 
 - **RULE: RULE-1** Do not present estimated API-equivalent cost as an actual Codex charge
   - **SYNOPSIS:** Monetary output must distinguish direct recorded cost, model-price estimate, subscription usage with no monetary telemetry, and unavailable cost.
@@ -401,11 +401,11 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 
 - **TASK: TEST-15** Enforce privacy defaults
   - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, and final-message text in a source fixture.
-  - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics and provenance but none of the sensitive content.
+  - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics, provenance, and a useful redacted tool-argument summary but none of the sensitive content or raw tool results.
 
 - **TASK: TEST-16** Open agent and turn tool-call drilldowns
   - **SYNOPSIS:** Expand an agent in the execution timeline, open its turn list, and select one turn for a focused view of that turn's metrics, attribution, and ordered tool calls.
-  - **VALIDATES:** The agent assignment appears in the agent overlay title without a redundant table column; turn links work from both the agent overlay and execution table; the turn overlay shows identity, timing, state, token count, work attribution, individual tool names, durations, and confidence while arguments and results remain excluded.
+  - **VALIDATES:** The agent assignment appears in the agent overlay title without a redundant table column; turn links work from both the agent overlay and execution table; the turn overlay shows identity, timing, state, token count, work attribution, each tool call's run-relative offset, name, and redacted argument summary. The normal matched-event timing bound is silent, exceptional timing provenance is called out, and tool results remain excluded.
 
 ## 8. Proposed Modifications
 

@@ -66,6 +66,32 @@ def test_parse_native_codex_rollout_uses_exclusive_cumulative_deltas():
     assert thread.token_totals.reasoning_tokens == 8
     assert thread.token_totals.processed_tokens == 180
     assert thread.unattributed_usage.processed_tokens == 0
+    assert thread.tool_intervals[0].argument_summary == (
+        "API_TOKEN=[redacted] python app.py"
+    )
+
+
+def test_native_codex_tool_argument_summary_redacts_sensitive_content():
+    module = _load_module()
+
+    summary = module._tool_argument_summary(
+        {
+            "arguments": json.dumps(
+                {
+                    "target": "reviewer",
+                    "message": "PRIVATE-MESSAGE-CONTENT",
+                    "api_key": "PRIVATE-API-KEY",
+                    "max_tokens": 100,
+                }
+            )
+        }
+    )
+
+    assert '"target":"reviewer"' in summary
+    assert '"message":"[23 chars]"' in summary
+    assert '"api_key":"[redacted]"' in summary
+    assert '"max_tokens":100' in summary
+    assert "PRIVATE" not in summary
 
 
 def test_discover_native_codex_run_aggregates_only_closed_descendant_set():
@@ -310,9 +336,33 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert 'href="#turn-tool-call-list-1"' in root_turn_overlay
     assert "Time to first token" in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
-    assert '<tr class="turn-detail-tool-row"><td>1</td><td><code>exec</code></td><td>500ms</td><td>exact</td></tr>' in root_turn_overlay
+    tool_table = root_turn_overlay.split('<div class="table-scroll">', 1)[1].split(
+        "</table>", 1
+    )[0]
+    assert "<th>T+</th>" in tool_table
+    assert "<th>Duration</th>" not in tool_table
+    assert "<th>Arguments</th>" in tool_table
+    assert "<th>Timing note</th>" in tool_table
+    assert (
+        '<tr class="turn-detail-tool-row"><td>1</td><td>T+3s</td>'
+        '<td><code>exec</code></td><td><code class="tool-arguments">'
+        "API_TOKEN=[redacted] python app.py</code></td>"
+        "<td>tool-reported duration available</td></tr>"
+        in tool_table
+    )
     assert '<code>root-turn-1</code>' in html
     assert "PRIVATE-TOOL-PAYLOAD" not in html
+
+    run.threads[0].tool_intervals[0].attribution_confidence = "bounded"
+    bounded_html = module.render_codex_rollout_html(run)
+    bounded_overlay = bounded_html.split(
+        'id="turn-tool-call-list-1-1"', 1
+    )[1].split("</section>", 1)[0]
+    bounded_tool_table = bounded_overlay.split(
+        '<div class="table-scroll">', 1
+    )[1].split("</table>", 1)[0]
+    assert "<th>Timing note</th>" not in bounded_tool_table
+    assert "bounded" not in bounded_tool_table
 
 
 def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp_path):

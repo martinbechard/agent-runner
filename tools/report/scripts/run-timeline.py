@@ -53,7 +53,22 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.2.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.3.0"
+CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
+CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
+    {
+        "body",
+        "chars",
+        "content",
+        "input",
+        "message",
+        "output",
+        "payload",
+        "prompt",
+        "result",
+        "text",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
@@ -296,7 +311,7 @@ class AgentTurn:
 
 @dataclass
 class ToolInterval:
-    """A content-free tool timing record matched by call identifier."""
+    """A tool timing record with a sanitized argument summary, matched by call identifier."""
 
     thread_id: str
     turn_id: str | None
@@ -306,6 +321,7 @@ class ToolInterval:
     duration_ms: int
     derivation_method: str
     attribution_confidence: str
+    argument_summary: str
     source_path: str
     source_start_ordinal: int
     source_end_ordinal: int
@@ -570,6 +586,108 @@ def _extract_tool_wall_time_ms(output: object) -> int | None:
     return round(float(raw) * 1000)
 
 
+def _is_sensitive_argument_key(key: str) -> bool:
+    normalized = key.strip().lstrip("-").lower().replace("-", "_")
+    if normalized in {
+        "api_key",
+        "client_secret",
+        "private_key",
+        "access_token",
+        "refresh_token",
+    }:
+        return True
+    return any(
+        part in {
+            "authorization",
+            "cookie",
+            "credential",
+            "credentials",
+            "passwd",
+            "password",
+            "secret",
+            "token",
+        }
+        for part in normalized.split("_")
+    )
+
+
+def _argument_content_size(value: object) -> int:
+    if isinstance(value, str):
+        return len(value)
+    return len(json.dumps(value, ensure_ascii=False, separators=(",", ":")))
+
+
+def _sanitize_structured_argument(key: str, value: object) -> object:
+    normalized_key = key.strip().lower().replace("-", "_")
+    if _is_sensitive_argument_key(normalized_key):
+        return "[redacted]"
+    if normalized_key in CODEX_CONTENT_ARGUMENT_KEYS:
+        return f"[{_argument_content_size(value):,} chars]"
+    if isinstance(value, dict):
+        return {
+            str(child_key): _sanitize_structured_argument(str(child_key), child_value)
+            for child_key, child_value in value.items()
+        }
+    if isinstance(value, list):
+        return [_sanitize_structured_argument("", child) for child in value]
+    return value
+
+
+def _truncate_argument_summary(summary: str) -> str:
+    if len(summary) <= CODEX_TOOL_ARGUMENT_SUMMARY_CHARS:
+        return summary
+    return summary[: CODEX_TOOL_ARGUMENT_SUMMARY_CHARS - 3].rstrip() + "..."
+
+
+def _sanitize_unstructured_argument(value: str) -> str:
+    def redact_assignment(match: re.Match[str]) -> str:
+        key = match.group("key")
+        if not _is_sensitive_argument_key(key):
+            return match.group(0)
+        return f"{key}{match.group('separator')}[redacted]"
+
+    summary = re.sub(
+        r"(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P<separator>\s*=\s*)"
+        r"(?P<value>\"[^\"]*\"|'[^']*'|[^\s]+)",
+        redact_assignment,
+        value,
+    )
+    summary = re.sub(
+        r"(?i)(?P<prefix>\b(?:authorization|bearer)\s*[:=]?\s+)(?P<value>\S+)",
+        lambda match: f"{match.group('prefix')}[redacted]",
+        summary,
+    )
+    summary = re.sub(
+        r"(?i)(?P<prefix>--(?:api-key|client-secret|private-key|access-token|"
+        r"refresh-token|token|secret|password|passwd|authorization|cookie|credential)"
+        r"(?:=|\s+))(?P<value>\"[^\"]*\"|'[^']*'|\S+)",
+        lambda match: f"{match.group('prefix')}[redacted]",
+        summary,
+    )
+    return _truncate_argument_summary(" ".join(summary.split()) or "—")
+
+
+def _tool_argument_summary(payload: dict[str, object]) -> str:
+    value = payload.get("arguments")
+    if value is None:
+        value = payload.get("input")
+    if value is None or value == "":
+        return "—"
+    if isinstance(value, str):
+        try:
+            structured = json.loads(value)
+        except json.JSONDecodeError:
+            return _sanitize_unstructured_argument(value)
+    else:
+        structured = value
+    if not isinstance(structured, (dict, list)):
+        return _sanitize_unstructured_argument(str(structured))
+    sanitized = _sanitize_structured_argument("", structured)
+    return _truncate_argument_summary(
+        json.dumps(sanitized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
 def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
     metadata = payload.get("internal_chat_message_metadata_passthrough")
     if isinstance(metadata, dict) and metadata.get("turn_id"):
@@ -580,11 +698,12 @@ def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn
 
 
 def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
-    """Parse one native Codex Desktop rollout without retaining content fields.
+    """Parse one native Codex Desktop rollout with bounded argument summaries.
 
     The returned counters belong only to this thread. Cumulative token events
     become exclusive response deltas; duplicate snapshots and a partial final
-    JSONL record are tolerated and surfaced through diagnostics.
+    JSONL record are tolerated and surfaced through diagnostics. Prompt,
+    reasoning, tool-result, and final-message content remains excluded.
     """
     path = path.resolve()
     records, diagnostics = _parse_jsonl_append_safe(path)
@@ -601,7 +720,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     turns: list[AgentTurn] = []
     responses: list[ResponseUsage] = []
     tools: list[ToolInterval] = []
-    pending_tools: dict[str, tuple[str, str, str | None, int]] = {}
+    pending_tools: dict[str, tuple[str, str, str | None, int, str]] = {}
     previous_usage = UsageTotals()
     recorded_cost_usd: float | None = None
     saw_usage = False
@@ -808,12 +927,13 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         timestamp,
                         _event_turn_id(payload, active_turns),
                         ordinal,
+                        _tool_argument_summary(payload),
                     )
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
                 call_id = str(payload.get("call_id") or "")
                 pending = pending_tools.pop(call_id, None)
                 if pending:
-                    tool_name, started_at, turn_id, start_ordinal = pending
+                    tool_name, started_at, turn_id, start_ordinal, argument_summary = pending
                     reported_ms = _extract_tool_wall_time_ms(payload.get("output"))
                     elapsed_ms = _interval_ms(started_at, timestamp)
                     duration_ms = reported_ms if reported_ms is not None else elapsed_ms
@@ -831,6 +951,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                                 else "matched-event-interval"
                             ),
                             attribution_confidence="exact" if reported_ms is not None else "bounded",
+                            argument_summary=argument_summary,
                             source_path=str(path),
                             source_start_ordinal=start_ordinal,
                             source_end_ordinal=ordinal,
@@ -1594,13 +1715,25 @@ def _tool_activity_summary(tools: list[ToolInterval]) -> tuple[str, str]:
     return names, f"{len(tools):,} {call_label} · {duration}"
 
 
-def _turn_offset_label(run: CodexRunMetrics, turn: AgentTurn) -> str:
+def _timestamp_offset_label(run: CodexRunMetrics, timestamp: str) -> str:
     run_start = _parse_iso_datetime(run.wall_started_at)
-    turn_start = _parse_iso_datetime(turn.started_at)
-    if run_start is None or turn_start is None:
+    event_time = _parse_iso_datetime(timestamp)
+    if run_start is None or event_time is None:
         return "T+—"
-    seconds = max(0, (turn_start - run_start).total_seconds())
+    seconds = max(0, (event_time - run_start).total_seconds())
     return f"T+{_fmt_duration(seconds)}"
+
+
+def _turn_offset_label(run: CodexRunMetrics, turn: AgentTurn) -> str:
+    return _timestamp_offset_label(run, turn.started_at)
+
+
+def _tool_timing_note(tool: ToolInterval) -> str:
+    if tool.attribution_confidence == "exact":
+        return "tool-reported duration available"
+    if tool.attribution_confidence == "bounded":
+        return ""
+    return f"{tool.attribution_confidence} timing"
 
 
 def _timeline_style(run: CodexRunMetrics, started_at: str, ended_at: str) -> str:
@@ -1809,15 +1942,27 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 "</tr>"
             )
+            show_timing_note = any(
+                tool.attribution_confidence != "bounded" for tool in tools
+            )
             turn_detail_tool_rows = "".join(
                 '<tr class="turn-detail-tool-row">'
                 f"<td>{tool_index}</td>"
+                f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
                 f"<td><code>{_escape_html(tool.tool_name)}</code></td>"
-                f"<td>{_escape_html(_format_detail_ms(tool.duration_ms))}</td>"
-                f"<td>{_escape_html(tool.attribution_confidence)}</td>"
-                "</tr>"
+                f'<td><code class="tool-arguments">{_escape_html(tool.argument_summary)}</code></td>'
+                + (
+                    f"<td>{_escape_html(_tool_timing_note(tool))}</td>"
+                    if show_timing_note
+                    else ""
+                )
+                + "</tr>"
                 for tool_index, tool in enumerate(tools, start=1)
-            ) or '<tr><td colspan="4">No matched tool calls</td></tr>'
+            ) or (
+                f'<tr><td colspan="{5 if show_timing_note else 4}">'
+                "No matched tool calls</td></tr>"
+            )
+            timing_note_header = "<th>Timing note</th>" if show_timing_note else ""
             turn_detail_overlays.append(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
                 '<div class="tool-call-panel turn-detail-panel">'
@@ -1838,9 +1983,12 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 '<p class="execution-note">'
                 f"Work unit {_escape_html(turn.work_unit_id or 'unattributed')} · "
                 f"Activity {_escape_html(turn.activity or 'not recorded')} · "
-                "Individual calls exclude arguments and results."
+                "T+ is measured from run start. Arguments are compact, secret-redacted summaries; "
+                "results remain excluded. A timing note appears only when timing is not the normal "
+                "matched-event bound."
                 "</p>"
-                '<div class="table-scroll"><table><thead><tr><th>#</th><th>Tool</th><th>Duration</th><th>Confidence</th></tr></thead>'
+                '<div class="table-scroll"><table><thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th>'
+                f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
                 "</section>"
@@ -2016,6 +2164,7 @@ td {{ font-size:.85em; }}
 .cached {{ background:#3498db; }} .fresh {{ background:#95a5a6; }} .output {{ background:#e74c3c; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
+.tool-arguments {{ display:block; max-width:720px; white-space:normal; overflow-wrap:anywhere; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
