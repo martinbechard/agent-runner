@@ -21,7 +21,7 @@ This section defines the outcome and boundary of the Codex rollout metrics compo
   - **BECAUSE:** Operators need progress visibility during long runs and reproducible evidence after a run finishes.
 
 - **REQUIREMENT: REQ-2** Avoid content collection by default
-  - **SYNOPSIS:** The default report reads structural metadata, counters, timestamps, agent paths, tool identifiers, and compact tool-argument summaries. It redacts secret-shaped values, replaces message-like bodies with character counts, truncates long summaries, and does not copy prompts, reasoning text, raw tool payloads or results, source code, or final document bodies into metrics outputs.
+  - **SYNOPSIS:** The default report reads structural metadata, counters, timestamps, agent paths, tool identifiers, and compact tool-argument summaries. It redacts secret-shaped values, replaces message-like bodies with character counts except for a secret-redacted 50-character `send_message` preview, truncates long summaries, and does not copy prompts, reasoning text, complete raw tool payloads or results, source code, or final document bodies into metrics outputs.
   - **BECAUSE:** Tool names alone do not explain activity, but rollout files can contain private project material and credentials that are unnecessary for usage accounting.
 
 - **RULE: RULE-1** Do not present estimated API-equivalent cost as an actual Codex charge
@@ -399,8 +399,8 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** Claude, prompt-runner Codex, and methodology-runner behavior remains compatible.
 
 - **TASK: TEST-15** Enforce privacy defaults
-  - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, and final-message text in a source fixture.
-  - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics, provenance, and a useful redacted tool-argument summary but none of the sensitive content or raw tool results.
+  - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, final-message text, and a secret-shaped `send_message` assignment in test inputs.
+  - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics, provenance, and useful redacted tool-argument summaries but no raw tool results; `send_message` exposes only its redacted 50-character preview and original character count.
 
 - **TASK: TEST-16** Open agent and turn tool-call drilldowns
   - **SYNOPSIS:** Expand an agent in the execution timeline, open its turn list, and select one turn for a focused view of that turn's metrics, attribution, and ordered tool calls.

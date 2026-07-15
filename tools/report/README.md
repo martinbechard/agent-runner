@@ -20,8 +20,10 @@ Run the timeline tool directly from the checkout:
 python tools/report/scripts/run-timeline.py <path> [--output report.html]
 ```
 
-Report a live Codex Desktop hierarchy without copying prompt, reasoning, tool
-payload, or final-message content into the report:
+Report a live Codex Desktop hierarchy without copying prompt, reasoning, raw
+tool results, or final-message content into the report. `send_message` argument
+summaries include a secret-redacted 50-character message preview followed by
+the original character count; other message-like bodies remain count-only:
 
 ```bash
 python tools/report/scripts/run-timeline.py \
