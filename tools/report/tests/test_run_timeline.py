@@ -587,6 +587,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     html = module.render_html(document)
     assert "Junie run" in html
     assert "Recorded cost: $0.03 USD" in html
+    assert '<div class="label">Summed agent time</div>' not in html
+    assert '<div class="label">Active interval union</div>' not in html
     assert "<summary>raw result</summary>" in html
     assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
@@ -1380,6 +1382,8 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     html = module.render_codex_rollout_html(run)
 
     assert "Agents used" in html
+    assert '<div class="label">Summed agent time</div>' not in html
+    assert '<div class="label">Active interval union</div>' not in html
     assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
     assert '<div class="agent-note-popover" role="note">' in html
     assert "Assignment" in html

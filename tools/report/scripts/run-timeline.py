@@ -3333,8 +3333,6 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {activity_metric_cards}
 <div class="metric"><div class="label">Matched tool calls</div><div class="value">{tool_count:,}</div></div>
 <div class="metric"><div class="label">Wall time</div><div class="value">{_format_ms(run.wall_time_ms)}</div></div>
-<div class="metric"><div class="label">Summed agent time</div><div class="value">{_format_ms(run.agent_time_ms)}</div></div>
-<div class="metric"><div class="label">Active interval union</div><div class="value">{_format_ms(run.active_time_ms)}</div></div>
 <div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
 </div>
