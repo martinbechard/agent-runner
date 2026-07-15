@@ -1049,10 +1049,11 @@ def test_native_codex_unattributed_usage_reconciles_in_all_aggregates(tmp_path):
     assert run.work_units[0].work_unit_id == "unattributed"
 
 
-def test_native_codex_completed_root_reports_aborted_children_separately(tmp_path):
+def test_native_codex_completed_root_reports_failed_and_aborted_children_separately(tmp_path):
     module = _load_module()
     root = tmp_path / "root.jsonl"
     child = tmp_path / "child.jsonl"
+    failed_child = tmp_path / "failed-child.jsonl"
     root.write_text(
         "\n".join(
             [
@@ -1075,10 +1076,27 @@ def test_native_codex_completed_root_reports_aborted_children_separately(tmp_pat
         + "\n",
         encoding="utf-8",
     )
+    failed_child.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"session_meta","payload":{"id":"failed-child","source":{"subagent":{"thread_spawn":{"parent_thread_id":"root","agent_path":"/root/reviewer"}}}}}',
+                '{"timestamp":"2026-07-14T10:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"failed-child-turn","started_at":"2026-07-14T10:00:00Z"}}',
+                '{"timestamp":"2026-07-14T10:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"**FAIL — required corrections remain.**"}]}}',
+                '{"timestamp":"2026-07-14T10:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"failed-child-turn","completed_at":"2026-07-14T10:00:02Z","duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
 
     run = module.build_codex_rollout_run("root", tmp_path)
 
-    assert run.state == "complete-with-aborted-children"
+    assert run.state == "complete-with-failed-and-aborted-children"
+    assert {thread.terminal_state for thread in run.threads} == {
+        "complete",
+        "failed",
+        "aborted",
+    }
 
 
 def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
@@ -1109,7 +1127,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.8.0"
+    assert run.parser_version == "1.9.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -1287,11 +1305,11 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert '<div class="label">Start T+</div>' in root_turn_overlay
     assert '<div class="label">T+</div>' not in root_turn_overlay
-    assert '<div class="metric turn-detail-tools-metric">' in root_turn_overlay
+    assert '<div class="metric"><div class="label">Tools used</div>' in root_turn_overlay
     assert '<div class="label">Tools used</div><div class="value">exec × 1</div>' in root_turn_overlay
     assert '<span class="metric-detail">1 call · 500ms</span>' in root_turn_overlay
     assert '<div class="label">Tool calls</div>' not in root_turn_overlay
-    assert ".turn-detail-tools-metric { grid-column:1 / -1; }" in html
+    assert "turn-detail-tools-metric" not in html
     assert (
         ".tool-call-panel { display:flex; flex-direction:column; "
         "box-sizing:border-box;"
@@ -1688,6 +1706,31 @@ def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_pat
     assert run.threads[0].responses[0].turn_id is None
     assert [turn.outcome for turn in run.threads[0].turns] == ["aborted", "complete", "active"]
     assert run.threads[0].unattributed_usage.processed_tokens == 24
+
+
+def test_native_codex_completed_reviewer_findings_are_failed(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "failed-review.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"session_meta","payload":{"id":"reviewer-thread","source":{"subagent":{"thread_spawn":{"parent_thread_id":"parent-thread","agent_path":"/root/setup_artifact_reviewer","agent_nickname":"Review"}}}}}',
+                '{"timestamp":"2026-07-14T03:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"findings-turn","started_at":"2026-07-14T03:00:00Z"}}',
+                '{"timestamp":"2026-07-14T03:00:01Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"1. **HIGH — Required correction remains.**"}]}}',
+                '{"timestamp":"2026-07-14T03:00:02Z","type":"event_msg","payload":{"type":"turn_aborted","turn_id":"findings-turn","completed_at":"2026-07-14T03:00:02Z","duration_ms":2000,"reason":"interrupted"}}',
+                '{"timestamp":"2026-07-14T03:00:03Z","type":"event_msg","payload":{"type":"task_started","turn_id":"explicit-fail-turn","started_at":"2026-07-14T03:00:03Z"}}',
+                '{"timestamp":"2026-07-14T03:00:04Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"**FAIL — required corrections remain.**"}]}}',
+                '{"timestamp":"2026-07-14T03:00:05Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"explicit-fail-turn","completed_at":"2026-07-14T03:00:05Z","duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    thread = module.parse_codex_rollout(rollout)
+
+    assert [turn.outcome for turn in thread.turns] == ["failed", "failed"]
+    assert thread.terminal_state == "failed"
 
 
 def test_native_codex_hierarchy_rejects_cycles(tmp_path):

@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.8.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.9.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -80,6 +80,13 @@ CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
 )
 _SKILL_PATH_PATTERN = re.compile(
     r"(?<![A-Za-z0-9._:-])(?P<name>[A-Za-z0-9][A-Za-z0-9._:-]*)/SKILL\.md\b"
+)
+_FAILED_VERDICT_PATTERN = re.compile(
+    r"^\s*(?:[#>*_`~-]+\s*)*FAIL\b", re.IGNORECASE | re.MULTILINE
+)
+_REVIEW_FINDING_PATTERN = re.compile(
+    r"^\s*(?:\d+[.)]|[-*])\s+\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)\b",
+    re.IGNORECASE | re.MULTILINE,
 )
 
 
@@ -1166,6 +1173,35 @@ def _append_codex_activity(
     )
 
 
+def _terminal_turn_outcome(
+    event_type: str,
+    turn_id: str,
+    activities: list[AgentActivity],
+    *,
+    agent_path: str,
+    agent_nickname: str,
+    final_message: object,
+) -> str:
+    final_outputs = [
+        activity.content
+        for activity in activities
+        if activity.turn_id == turn_id
+        and activity.activity_type == "output"
+        and activity.summary.startswith("Final answer")
+        and activity.content
+    ]
+    if isinstance(final_message, str) and final_message.strip():
+        final_outputs.append(final_message)
+    if any(_FAILED_VERDICT_PATTERN.search(output) for output in final_outputs):
+        return "failed"
+    agent_identity = f"{agent_path} {agent_nickname}".casefold()
+    if "review" in agent_identity and any(
+        _REVIEW_FINDING_PATTERN.search(output) for output in final_outputs
+    ):
+        return "failed"
+    return "complete" if event_type == "task_complete" else "aborted"
+
+
 def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     """Parse one native Codex Desktop rollout with bounded local disclosures.
 
@@ -1350,8 +1386,15 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 turn.duration_ms = int(duration) if isinstance(duration, (int, float)) else 0
                 ttft = payload.get("time_to_first_token_ms")
                 turn.time_to_first_token_ms = int(ttft) if isinstance(ttft, (int, float)) else None
-                turn.outcome = "complete" if event_type == "task_complete" else "aborted"
                 final_message = payload.get("last_agent_message")
+                turn.outcome = _terminal_turn_outcome(
+                    event_type,
+                    turn.turn_id,
+                    activities,
+                    agent_path=agent_path,
+                    agent_nickname=agent_nickname,
+                    final_message=final_message,
+                )
                 has_recorded_output = any(
                     activity.turn_id == turn.turn_id and activity.activity_type == "output"
                     for activity in activities
@@ -2293,7 +2336,7 @@ def build_codex_rollout_run(
         invalid_states = {
             thread.terminal_state
             for thread in threads
-            if thread.terminal_state != "complete"
+            if thread.terminal_state not in {"complete", "failed"}
             and not (allow_aborted and thread.terminal_state == "aborted")
         }
         if invalid_states:
@@ -2315,8 +2358,14 @@ def build_codex_rollout_run(
     )
     if "active" in run_states or "indeterminate" in run_states:
         state = "live"
+    elif root_state == "failed":
+        state = "failed"
     elif root_state == "aborted":
         state = "aborted"
+    elif "failed" in run_states and "aborted" in run_states:
+        state = "complete-with-failed-and-aborted-children"
+    elif "failed" in run_states:
+        state = "complete-with-failed-children"
     elif "aborted" in run_states:
         state = "complete-with-aborted-children"
     else:
@@ -3017,7 +3066,7 @@ def render_codex_rollout_html(
                 '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
-                '<div class="metric turn-detail-tools-metric">'
+                '<div class="metric">'
                 '<div class="label">Tools used</div>'
                 f'<div class="value">{_escape_html(tool_names)}</div>'
                 f'<span class="metric-detail">{_escape_html(tool_total)}</span>'
@@ -3214,8 +3263,6 @@ h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
-.turn-detail-tools-metric {{ grid-column:1 / -1; }}
-.turn-detail-tools-metric .value {{ font-size:1em; white-space:normal; overflow-wrap:anywhere; }}
 .label {{ color:#666; font-size:.82em; }}
 .value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
 .metric-detail {{ display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }}
@@ -3285,7 +3332,7 @@ td {{ font-size:.85em; }}
 .turn-table .turn-timeline-track {{ width:100%; min-width:220px; }}
 .state {{ display:inline-block; border-radius:10px; padding:2px 7px; background:#eceff1; font-size:.82em; }}
 .state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
-.state-aborted {{ background:#fdecea; color:#b3261e; }}
+.state-aborted, .state-failed {{ background:#fdecea; color:#b3261e; }}
 .state-active, .state-live {{ background:#fff3cd; color:#7a5b00; }}
 .model-pricing-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:#fafbfc; }}
 .model-pricing-overlay:target {{ display:flex; }}
