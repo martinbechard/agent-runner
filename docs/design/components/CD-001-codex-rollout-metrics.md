@@ -17,7 +17,7 @@ This section defines the outcome and boundary of native Codex and Junie executio
   - **BECAUSE:** The repository already owns cross-tool timeline reporting and should not create a competing parser, cost model, or user interface.
 
 - **GOAL: GOAL-4** Report durable Junie sessions without parsing terminal presentation
-  - **SYNOPSIS:** Detect Junie `events.jsonl` session streams, reconstruct task and custom-agent boundaries, collapse repeated block updates, and aggregate recorded model usage and cost.
+  - **SYNOPSIS:** Detect Junie `events.jsonl` session streams, reconstruct task and custom-agent boundaries, distinguish user tasks from per-agent task spans and model responses, collapse repeated block updates, recognize terminal heredoc file writes, and aggregate recorded model usage and cost.
   - **BECAUSE:** The rendered Junie transcript omits timestamps, full results, and accounting metadata that remain available in the durable session event stream.
 
 - **REQUIREMENT: REQ-1** Support live and sealed reports
@@ -205,8 +205,8 @@ flowchart LR
 - **MODULE: MODULE-2A** Junie session source adapter
   - **SYNOPSIS:** Detect a Junie session directory or `events.jsonl`, map sequential task boundaries, and reconstruct main/custom-agent ownership from recorded agent identities and custom-agent model intervals.
   - **READS:** `~/.junie/sessions/session-*/events.jsonl` or a caller-supplied equivalent path.
-  - **PRODUCES:** Normalized agent threads, turns, response usage, recorded costs, deduplicated tool intervals, bounded result previews, and parser diagnostics.
-  - **VALIDATES:** Required event shapes, task completion, agent identity, model-usage counters, repeated `stepId` updates, and incomplete live streams.
+  - **PRODUCES:** Normalized agent threads, unique user tasks, per-agent task spans, response usage, recorded costs, deduplicated tool intervals, terminal heredoc write targets, bounded result previews, and parser diagnostics.
+  - **VALIDATES:** Required event shapes, task completion, agent identity, model-usage counters, repeated `stepId` updates, heredoc boundaries, and incomplete live streams.
 
 - **MODULE: MODULE-3** Usage normalizer
   - **SYNOPSIS:** Convert cumulative token snapshots into exclusive response deltas and reconcile them with final thread totals.
@@ -421,8 +421,8 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** The agent assignment appears in the agent overlay title without a redundant table column; turn links work from both the agent overlay and execution table; the turn overlay shows identity, timing, state, token count, work attribution, each tool call's run-relative offset, name, redacted argument summary, and bounded result preview. Recognized calls use the configured summary plus collapsed sanitized argument and result disclosures. The normal matched-event timing bound is silent and exceptional timing provenance is called out.
 
 - **TASK: TEST-17** Parse a native Junie session
-  - **SYNOPSIS:** Build a synthetic session with a main agent, custom agent, repeated terminal updates, file reads, per-model token metadata, recorded cost, and secret-shaped command output.
-  - **VALIDATES:** The adapter detects the session, assigns custom-agent model usage correctly, collapses tool updates by `stepId`, reports recorded cost, preserves task completion, and excludes the secret value from HTML.
+  - **SYNOPSIS:** Build a synthetic session with a main agent, custom agent, repeated terminal updates, file reads, terminal heredoc writes, per-model token metadata, recorded cost, and secret-shaped command output.
+  - **VALIDATES:** The adapter detects the session, assigns custom-agent model usage correctly, collapses tool updates by `stepId`, separates one user task from two agent task spans, exposes created file paths without treating heredoc body examples as commands, reports recorded cost, preserves task completion, and excludes the secret value from HTML.
 
 ## 8. Proposed Modifications
 

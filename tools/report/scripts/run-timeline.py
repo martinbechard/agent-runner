@@ -2126,8 +2126,13 @@ def _parent_agent_assignment(
 def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     """Render a privacy-safe Markdown summary with execution detail."""
     turn_count = sum(len(thread.turns) for thread in run.threads)
+    unique_turn_count = len(
+        {turn.turn_id for thread in run.threads for turn in thread.turns}
+    )
     response_count = sum(len(thread.responses) for thread in run.threads)
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
+    is_junie = run.runtime.lower() == "junie"
+    turn_column_label = "Task spans" if is_junie else "Turns"
     cached_share = (
         run.usage_totals.cached_input_tokens / run.usage_totals.input_tokens * 100
         if run.usage_totals.input_tokens
@@ -2141,8 +2146,15 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         f"- State: `{run.state}`",
         f"- Observed at: `{run.observed_at}`",
         f"- Threads: {len(run.threads)}",
-        f"- Turns: {turn_count}",
-        f"- Responses: {response_count}",
+        *(
+            [
+                f"- User tasks: {unique_turn_count}",
+                f"- Agent task spans: {turn_count}",
+                f"- Model responses: {response_count}",
+            ]
+            if is_junie
+            else [f"- Turns: {turn_count}", f"- Model responses: {response_count}"]
+        ),
         f"- Matched tool calls: {tool_count}",
         f"- Processed tokens: {run.usage_totals.processed_tokens:,}",
         f"- Cached input share: {cached_share:.1f}%",
@@ -2173,7 +2185,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     lines.extend(
         [
             "",
-            "| Assignment | Parent assignment | State | Turns | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
+            f"| Assignment | Parent assignment | State | {turn_column_label} | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
             "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -2191,7 +2203,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     lines.extend(
         [
             "",
-            "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |",
+            f"| Work unit | {turn_column_label} | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |",
             "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
@@ -2239,8 +2251,27 @@ def render_codex_rollout_html(
     """Render methodology-style execution detail without source content."""
     formatter_config = formatter_config or _load_tool_formatter_config()
     turn_count = sum(len(thread.turns) for thread in run.threads)
+    unique_turn_count = len(
+        {turn.turn_id for thread in run.threads for turn in thread.turns}
+    )
     response_count = sum(len(thread.responses) for thread in run.threads)
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
+    is_junie = run.runtime.lower() == "junie"
+    turn_singular = "task span" if is_junie else "turn"
+    turn_plural = "task spans" if is_junie else "turns"
+    turn_column_label = "Task spans" if is_junie else "Turns"
+    turn_activity_label = "Task span activity" if is_junie else "Turn activity"
+    turn_id_label = "Task ID" if is_junie else "Turn"
+    activity_metric_cards = (
+        f'<div class="metric"><div class="label">User tasks</div><div class="value">{unique_turn_count:,}</div></div>'
+        f'<div class="metric"><div class="label">Agent task spans</div><div class="value">{turn_count:,}</div></div>'
+        f'<div class="metric"><div class="label">Model responses</div><div class="value">{response_count:,}</div></div>'
+        if is_junie
+        else (
+            f'<div class="metric"><div class="label">Turns</div><div class="value">{turn_count:,}</div></div>'
+            f'<div class="metric"><div class="label">Model responses</div><div class="value">{response_count:,}</div></div>'
+        )
+    )
     cached_share = (
         run.usage_totals.cached_input_tokens / run.usage_totals.input_tokens * 100
         if run.usage_totals.input_tokens
@@ -2281,7 +2312,7 @@ def render_codex_rollout_html(
         metadata_notes = []
         if len(work_units) == 1:
             metadata_notes.append(
-                f"Work unit {_escape_html(next(iter(work_units)))} for all turns"
+                f"Work unit {_escape_html(next(iter(work_units)))} for all {turn_plural}"
             )
         if thread.turns and not show_activity:
             metadata_notes.append("Activity not recorded")
@@ -2333,7 +2364,7 @@ def render_codex_rollout_html(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
                 '<div class="tool-call-panel turn-detail-panel">'
                 '<div class="tool-call-header">'
-                f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — turn {_escape_html(turn.turn_id)}</h2>'
+                f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_singular} {_escape_html(turn.turn_id)}</h2>'
                 '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
@@ -2381,7 +2412,7 @@ def render_codex_rollout_html(
             )
         turn_column_count = 13 + int(show_work_unit) + int(show_activity)
         turn_rows_html = "".join(turn_rows) or (
-            f'<tr><td colspan="{turn_column_count}">No turns recorded</td></tr>'
+            f'<tr><td colspan="{turn_column_count}">No {turn_plural} recorded</td></tr>'
         )
         optional_headers = (
             ("<th>Work unit</th>" if show_work_unit else "")
@@ -2390,17 +2421,17 @@ def render_codex_rollout_html(
         metadata_note = " · ".join(metadata_notes)
         agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
         thread_tool_rows_html = "".join(thread_tool_rows) or (
-            '<tr><td colspan="7">No turns recorded</td></tr>'
+            f'<tr><td colspan="7">No {turn_plural} recorded</td></tr>'
         )
         tool_call_overlays.append(
             f'<section id="{tool_call_overlay_id}" class="tool-call-overlay agent-tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="{tool_call_overlay_id}-title">'
             '<div class="tool-call-panel">'
             '<div class="tool-call-header">'
-            f'<h2 id="{tool_call_overlay_id}-title">{_escape_html(agent_assignment)} — turns and tool calls</h2>'
+            f'<h2 id="{tool_call_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_plural} and tool calls</h2>'
             '<a class="tool-call-close" href="#execution-timeline">close</a>'
             "</div>"
-            '<p class="execution-note">Select a turn to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p>'
-            '<div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th><th>Cost estimate</th></tr></thead>'
+            f'<p class="execution-note">Select a {turn_singular} to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p>'
+            f'<div class="table-scroll"><table><thead><tr><th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th><th>Cost estimate</th></tr></thead>'
             f"<tbody>{thread_tool_rows_html}</tbody></table></div>"
             "</div>"
             "</section>"
@@ -2410,7 +2441,7 @@ def render_codex_rollout_html(
             "<summary>"
             f'<span class="thread-name">{_escape_html(agent_label)}</span>'
             f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span>'
-            f'<span>{len(thread.turns)} turns</span>'
+            f'<span>{len(thread.turns)} {turn_singular if len(thread.turns) == 1 else turn_plural}</span>'
             f'<span>{_escape_html(thread_tools_total)}</span>'
             f'<span>{thread.token_totals.processed_tokens:,} tokens</span>'
             f'<span title="Agent cost estimate">cost {_escape_html(_compact_cost_summary(agent_cost))}</span>'
@@ -2424,11 +2455,11 @@ def render_codex_rollout_html(
             f"model {_escape_html(thread.model or '—')} · "
             f"tools {_escape_html(thread_tools_label)}"
             f"{' · ' + metadata_note if metadata_note else ''}"
-            f' · <a class="drilldown-link" href="#{tool_call_overlay_id}">View turns and tool calls</a>'
+            f' · <a class="drilldown-link" href="#{tool_call_overlay_id}">View {turn_plural} and tool calls</a>'
             "</div>"
-            "<h3>Turn activity</h3>"
+            f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
-            "<th>Turn</th><th>T+</th><th>Duration</th><th>TTFT</th><th>State</th>"
+            f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>TTFT</th><th>State</th>"
             f"{optional_headers}<th>Input</th><th>Cached</th>"
             "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Tools</th><th>Cost estimate</th>"
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
@@ -2519,12 +2550,16 @@ def render_codex_rollout_html(
     agent_note = (
         "Agent path is the recorded assignment hierarchy. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles."
         if is_codex
-        else "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities."
+        else (
+            "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities. "
+            "User tasks count unique TaskStartedEvent IDs; task spans count each participating agent once per task, so delegated work appears in both the parent and custom-agent rows. "
+            "Model responses count LlmResponseMetadataEvent records."
+        )
     )
     execution_note = (
         "Bars use the observed run interval. Agent and turn costs use each agent's recorded model and the linked pricing table."
         if is_codex
-        else "Bars use Junie's timestamped session events. Costs are recorded by Junie and allocated to turns by processed-token share."
+        else "Bars use Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
     )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
@@ -2595,7 +2630,7 @@ code {{ font-size:.9em; }}
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
-<div class="metric"><div class="label">Turns / responses</div><div class="value">{turn_count:,} / {response_count:,}</div></div>
+{activity_metric_cards}
 <div class="metric"><div class="label">Matched tool calls</div><div class="value">{tool_count:,}</div></div>
 <div class="metric"><div class="label">Wall time</div><div class="value">{_format_ms(run.wall_time_ms)}</div></div>
 <div class="metric"><div class="label">Summed agent time</div><div class="value">{_format_ms(run.agent_time_ms)}</div></div>
@@ -2614,12 +2649,12 @@ code {{ font-size:.9em; }}
 {pricing_link}
 <h2>Agents used</h2>
 <p class="execution-note">{_escape_html(agent_note)}</p>
-<div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Parent assignment</th><th>State</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
-<p class="execution-note">{_escape_html(execution_note)} Expand an agent for turn, token, cost, and tool-call detail.</p>
+<p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
 <h2>Work units and attribution</h2>
-<div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
 <h2>Phase and lane aggregates</h2>
 <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
 {pricing_overlay}
@@ -4116,12 +4151,55 @@ def _junie_usage(value: object) -> UsageTotals | None:
     )
 
 
+def _junie_shell_write_paths(command: str) -> list[str]:
+    paths: list[str] = []
+    active_heredoc = ""
+    declaration = re.compile(
+        r"(?:^|&&|;)\s*cat\s*>>?\s*"
+        r"(?P<path>\"[^\"]+\"|'[^']+'|[^\s;&|<>]+)\s*"
+        r"<<-?\s*(?:\"(?P<double>[A-Za-z_][A-Za-z0-9_]*)\"|"
+        r"'(?P<single>[A-Za-z_][A-Za-z0-9_]*)'|"
+        r"(?P<plain>[A-Za-z_][A-Za-z0-9_]*))"
+    )
+    for line in command.splitlines():
+        if active_heredoc:
+            if line.strip() == active_heredoc:
+                active_heredoc = ""
+            continue
+        match = declaration.search(line)
+        if match is None:
+            continue
+        path = match.group("path").strip("\"'")
+        if path not in paths:
+            paths.append(path)
+        active_heredoc = (
+            match.group("double") or match.group("single") or match.group("plain")
+        )
+    return paths
+
+
 def _junie_tool_payload(agent_event: dict[str, object]) -> tuple[str, str, object] | None:
     kind = str(agent_event.get("kind") or "")
     if kind == "TerminalBlockUpdatedEvent":
+        command = str(agent_event.get("command") or "—")
+        written_paths = _junie_shell_write_paths(command)
+        if written_paths:
+            file_label = "file" if len(written_paths) == 1 else "files"
+            return (
+                "write_files",
+                _tool_argument_summary(
+                    {
+                        "input": {
+                            "operation": f"Write {len(written_paths)} {file_label}",
+                            "files": written_paths,
+                        }
+                    }
+                ),
+                agent_event.get("output") or agent_event.get("presentableOutput") or "",
+            )
         return (
             "exec",
-            _sanitize_unstructured_argument(str(agent_event.get("command") or "—")),
+            _sanitize_unstructured_argument(command),
             agent_event.get("output") or agent_event.get("presentableOutput") or "",
         )
     if kind == "ToolBlockUpdatedEvent":

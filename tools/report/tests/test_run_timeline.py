@@ -94,6 +94,42 @@ def _write_junie_session(root: Path) -> Path:
             output="password=PRIVATE\nhello",
         ),
         agent_event(
+            1_783_993_818_045,
+            main,
+            kind="TerminalBlockUpdatedEvent",
+            stepId="write-1",
+            status="IN_PROGRESS",
+            command=(
+                "mkdir -p docs/architecture docs/wiki && "
+                "cat > docs/architecture/example.md <<'DOC_EOF'\n"
+                "# Example\n"
+                "cat > ignored-example.md <<'NOT_A_COMMAND'\n"
+                "DOC_EOF\n"
+                "cat > docs/wiki/index.md <<'WIKI_EOF'\n"
+                "# Wiki\n"
+                "WIKI_EOF"
+            ),
+            output="",
+        ),
+        agent_event(
+            1_783_993_818_046,
+            main,
+            kind="TerminalBlockUpdatedEvent",
+            stepId="write-1",
+            status="COMPLETED",
+            command=(
+                "mkdir -p docs/architecture docs/wiki && "
+                "cat > docs/architecture/example.md <<'DOC_EOF'\n"
+                "# Example\n"
+                "cat > ignored-example.md <<'NOT_A_COMMAND'\n"
+                "DOC_EOF\n"
+                "cat > docs/wiki/index.md <<'WIKI_EOF'\n"
+                "# Wiki\n"
+                "WIKI_EOF"
+            ),
+            output="Created documentation",
+        ),
+        agent_event(
             1_783_993_818_050,
             main,
             kind="CustomAgentBlockUpdatedEvent",
@@ -283,12 +319,22 @@ def test_default_tool_formatters_cover_common_run_patterns():
         '{"timeout_ms":30000}',
         config,
     )
+    write = module._format_tool_argument(
+        "write_files",
+        '{"files":["docs/architecture.md","docs/wiki/index.md"],'
+        '"operation":"Write 2 files"}',
+        config,
+    )
 
     assert patch.summary == "Patch · Add · frontend-password-reset.md"
     assert patch.rule_id == "apply-patch"
     assert claim.summary == "Claim · acquire · claim-123"
     assert message.summary == "Message → /root · Review complete… [760 chars]"
     assert wait.summary == "Wait for agent activity · 30000 ms"
+    assert write.summary == (
+        'Write 2 files · ["docs/architecture.md","docs/wiki/index.md"]'
+    )
+    assert write.rule_id == "write-files"
 
 
 def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure():
@@ -324,7 +370,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
-    assert sum(len(thread.tool_intervals) for thread in run.threads) == 2
+    assert sum(len(thread.tool_intervals) for thread in run.threads) == 3
     assert run.usage_totals.input_tokens == 28
     assert run.usage_totals.cached_input_tokens == 11
     assert run.usage_totals.uncached_input_tokens == 17
@@ -345,12 +391,25 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "PRIVATE" not in terminal.argument_summary
     assert "password=[redacted]" in terminal.result_content
     assert "PRIVATE" not in terminal.result_content
+    write = main.tool_intervals[1]
+    assert write.tool_name == "write_files"
+    assert "docs/architecture/example.md" in write.argument_summary
+    assert "docs/wiki/index.md" in write.argument_summary
+    assert "ignored-example.md" not in write.argument_summary
 
     html = module.render_html(document)
     assert "Junie run" in html
     assert "Recorded cost: $0.03 USD" in html
     assert "raw result (redacted)" in html
     assert "Agent path is reconstructed from Junie" in html
+    assert '<div class="label">User tasks</div><div class="value">1</div>' in html
+    assert '<div class="label">Agent task spans</div><div class="value">2</div>' in html
+    assert '<div class="label">Model responses</div><div class="value">2</div>' in html
+    assert "Turns / responses" not in html
+    assert "<th>Task spans</th>" in html
+    assert "task span task-1" in html
+    assert "Write 2 files" in html
+    assert "docs/architecture/example.md" in html
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
 

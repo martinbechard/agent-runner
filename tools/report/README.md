@@ -76,8 +76,13 @@ python tools/report/scripts/run-timeline.py \
 Junie reports collapse repeated block updates by `stepId`, reconstruct the main
 and custom-agent hierarchy, associate events with task boundaries, preserve
 terminal success and failure states, and aggregate Junie's per-response token
-and cost metadata. Terminal output and other available results use the same
-bounded, redacted preview and raw-disclosure treatment as Codex tool results.
+and cost metadata. The summary distinguishes unique user tasks, per-agent task
+spans, and model responses; delegated tasks therefore count once as a user task
+but once for every participating agent. Terminal heredoc writes such as
+`cat > docs/wiki/index.md` are identified as `write_files` activity with the
+created paths instead of being buried inside a truncated shell command.
+Terminal output and other available results use the same bounded, redacted
+preview and raw-disclosure treatment as Codex tool results.
 Junie does not record a model API time-to-first-token measurement, so that
 field remains unavailable rather than being inferred from unrelated events.
 

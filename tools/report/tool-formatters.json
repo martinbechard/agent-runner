@@ -25,6 +25,25 @@
       }
     },
     {
+      "id": "write-files",
+      "match": {
+        "tool": "write_files"
+      },
+      "fields": [
+        {
+          "name": "operation",
+          "json_path": "operation"
+        },
+        {
+          "name": "files",
+          "json_path": "files"
+        }
+      ],
+      "display": {
+        "parts": ["{operation}", "{files}"]
+      }
+    },
+    {
       "id": "agent-claim",
       "match": {
         "tool": "exec",
