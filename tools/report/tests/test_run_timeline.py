@@ -371,7 +371,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
-    assert run.parser_version == "1.1.0"
+    assert run.parser_version == "1.2.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
@@ -388,6 +388,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert custom.model == "claude-reviewer"
     assert custom.token_totals.processed_tokens == 13
     assert custom.recorded_cost_usd == pytest.approx(0.02)
+    assert custom.responses[0].recorded_cost_usd == pytest.approx(0.02)
 
     main = next(thread for thread in run.threads if thread.agent_path == "/main")
     terminal = main.tool_intervals[0]
@@ -423,6 +424,15 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "raw source command (redacted)" in html
     assert "cat &gt; docs/architecture/example.md &lt;&lt;'DOC_EOF'" in html
     assert "# Example" in html
+    custom_overlay = html.split('id="turn-tool-call-list-2-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    custom_tool_table = custom_overlay.split('<div class="table-scroll">', 1)[1]
+    assert (
+        '<th>#</th><th>T+</th><th title="Cumulative model cost for this agent '
+        'task span through the tool source event">Cost to T+</th><th>Tool</th>'
+    ) in custom_tool_table
+    assert '<td title="cumulative recorded model cost before tool call">$0.02 recorded</td>' in custom_tool_table
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
 
@@ -781,9 +791,11 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     )[0]
     assert '<table class="turn-detail-table has-timing">' in tool_table
     assert '<col class="turn-detail-arguments-column">' in tool_table
+    assert '<col class="turn-detail-cost-column">' in tool_table
     assert '<col class="turn-detail-result-column">' in tool_table
     assert '<col class="turn-detail-timing-column">' in tool_table
     assert "<th>T+</th>" in tool_table
+    assert "Cost to T+" in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
     assert "<th>Result</th>" in tool_table

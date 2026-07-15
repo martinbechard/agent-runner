@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.4.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.5.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -63,7 +63,7 @@ TOOL_RESULT_PREVIEW_CHARS = 200
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.1.0"
+JUNIE_SESSION_PARSER_VERSION = "1.2.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -291,6 +291,7 @@ class ResponseUsage:
     turn_id: str | None
     source_path: str
     source_ordinal: int
+    recorded_cost_usd: float | None = None
     derivation_method: str = "cumulative-delta"
     attribution_confidence: str = "exact"
 
@@ -1059,6 +1060,14 @@ def _render_tool_result(tool: ToolInterval) -> str:
     )
 
 
+def _render_tool_cost_cell(thread: CodexThreadMetrics, tool: ToolInterval) -> str:
+    cost = _cost_to_tool_start(thread, tool)
+    return (
+        f'<td title="{_escape_html(cost.method)}">'
+        f"{_escape_html(_compact_cost_summary(cost))}</td>"
+    )
+
+
 def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
     metadata = payload.get("internal_chat_message_metadata_passthrough")
     if isinstance(metadata, dict) and metadata.get("turn_id"):
@@ -1518,6 +1527,36 @@ def _cost_for_thread_usage(
     model_usage = {thread.model: usage} if thread.model else {}
     plan_types = {thread.plan_type} if thread.plan_type else set()
     return _cost_for_usage(usage, model_usage, plan_types=plan_types)
+
+
+def _cost_to_tool_start(
+    thread: CodexThreadMetrics,
+    tool: ToolInterval,
+) -> CostAssessment:
+    """Return cumulative model cost in the tool's task through its source event."""
+
+    responses = [
+        response
+        for response in thread.responses
+        if response.turn_id == tool.turn_id
+        and response.source_path == tool.source_path
+        and response.source_ordinal < tool.source_start_ordinal
+    ]
+    if not responses:
+        return CostAssessment(
+            status="unavailable",
+            method="no attributable model response before tool call",
+        )
+    if all(response.recorded_cost_usd is not None for response in responses):
+        return CostAssessment(
+            status="recorded",
+            total_cost=sum(response.recorded_cost_usd or 0.0 for response in responses),
+            method="cumulative recorded model cost before tool call",
+        )
+    usage = UsageTotals()
+    for response in responses:
+        usage = usage + response.usage
+    return _cost_for_thread_usage(thread, usage)
 
 
 def _time_metrics(
@@ -2359,6 +2398,7 @@ def render_codex_rollout_html(
                 '<tr class="turn-detail-tool-row">'
                 f"<td>{tool_index}</td>"
                 f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
+                f"{_render_tool_cost_cell(thread, tool)}"
                 f"<td><code>{_escape_html(tool.tool_name)}</code></td>"
                 f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                 f"<td>{_render_tool_result(tool)}</td>"
@@ -2370,7 +2410,7 @@ def render_codex_rollout_html(
                 + "</tr>"
                 for tool_index, tool in enumerate(tools, start=1)
             ) or (
-                f'<tr><td colspan="{6 if show_timing_note else 5}">'
+                f'<tr><td colspan="{7 if show_timing_note else 6}">'
                 "No matched tool calls</td></tr>"
             )
             timing_note_header = "<th>Timing note</th>" if show_timing_note else ""
@@ -2402,11 +2442,14 @@ def render_codex_rollout_html(
                 f'<div class="table-scroll"><table class="{turn_detail_table_class}">'
                 '<colgroup><col class="turn-detail-index-column">'
                 '<col class="turn-detail-offset-column">'
+                '<col class="turn-detail-cost-column">'
                 '<col class="turn-detail-tool-column">'
                 '<col class="turn-detail-arguments-column">'
                 '<col class="turn-detail-result-column">'
                 f"{timing_note_column}</colgroup>"
-                '<thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th><th>Result</th>'
+                '<thead><tr><th>#</th><th>T+</th>'
+                '<th title="Cumulative model cost for this agent task span through the tool source event">Cost to T+</th>'
+                '<th>Tool</th><th>Arguments</th><th>Result</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
@@ -2654,15 +2697,17 @@ td {{ font-size:.85em; }}
 .turn-detail-table {{ min-width:900px; margin:0; table-layout:fixed; }}
 .turn-detail-table th, .turn-detail-table td {{ vertical-align:top; white-space:normal; }}
 .turn-detail-table .turn-detail-index-column {{ width:5%; }}
-.turn-detail-table .turn-detail-offset-column {{ width:10%; }}
-.turn-detail-table .turn-detail-tool-column {{ width:12%; }}
+.turn-detail-table .turn-detail-offset-column {{ width:8%; }}
+.turn-detail-table .turn-detail-cost-column {{ width:10%; }}
+.turn-detail-table .turn-detail-tool-column {{ width:10%; }}
 .turn-detail-table .turn-detail-arguments-column,
-.turn-detail-table .turn-detail-result-column {{ width:36.5%; }}
-.turn-detail-table.has-timing .turn-detail-index-column {{ width:4%; }}
-.turn-detail-table.has-timing .turn-detail-offset-column {{ width:8%; }}
-.turn-detail-table.has-timing .turn-detail-tool-column {{ width:10%; }}
+.turn-detail-table .turn-detail-result-column {{ width:33.5%; }}
+.turn-detail-table.has-timing .turn-detail-index-column {{ width:3%; }}
+.turn-detail-table.has-timing .turn-detail-offset-column {{ width:7%; }}
+.turn-detail-table.has-timing .turn-detail-cost-column {{ width:8%; }}
+.turn-detail-table.has-timing .turn-detail-tool-column {{ width:9%; }}
 .turn-detail-table.has-timing .turn-detail-arguments-column,
-.turn-detail-table.has-timing .turn-detail-result-column {{ width:31%; }}
+.turn-detail-table.has-timing .turn-detail-result-column {{ width:28.5%; }}
 .turn-detail-table.has-timing .turn-detail-timing-column {{ width:16%; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
@@ -4434,21 +4479,27 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                 diagnostics.append(f"invalid Junie model usage at line {ordinal}")
                 continue
             saw_cache_create = saw_cache_create or bool(model_usage.get("cacheCreateTokens"))
+            raw_cost = model_usage.get("cost")
+            response_cost = (
+                float(raw_cost)
+                if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool)
+                else None
+            )
             response = ResponseUsage(
                 event_timestamp=timestamp,
                 usage=usage,
                 turn_id=turn_id or None,
                 source_path=str(events_path),
                 source_ordinal=ordinal,
+                recorded_cost_usd=response_cost,
                 derivation_method="Junie response metadata",
                 attribution_confidence="exact" if turn_id else "unattributed",
             )
             responses.setdefault(agent_id, []).append(response)
             model = str(model_usage.get("model") or "unknown")
             models.setdefault(agent_id, Counter())[model] += 1
-            raw_cost = model_usage.get("cost")
-            if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool):
-                recorded_costs[agent_id] = recorded_costs.get(agent_id, 0.0) + float(raw_cost)
+            if response_cost is not None:
+                recorded_costs[agent_id] = recorded_costs.get(agent_id, 0.0) + response_cost
 
     if not agent_events:
         raise ValueError(f"Junie session has no agent events: {events_path}")
