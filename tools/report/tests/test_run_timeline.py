@@ -472,7 +472,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<div class="label">Model responses</div><div class="value">2</div>' in html
     assert "Turns / responses" not in html
     agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
-    assert "<td>python</td><td>reviewer</td>" in agent_table
+    assert '<td class="agent-skills-cell">python</td>' in agent_table
+    assert '<td class="agent-subagents-cell">reviewer</td>' in agent_table
     task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>TTFT</th>" not in task_span_table
     assert "<th>Cache read</th><th>Cache write</th><th>Fresh</th>" in task_span_table
@@ -1114,6 +1115,7 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
 def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    run.threads = [run.threads[2], run.threads[0], run.threads[1]]
 
     html = module.render_codex_rollout_html(run)
 
@@ -1122,16 +1124,27 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "<th>Runtime nickname</th>" not in html
     assert "<strong>module-a (module-a)</strong>" in html
     assert "<strong>reviewer (reviewer)</strong>" in html
-    assert "Agent path is the recorded assignment hierarchy" in html
+    assert "Nested rows are indented under their parent assignment" in html
     assert "Runtime nicknames appear in parentheses" in html
     agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
+    assert "<th>Parent assignment</th>" not in agent_table
     assert "<th>State</th>" not in agent_table
     assert "<th>Skills used</th>" in agent_table
     assert "<th>Subagents invoked</th>" in agent_table
+    assert '<col class="agent-skills-column">' in agent_table
+    assert ".agent-table { table-layout:fixed; min-width:1200px; }" in html
+    assert ".agent-table .agent-skills-column { width:24%; }" in html
+    assert ".agent-table .agent-subagents-column { width:16%; }" in html
     agent_rows = agent_table.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("</tr>")
-    assert "<td>careful-coding · python</td><td>module-a</td>" in agent_rows[0]
-    assert "<td>—</td><td>reviewer</td>" in agent_rows[1]
-    assert "<td>—</td><td>—</td>" in agent_rows[2]
+    assert 'class="agent-assignment" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
+    assert '<strong>root</strong>' in agent_rows[0]
+    assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
+    assert '<td class="agent-subagents-cell">module-a</td>' in agent_rows[0]
+    assert 'class="agent-assignment" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
+    assert '<strong>module-a (module-a)</strong>' in agent_rows[1]
+    assert '<td class="agent-subagents-cell">reviewer</td>' in agent_rows[1]
+    assert 'class="agent-assignment" data-depth="2" style="--agent-depth:2"' in agent_rows[2]
+    assert '<strong>reviewer (reviewer)</strong>' in agent_rows[2]
 
 
 def test_native_codex_markdown_includes_turn_and_tool_breakdown():
@@ -1143,11 +1156,13 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
     assert "- Turns: 4" in markdown
     assert "- Matched tool calls: 1" in markdown
     assert (
-        "| Assignment | Parent assignment | Skills used | Subagents invoked | "
+        "| Assignment | Skills used | Subagents invoked | "
         "Turns | Tools | Agent time |" in markdown
     )
-    assert "| root | outside selected run | careful-coding · python | module-a |" in markdown
-    assert "| module-a (module-a) | root | — | reviewer |" in markdown
+    assert "Parent assignment" not in markdown
+    assert "| root | careful-coding · python | module-a |" in markdown
+    assert "| ↳ module-a (module-a) | — | reviewer |" in markdown
+    assert "| ↳ ↳ reviewer (reviewer) | — | — |" in markdown
     assert "| Work unit |" not in markdown
     assert "| Phase | Lane | Work units |" not in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
