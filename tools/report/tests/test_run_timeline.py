@@ -442,6 +442,26 @@ def test_native_codex_cost_includes_api_usd_and_codex_credit_estimates():
     assert "Codex token-rate credits" in cost.method
 
 
+def test_native_codex_cost_display_is_compact_and_rounded():
+    module = _load_module()
+    cost = module.CostAssessment(
+        status="estimated",
+        total_cost=1.330343,
+        estimated_credits=33.256,
+    )
+
+    assert module._cost_summary(cost) == (
+        "API-equivalent estimate: $1.33 USD; Codex rate-card estimate: "
+        "33.26 credits (estimates, not an actual Codex charge or invoice)"
+    )
+    assert module._compact_cost_summary(cost) == "$1.33 · 33.26 credits"
+
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    html = module.render_codex_rollout_html(run)
+    assert html.count("not an actual Codex charge or invoice") == 1
+    assert "<th>Cost estimate</th>" in html
+
+
 def test_native_codex_html_restores_model_pricing_table():
     module = _load_module()
     run = module.build_codex_rollout_run(

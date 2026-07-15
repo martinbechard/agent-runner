@@ -323,6 +323,7 @@ These conditions define an acceptable implementation and report.
 
 - **REQUIREMENT: REQ-6** Honest cost reporting
   - **SYNOPSIS:** Direct cost, API-equivalent USD, Codex credit estimates, subscription usage, and unavailable pricing are visually and structurally distinct.
+  - **DISPLAYS:** Human-readable cost values use two decimal places; repeated table cells show compact values while the estimate disclaimer appears once at run level.
   - **BECAUSE:** Token telemetry is sufficient for some estimates but not proof of an actual charge.
 
 - **REQUIREMENT: REQ-7** Live report stability

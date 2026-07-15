@@ -1544,15 +1544,29 @@ def _format_ms(milliseconds: int) -> str:
 
 def _cost_summary(cost: CostAssessment) -> str:
     if cost.status == "estimated" and cost.total_cost is not None:
-        summary = f"API-equivalent estimate: ${cost.total_cost:.6f} USD"
+        summary = f"API-equivalent estimate: ${cost.total_cost:.2f} USD"
         if cost.estimated_credits is not None:
             summary += f"; Codex rate-card estimate: {cost.estimated_credits:,.2f} credits"
         return summary + " (estimates, not an actual Codex charge or invoice)"
     if cost.status == "subscription-no-charge-data":
         return "Subscription usage; no monetary charge telemetry available"
     if cost.status == "recorded" and cost.total_cost is not None:
-        return f"Recorded cost: ${cost.total_cost:.6f} USD"
+        return f"Recorded cost: ${cost.total_cost:.2f} USD"
     return "Cost unavailable"
+
+
+def _compact_cost_summary(cost: CostAssessment) -> str:
+    """Format repeated table cells without restating the report disclaimer."""
+    if cost.status == "estimated" and cost.total_cost is not None:
+        summary = f"${cost.total_cost:.2f}"
+        if cost.estimated_credits is not None:
+            summary += f" · {cost.estimated_credits:,.2f} credits"
+        return summary
+    if cost.status == "recorded" and cost.total_cost is not None:
+        return f"${cost.total_cost:.2f} recorded"
+    if cost.status == "subscription-no-charge-data":
+        return "subscription"
+    return "—"
 
 
 def _format_detail_ms(milliseconds: int | None) -> str:
@@ -1890,7 +1904,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             f"<td>{unit.usage.reasoning_tokens:,}</td>"
             f"<td>{unit.usage.processed_tokens:,}</td>"
             f"<td>{processed_share:.1f}%</td>"
-            f"<td>{_escape_html(_cost_summary(unit.cost))}</td>"
+            f"<td>{_escape_html(_compact_cost_summary(unit.cost))}</td>"
             "</tr>"
         )
     phase_rows = []
@@ -2006,7 +2020,7 @@ code {{ font-size:.9em; }}
 <p class="execution-note">Bars use the observed run interval. Expand a thread for privacy-safe turn, token, TTFT, and aggregated tool detail. <a class="drilldown-link" href="#turn-tool-call-list">View all turns and tool calls</a>.</p>
 {''.join(thread_details)}
 <h2>Work units and attribution</h2>
-<div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost status</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
+<div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
 <h2>Phase and lane aggregates</h2>
 <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
 <section id="turn-tool-call-list" class="tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="turn-tool-call-title">
