@@ -83,7 +83,7 @@ This model retains exact source measurements and progressively aggregated views.
   - **FIELD:** `root_thread_id`
     - **SYNOPSIS:** Session ID that anchors descendant discovery.
   - **FIELD:** `state`
-    - **SYNOPSIS:** `live`, `complete`, `aborted`, `blocked`, or `sealed`.
+    - **SYNOPSIS:** `live`, `complete`, `failed`, `aborted`, or `sealed`, with combined complete-with-failed/aborted-child states when only descendants have terminal problems.
   - **FIELD:** `observed_at`
     - **SYNOPSIS:** Timestamp through which the live metrics are known.
   - **FIELD:** `wall_interval`
@@ -106,7 +106,7 @@ This model retains exact source measurements and progressively aggregated views.
   - **FIELD:** `token_totals`
     - **SYNOPSIS:** Final local input, cached input, uncached input, output, reasoning, and total processed tokens.
   - **FIELD:** `terminal_state`
-    - **SYNOPSIS:** Complete, aborted, active, or indeterminate based on task events and latest activity.
+    - **SYNOPSIS:** Complete, failed, aborted, active, or indeterminate. An explicit failed verdict or a reviewer final answer containing categorized findings is failed even when a later interruption records `turn_aborted`; turns interrupted before a final result remain aborted.
 
 - **ENTITY: ENTITY-3** Model response usage
   - **SYNOPSIS:** The smallest exclusive token-accounting unit derived from one positive cumulative counter change.
