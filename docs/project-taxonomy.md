@@ -105,6 +105,16 @@
 - **Filename pattern:** `TR-NNN-<slug>.md`
 - **Example:** `TR-001-python-version.md`
 
+### docs/feature-backlog/
+- **Purpose:** Active, dispatchable feature and enhancement work that has not
+  yet been implemented or promoted into completed-backlog history.
+- **Signals:** proposed product or tooling behavior, project-only enhancement,
+  queued refactoring with an observable delivery outcome, acceptance criteria
+  for future implementation.
+- **Filename pattern:** `<stable-feature-slug>.md` in lowercase kebab-case;
+  avoid dates, owner names, and status words in the filename.
+- **Example:** `modularize-report-tool-for-concurrent-maintenance.md`
+
 ### docs/design/high-level/
 - **Purpose:** System-wide decomposition — the components that make up the system and how they interact.
 - **Signals:** component diagram, sequence diagram, "the CLI talks to the server via", system overview, end-to-end data flow, three-tier description.
@@ -431,6 +441,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-07-15 — docs/feature-backlog/ added — active project enhancements need a dispatchable queue separate from requirements, designs, and implementation plans.
 - 2026-04-24 — tools/backlog-runner/ added — backlog-runner is a sibling tool for backlog queue supervision and needs its own package, design, source, and test paths.
 - 2026-04-20 — docs/strategies/ added — durable operating guidance such as file-promotion and artifact-retention models needs a canonical home separate from one-off reviews and staged plans.
 - 2026-04-19 — tools/report/ added — the timeline report script, its tests, and its fixtures are cross-tool diagnostics and belong under a dedicated reporting tool instead of lingering in root `scripts/` and `tests/`.
