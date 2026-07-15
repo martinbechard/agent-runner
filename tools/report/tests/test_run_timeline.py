@@ -94,6 +94,35 @@ def test_native_codex_tool_argument_summary_redacts_sensitive_content():
     assert "PRIVATE" not in summary
 
 
+def test_native_codex_send_message_argument_summary_includes_preview_and_length():
+    module = _load_module()
+    message = "0123456789" * 7
+
+    summary = module._tool_argument_summary(
+        {
+            "name": "send_message",
+            "arguments": json.dumps({"message": message, "target": "/root"}),
+        }
+    )
+
+    assert summary == (
+        '{"message":"01234567890123456789012345678901234567890123456789'
+        '… [70 chars]","target":"/root"}'
+    )
+    assert message not in summary
+
+    sensitive_summary = module._tool_argument_summary(
+        {
+            "name": "send_message",
+            "arguments": json.dumps(
+                {"message": "API_TOKEN=PRIVATE-SECRET " + message, "target": "/root"}
+            ),
+        }
+    )
+    assert "API_TOKEN=[redacted]" in sensitive_summary
+    assert "PRIVATE-SECRET" not in sensitive_summary
+
+
 def test_discover_native_codex_run_aggregates_only_closed_descendant_set():
     module = _load_module()
 

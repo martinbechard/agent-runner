@@ -56,6 +56,7 @@ CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
 CODEX_ROLLOUT_PARSER_VERSION = "1.4.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
+CODEX_MESSAGE_PREVIEW_CHARS = 50
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -667,6 +668,13 @@ def _sanitize_unstructured_argument(value: str) -> str:
     return _truncate_argument_summary(" ".join(summary.split()) or "—")
 
 
+def _message_argument_preview(value: str) -> str:
+    sanitized = _sanitize_unstructured_argument(value)
+    preview = sanitized[:CODEX_MESSAGE_PREVIEW_CHARS].rstrip()
+    ellipsis = "…" if len(value) > CODEX_MESSAGE_PREVIEW_CHARS else ""
+    return f"{preview}{ellipsis} [{len(value):,} chars]"
+
+
 def _tool_argument_summary(payload: dict[str, object]) -> str:
     value = payload.get("arguments")
     if value is None:
@@ -683,6 +691,13 @@ def _tool_argument_summary(payload: dict[str, object]) -> str:
     if not isinstance(structured, (dict, list)):
         return _sanitize_unstructured_argument(str(structured))
     sanitized = _sanitize_structured_argument("", structured)
+    if (
+        payload.get("name") == "send_message"
+        and isinstance(structured, dict)
+        and isinstance(structured.get("message"), str)
+        and isinstance(sanitized, dict)
+    ):
+        sanitized["message"] = _message_argument_preview(structured["message"])
     return _truncate_argument_summary(
         json.dumps(sanitized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     )
