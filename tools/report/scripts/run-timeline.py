@@ -1761,8 +1761,10 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         )
     thread_details = []
     tool_call_overlays = []
+    turn_detail_overlays = []
     for thread_index, thread in enumerate(run.threads, start=1):
         tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
+        agent_assignment = _agent_assignment(thread)
         thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
         show_work_unit = len(work_units) > 1
@@ -1776,32 +1778,57 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             metadata_notes.append("Activity not recorded")
         turn_rows = []
         thread_tool_rows = []
-        for turn in thread.turns:
+        for turn_index, turn in enumerate(thread.turns, start=1):
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
-            tool_items = (
-                '<ol class="tool-call-items">'
-                + "".join(
-                    "<li>"
-                    f"<code>{_escape_html(tool.tool_name)}</code> · "
-                    f"{_escape_html(_format_detail_ms(tool.duration_ms))} · "
-                    f"{_escape_html(tool.attribution_confidence)}"
-                    "</li>"
-                    for tool in tools
-                )
-                + "</ol>"
-                if tools
-                else '<span class="muted">No matched calls</span>'
+            turn_detail_overlay_id = f"{tool_call_overlay_id}-{turn_index}"
+            turn_link = (
+                f'<a class="drilldown-link" href="#{turn_detail_overlay_id}">'
+                f"<code>{_escape_html(turn.turn_id)}</code></a>"
             )
             thread_tool_rows.append(
                 '<tr class="turn-tool-row">'
-                f"<td><code>{_escape_html(turn.turn_id)}</code></td>"
+                f"<td>{turn_link}</td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
                 f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
                 f"<td>{len(tools):,}</td>"
-                f"<td>{tool_items}</td>"
+                f'<td title="{_escape_html(tool_total)}">{_escape_html(tool_names)}</td>'
                 "</tr>"
+            )
+            turn_detail_tool_rows = "".join(
+                '<tr class="turn-detail-tool-row">'
+                f"<td>{tool_index}</td>"
+                f"<td><code>{_escape_html(tool.tool_name)}</code></td>"
+                f"<td>{_escape_html(_format_detail_ms(tool.duration_ms))}</td>"
+                f"<td>{_escape_html(tool.attribution_confidence)}</td>"
+                "</tr>"
+                for tool_index, tool in enumerate(tools, start=1)
+            ) or '<tr><td colspan="4">No matched tool calls</td></tr>'
+            turn_detail_overlays.append(
+                f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
+                '<div class="tool-call-panel turn-detail-panel">'
+                '<div class="tool-call-header">'
+                f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — turn {_escape_html(turn.turn_id)}</h2>'
+                f'<a class="tool-call-close" href="#{tool_call_overlay_id}">back to agent</a>'
+                "</div>"
+                '<div class="metrics turn-detail-metrics">'
+                f'<div class="metric"><div class="label">T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
+                f'<div class="metric"><div class="label">Duration</div><div class="value">{_format_detail_ms(turn.duration_ms)}</div></div>'
+                f'<div class="metric"><div class="label">Time to first token</div><div class="value">{_format_detail_ms(turn.time_to_first_token_ms)}</div></div>'
+                f'<div class="metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div></div>'
+                f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
+                f'<div class="metric"><div class="label">Tool calls</div><div class="value">{len(tools):,}</div></div>'
+                "</div>"
+                '<p class="execution-note">'
+                f"Work unit {_escape_html(turn.work_unit_id or 'unattributed')} · "
+                f"Activity {_escape_html(turn.activity or 'not recorded')} · "
+                "Individual calls exclude arguments and results."
+                "</p>"
+                '<div class="table-scroll"><table><thead><tr><th>#</th><th>Tool</th><th>Duration</th><th>Confidence</th></tr></thead>'
+                f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
+                "</div>"
+                "</section>"
             )
             work_unit_cell = (
                 f"<td>{_escape_html(turn.work_unit_id or 'unattributed')}</td>"
@@ -1813,7 +1840,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             )
             turn_rows.append(
                 "<tr>"
-                f"<td><code>{_escape_html(turn.turn_id)}</code></td>"
+                f"<td>{turn_link}</td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
                 f"<td>{_format_detail_ms(turn.time_to_first_token_ms)}</td>"
@@ -1839,19 +1866,18 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         )
         metadata_note = " · ".join(metadata_notes)
         agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
-        agent_assignment = _agent_assignment(thread)
         thread_tool_rows_html = "".join(thread_tool_rows) or (
             '<tr><td colspan="6">No turns recorded</td></tr>'
         )
         tool_call_overlays.append(
-            f'<section id="{tool_call_overlay_id}" class="tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="{tool_call_overlay_id}-title">'
+            f'<section id="{tool_call_overlay_id}" class="tool-call-overlay agent-tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="{tool_call_overlay_id}-title">'
             '<div class="tool-call-panel">'
             '<div class="tool-call-header">'
             f'<h2 id="{tool_call_overlay_id}-title">{_escape_html(agent_assignment)} — turns and tool calls</h2>'
             '<a class="tool-call-close" href="#execution-timeline">close</a>'
             "</div>"
-            '<p class="execution-note">Individual calls include only the recorded tool name, duration, and attribution confidence. Arguments and results are intentionally excluded.</p>'
-            '<div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tool calls (name · duration · confidence)</th></tr></thead>'
+            '<p class="execution-note">Select a turn to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p>'
+            '<div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th></tr></thead>'
             f"<tbody>{thread_tool_rows_html}</tbody></table></div>"
             "</div>"
             "</section>"
@@ -1997,13 +2023,11 @@ td {{ font-size:.85em; }}
 .tool-call-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:rgba(25,35,45,.62); }}
 .tool-call-overlay:target {{ display:flex; }}
 .tool-call-panel {{ width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
+.turn-detail-panel {{ width:min(1000px,94vw); }}
 .tool-call-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
 .tool-call-header h2 {{ margin:0; }}
 .tool-call-close {{ color:#b3261e; font-weight:600; text-decoration:none; }}
 .tool-call-panel .table-scroll {{ max-height:calc(92vh - 80px); }}
-.tool-call-items {{ margin:0; padding-left:20px; }}
-.tool-call-items li {{ margin:2px 0; }}
-.muted {{ color:#78909c; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-size:.9em; }}
 @media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
@@ -2048,6 +2072,7 @@ code {{ font-size:.9em; }}
 </div>
 </section>
 {''.join(tool_call_overlays)}
+{''.join(turn_detail_overlays)}
 <h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
 </body></html>"""
 

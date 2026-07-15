@@ -224,7 +224,7 @@ flowchart LR
 
 - **MODULE: MODULE-7** Report integration
   - **SYNOPSIS:** Feed normalized metrics into the existing timeline report model and renderer while adding hierarchy and confidence views.
-  - **PRODUCES:** Interactive HTML with a new-tab model-rate reference and linked per-agent tool-call drilldowns, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
+  - **PRODUCES:** Interactive HTML with a new-tab model-rate reference and nested per-agent and per-turn tool-call drilldowns, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
   - **SUPPORTS:** Live refresh and sealed archive generation from the same normalized data model.
 
 - **PROCESS: PROCESS-1** Discover and parse a run
@@ -403,9 +403,9 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, and final-message text in a source fixture.
   - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics and provenance but none of the sensitive content.
 
-- **TASK: TEST-16** Open an agent tool-call drilldown
-  - **SYNOPSIS:** Expand an agent in the execution timeline and follow its link to an overlay containing only that agent's turns and matched tool calls.
-  - **VALIDATES:** The agent assignment appears in the overlay title without a redundant table column; turn identity, timing, state, individual tool names, tool durations, and attribution confidence are visible while arguments and results remain excluded.
+- **TASK: TEST-16** Open agent and turn tool-call drilldowns
+  - **SYNOPSIS:** Expand an agent in the execution timeline, open its turn list, and select one turn for a focused view of that turn's metrics, attribution, and ordered tool calls.
+  - **VALIDATES:** The agent assignment appears in the agent overlay title without a redundant table column; turn links work from both the agent overlay and execution table; the turn overlay shows identity, timing, state, token count, work attribution, individual tool names, durations, and confidence while arguments and results remain excluded.
 
 ## 8. Proposed Modifications
 

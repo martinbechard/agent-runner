@@ -279,19 +279,22 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert "<th>Activity</th>" in root_turn_table
 
 
-def test_native_codex_html_links_to_privacy_safe_agent_tool_call_lists():
+def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
 
     html = module.render_codex_rollout_html(run)
 
-    assert html.count('class="tool-call-overlay"') == 3
+    assert html.count('class="tool-call-overlay agent-tool-call-overlay"') == 3
+    assert html.count('class="tool-call-overlay turn-detail-overlay"') == 4
     assert 'href="#turn-tool-call-list-1"' in html
     assert 'href="#turn-tool-call-list-2"' in html
     assert 'href="#turn-tool-call-list-3"' in html
+    assert html.count('href="#turn-tool-call-list-1-1"') == 2
     assert "root — turns and tool calls" in html
     assert "module-a — turns and tool calls" in html
     assert "reviewer — turns and tool calls" in html
+    assert "root — turn root-turn-1" in html
     assert "All turns and tool calls" not in html
     assert "<th>Agent</th>" not in html
     assert html.count('class="turn-tool-row"') == 4
@@ -301,8 +304,14 @@ def test_native_codex_html_links_to_privacy_safe_agent_tool_call_lists():
     assert module_overlay.count('class="turn-tool-row"') == 1
     assert "child-turn" in module_overlay
     assert "root-turn-1" not in module_overlay
+    root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert 'href="#turn-tool-call-list-1"' in root_turn_overlay
+    assert "Time to first token" in root_turn_overlay
+    assert "Processed tokens" in root_turn_overlay
+    assert '<tr class="turn-detail-tool-row"><td>1</td><td><code>exec</code></td><td>500ms</td><td>exact</td></tr>' in root_turn_overlay
     assert '<code>root-turn-1</code>' in html
-    assert '<code>exec</code> · 500ms · exact' in html
     assert "PRIVATE-TOOL-PAYLOAD" not in html
 
 
