@@ -351,8 +351,23 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
 
     assert '<div class="tool-argument-formatted">Patch · Add · example.md</div>' in html
     assert (
-        ".tool-argument-formatted { font-weight:600; color:#243447; "
-        "white-space:normal; overflow-wrap:anywhere; }"
+        ".tool-argument-formatted { font-family:var(--font-ui); font-size:1em; "
+        "font-weight:400; line-height:1.35; color:#263238; white-space:normal; "
+        "overflow-wrap:anywhere; }"
+    ) in html
+    assert '<code class="tool-name">exec</code>' in html
+    assert (
+        ".tool-arguments { display:block; max-width:720px; "
+        "font-family:var(--font-code); font-size:.9em; font-weight:400;"
+    ) in html
+    assert (
+        ".tool-result-summary { max-width:420px; font-family:var(--font-ui); "
+        "font-size:1em; font-weight:400; line-height:1.35; color:#263238;"
+    ) in html
+    assert (
+        ".tool-result-raw pre { max-width:720px; max-height:360px; "
+        "margin:5px 0 0; padding:8px; overflow:auto; "
+        "font-family:var(--font-code);"
     ) in html
     assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
     assert "*** Add File: /tmp/docs/example.md" in html

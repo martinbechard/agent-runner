@@ -2399,7 +2399,7 @@ def render_codex_rollout_html(
                 f"<td>{tool_index}</td>"
                 f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
                 f"{_render_tool_cost_cell(thread, tool)}"
-                f"<td><code>{_escape_html(tool.tool_name)}</code></td>"
+                f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
                 f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                 f"<td>{_render_tool_result(tool)}</td>"
                 + (
@@ -2636,7 +2636,8 @@ def render_codex_rollout_html(
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
 <style>
-body {{ font-family: -apple-system, system-ui, sans-serif; margin: 2em; color: #263238; background:#fafbfc; }}
+:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; }}
+body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
@@ -2655,15 +2656,16 @@ td {{ font-size:.85em; }}
 .cached {{ background:#3498db; }} .fresh {{ background:#95a5a6; }} .output {{ background:#e74c3c; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
-.tool-arguments {{ display:block; max-width:720px; white-space:normal; overflow-wrap:anywhere; }}
-.tool-argument-formatted {{ font-weight:600; color:#243447; white-space:normal; overflow-wrap:anywhere; }}
+.tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
+.tool-arguments {{ display:block; max-width:720px; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
+.tool-argument-formatted {{ font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }}
 .tool-argument-raw {{ margin-top:4px; }}
 .tool-argument-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
 .tool-argument-raw[open] .tool-arguments {{ margin-top:5px; }}
-.tool-result-summary {{ max-width:420px; white-space:normal; overflow-wrap:anywhere; }}
+.tool-result-summary {{ max-width:420px; font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }}
 .tool-result-raw {{ margin-top:4px; }}
 .tool-result-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
-.tool-result-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
+.tool-result-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
@@ -2712,7 +2714,7 @@ td {{ font-size:.85em; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
-code {{ font-size:.9em; }}
+code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
