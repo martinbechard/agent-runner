@@ -701,7 +701,17 @@ def _sanitize_unstructured_argument(value: str) -> str:
     return _truncate_argument_summary(" ".join(summary.split()) or "—")
 
 
+def _looks_like_encrypted_message(value: str) -> bool:
+    return (
+        len(value) >= 80
+        and value.startswith("gAAAAA")
+        and re.fullmatch(r"[A-Za-z0-9_-]+={0,2}", value) is not None
+    )
+
+
 def _message_argument_preview(value: str) -> str:
+    if _looks_like_encrypted_message(value):
+        return f"[encrypted message, {len(value):,} chars]"
     sanitized = _sanitize_unstructured_argument(value)
     preview = sanitized[:CODEX_MESSAGE_PREVIEW_CHARS].rstrip()
     ellipsis = "…" if len(value) > CODEX_MESSAGE_PREVIEW_CHARS else ""

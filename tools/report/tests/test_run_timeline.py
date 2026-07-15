@@ -124,6 +124,20 @@ def test_native_codex_send_message_argument_summary_includes_preview_and_length(
     assert "API_TOKEN=[redacted]" in sensitive_summary
     assert "PRIVATE-SECRET" not in sensitive_summary
 
+    encrypted_message = "gAAAAA" + "A" * 754
+    encrypted_summary = module._tool_argument_summary(
+        {
+            "name": "send_message",
+            "arguments": json.dumps(
+                {"message": encrypted_message, "target": "/root"}
+            ),
+        }
+    )
+    assert encrypted_summary == (
+        '{"message":"[encrypted message, 760 chars]","target":"/root"}'
+    )
+    assert "gAAAAA" not in encrypted_summary
+
 
 def test_default_tool_formatters_cover_common_run_patterns():
     module = _load_module()
