@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 # AI attribution: Modified with AI assistance.
-# Responsibility: Verify cross-tool timeline and native Codex rollout reporting.
+# Responsibility: Verify cross-tool, Codex, and Junie execution reporting.
 # Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
 from __future__ import annotations
@@ -33,6 +33,125 @@ def _load_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def _write_junie_session(root: Path) -> Path:
+    session = root / "session-260714-000000-test"
+    session.mkdir()
+    main = {"id": "main-agent", "kind": "MainAgent", "name": "main"}
+    custom = {"id": "custom-agent", "kind": "CustomAgent", "name": "reviewer"}
+
+    def agent_event(timestamp: int, agent: dict[str, str], **event):
+        return {
+            "kind": "SessionA2uxEvent",
+            "timestampMs": timestamp,
+            "event": {"agentEvent": {"agent": agent, **event}},
+        }
+
+    records = [
+        {
+            "kind": "UserPromptEvent",
+            "timestampMs": 1_783_993_818_000,
+            "requestId": "request-1",
+            "prompt": "Synthetic prompt",
+        },
+        {
+            "kind": "TaskStartedEvent",
+            "timestampMs": 1_783_993_818_010,
+            "taskId": "task-1",
+        },
+        agent_event(
+            1_783_993_818_020,
+            main,
+            kind="LlmResponseMetadataEvent",
+            modelUsage=[
+                {
+                    "model": "gpt-main",
+                    "inputTokens": 10,
+                    "cacheInputTokens": 5,
+                    "cacheCreateTokens": 2,
+                    "outputTokens": 3,
+                    "cost": 0.01,
+                }
+            ],
+        ),
+        agent_event(
+            1_783_993_818_030,
+            main,
+            kind="TerminalBlockUpdatedEvent",
+            stepId="terminal-1",
+            status="IN_PROGRESS",
+            command="API_TOKEN=PRIVATE echo hello",
+            output="",
+        ),
+        agent_event(
+            1_783_993_818_040,
+            main,
+            kind="TerminalBlockUpdatedEvent",
+            stepId="terminal-1",
+            status="COMPLETED",
+            command="API_TOKEN=PRIVATE echo hello",
+            output="password=PRIVATE\nhello",
+        ),
+        agent_event(
+            1_783_993_818_050,
+            main,
+            kind="CustomAgentBlockUpdatedEvent",
+            stepId="custom-1",
+            status="STARTED",
+            name="reviewer",
+            model="claude-reviewer",
+        ),
+        agent_event(
+            1_783_993_818_060,
+            custom,
+            kind="AgentCurrentStatusUpdatedEvent",
+            status="working",
+        ),
+        agent_event(
+            1_783_993_818_070,
+            main,
+            kind="LlmResponseMetadataEvent",
+            modelUsage=[
+                {
+                    "model": "claude-reviewer",
+                    "inputTokens": 4,
+                    "cacheInputTokens": 6,
+                    "cacheCreateTokens": 1,
+                    "outputTokens": 2,
+                    "cost": 0.02,
+                }
+            ],
+        ),
+        agent_event(
+            1_783_993_818_080,
+            custom,
+            kind="ViewFilesBlockUpdatedEvent",
+            stepId="read-1",
+            status="COMPLETED",
+            files=[{"relativePath": "src/example.py"}],
+            details="Read one file",
+        ),
+        agent_event(
+            1_783_993_818_090,
+            main,
+            kind="CustomAgentBlockUpdatedEvent",
+            stepId="custom-1",
+            status="FINISHED",
+            name="reviewer",
+            model="claude-reviewer",
+        ),
+        {
+            "kind": "TaskState",
+            "timestampMs": 1_783_993_818_100,
+            "state": "COMPLETED",
+        },
+    ]
+    (session / "events.jsonl").write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return session
 
 
 def test_human_readable_durations_use_hours_at_sixty_minutes():
@@ -187,7 +306,89 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
     assert '<div class="tool-argument-formatted">Patch · Add · example.md</div>' in html
     assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
     assert "*** Add File: /tmp/docs/example.md" in html
-    assert "<th>Result</th>" not in html
+    assert "<th>Result</th>" in html
+    assert "raw result (redacted)" in html
+
+
+def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tmp_path):
+    module = _load_module()
+    session = _write_junie_session(tmp_path)
+
+    document = module.load_report_document(session)
+    run = document.codex_run
+
+    assert run is not None
+    assert run.runtime == "Junie"
+    assert run.state == "complete"
+    assert run.format_version == module.JUNIE_SESSION_FORMAT
+    assert len(run.threads) == 2
+    assert sum(len(thread.turns) for thread in run.threads) == 2
+    assert sum(len(thread.responses) for thread in run.threads) == 2
+    assert sum(len(thread.tool_intervals) for thread in run.threads) == 2
+    assert run.usage_totals.input_tokens == 28
+    assert run.usage_totals.cached_input_tokens == 11
+    assert run.usage_totals.uncached_input_tokens == 17
+    assert run.usage_totals.output_tokens == 5
+    assert run.usage_totals.processed_tokens == 33
+    assert run.cost.status == "recorded"
+    assert run.cost.total_cost == pytest.approx(0.03)
+
+    custom = next(thread for thread in run.threads if thread.agent_path.endswith("/reviewer"))
+    assert custom.model == "claude-reviewer"
+    assert custom.token_totals.processed_tokens == 13
+    assert custom.recorded_cost_usd == pytest.approx(0.02)
+
+    main = next(thread for thread in run.threads if thread.agent_path == "/main")
+    terminal = main.tool_intervals[0]
+    assert terminal.tool_name == "exec"
+    assert "API_TOKEN=[redacted]" in terminal.argument_summary
+    assert "PRIVATE" not in terminal.argument_summary
+    assert "password=[redacted]" in terminal.result_content
+    assert "PRIVATE" not in terminal.result_content
+
+    html = module.render_html(document)
+    assert "Junie run" in html
+    assert "Recorded cost: $0.03 USD" in html
+    assert "raw result (redacted)" in html
+    assert "Agent path is reconstructed from Junie" in html
+    assert "Open model pricing" not in html
+    assert "PRIVATE" not in html
+
+
+def test_native_junie_session_cli_generates_html_report(tmp_path):
+    module = _load_module()
+    session = _write_junie_session(tmp_path)
+    output = tmp_path / "junie-report.html"
+    json_output = tmp_path / "junie-report.json"
+    turn_output = tmp_path / "junie-report.turns.csv"
+    work_output = tmp_path / "junie-report.work-units.csv"
+    markdown_output = tmp_path / "junie-report.md"
+
+    rc = module.main(
+        [
+            str(session),
+            "--output",
+            str(output),
+            "--json-output",
+            str(json_output),
+            "--turn-csv-output",
+            str(turn_output),
+            "--work-unit-csv-output",
+            str(work_output),
+            "--markdown-output",
+            str(markdown_output),
+        ]
+    )
+
+    assert rc == 0
+    assert output.exists()
+    assert "Junie run" in output.read_text(encoding="utf-8")
+    assert json_output.exists()
+    assert turn_output.exists()
+    assert work_output.exists()
+    assert markdown_output.exists()
+    assert "Runtime: `Junie`" in markdown_output.read_text(encoding="utf-8")
+    assert "## Model pricing" not in markdown_output.read_text(encoding="utf-8")
 
 
 def test_tool_formatter_config_rejects_unsafe_regex():
@@ -509,15 +710,13 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert "<th>T+</th>" in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
+    assert "<th>Result</th>" in tool_table
     assert "<th>Confidence</th>" not in tool_table
     assert "<th>Timing note</th>" in tool_table
-    assert (
-        '<tr class="turn-detail-tool-row"><td>1</td><td>T+3s</td>'
-        '<td><code>exec</code></td><td><code class="tool-arguments">'
-        "API_TOKEN=[redacted] python app.py</code></td>"
-        "<td>tool-reported duration available</td></tr>"
-        in tool_table
-    )
+    assert '<tr class="turn-detail-tool-row"><td>1</td><td>T+3s</td>' in tool_table
+    assert "API_TOKEN=[redacted] python app.py</code></td>" in tool_table
+    assert "[20 chars]" in tool_table
+    assert "tool-reported duration available</td></tr>" in tool_table
     assert '<code>root-turn-1</code>' in html
     assert "PRIVATE-TOOL-PAYLOAD" not in html
 

@@ -14,6 +14,8 @@ Current contents:
     a `methodology-runner` workspace
   - reports a native Codex Desktop root rollout and its closed descendant set
     from a thread ID or rollout path
+  - reports a native Junie session from its session directory or
+    `events.jsonl` path
   - emits privacy-safe JSON, turn CSV, work-unit CSV, Markdown, and HTML
     companions, with reproducible source and pricing digests for sealed runs
 - `tests/`
@@ -25,8 +27,9 @@ Run the timeline tool directly from the checkout:
 python tools/report/scripts/run-timeline.py <path> [--output report.html]
 ```
 
-Report a live Codex Desktop hierarchy without copying prompt, reasoning, raw
-tool results, or final-message content into the report. `send_message` argument
+Report a live Codex Desktop hierarchy without copying prompt, reasoning, or
+final-message content into the report. Tool results use bounded previews and a
+collapsed, secret-redacted raw disclosure. `send_message` argument
 summaries include a secret-redacted 50-character message preview followed by
 the original character count. Recognized encrypted message tokens are replaced
 with an `[encrypted message, N chars]` placeholder instead of previewing
@@ -59,8 +62,24 @@ python tools/report/scripts/run-timeline.py \
 ```
 
 Formatter configs affect HTML presentation only. They never receive unsanitized
-payloads, and tool results remain excluded; sanitized result previews are a
-separate future increment.
+payloads. Result previews and disclosures pass through the separate result
+redactor and size boundary.
+
+Report a Junie session directly from its durable event stream:
+
+```bash
+python tools/report/scripts/run-timeline.py \
+  ~/.junie/sessions/session-YYMMDD-HHMMSS-ID \
+  --output junie-run.html
+```
+
+Junie reports collapse repeated block updates by `stepId`, reconstruct the main
+and custom-agent hierarchy, associate events with task boundaries, preserve
+terminal success and failure states, and aggregate Junie's per-response token
+and cost metadata. Terminal output and other available results use the same
+bounded, redacted preview and raw-disclosure treatment as Codex tool results.
+Junie does not record a model API time-to-first-token measurement, so that
+field remains unavailable rather than being inferred from unrelated events.
 
 Seal a stable completed hierarchy. Sealing writes HTML plus normalized JSON,
 turn CSV, work-unit CSV, and Markdown files using the output stem:

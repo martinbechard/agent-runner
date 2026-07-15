@@ -1,8 +1,8 @@
-# Component Design: Codex Rollout Metrics
+# Component Design: Native Agent Execution Metrics
 
 ## 1. Finality
 
-This section defines the outcome and boundary of the Codex rollout metrics component.
+This section defines the outcome and boundary of native Codex and Junie execution reporting.
 
 - **GOAL: GOAL-1** Report resource use for a complete Codex Desktop run
   - **SYNOPSIS:** Extend the cross-tool reporter so a root Codex rollout and every descendant agent thread can be summarized by response, turn, thread, work unit, phase, and complete run.
@@ -13,15 +13,19 @@ This section defines the outcome and boundary of the Codex rollout metrics compo
   - **BECAUSE:** Interrupted, resumed, compacted, and reused threads can make semantic allocation less precise than raw thread totals.
 
 - **GOAL: GOAL-3** Reuse the existing report product
-  - **SYNOPSIS:** Add native Codex rollout ingestion to `tools/report/scripts/run-timeline.py`, its backend-neutral report model, HTML renderer, pricing registry, fixtures, and regression suite.
+  - **SYNOPSIS:** Add native Codex rollout and Junie session ingestion to `tools/report/scripts/run-timeline.py`, its backend-neutral report model, HTML renderer, pricing registry, fixtures, and regression suite.
   - **BECAUSE:** The repository already owns cross-tool timeline reporting and should not create a competing parser, cost model, or user interface.
+
+- **GOAL: GOAL-4** Report durable Junie sessions without parsing terminal presentation
+  - **SYNOPSIS:** Detect Junie `events.jsonl` session streams, reconstruct task and custom-agent boundaries, collapse repeated block updates, and aggregate recorded model usage and cost.
+  - **BECAUSE:** The rendered Junie transcript omits timestamps, full results, and accounting metadata that remain available in the durable session event stream.
 
 - **REQUIREMENT: REQ-1** Support live and sealed reports
   - **SYNOPSIS:** A live report records an observation timestamp and incomplete work; a sealed report fixes the discovered thread set, terminal states, source digests, metrics, and report artifacts for an archived run.
   - **BECAUSE:** Operators need progress visibility during long runs and reproducible evidence after a run finishes.
 
 - **REQUIREMENT: REQ-2** Avoid content collection by default
-  - **SYNOPSIS:** The default report reads structural metadata, counters, timestamps, agent paths, tool identifiers, and compact tool-argument summaries. It redacts secret-shaped values, replaces message-like bodies with character counts except for a secret-redacted 50-character `send_message` preview, replaces recognized encrypted message tokens with an encrypted-message length placeholder, truncates long summaries, and does not copy prompts, reasoning text, complete raw tool payloads or results, source code, or final document bodies into metrics outputs. Presentation rules operate only on these sanitized summaries; their collapsed `raw` disclosure is the sanitized pre-formatting summary, not the original payload.
+  - **SYNOPSIS:** The default report reads structural metadata, counters, timestamps, agent paths, tool identifiers, compact tool-argument summaries, and bounded tool-result previews. It redacts secret-shaped values, replaces message-like bodies with character counts except for a secret-redacted 50-character `send_message` preview, replaces recognized encrypted message tokens with an encrypted-message length placeholder, truncates long summaries, and does not copy prompts, reasoning text, unredacted tool payloads, source code, or final document bodies into metrics outputs. Presentation rules operate only on sanitized summaries; collapsed raw disclosures contain bounded redacted content rather than the original payload.
   - **BECAUSE:** Tool names alone do not explain activity, but rollout files can contain private project material and credentials that are unnecessary for usage accounting.
 
 - **RULE: RULE-1** Do not present estimated API-equivalent cost as an actual Codex charge
@@ -172,8 +176,8 @@ The component extends the existing reporter with a native rollout source adapter
 
 ```mermaid
 flowchart LR
-  A[Root thread ID or rollout path] --> B[Session discovery]
-  B --> C[Codex rollout parser]
+  A[Codex root or Junie session path] --> B[Source detection]
+  B --> C[Native runtime parser]
   C --> D[Exclusive response usage]
   C --> E[Turns and tool intervals]
   D --> F[Thread totals]
@@ -197,6 +201,12 @@ flowchart LR
   - **CHECKS-FILE:** First usable `session_meta` record in each candidate rollout.
   - **VALIDATES:** Unique session ownership, missing parents, duplicate IDs, cycles, unreadable files, and unrelated siblings.
   - **PRODUCES:** Ordered thread nodes plus hierarchy diagnostics.
+
+- **MODULE: MODULE-2A** Junie session source adapter
+  - **SYNOPSIS:** Detect a Junie session directory or `events.jsonl`, map sequential task boundaries, and reconstruct main/custom-agent ownership from recorded agent identities and custom-agent model intervals.
+  - **READS:** `~/.junie/sessions/session-*/events.jsonl` or a caller-supplied equivalent path.
+  - **PRODUCES:** Normalized agent threads, turns, response usage, recorded costs, deduplicated tool intervals, bounded result previews, and parser diagnostics.
+  - **VALIDATES:** Required event shapes, task completion, agent identity, model-usage counters, repeated `stepId` updates, and incomplete live streams.
 
 - **MODULE: MODULE-3** Usage normalizer
   - **SYNOPSIS:** Convert cumulative token snapshots into exclusive response deltas and reconcile them with final thread totals.
@@ -404,11 +414,15 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 
 - **TASK: TEST-15** Enforce privacy defaults
   - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, final-message text, and a secret-shaped `send_message` assignment in test inputs.
-  - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics, provenance, and useful redacted tool-argument summaries but no raw tool results; `send_message` exposes only its redacted 50-character preview and original character count, while recognized encrypted messages expose only an encrypted-message length placeholder.
+  - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics, provenance, useful redacted tool-argument summaries, and only bounded redacted tool results; `send_message` exposes only its redacted 50-character preview and original character count, while recognized encrypted messages expose only an encrypted-message length placeholder.
 
 - **TASK: TEST-16** Open agent and turn tool-call drilldowns
   - **SYNOPSIS:** Expand an agent in the execution timeline, open its turn list, and select one turn for a focused view of that turn's metrics, attribution, and ordered tool calls.
-  - **VALIDATES:** The agent assignment appears in the agent overlay title without a redundant table column; turn links work from both the agent overlay and execution table; the turn overlay shows identity, timing, state, token count, work attribution, each tool call's run-relative offset, name, and redacted argument summary. Recognized calls use the configured summary plus a collapsed sanitized `raw` disclosure. The normal matched-event timing bound is silent, exceptional timing provenance is called out, and tool results remain excluded.
+  - **VALIDATES:** The agent assignment appears in the agent overlay title without a redundant table column; turn links work from both the agent overlay and execution table; the turn overlay shows identity, timing, state, token count, work attribution, each tool call's run-relative offset, name, redacted argument summary, and bounded result preview. Recognized calls use the configured summary plus collapsed sanitized argument and result disclosures. The normal matched-event timing bound is silent and exceptional timing provenance is called out.
+
+- **TASK: TEST-17** Parse a native Junie session
+  - **SYNOPSIS:** Build a synthetic session with a main agent, custom agent, repeated terminal updates, file reads, per-model token metadata, recorded cost, and secret-shaped command output.
+  - **VALIDATES:** The adapter detects the session, assigns custom-agent model usage correctly, collapses tool updates by `stepId`, reports recorded cost, preserves task completion, and excludes the secret value from HTML.
 
 ## 8. Proposed Modifications
 

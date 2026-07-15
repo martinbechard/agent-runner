@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 # AI attribution: Modified with AI assistance.
-# Responsibility: Generate privacy-safe cross-tool and native Codex rollout reports.
+# Responsibility: Generate privacy-safe cross-tool, Codex, and Junie execution reports.
 # Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
 """Generate an HTML timeline report for a methodology-runner workspace or
@@ -20,6 +20,7 @@ Usage:
 The path can be:
   - A methodology-runner workspace (contains .methodology-runner/runs/)
   - A prompt-runner run directory (contains logs/ and/or manifest.json)
+  - A Junie session directory (contains events.jsonl)
 """
 from __future__ import annotations
 
@@ -58,6 +59,10 @@ CODEX_ROLLOUT_PARSER_VERSION = "1.4.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
+TOOL_RESULT_PREVIEW_CHARS = 200
+TOOL_RESULT_RAW_CHARS = 20_000
+JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
+JUNIE_SESSION_PARSER_VERSION = "1.0.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -221,7 +226,7 @@ class ComparisonManifest:
 
 @dataclass
 class ReportDocument:
-    """Backend-neutral render input for legacy timelines or one native Codex run."""
+    """Backend-neutral render input for legacy timelines or one native-agent run."""
 
     run_title: str
     workspace: Path
@@ -314,7 +319,7 @@ class AgentTurn:
 
 @dataclass
 class ToolInterval:
-    """A tool timing record with a sanitized argument summary, matched by call identifier."""
+    """A tool timing record with sanitized arguments and optional result content."""
 
     thread_id: str
     turn_id: str | None
@@ -328,6 +333,8 @@ class ToolInterval:
     source_path: str
     source_start_ordinal: int
     source_end_ordinal: int
+    result_summary: str = ""
+    result_content: str = ""
 
 
 @dataclass(frozen=True)
@@ -364,7 +371,7 @@ class FormattedToolArgument:
 
 @dataclass
 class CodexThreadMetrics:
-    """Normalized metrics for one native Codex rollout accounting boundary."""
+    """Normalized metrics for one native agent accounting boundary."""
 
     thread_id: str
     parent_thread_id: str = ""
@@ -447,7 +454,7 @@ class PhaseLaneMetrics:
 
 @dataclass
 class CodexRunMetrics:
-    """A root rollout and its closed descendant set with auditable aggregates."""
+    """A normalized native-agent run with auditable execution aggregates."""
 
     run_id: str
     root_thread_id: str
@@ -473,6 +480,7 @@ class CodexRunMetrics:
     format_version: str = CODEX_ROLLOUT_FORMAT
     pricing_version: str = ""
     pricing_digest: str = ""
+    runtime: str = "Codex"
 
 
 # ---------------------------------------------------------------------------
@@ -673,7 +681,9 @@ def _truncate_argument_summary(summary: str) -> str:
     return summary[: CODEX_TOOL_ARGUMENT_SUMMARY_CHARS - 3].rstrip() + "..."
 
 
-def _sanitize_unstructured_argument(value: str) -> str:
+def _redact_unstructured_text(value: str) -> str:
+    """Redact common credential forms while preserving the source layout."""
+
     def redact_assignment(match: re.Match[str]) -> str:
         key = match.group("key")
         if not _is_sensitive_argument_key(key):
@@ -698,7 +708,70 @@ def _sanitize_unstructured_argument(value: str) -> str:
         lambda match: f"{match.group('prefix')}[redacted]",
         summary,
     )
+    return summary
+
+
+def _sanitize_unstructured_argument(value: str) -> str:
+    summary = _redact_unstructured_text(value)
     return _truncate_argument_summary(" ".join(summary.split()) or "—")
+
+
+def _sanitize_result_value(value: object) -> object:
+    if isinstance(value, dict):
+        sanitized: dict[str, object] = {}
+        for key, child in value.items():
+            rendered_key = str(key)
+            normalized_key = rendered_key.strip().lower().replace("-", "_")
+            if _is_sensitive_argument_key(normalized_key):
+                sanitized[rendered_key] = "[redacted]"
+            elif normalized_key in CODEX_CONTENT_ARGUMENT_KEYS:
+                sanitized[rendered_key] = f"[{_argument_content_size(child):,} chars]"
+            else:
+                sanitized[rendered_key] = _sanitize_result_value(child)
+        return sanitized
+    if isinstance(value, list):
+        return [_sanitize_result_value(child) for child in value]
+    return value
+
+
+def _tool_result_content(value: object) -> str:
+    """Return bounded, secret-redacted tool output for local report disclosure."""
+
+    structured = value
+    if isinstance(value, str):
+        try:
+            structured = json.loads(value)
+        except json.JSONDecodeError:
+            content = _redact_unstructured_text(value)
+        else:
+            content = json.dumps(
+                _sanitize_result_value(structured),
+                ensure_ascii=False,
+                indent=2,
+            )
+    elif isinstance(value, (dict, list)):
+        content = json.dumps(
+            _sanitize_result_value(value),
+            ensure_ascii=False,
+            indent=2,
+        )
+    elif value is None:
+        return ""
+    else:
+        content = str(value)
+    if len(content) <= TOOL_RESULT_RAW_CHARS:
+        return content
+    omitted = len(content) - TOOL_RESULT_RAW_CHARS
+    return content[:TOOL_RESULT_RAW_CHARS] + f"\n… [{omitted:,} chars omitted]"
+
+
+def _tool_result_summary(content: str) -> str:
+    if not content:
+        return ""
+    compact = " ".join(content.split())
+    preview = compact[:TOOL_RESULT_PREVIEW_CHARS].rstrip()
+    ellipsis = "…" if len(compact) > TOOL_RESULT_PREVIEW_CHARS else ""
+    return f"{preview}{ellipsis} [{len(content):,} chars]"
 
 
 def _looks_like_encrypted_message(value: str) -> bool:
@@ -959,6 +1032,19 @@ def _render_tool_argument(
     )
 
 
+def _render_tool_result(tool: ToolInterval) -> str:
+    if not tool.result_summary:
+        return "—"
+    summary = _escape_html(tool.result_summary)
+    if not tool.result_content:
+        return f'<div class="tool-result-summary">{summary}</div>'
+    return (
+        f'<div class="tool-result-summary">{summary}</div>'
+        '<details class="tool-result-raw"><summary>raw result (redacted)</summary>'
+        f'<pre>{_escape_html(tool.result_content)}</pre></details>'
+    )
+
+
 def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
     metadata = payload.get("internal_chat_message_metadata_passthrough")
     if isinstance(metadata, dict) and metadata.get("turn_id"):
@@ -1205,7 +1291,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 pending = pending_tools.pop(call_id, None)
                 if pending:
                     tool_name, started_at, turn_id, start_ordinal, argument_summary = pending
-                    reported_ms = _extract_tool_wall_time_ms(payload.get("output"))
+                    raw_output = payload.get("output")
+                    reported_ms = _extract_tool_wall_time_ms(raw_output)
+                    result_content = _tool_result_content(raw_output)
                     elapsed_ms = _interval_ms(started_at, timestamp)
                     duration_ms = reported_ms if reported_ms is not None else elapsed_ms
                     tools.append(
@@ -1226,6 +1314,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                             source_path=str(path),
                             source_start_ordinal=start_ordinal,
                             source_end_ordinal=ordinal,
+                            result_summary=_tool_result_summary(result_content),
+                            result_content=result_content,
                         )
                     )
             continue
@@ -1400,7 +1490,17 @@ def _cost_for_thread_usage(
     thread: CodexThreadMetrics,
     usage: UsageTotals,
 ) -> CostAssessment:
-    """Estimate one thread-owned usage bucket with that agent's model."""
+    """Price or proportionally allocate one thread-owned usage bucket."""
+    if thread.recorded_cost_usd is not None and thread.token_totals.processed_tokens:
+        ratio = min(
+            1.0,
+            max(0.0, usage.processed_tokens / thread.token_totals.processed_tokens),
+        )
+        return CostAssessment(
+            status="recorded",
+            total_cost=thread.recorded_cost_usd * ratio,
+            method="proportional allocation of recorded thread cost",
+        )
     model_usage = {thread.model: usage} if thread.model else {}
     plan_types = {thread.plan_type} if thread.plan_type else set()
     return _cost_for_usage(usage, model_usage, plan_types=plan_types)
@@ -2036,7 +2136,8 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     lines = [
         f"# {AGENT_EXECUTION_METRICS_TITLE}",
         "",
-        f"- Root thread: `{run.root_thread_id}`",
+        f"- Runtime: `{run.runtime}`",
+        f"- Run: `{run.root_thread_id}`",
         f"- State: `{run.state}`",
         f"- Observed at: `{run.observed_at}`",
         f"- Threads: {len(run.threads)}",
@@ -2050,20 +2151,25 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         f"- Active interval union: {_format_ms(run.active_time_ms)}",
         f"- Peak concurrency: {run.peak_concurrency}",
         f"- Cost: {_cost_summary(run.cost)}",
-        "",
-        "## Model pricing",
-        "",
-        "Rates are per 1M tokens in input / cached input / output order. USD is API-equivalent. Long-context and fast-mode multipliers are not inferred from aggregate telemetry.",
-        "",
-        "| Provider | Model | API USD / 1M tokens | Note |",
-        "|---|---|---:|---|",
     ]
-    for model, prices in _pricing_reference_rows():
-        lines.append(
-            f"| {prices.get('provider', '-')} | {prices.get('display_name', model)} | "
-            f"{_rate_triplet(prices, PRICING_RATE_KEYS, '$')} | "
-            f"{prices.get('pricing_note', '')} |"
+    if run.runtime.lower() == "codex":
+        lines.extend(
+            [
+                "",
+                "## Model pricing",
+                "",
+                "Rates are per 1M tokens in input / cached input / output order. USD is API-equivalent. Long-context and fast-mode multipliers are not inferred from aggregate telemetry.",
+                "",
+                "| Provider | Model | API USD / 1M tokens | Note |",
+                "|---|---|---:|---|",
+            ]
         )
+        for model, prices in _pricing_reference_rows():
+            lines.append(
+                f"| {prices.get('provider', '-')} | {prices.get('display_name', model)} | "
+                f"{_rate_triplet(prices, PRICING_RATE_KEYS, '$')} | "
+                f"{prices.get('pricing_note', '')} |"
+            )
     lines.extend(
         [
             "",
@@ -2210,6 +2316,7 @@ def render_codex_rollout_html(
                 f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
                 f"<td><code>{_escape_html(tool.tool_name)}</code></td>"
                 f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
+                f"<td>{_render_tool_result(tool)}</td>"
                 + (
                     f"<td>{_escape_html(_tool_timing_note(tool))}</td>"
                     if show_timing_note
@@ -2218,7 +2325,7 @@ def render_codex_rollout_html(
                 + "</tr>"
                 for tool_index, tool in enumerate(tools, start=1)
             ) or (
-                f'<tr><td colspan="{5 if show_timing_note else 4}">'
+                f'<tr><td colspan="{6 if show_timing_note else 5}">'
                 "No matched tool calls</td></tr>"
             )
             timing_note_header = "<th>Timing note</th>" if show_timing_note else ""
@@ -2239,7 +2346,7 @@ def render_codex_rollout_html(
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_escape_html(thread.model or "—")}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 "</div>"
-                '<div class="table-scroll"><table><thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th>'
+                '<div class="table-scroll"><table><thead><tr><th>#</th><th>T+</th><th>Tool</th><th>Arguments</th><th>Result</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
@@ -2392,6 +2499,33 @@ def render_codex_rollout_html(
     pricing_version = str(pricing_registry.get("_updated_at", ""))
     openai_source = str(pricing_registry.get("_source", ""))
     anthropic_source = str(pricing_registry.get("_anthropic_source", ""))
+    is_codex = run.runtime.lower() == "codex"
+    pricing_link = (
+        '<p class="execution-note"><a class="drilldown-link" href="#model-pricing" '
+        'target="_blank" rel="noopener">Open model pricing</a>.</p>'
+        if is_codex
+        else ""
+    )
+    pricing_overlay = (
+        f'<section id="model-pricing" class="model-pricing-overlay" role="dialog" aria-modal="true" aria-labelledby="model-pricing-title">'
+        '<div class="model-pricing-panel">'
+        '<div class="model-pricing-header"><h2 id="model-pricing-title">Model pricing</h2><span class="execution-note">Close this tab to return to the report.</span></div>'
+        f'<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a> and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>'
+        '<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead>'
+        f"<tbody>{''.join(pricing_rows)}</tbody></table></div></div></section>"
+        if is_codex
+        else ""
+    )
+    agent_note = (
+        "Agent path is the recorded assignment hierarchy. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles."
+        if is_codex
+        else "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities."
+    )
+    execution_note = (
+        "Bars use the observed run interval. Agent and turn costs use each agent's recorded model and the linked pricing table."
+        if is_codex
+        else "Bars use Junie's timestamped session events. Costs are recorded by Junie and allocated to turns by processed-token share."
+    )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
 <style>
@@ -2419,6 +2553,10 @@ td {{ font-size:.85em; }}
 .tool-argument-raw {{ margin-top:4px; }}
 .tool-argument-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
 .tool-argument-raw[open] .tool-arguments {{ margin-top:5px; }}
+.tool-result-summary {{ max-width:420px; white-space:normal; overflow-wrap:anywhere; }}
+.tool-result-raw {{ margin-top:4px; }}
+.tool-result-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
+.tool-result-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
@@ -2453,7 +2591,7 @@ code {{ font-size:.9em; }}
 @media (max-width:1000px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
-<p>Root <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
+<p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
@@ -2473,24 +2611,18 @@ code {{ font-size:.9em; }}
 <span class="token-segment output" style="width:{output_width:.3f}%"></span>
 </div>
 <div class="composition-legend">Cached input {run.usage_totals.cached_input_tokens:,} ({cached_share:.1f}% of input) · fresh input {run.usage_totals.uncached_input_tokens:,} · output {run.usage_totals.output_tokens:,} · reasoning {run.usage_totals.reasoning_tokens:,}. Cached input is part of input. Reasoning is part of output.</div>
-<p class="execution-note"><a class="drilldown-link" href="#model-pricing" target="_blank" rel="noopener">Open model pricing</a>.</p>
+{pricing_link}
 <h2>Agents used</h2>
-<p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles.</p>
+<p class="execution-note">{_escape_html(agent_note)}</p>
 <div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
-<p class="execution-note">Bars use the observed run interval. Agent and turn costs use each agent's recorded model and the linked pricing table. Expand an agent for privacy-safe turn, token, TTFT, cost, aggregated tool detail, and its individual tool-call drilldown.</p>
+<p class="execution-note">{_escape_html(execution_note)} Expand an agent for turn, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
 <h2>Work units and attribution</h2>
 <div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>
 <h2>Phase and lane aggregates</h2>
 <div class="table-scroll"><table><thead><tr><th>Phase</th><th>Lane</th><th>Work units</th><th>Wall</th><th>Active union</th><th>Agent time</th><th>Processed</th><th>Confidence</th></tr></thead><tbody>{''.join(phase_rows)}</tbody></table></div>
-<section id="model-pricing" class="model-pricing-overlay" role="dialog" aria-modal="true" aria-labelledby="model-pricing-title">
-<div class="model-pricing-panel">
-<div class="model-pricing-header"><h2 id="model-pricing-title">Model pricing</h2><span class="execution-note">Close this tab to return to the report.</span></div>
-<p class="execution-note">Rates updated {_escape_html(pricing_version)} and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="{_escape_html(openai_source)}">OpenAI API</a> and <a href="{_escape_html(anthropic_source)}">Anthropic API</a>.</p>
-<div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody>{''.join(pricing_rows)}</tbody></table></div>
-</div>
-</section>
+{pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
 <h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
@@ -3926,6 +4058,452 @@ def parse_comparison_manifest(path: Path) -> tuple[list[Step], list[ForkSection]
     return shared_prefix, [ForkSection(fork_index=1, fork_title=manifest.title, variants=trimmed_variants)], manifest.title
 
 
+# ---------------------------------------------------------------------------
+# Native Junie session parser
+# ---------------------------------------------------------------------------
+
+def _junie_events_path(path: Path) -> Path:
+    return path / "events.jsonl" if path.is_dir() else path
+
+
+def _is_native_junie_session(path: Path) -> bool:
+    events_path = _junie_events_path(path)
+    if events_path.name != "events.jsonl" or not events_path.is_file():
+        return False
+    try:
+        with events_path.open(encoding="utf-8", errors="replace") as handle:
+            checked = 0
+            for line in handle:
+                if not line.strip():
+                    continue
+                checked += 1
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    return False
+                if isinstance(record, dict) and record.get("kind") in {
+                    "UserPromptEvent",
+                    "SessionA2uxEvent",
+                    "TaskStartedEvent",
+                }:
+                    return True
+                if checked >= 20:
+                    break
+    except OSError:
+        return False
+    return False
+
+
+def _junie_usage(value: object) -> UsageTotals | None:
+    if not isinstance(value, dict):
+        return None
+    counters: dict[str, int] = {}
+    for key in ("inputTokens", "cacheInputTokens", "cacheCreateTokens", "outputTokens"):
+        raw = value.get(key, 0)
+        if not isinstance(raw, int) or isinstance(raw, bool) or raw < 0:
+            return None
+        counters[key] = raw
+    cached = counters["cacheInputTokens"]
+    uncached = counters["inputTokens"] + counters["cacheCreateTokens"]
+    output = counters["outputTokens"]
+    return UsageTotals(
+        input_tokens=cached + uncached,
+        cached_input_tokens=cached,
+        uncached_input_tokens=uncached,
+        output_tokens=output,
+        reasoning_tokens=0,
+        processed_tokens=cached + uncached + output,
+    )
+
+
+def _junie_tool_payload(agent_event: dict[str, object]) -> tuple[str, str, object] | None:
+    kind = str(agent_event.get("kind") or "")
+    if kind == "TerminalBlockUpdatedEvent":
+        return (
+            "exec",
+            _sanitize_unstructured_argument(str(agent_event.get("command") or "—")),
+            agent_event.get("output") or agent_event.get("presentableOutput") or "",
+        )
+    if kind == "ToolBlockUpdatedEvent":
+        tool_name = str(agent_event.get("toolType") or "tool").lower()
+        argument = agent_event.get("text") or agent_event.get("details") or "—"
+        return tool_name, _sanitize_unstructured_argument(str(argument)), agent_event.get("details") or ""
+    if kind == "ViewFilesBlockUpdatedEvent":
+        files = agent_event.get("files")
+        paths = [
+            str(item.get("relativePath"))
+            for item in files
+            if isinstance(item, dict) and item.get("relativePath")
+        ] if isinstance(files, list) else []
+        return (
+            "read",
+            _tool_argument_summary({"input": {"files": paths}}),
+            agent_event.get("details") or "",
+        )
+    if kind == "FileChangesBlockUpdatedEvent":
+        changes = agent_event.get("changes")
+        paths = [
+            str(item.get("afterRelativePath") or item.get("beforeRelativePath"))
+            for item in changes
+            if isinstance(item, dict)
+            and (item.get("afterRelativePath") or item.get("beforeRelativePath"))
+        ] if isinstance(changes, list) else []
+        return (
+            "apply_patch",
+            _tool_argument_summary({"input": {"files": paths}}),
+            agent_event.get("details") or "",
+        )
+    return None
+
+
+def parse_junie_session(path: Path) -> CodexRunMetrics:
+    """Normalize one Junie session for native execution reporting.
+
+    `path` may be a session directory or its `events.jsonl`. The parser reads
+    the append-only stream without modifying it, returns task, agent, usage,
+    cost, tool, and bounded result metrics, and raises `ValueError` when the
+    source lacks recognizable Junie events or agent identities.
+    """
+
+    events_path = _junie_events_path(path).resolve()
+    records, diagnostics = _parse_jsonl_append_safe(events_path)
+    if not records or not any(
+        record.get("kind") in {"UserPromptEvent", "SessionA2uxEvent", "TaskStartedEvent"}
+        for _, record in records[:20]
+    ):
+        raise ValueError(f"No native Junie session events found at {events_path}")
+
+    session_id = events_path.parent.name
+    all_timestamps = [
+        _normalize_timestamp(record.get("timestampMs"))
+        for _, record in records
+        if _parse_iso_datetime(record.get("timestampMs")) is not None
+    ]
+    tasks: dict[str, dict[str, object]] = {}
+    task_order: list[str] = []
+    current_task_id = ""
+    last_task_id = ""
+    pending_prompt_at = ""
+    agent_meta: dict[str, dict[str, str]] = {}
+    custom_agent_ids_by_name: dict[str, str] = {}
+    for _, record in records:
+        event = record.get("event")
+        agent_event = event.get("agentEvent") if isinstance(event, dict) else None
+        raw_agent = agent_event.get("agent") if isinstance(agent_event, dict) else None
+        if not isinstance(raw_agent, dict) or raw_agent.get("kind") != "CustomAgent":
+            continue
+        custom_id = str(raw_agent.get("id") or "")
+        custom_name = str(raw_agent.get("name") or custom_id)
+        if custom_id:
+            custom_agent_ids_by_name[custom_name] = custom_id
+            agent_meta[custom_id] = {"kind": "CustomAgent", "name": custom_name}
+    active_custom_models: dict[str, str] = {}
+    agent_events: dict[str, list[tuple[int, str, str, dict[str, object]]]] = {}
+    tool_updates: dict[
+        tuple[str, str, str],
+        list[tuple[int, str, str, dict[str, object]]],
+    ] = {}
+    responses: dict[str, list[ResponseUsage]] = {}
+    models: dict[str, Counter[str]] = {}
+    recorded_costs: dict[str, float] = {}
+    saw_cache_create = False
+
+    for ordinal, record in records:
+        timestamp = _normalize_timestamp(record.get("timestampMs"))
+        kind = str(record.get("kind") or "")
+        if kind == "UserPromptEvent":
+            pending_prompt_at = timestamp
+            continue
+        if kind == "TaskStartedEvent":
+            current_task_id = str(record.get("taskId") or f"task-{len(task_order) + 1}")
+            last_task_id = current_task_id
+            task_order.append(current_task_id)
+            tasks[current_task_id] = {
+                "started_at": pending_prompt_at or timestamp,
+                "completed_at": "",
+                "outcome": "active",
+                "source_ordinal": ordinal,
+            }
+            pending_prompt_at = ""
+            continue
+        if kind == "TaskState":
+            if current_task_id and current_task_id in tasks:
+                state = str(record.get("state") or "indeterminate").lower()
+                tasks[current_task_id]["completed_at"] = timestamp
+                tasks[current_task_id]["outcome"] = "complete" if state == "completed" else state
+            current_task_id = ""
+            continue
+        if kind != "SessionA2uxEvent":
+            continue
+        event = record.get("event")
+        agent_event = event.get("agentEvent") if isinstance(event, dict) else None
+        if not isinstance(agent_event, dict):
+            continue
+        raw_agent = agent_event.get("agent")
+        if not isinstance(raw_agent, dict):
+            diagnostics.append(f"Junie agent event without agent identity at line {ordinal}")
+            continue
+        raw_agent_id = str(raw_agent.get("id") or "")
+        if not raw_agent_id:
+            diagnostics.append(f"Junie agent event without agent id at line {ordinal}")
+            continue
+        event_kind = str(agent_event.get("kind") or "")
+        if event_kind == "CustomAgentBlockUpdatedEvent":
+            custom_name = str(agent_event.get("name") or "")
+            custom_model = str(agent_event.get("model") or "")
+            if custom_name and custom_model:
+                active_custom_models[custom_model] = custom_name
+        agent_id = raw_agent_id
+        if event_kind == "LlmResponseMetadataEvent" and raw_agent.get("kind") == "MainAgent":
+            usage_list = agent_event.get("modelUsage")
+            usage_models = {
+                str(item.get("model") or "")
+                for item in usage_list
+                if isinstance(item, dict)
+            } if isinstance(usage_list, list) else set()
+            custom_names = {
+                active_custom_models[model]
+                for model in usage_models
+                if model in active_custom_models
+            }
+            if len(custom_names) == 1:
+                custom_name = next(iter(custom_names))
+                agent_id = custom_agent_ids_by_name.get(custom_name, raw_agent_id)
+        if agent_id == raw_agent_id:
+            agent_meta[agent_id] = {
+                "kind": str(raw_agent.get("kind") or "UnknownAgent"),
+                "name": str(raw_agent.get("name") or agent_id),
+            }
+        turn_id = current_task_id or last_task_id
+        agent_events.setdefault(agent_id, []).append((ordinal, timestamp, turn_id, agent_event))
+
+        payload = _junie_tool_payload(agent_event)
+        step_id = str(agent_event.get("stepId") or "")
+        if payload is not None and step_id:
+            key = (agent_id, step_id, str(agent_event.get("kind") or ""))
+            tool_updates.setdefault(key, []).append((ordinal, timestamp, turn_id, agent_event))
+
+        if event_kind != "LlmResponseMetadataEvent":
+            if (
+                event_kind == "CustomAgentBlockUpdatedEvent"
+                and agent_event.get("status") == "FINISHED"
+            ):
+                active_custom_models.pop(str(agent_event.get("model") or ""), None)
+            continue
+        usage_list = agent_event.get("modelUsage")
+        if not isinstance(usage_list, list):
+            diagnostics.append(f"invalid Junie model usage list at line {ordinal}")
+            continue
+        for model_usage in usage_list:
+            usage = _junie_usage(model_usage)
+            if usage is None or not isinstance(model_usage, dict):
+                diagnostics.append(f"invalid Junie model usage at line {ordinal}")
+                continue
+            saw_cache_create = saw_cache_create or bool(model_usage.get("cacheCreateTokens"))
+            response = ResponseUsage(
+                event_timestamp=timestamp,
+                usage=usage,
+                turn_id=turn_id or None,
+                source_path=str(events_path),
+                source_ordinal=ordinal,
+                derivation_method="Junie response metadata",
+                attribution_confidence="exact" if turn_id else "unattributed",
+            )
+            responses.setdefault(agent_id, []).append(response)
+            model = str(model_usage.get("model") or "unknown")
+            models.setdefault(agent_id, Counter())[model] += 1
+            raw_cost = model_usage.get("cost")
+            if isinstance(raw_cost, (int, float)) and not isinstance(raw_cost, bool):
+                recorded_costs[agent_id] = recorded_costs.get(agent_id, 0.0) + float(raw_cost)
+
+    if not agent_events:
+        raise ValueError(f"Junie session has no agent events: {events_path}")
+    main_agent_id = next(
+        (agent_id for agent_id, meta in agent_meta.items() if meta["kind"] == "MainAgent"),
+        next(iter(agent_events)),
+    )
+    all_tasks_complete = bool(tasks) and all(
+        task.get("outcome") == "complete" for task in tasks.values()
+    )
+    threads: list[CodexThreadMetrics] = []
+    for agent_id in sorted(
+        agent_events,
+        key=lambda candidate: (candidate != main_agent_id, agent_meta[candidate]["name"]),
+    ):
+        events = agent_events[agent_id]
+        meta = agent_meta[agent_id]
+        by_turn: dict[str, list[tuple[int, str, dict[str, object]]]] = {}
+        for ordinal, timestamp, turn_id, agent_event in events:
+            if turn_id:
+                by_turn.setdefault(turn_id, []).append((ordinal, timestamp, agent_event))
+        agent_responses = responses.get(agent_id, [])
+        turns: list[AgentTurn] = []
+        for turn_id in task_order:
+            activity = by_turn.get(turn_id, [])
+            owned_responses = [item for item in agent_responses if item.turn_id == turn_id]
+            if not activity and not owned_responses:
+                continue
+            task = tasks[turn_id]
+            if meta["kind"] == "MainAgent":
+                started_at = str(task.get("started_at") or activity[0][1])
+                completed_at = str(task.get("completed_at") or activity[-1][1])
+                outcome = str(task.get("outcome") or "active")
+            else:
+                started_at = min(item[1] for item in activity)
+                completed_at = max(item[1] for item in activity)
+                outcome = "complete" if all_tasks_complete else "active"
+            turn_usage = UsageTotals()
+            for response in owned_responses:
+                turn_usage = turn_usage + response.usage
+            turns.append(
+                AgentTurn(
+                    thread_id=agent_id,
+                    turn_id=turn_id,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_ms=_interval_ms(started_at, completed_at),
+                    time_to_first_token_ms=None,
+                    outcome=outcome,
+                    usage=turn_usage,
+                    run_id=session_id,
+                    work_unit_id=meta["name"],
+                    attribution_confidence="exact",
+                    attribution_reason="Junie task and agent identity",
+                    source_path=str(events_path),
+                    source_ordinal=int(task.get("source_ordinal") or activity[0][0]),
+                )
+            )
+
+        tools: list[ToolInterval] = []
+        for (owner_id, _, _), versions in tool_updates.items():
+            if owner_id != agent_id:
+                continue
+            versions.sort(key=lambda item: item[0])
+            start_ordinal, started_at, start_turn_id, _ = versions[0]
+            end_ordinal, completed_at, end_turn_id, final_event = versions[-1]
+            payload = _junie_tool_payload(final_event)
+            if payload is None:
+                continue
+            tool_name, argument_summary, raw_result = payload
+            result_content = _tool_result_content(raw_result)
+            tools.append(
+                ToolInterval(
+                    thread_id=agent_id,
+                    turn_id=end_turn_id or start_turn_id or None,
+                    tool_name=tool_name,
+                    started_at=started_at,
+                    completed_at=completed_at,
+                    duration_ms=_interval_ms(started_at, completed_at),
+                    derivation_method="Junie block update interval",
+                    attribution_confidence="bounded",
+                    argument_summary=argument_summary,
+                    source_path=str(events_path),
+                    source_start_ordinal=start_ordinal,
+                    source_end_ordinal=end_ordinal,
+                    result_summary=_tool_result_summary(result_content),
+                    result_content=result_content,
+                )
+            )
+
+        token_totals = UsageTotals()
+        for response in agent_responses:
+            token_totals = token_totals + response.usage
+        model_counts = models.get(agent_id, Counter())
+        if not model_counts:
+            model_label = ""
+        elif len(model_counts) == 1:
+            model_label = next(iter(model_counts))
+        else:
+            model_label = f"mixed ({len(model_counts)} models)"
+        thread_diagnostics = []
+        if len(model_counts) > 1:
+            thread_diagnostics.append("models: " + ", ".join(sorted(model_counts)))
+        event_times = [item[1] for item in events]
+        thread_started = min(event_times)
+        thread_ended = max(event_times)
+        if agent_id == main_agent_id and all_timestamps:
+            thread_started = min(all_timestamps)
+            thread_ended = max(all_timestamps)
+        threads.append(
+            CodexThreadMetrics(
+                thread_id=agent_id,
+                parent_thread_id="" if agent_id == main_agent_id else main_agent_id,
+                agent_path=(
+                    "/main" if agent_id == main_agent_id else f"/main/{meta['name']}"
+                ),
+                model=model_label,
+                recorded_cost_usd=recorded_costs.get(agent_id),
+                started_at=thread_started,
+                last_observed_at=thread_ended,
+                token_totals=token_totals,
+                responses=agent_responses,
+                turns=turns,
+                tool_intervals=sorted(tools, key=lambda tool: tool.source_start_ordinal),
+                terminal_state="complete" if all_tasks_complete else "active",
+                source_path=str(events_path),
+                diagnostics=thread_diagnostics,
+            )
+        )
+
+    usage_totals = UsageTotals()
+    for thread in threads:
+        usage_totals = usage_totals + thread.token_totals
+        diagnostics.extend(f"{_agent_assignment(thread)}: {item}" for item in thread.diagnostics)
+    if saw_cache_create:
+        diagnostics.append("Junie cache-create tokens are included in fresh input")
+    wall_start, wall_end, wall_ms, agent_ms, active_ms, tool_ms, peak = _time_metrics(threads)
+    used_threads = [thread for thread in threads if thread.token_totals.processed_tokens]
+    has_complete_cost = bool(used_threads) and all(
+        thread.recorded_cost_usd is not None for thread in used_threads
+    )
+    total_cost = (
+        sum(thread.recorded_cost_usd or 0.0 for thread in used_threads)
+        if has_complete_cost
+        else None
+    )
+    stat = events_path.stat()
+    return CodexRunMetrics(
+        run_id=session_id,
+        root_thread_id=session_id,
+        state="complete" if all_tasks_complete else "live",
+        observed_at=max(all_timestamps) if all_timestamps else "",
+        wall_started_at=wall_start,
+        wall_ended_at=wall_end,
+        wall_time_ms=wall_ms,
+        agent_time_ms=agent_ms,
+        active_time_ms=active_ms,
+        tool_time_ms=tool_ms,
+        critical_path_ms=wall_ms,
+        critical_path_method="Junie observed session interval",
+        peak_concurrency=peak,
+        usage_totals=usage_totals,
+        threads=threads,
+        work_units=_aggregate_work_units(threads),
+        phase_lanes=_aggregate_phase_lanes(threads),
+        cost=CostAssessment(
+            status="recorded" if has_complete_cost else "unavailable",
+            total_cost=total_cost,
+            method=(
+                "Junie response metadata"
+                if has_complete_cost
+                else "incomplete Junie cost metadata"
+            ),
+        ),
+        source_manifest=[
+            SourceManifestEntry(
+                thread_id=session_id,
+                path=str(events_path),
+                size_bytes=stat.st_size,
+                modified_at_ns=stat.st_mtime_ns,
+            )
+        ],
+        diagnostics=sorted(set(diagnostics)),
+        parser_version=JUNIE_SESSION_PARSER_VERSION,
+        format_version=JUNIE_SESSION_FORMAT,
+        runtime="Junie",
+    )
+
+
 class BaseReportAdapter:
     """Converts a source path into a normalized report document."""
 
@@ -4043,6 +4621,22 @@ class NativeCodexRolloutAdapter(BaseReportAdapter):
         )
 
 
+class NativeJunieSessionAdapter(BaseReportAdapter):
+    """Build an execution report from Junie's durable session event stream."""
+
+    @staticmethod
+    def matches(path: Path) -> bool:
+        return _is_native_junie_session(path)
+
+    @staticmethod
+    def build(path: Path) -> ReportDocument:
+        return ReportDocument(
+            run_title=AGENT_EXECUTION_METRICS_TITLE,
+            workspace=path,
+            codex_run=parse_junie_session(path),
+        )
+
+
 class ComparisonManifestAdapter(BaseReportAdapter):
     @staticmethod
     def matches(path: Path) -> bool:
@@ -4064,6 +4658,7 @@ class ComparisonManifestAdapter(BaseReportAdapter):
 ADAPTERS: list[type[BaseReportAdapter]] = [
     SealedCodexRunAdapter,
     NativeCodexRolloutAdapter,
+    NativeJunieSessionAdapter,
     ComparisonManifestAdapter,
     MethodologyWorkspaceAdapter,
     PromptRunnerRunAdapter,
@@ -4076,8 +4671,8 @@ def load_report_document(path: Path) -> ReportDocument:
             return adapter.build(path)
     raise ValueError(
         f"Cannot detect input type for {path}.\n"
-        f"Expected a comparison manifest file, a methodology workspace with .methodology-runner/state.json, "
-        f"or a prompt-runner run/module directory."
+        f"Expected a native Codex rollout, native Junie session, comparison manifest, "
+        f"methodology workspace with .methodology-runner/state.json, or prompt-runner run/module directory."
     )
 
 
@@ -5761,7 +6356,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description=(
             "Generate timeline reports for methodology-runner, prompt-runner, "
-            "comparison manifests, or native Codex Desktop rollout hierarchies."
+            "comparison manifests, native Codex hierarchies, or Junie sessions."
         )
     )
     parser.add_argument("path", nargs="?", help="Path to analyze (workspace, run, rollout, or manifest).")
@@ -5873,6 +6468,31 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    if document.codex_run is not None:
+        run = document.codex_run
+        if args.seal and run.runtime.lower() != "codex":
+            print("Sealing is not supported for native Junie sessions", file=sys.stderr)
+            return 1
+        _write_codex_outputs(
+            run,
+            output,
+            formatter_config=formatter_config,
+            json_output=Path(args.json_output).resolve() if args.json_output else None,
+            turn_csv_output=(
+                Path(args.turn_csv_output).resolve() if args.turn_csv_output else None
+            ),
+            work_unit_csv_output=(
+                Path(args.work_unit_csv_output).resolve()
+                if args.work_unit_csv_output
+                else None
+            ),
+            markdown_output=(
+                Path(args.markdown_output).resolve() if args.markdown_output else None
+            ),
+        )
+        print(f"{run.runtime} execution report written to {output}")
+        return 0
 
     output.parent.mkdir(parents=True, exist_ok=True)
     if MethodologyWorkspaceAdapter.matches(input_path):
