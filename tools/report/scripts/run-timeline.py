@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.5.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.6.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -63,7 +63,7 @@ TOOL_RESULT_PREVIEW_CHARS = 200
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.2.0"
+JUNIE_SESSION_PARSER_VERSION = "1.3.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -291,6 +291,7 @@ class ResponseUsage:
     turn_id: str | None
     source_path: str
     source_ordinal: int
+    model: str = ""
     recorded_cost_usd: float | None = None
     derivation_method: str = "cumulative-delta"
     attribution_confidence: str = "exact"
@@ -317,6 +318,20 @@ class AgentTurn:
     attribution_reason: str = "no explicit or reliable work identifier"
     source_path: str = ""
     source_ordinal: int = 0
+
+
+@dataclass
+class AgentActivity:
+    """One non-tool narrative event retained for a turn drilldown."""
+
+    thread_id: str
+    turn_id: str | None
+    activity_type: str
+    event_timestamp: str
+    source_path: str
+    source_ordinal: int
+    summary: str = ""
+    content: str = ""
 
 
 @dataclass
@@ -389,6 +404,7 @@ class CodexThreadMetrics:
     unattributed_usage: UsageTotals = field(default_factory=UsageTotals)
     responses: list[ResponseUsage] = field(default_factory=list)
     turns: list[AgentTurn] = field(default_factory=list)
+    activities: list[AgentActivity] = field(default_factory=list)
     tool_intervals: list[ToolInterval] = field(default_factory=list)
     terminal_state: str = "indeterminate"
     source_path: str = ""
@@ -1060,22 +1076,6 @@ def _render_tool_result(tool: ToolInterval) -> str:
     )
 
 
-def _render_tool_cost_cell(
-    thread: CodexThreadMetrics,
-    tool: ToolInterval,
-    previous_tool: ToolInterval | None,
-) -> str:
-    current = _cost_to_tool_start(thread, tool)
-    if current.total_cost is None:
-        return "<td>—</td>"
-    previous_total = 0.0
-    if previous_tool is not None:
-        previous = _cost_to_tool_start(thread, previous_tool)
-        previous_total = previous.total_cost or 0.0
-    delta = max(0.0, current.total_cost - previous_total)
-    return f"<td>${delta:.2f}</td>"
-
-
 def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
     metadata = payload.get("internal_chat_message_metadata_passthrough")
     if isinstance(metadata, dict) and metadata.get("turn_id"):
@@ -1223,6 +1223,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         turn_id=turn_id,
                         source_path=str(path),
                         source_ordinal=ordinal,
+                        model=model,
                         attribution_confidence=confidence,
                     )
                     responses.append(response)
@@ -1537,34 +1538,103 @@ def _cost_for_thread_usage(
     return _cost_for_usage(usage, model_usage, plan_types=plan_types)
 
 
-def _cost_to_tool_start(
+def _cost_for_response(
     thread: CodexThreadMetrics,
-    tool: ToolInterval,
+    response: ResponseUsage,
 ) -> CostAssessment:
-    """Return cumulative model cost in the tool's task through its source event."""
+    """Return the monetary cost owned by one recorded model response."""
 
-    responses = [
-        response
-        for response in thread.responses
-        if response.turn_id == tool.turn_id
-        and response.source_path == tool.source_path
-        and response.source_ordinal < tool.source_start_ordinal
-    ]
-    if not responses:
-        return CostAssessment(
-            status="unavailable",
-            method="no attributable model response before tool call",
-        )
-    if all(response.recorded_cost_usd is not None for response in responses):
+    if response.recorded_cost_usd is not None:
         return CostAssessment(
             status="recorded",
-            total_cost=sum(response.recorded_cost_usd or 0.0 for response in responses),
-            method="cumulative recorded model cost before tool call",
+            total_cost=response.recorded_cost_usd,
+            method="recorded response cost",
         )
-    usage = UsageTotals()
-    for response in responses:
-        usage = usage + response.usage
-    return _cost_for_thread_usage(thread, usage)
+    response_model = response.model or (
+        thread.model if not thread.model.startswith("mixed (") else ""
+    )
+    model_usage = {response_model: response.usage} if response_model else {}
+    plan_types = {thread.plan_type} if thread.plan_type else set()
+    return _cost_for_usage(response.usage, model_usage, plan_types=plan_types)
+
+
+def _models_for_turn(thread: CodexThreadMetrics, turn_id: str) -> list[str]:
+    """Return turn model names in first-observed order."""
+
+    return list(
+        dict.fromkeys(
+            response.model
+            for response in thread.responses
+            if response.turn_id == turn_id and response.model
+        )
+    )
+
+
+def _models_before_source(
+    thread: CodexThreadMetrics,
+    *,
+    turn_id: str | None,
+    source_path: str,
+    source_ordinal: int,
+) -> list[str]:
+    """Return models from the latest response preceding one source event."""
+
+    candidates = [
+        response
+        for response in thread.responses
+        if response.turn_id == turn_id
+        and response.source_path == source_path
+        and response.source_ordinal < source_ordinal
+        and response.model
+    ]
+    if not candidates:
+        return []
+    latest_ordinal = max(response.source_ordinal for response in candidates)
+    return list(
+        dict.fromkeys(
+            response.model
+            for response in candidates
+            if response.source_ordinal == latest_ordinal
+        )
+    )
+
+
+def _render_model_names(models: list[str], *, attributed: bool = False) -> str:
+    if not models:
+        return "—"
+    title = (
+        ' title="Attributed from the latest preceding model response in this task span"'
+        if attributed
+        else ""
+    )
+    return (
+        f'<code class="model-name"{title}>'
+        + "<br>".join(_escape_html(model) for model in models)
+        + "</code>"
+    )
+
+
+def _render_turn_model_metric(thread: CodexThreadMetrics, turn_id: str) -> str:
+    models = _models_for_turn(thread, turn_id)
+    if not models:
+        return _escape_html(thread.model or "—")
+    if len(models) == 1:
+        return _escape_html(models[0])
+    return (
+        f'mixed ({len(models)} models)'
+        f'<span class="metric-detail">{" · ".join(_escape_html(model) for model in models)}</span>'
+    )
+
+
+def _render_activity_detail(activity: AgentActivity, *, raw_label: str) -> str:
+    summary = _escape_html(activity.summary or "—")
+    if not activity.content:
+        return f'<div class="activity-summary">{summary}</div>'
+    return (
+        f'<div class="activity-summary">{summary}</div>'
+        f'<details class="activity-raw"><summary>{raw_label}</summary>'
+        f'<pre>{_escape_html(activity.content)}</pre></details>'
+    )
 
 
 def _time_metrics(
@@ -2402,24 +2472,168 @@ def render_codex_rollout_html(
             show_timing_note = any(
                 tool.attribution_confidence != "bounded" for tool in tools
             )
-            turn_detail_tool_rows = "".join(
-                '<tr class="turn-detail-tool-row">'
-                f"<td>{tool_index}</td>"
-                f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
-                f"{_render_tool_cost_cell(thread, tool, tools[tool_index - 2] if tool_index > 1 else None)}"
-                f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
-                f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
-                f"<td>{_render_tool_result(tool)}</td>"
-                + (
-                    f"<td>{_escape_html(_tool_timing_note(tool))}</td>"
-                    if show_timing_note
-                    else ""
+            turn_responses = sorted(
+                (response for response in thread.responses if response.turn_id == turn.turn_id),
+                key=lambda response: response.source_ordinal,
+            )
+            turn_activities = sorted(
+                (activity for activity in thread.activities if activity.turn_id == turn.turn_id),
+                key=lambda activity: activity.source_ordinal,
+            )
+            detail_rows: list[tuple[float, int, str]] = []
+            input_activity = next(
+                (activity for activity in turn_activities if activity.activity_type == "input"),
+                None,
+            )
+            input_result = (
+                f'<div class="activity-summary">{turn.usage.cached_input_tokens:,} cached · '
+                f'{turn.usage.uncached_input_tokens:,} fresh</div>'
+            )
+            if input_activity is not None:
+                input_result += _render_activity_detail(input_activity, raw_label="raw input")
+                input_ordinal = float(input_activity.source_ordinal)
+                input_timestamp = input_activity.event_timestamp
+            else:
+                input_ordinal = float(turn.source_ordinal) - 0.5
+                input_timestamp = turn.started_at
+            detail_rows.append(
+                (
+                    input_ordinal,
+                    0,
+                    '<tr class="turn-detail-lifecycle-row turn-detail-input-row">'
+                    '<td>—</td>'
+                    f'<td>{_timestamp_offset_label(run, input_timestamp)}</td>'
+                    '<td>—</td><td>—</td>'
+                    '<td><span class="activity-name">input</span></td>'
+                    f'<td><div class="activity-summary">{turn.usage.input_tokens:,} model-input tokens '
+                    f'across {len(turn_responses):,} responses</div></td>'
+                    f'<td>{input_result}</td>'
+                    + ("<td>—</td>" if show_timing_note else "")
+                    + "</tr>",
                 )
-                + "</tr>"
-                for tool_index, tool in enumerate(tools, start=1)
-            ) or (
-                f'<tr><td colspan="{7 if show_timing_note else 6}">'
-                "No matched tool calls</td></tr>"
+            )
+            for response_index, response in enumerate(turn_responses, start=1):
+                response_cost = _cost_for_response(thread, response)
+                response_cost_label = (
+                    f"${response_cost.total_cost:.2f}"
+                    if response_cost.total_cost is not None
+                    else "—"
+                )
+                detail_rows.append(
+                    (
+                        float(response.source_ordinal),
+                        0,
+                        '<tr class="turn-detail-lifecycle-row turn-detail-model-row">'
+                        f'<td>M{response_index}</td>'
+                        f'<td>{_timestamp_offset_label(run, response.event_timestamp)}</td>'
+                        f'<td>{response_cost_label}</td>'
+                        f'<td>{_render_model_names([response.model] if response.model else [])}</td>'
+                        '<td><span class="activity-name">model</span></td>'
+                        f'<td><div class="activity-summary">{response.usage.input_tokens:,} input · '
+                        f'{response.usage.cached_input_tokens:,} cached · '
+                        f'{response.usage.uncached_input_tokens:,} fresh</div></td>'
+                        f'<td><div class="activity-summary">{response.usage.output_tokens:,} output · '
+                        f'{response.usage.reasoning_tokens:,} reasoning</div></td>'
+                        + ("<td>—</td>" if show_timing_note else "")
+                        + "</tr>",
+                    )
+                )
+            reasoning_index = 0
+            for activity in turn_activities:
+                if activity.activity_type != "reasoning":
+                    continue
+                reasoning_index += 1
+                activity_models = _models_before_source(
+                    thread,
+                    turn_id=turn.turn_id,
+                    source_path=activity.source_path,
+                    source_ordinal=activity.source_ordinal,
+                )
+                detail_rows.append(
+                    (
+                        float(activity.source_ordinal),
+                        1,
+                        '<tr class="turn-detail-lifecycle-row turn-detail-reasoning-row">'
+                        f'<td>R{reasoning_index}</td>'
+                        f'<td>{_timestamp_offset_label(run, activity.event_timestamp)}</td>'
+                        '<td>—</td>'
+                        f'<td>{_render_model_names(activity_models, attributed=True)}</td>'
+                        '<td><span class="activity-name">reasoning</span></td>'
+                        '<td>—</td>'
+                        f'<td>{_render_activity_detail(activity, raw_label="raw reasoning")}</td>'
+                        + ("<td>—</td>" if show_timing_note else "")
+                        + "</tr>",
+                    )
+                )
+            if not reasoning_index and turn.usage.reasoning_tokens:
+                detail_rows.append(
+                    (
+                        (float(turn_responses[0].source_ordinal) - 0.25)
+                        if turn_responses
+                        else float(turn.source_ordinal),
+                        1,
+                        '<tr class="turn-detail-lifecycle-row turn-detail-reasoning-row">'
+                        '<td>R1</td>'
+                        f'<td>{_timestamp_offset_label(run, turn.started_at)}</td>'
+                        '<td>—</td><td>—</td>'
+                        '<td><span class="activity-name">reasoning</span></td>'
+                        '<td>—</td>'
+                        f'<td><div class="activity-summary">{turn.usage.reasoning_tokens:,} recorded reasoning tokens</div></td>'
+                        + ("<td>—</td>" if show_timing_note else "")
+                        + "</tr>",
+                    )
+                )
+            for tool_index, tool in enumerate(tools, start=1):
+                tool_models = _models_before_source(
+                    thread,
+                    turn_id=turn.turn_id,
+                    source_path=tool.source_path,
+                    source_ordinal=tool.source_start_ordinal,
+                )
+                detail_rows.append(
+                    (
+                        float(tool.source_start_ordinal),
+                        2,
+                        '<tr class="turn-detail-tool-row">'
+                        f"<td>{tool_index}</td>"
+                        f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
+                        '<td>—</td>'
+                        f'<td>{_render_model_names(tool_models, attributed=True)}</td>'
+                        f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
+                        f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
+                        f"<td>{_render_tool_result(tool)}</td>"
+                        + (
+                            f"<td>{_escape_html(_tool_timing_note(tool))}</td>"
+                            if show_timing_note
+                            else ""
+                        )
+                        + "</tr>",
+                    )
+                )
+            final_ordinal = max(
+                [float(turn.source_ordinal)]
+                + [float(response.source_ordinal) for response in turn_responses]
+                + [float(activity.source_ordinal) for activity in turn_activities]
+                + [float(tool.source_end_ordinal) for tool in tools]
+            ) + 1
+            detail_rows.append(
+                (
+                    final_ordinal,
+                    3,
+                    '<tr class="turn-detail-lifecycle-row turn-detail-output-row">'
+                    '<td>—</td>'
+                    f'<td>{_timestamp_offset_label(run, turn.completed_at)}</td>'
+                    '<td>—</td><td>—</td>'
+                    '<td><span class="activity-name">output</span></td>'
+                    '<td><div class="activity-summary">Output generation aggregate</div></td>'
+                    f'<td><div class="activity-summary">{turn.usage.output_tokens:,} model-output tokens '
+                    f'across {len(turn_responses):,} responses</div></td>'
+                    + ("<td>—</td>" if show_timing_note else "")
+                    + "</tr>",
+                )
+            )
+            turn_detail_tool_rows = "".join(
+                row for _, _, row in sorted(detail_rows, key=lambda item: (item[0], item[1]))
             )
             timing_note_header = "<th>Timing note</th>" if show_timing_note else ""
             timing_note_column = (
@@ -2444,20 +2658,21 @@ def render_codex_rollout_html(
                 f'<div class="metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div></div>'
                 f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
                 f'<div class="metric"><div class="label">Tool calls</div><div class="value">{len(tools):,}</div></div>'
-                f'<div class="metric"><div class="label">Model</div><div class="value">{_escape_html(thread.model or "—")}</div></div>'
+                f'<div class="metric"><div class="label">Model</div><div class="value">{_render_turn_model_metric(thread, turn.turn_id)}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 "</div>"
                 f'<div class="table-scroll"><table class="{turn_detail_table_class}">'
                 '<colgroup><col class="turn-detail-index-column">'
                 '<col class="turn-detail-offset-column">'
                 '<col class="turn-detail-cost-column">'
+                '<col class="turn-detail-model-column">'
                 '<col class="turn-detail-tool-column">'
                 '<col class="turn-detail-arguments-column">'
                 '<col class="turn-detail-result-column">'
                 f"{timing_note_column}</colgroup>"
                 '<thead><tr><th>#</th><th>T+</th>'
-                '<th title="Recorded model cost since the previous tool row; the first row starts at the task-span boundary">Cost</th>'
-                '<th>Tool</th><th>Arguments</th><th>Result</th>'
+                '<th title="Cost of the model response on this row; tool execution has no separately recorded model cost">Cost</th>'
+                '<th>Model</th><th>Tool</th><th>Arguments</th><th>Result</th>'
                 f"{timing_note_header}</tr></thead>"
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
@@ -2653,6 +2868,7 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
 .label {{ color:#666; font-size:.82em; }}
 .value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
+.metric-detail {{ display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }}
 table {{ border-collapse:collapse; width:100%; margin:10px 0; background:#fff; }}
 th,td {{ border-bottom:1px solid #e1e6ea; padding:7px; text-align:left; white-space:nowrap; }}
 th {{ color:#546e7a; font-size:.8em; background:#f5f7f8; position:sticky; top:0; }}
@@ -2665,6 +2881,12 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
+.model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
+.activity-name {{ font-family:var(--font-ui); font-size:.92em; font-weight:600; color:#455a64; }}
+.activity-summary {{ font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }}
+.activity-raw {{ margin-top:4px; }}
+.activity-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
+.activity-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
 .tool-arguments {{ display:block; max-width:720px; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
 .tool-argument-formatted {{ font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }}
 .tool-argument-raw {{ margin-top:4px; }}
@@ -2706,18 +2928,20 @@ td {{ font-size:.85em; }}
 .turn-detail-panel .table-scroll {{ max-height:calc(92vh - 180px); }}
 .turn-detail-table {{ min-width:900px; margin:0; table-layout:fixed; }}
 .turn-detail-table th, .turn-detail-table td {{ vertical-align:top; white-space:normal; }}
-.turn-detail-table .turn-detail-index-column {{ width:5%; }}
-.turn-detail-table .turn-detail-offset-column {{ width:8%; }}
-.turn-detail-table .turn-detail-cost-column {{ width:10%; }}
-.turn-detail-table .turn-detail-tool-column {{ width:10%; }}
+.turn-detail-table .turn-detail-index-column {{ width:4%; }}
+.turn-detail-table .turn-detail-offset-column {{ width:7%; }}
+.turn-detail-table .turn-detail-cost-column {{ width:7%; }}
+.turn-detail-table .turn-detail-model-column {{ width:14%; }}
+.turn-detail-table .turn-detail-tool-column {{ width:9%; }}
 .turn-detail-table .turn-detail-arguments-column,
-.turn-detail-table .turn-detail-result-column {{ width:33.5%; }}
+.turn-detail-table .turn-detail-result-column {{ width:29.5%; }}
 .turn-detail-table.has-timing .turn-detail-index-column {{ width:3%; }}
-.turn-detail-table.has-timing .turn-detail-offset-column {{ width:7%; }}
-.turn-detail-table.has-timing .turn-detail-cost-column {{ width:8%; }}
-.turn-detail-table.has-timing .turn-detail-tool-column {{ width:9%; }}
+.turn-detail-table.has-timing .turn-detail-offset-column {{ width:6%; }}
+.turn-detail-table.has-timing .turn-detail-cost-column {{ width:7%; }}
+.turn-detail-table.has-timing .turn-detail-model-column {{ width:12%; }}
+.turn-detail-table.has-timing .turn-detail-tool-column {{ width:8%; }}
 .turn-detail-table.has-timing .turn-detail-arguments-column,
-.turn-detail-table.has-timing .turn-detail-result-column {{ width:28.5%; }}
+.turn-detail-table.has-timing .turn-detail-result-column {{ width:24%; }}
 .turn-detail-table.has-timing .turn-detail-timing-column {{ width:16%; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
@@ -4373,6 +4597,8 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
     current_task_id = ""
     last_task_id = ""
     pending_prompt_at = ""
+    pending_prompt_ordinal = 0
+    pending_prompt_content = ""
     agent_meta: dict[str, dict[str, str]] = {}
     custom_agent_ids_by_name: dict[str, str] = {}
     for _, record in records:
@@ -4392,6 +4618,10 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
         tuple[str, str, str],
         list[tuple[int, str, str, dict[str, object]]],
     ] = {}
+    activity_updates: dict[
+        tuple[str, str, str],
+        list[tuple[int, str, str, dict[str, object]]],
+    ] = {}
     responses: dict[str, list[ResponseUsage]] = {}
     models: dict[str, Counter[str]] = {}
     recorded_costs: dict[str, float] = {}
@@ -4402,6 +4632,11 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
         kind = str(record.get("kind") or "")
         if kind == "UserPromptEvent":
             pending_prompt_at = timestamp
+            pending_prompt_ordinal = ordinal
+            raw_prompt = record.get("presentablePrompt") or record.get("prompt") or ""
+            pending_prompt_content = (
+                _tool_argument_content(raw_prompt) if isinstance(raw_prompt, str) else ""
+            )
             continue
         if kind == "TaskStartedEvent":
             current_task_id = str(record.get("taskId") or f"task-{len(task_order) + 1}")
@@ -4412,8 +4647,13 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                 "completed_at": "",
                 "outcome": "active",
                 "source_ordinal": ordinal,
+                "prompt_at": pending_prompt_at or timestamp,
+                "prompt_ordinal": pending_prompt_ordinal or ordinal,
+                "prompt_content": pending_prompt_content,
             }
             pending_prompt_at = ""
+            pending_prompt_ordinal = 0
+            pending_prompt_content = ""
             continue
         if kind == "TaskState":
             if current_task_id and current_task_id in tasks:
@@ -4471,6 +4711,11 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
         if payload is not None and step_id:
             key = (agent_id, step_id, str(agent_event.get("kind") or ""))
             tool_updates.setdefault(key, []).append((ordinal, timestamp, turn_id, agent_event))
+        if event_kind == "AgentThoughtBlockUpdatedEvent" and step_id:
+            key = (agent_id, step_id, event_kind)
+            activity_updates.setdefault(key, []).append(
+                (ordinal, timestamp, turn_id, agent_event)
+            )
 
         if event_kind != "LlmResponseMetadataEvent":
             if (
@@ -4501,6 +4746,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                 turn_id=turn_id or None,
                 source_path=str(events_path),
                 source_ordinal=ordinal,
+                model=str(model_usage.get("model") or "unknown"),
                 recorded_cost_usd=response_cost,
                 derivation_method="Junie response metadata",
                 attribution_confidence="exact" if turn_id else "unattributed",
@@ -4601,6 +4847,46 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                 )
             )
 
+        activities: list[AgentActivity] = []
+        if meta["kind"] == "MainAgent":
+            for turn_id in task_order:
+                task = tasks[turn_id]
+                prompt_content = str(task.get("prompt_content") or "")
+                if not prompt_content:
+                    continue
+                activities.append(
+                    AgentActivity(
+                        thread_id=agent_id,
+                        turn_id=turn_id,
+                        activity_type="input",
+                        event_timestamp=str(task.get("prompt_at") or task.get("started_at") or ""),
+                        source_path=str(events_path),
+                        source_ordinal=int(task.get("prompt_ordinal") or task.get("source_ordinal") or 0),
+                        summary=f"Initial prompt · {len(prompt_content):,} characters",
+                        content=prompt_content,
+                    )
+                )
+        for (owner_id, _, _), versions in activity_updates.items():
+            if owner_id != agent_id:
+                continue
+            ordinal, timestamp, turn_id, final_event = sorted(versions, key=lambda item: item[0])[-1]
+            raw_text = final_event.get("text")
+            if not isinstance(raw_text, str) or not raw_text.strip():
+                continue
+            content = _tool_argument_content(raw_text)
+            activities.append(
+                AgentActivity(
+                    thread_id=agent_id,
+                    turn_id=turn_id or None,
+                    activity_type="reasoning",
+                    event_timestamp=timestamp,
+                    source_path=str(events_path),
+                    source_ordinal=ordinal,
+                    summary=_sanitize_unstructured_argument(raw_text),
+                    content=content,
+                )
+            )
+
         token_totals = UsageTotals()
         for response in agent_responses:
             token_totals = token_totals + response.usage
@@ -4634,6 +4920,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                 token_totals=token_totals,
                 responses=agent_responses,
                 turns=turns,
+                activities=sorted(activities, key=lambda item: item.source_ordinal),
                 tool_intervals=sorted(tools, key=lambda tool: tool.source_start_ordinal),
                 terminal_state="complete" if all_tasks_complete else "active",
                 source_path=str(events_path),

@@ -53,7 +53,7 @@ def _write_junie_session(root: Path) -> Path:
             "kind": "UserPromptEvent",
             "timestampMs": 1_783_993_818_000,
             "requestId": "request-1",
-            "prompt": "Synthetic prompt",
+            "prompt": "Synthetic prompt API_TOKEN=PRIVATE",
         },
         {
             "kind": "TaskStartedEvent",
@@ -74,6 +74,13 @@ def _write_junie_session(root: Path) -> Path:
                     "cost": 0.01,
                 }
             ],
+        ),
+        agent_event(
+            1_783_993_818_025,
+            main,
+            kind="AgentThoughtBlockUpdatedEvent",
+            stepId="thought-1",
+            text="Inspect the project before running the command.",
         ),
         agent_event(
             1_783_993_818_030,
@@ -387,7 +394,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
-    assert run.parser_version == "1.2.0"
+    assert run.parser_version == "1.3.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
@@ -405,8 +412,16 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert custom.token_totals.processed_tokens == 13
     assert custom.recorded_cost_usd == pytest.approx(0.02)
     assert custom.responses[0].recorded_cost_usd == pytest.approx(0.02)
+    assert custom.responses[0].model == "claude-reviewer"
 
     main = next(thread for thread in run.threads if thread.agent_path == "/main")
+    assert main.responses[0].model == "gpt-main"
+    assert [activity.activity_type for activity in main.activities] == [
+        "input",
+        "reasoning",
+    ]
+    assert main.activities[0].content == "Synthetic prompt API_TOKEN=[redacted]"
+    assert "Inspect the project" in main.activities[1].content
     terminal = main.tool_intervals[0]
     assert terminal.tool_name == "exec"
     assert "API_TOKEN=[redacted]" in terminal.argument_summary
@@ -447,17 +462,28 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     )[0]
     custom_tool_table = custom_overlay.split('<div class="table-scroll">', 1)[1]
     assert (
-        '<th>#</th><th>T+</th><th title="Recorded model cost since the previous '
-        'tool row; the first row starts at the task-span boundary">Cost</th>'
-        '<th>Tool</th>'
+        '<th>#</th><th>T+</th><th title="Cost of the model response on this row; '
+        'tool execution has no separately recorded model cost">Cost</th>'
+        '<th>Model</th><th>Tool</th>'
     ) in custom_tool_table
     assert "<td>$0.02</td>" in custom_tool_table
+    assert '<span class="activity-name">input</span>' in custom_tool_table
+    assert '<span class="activity-name">model</span>' in custom_tool_table
+    assert '<span class="activity-name">output</span>' in custom_tool_table
+    assert "claude-reviewer" in custom_tool_table
     main_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
     main_tool_table = main_overlay.split('<div class="table-scroll">', 1)[1]
     assert "<td>$0.01</td>" in main_tool_table
-    assert "<td>$0.00</td>" in main_tool_table
+    assert (
+        '<summary>raw input</summary><pre>Synthetic prompt API_TOKEN=[redacted]</pre>'
+        in main_tool_table
+    )
+    assert '<span class="activity-name">reasoning</span>' in main_tool_table
+    assert '<summary>raw reasoning</summary>' in main_tool_table
+    assert 'title="Attributed from the latest preceding model response in this task span">gpt-main' in main_tool_table
+    assert "Output generation aggregate" in main_tool_table
     assert "recorded</td>" not in main_tool_table
     assert "Open model pricing" not in html
     assert "PRIVATE" not in html
@@ -497,6 +523,34 @@ def test_native_junie_session_cli_generates_html_report(tmp_path):
     assert markdown_output.exists()
     assert "Runtime: `Junie`" in markdown_output.read_text(encoding="utf-8")
     assert "## Model pricing" not in markdown_output.read_text(encoding="utf-8")
+
+
+def test_turn_model_tile_lists_mixed_models_and_tool_rows_show_event_order_model(tmp_path):
+    module = _load_module()
+    session = _write_junie_session(tmp_path)
+    run = module.load_report_document(session).codex_run
+
+    assert run is not None
+    main = next(thread for thread in run.threads if thread.agent_path == "/main")
+    second_response = module.deepcopy(main.responses[0])
+    second_response.model = "gpt-helper"
+    second_response.source_ordinal += 1
+    second_response.recorded_cost_usd = 0.02
+    main.responses.append(second_response)
+
+    html = module.render_codex_rollout_html(run)
+    overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+
+    assert 'mixed (2 models)<span class="metric-detail">gpt-main · gpt-helper</span>' in overlay
+    assert '<th>Model</th><th>Tool</th>' in overlay
+    assert '<td><code class="model-name">gpt-main</code></td>' in overlay
+    assert '<td><code class="model-name">gpt-helper</code></td>' in overlay
+    assert (
+        'title="Attributed from the latest preceding model response in this task span">'
+        "gpt-helper</code>"
+    ) in overlay
 
 
 def test_tool_formatter_config_rejects_unsafe_regex():
@@ -825,10 +879,12 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert '<table class="turn-detail-table has-timing">' in tool_table
     assert '<col class="turn-detail-arguments-column">' in tool_table
     assert '<col class="turn-detail-cost-column">' in tool_table
+    assert '<col class="turn-detail-model-column">' in tool_table
     assert '<col class="turn-detail-result-column">' in tool_table
     assert '<col class="turn-detail-timing-column">' in tool_table
     assert "<th>T+</th>" in tool_table
     assert '>Cost</th>' in tool_table
+    assert '<th>Model</th><th>Tool</th>' in tool_table
     assert "Cost to T+" not in tool_table
     assert "<th>Duration</th>" not in tool_table
     assert "<th>Arguments</th>" in tool_table
@@ -1051,6 +1107,8 @@ def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_cos
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
     root.model = "gpt-5.6-sol"
+    for response in root.responses:
+        response.model = root.model
     root.plan_type = "pro"
     root.turns[0].usage = module.UsageTotals(
         input_tokens=2_000_000,
