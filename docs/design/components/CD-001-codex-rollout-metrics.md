@@ -244,7 +244,7 @@ flowchart LR
 
 - **PROCESS: PROCESS-4** Calculate optional cost
   - **SYNOPSIS:** Multiply uncached input, cached input, and output by matching per-million USD and Codex-credit rates when supported; prefer direct cost if the source records it.
-  - **PRODUCES:** Recorded or estimated USD, optional credit consumption, and explicit subscription or unavailable states.
+  - **PRODUCES:** Recorded or estimated USD, optional credit consumption, and explicit subscription or unavailable states at turn, agent, work-unit, phase, and run levels.
 
 - **PROCESS: PROCESS-5** Seal a completed report
   - **SYNOPSIS:** Re-scan until the descendant set and source sizes are stable, reject active or indeterminate threads unless the caller explicitly seals an aborted run, write source digests and report artifacts, then mark the snapshot sealed.
@@ -324,7 +324,7 @@ These conditions define an acceptable implementation and report.
 
 - **REQUIREMENT: REQ-6** Honest cost reporting
   - **SYNOPSIS:** Direct cost, API-equivalent USD, Codex credit estimates, subscription usage, and unavailable pricing are visually and structurally distinct.
-  - **DISPLAYS:** Human-readable cost values use two decimal places; repeated table cells show compact values while the estimate disclaimer appears once at run level.
+  - **DISPLAYS:** Human-readable cost values use two decimal places; the execution timeline shows each turn estimate and the owning agent total calculated with that agent's model; repeated table cells show compact values while the estimate disclaimer appears once at run level.
   - **BECAUSE:** Token telemetry is sufficient for some estimates but not proof of an actual charge.
 
 - **REQUIREMENT: REQ-7** Live report stability
@@ -377,7 +377,7 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 
 - **TASK: TEST-9** Estimate supported model cost
   - **SYNOPSIS:** Map uncached input, cached input, and output to versioned provider and Codex rate-card entries.
-  - **VALIDATES:** Component calculations, per-million conversion, currency, credit estimate, estimate labels, pricing table rendering, and pricing digest.
+  - **VALIDATES:** Component calculations, per-million conversion, currency, credit estimate, estimate labels, per-turn and per-agent execution-timeline totals, pricing table rendering, and pricing digest.
 
 - **TASK: TEST-10** Refuse unsupported model pricing
   - **SYNOPSIS:** Use an internal model identifier absent from the registry and a Pro subscription rate-limit record with null credits.

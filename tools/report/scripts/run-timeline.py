@@ -1022,6 +1022,16 @@ def _cost_for_usage(
     )
 
 
+def _cost_for_thread_usage(
+    thread: CodexThreadMetrics,
+    usage: UsageTotals,
+) -> CostAssessment:
+    """Estimate one thread-owned usage bucket with that agent's model."""
+    model_usage = {thread.model: usage} if thread.model else {}
+    plan_types = {thread.plan_type} if thread.plan_type else set()
+    return _cost_for_usage(usage, model_usage, plan_types=plan_types)
+
+
 def _time_metrics(
     threads: list[CodexThreadMetrics],
 ) -> tuple[str, str, int, int, int, int, int]:
@@ -1765,6 +1775,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
     for thread_index, thread in enumerate(run.threads, start=1):
         tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
         agent_assignment = _agent_assignment(thread)
+        agent_cost = _cost_for_thread_usage(thread, thread.token_totals)
         thread_tools_label, thread_tools_total = _tool_activity_summary(thread.tool_intervals)
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
         show_work_unit = len(work_units) > 1
@@ -1781,6 +1792,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         for turn_index, turn in enumerate(thread.turns, start=1):
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
+            turn_cost = _cost_for_thread_usage(thread, turn.usage)
             turn_detail_overlay_id = f"{tool_call_overlay_id}-{turn_index}"
             turn_link = (
                 f'<a class="drilldown-link" href="#{turn_detail_overlay_id}">'
@@ -1794,6 +1806,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
                 f"<td>{len(tools):,}</td>"
                 f'<td title="{_escape_html(tool_total)}">{_escape_html(tool_names)}</td>'
+                f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 "</tr>"
             )
             turn_detail_tool_rows = "".join(
@@ -1819,6 +1832,8 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f'<div class="metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div></div>'
                 f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
                 f'<div class="metric"><div class="label">Tool calls</div><div class="value">{len(tools):,}</div></div>'
+                f'<div class="metric"><div class="label">Model</div><div class="value">{_escape_html(thread.model or "—")}</div></div>'
+                f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 "</div>"
                 '<p class="execution-note">'
                 f"Work unit {_escape_html(turn.work_unit_id or 'unattributed')} · "
@@ -1854,9 +1869,10 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f"<td>{turn.usage.reasoning_tokens:,}</td>"
                 f"<td>{turn.usage.processed_tokens:,}</td>"
                 f"<td title=\"{_escape_html(tool_total)}\">{_escape_html(tool_names)}</td>"
+                f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 "</tr>"
             )
-        turn_column_count = 12 + int(show_work_unit) + int(show_activity)
+        turn_column_count = 13 + int(show_work_unit) + int(show_activity)
         turn_rows_html = "".join(turn_rows) or (
             f'<tr><td colspan="{turn_column_count}">No turns recorded</td></tr>'
         )
@@ -1867,7 +1883,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
         metadata_note = " · ".join(metadata_notes)
         agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
         thread_tool_rows_html = "".join(thread_tool_rows) or (
-            '<tr><td colspan="6">No turns recorded</td></tr>'
+            '<tr><td colspan="7">No turns recorded</td></tr>'
         )
         tool_call_overlays.append(
             f'<section id="{tool_call_overlay_id}" class="tool-call-overlay agent-tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="{tool_call_overlay_id}-title">'
@@ -1877,7 +1893,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             '<a class="tool-call-close" href="#execution-timeline">close</a>'
             "</div>"
             '<p class="execution-note">Select a turn to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p>'
-            '<div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th></tr></thead>'
+            '<div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th><th>Cost estimate</th></tr></thead>'
             f"<tbody>{thread_tool_rows_html}</tbody></table></div>"
             "</div>"
             "</section>"
@@ -1890,6 +1906,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             f'<span>{len(thread.turns)} turns</span>'
             f'<span>{_escape_html(thread_tools_total)}</span>'
             f'<span>{thread.token_totals.processed_tokens:,} tokens</span>'
+            f'<span title="Agent cost estimate">cost {_escape_html(_compact_cost_summary(agent_cost))}</span>'
             '<span class="timeline-track">'
             f'<span class="timeline-bar" style="{_timeline_style(run, thread.started_at, thread.last_observed_at)}"></span>'
             "</span>"
@@ -1906,7 +1923,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             "<th>Turn</th><th>T+</th><th>Duration</th><th>TTFT</th><th>State</th>"
             f"{optional_headers}<th>Input</th><th>Cached</th>"
-            "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Tools</th>"
+            "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Tools</th><th>Cost estimate</th>"
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</details>"
         )
@@ -2002,7 +2019,7 @@ td {{ font-size:.85em; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
-.thread-detail > summary {{ display:grid; grid-template-columns:minmax(250px,2fr) auto auto auto auto minmax(180px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
+.thread-detail > summary {{ display:grid; grid-template-columns:minmax(250px,2fr) auto auto auto auto auto minmax(180px,1fr); gap:12px; align-items:center; padding:11px 13px; cursor:pointer; }}
 .thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
 .thread-name {{ font-weight:600; overflow-wrap:anywhere; }}
 .thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
@@ -2058,7 +2075,7 @@ code {{ font-size:.9em; }}
 <p class="execution-note">Agent path is the recorded assignment hierarchy. Runtime nickname is Codex's per-thread label, not a reusable custom-agent role; the rollout adapter does not infer a custom-agent definition when telemetry does not declare one.</p>
 <div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Runtime nickname</th><th>Parent assignment</th><th>State</th><th>Model</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
-<p class="execution-note">Bars use the observed run interval. Expand an agent for privacy-safe turn, token, TTFT, aggregated tool detail, and its individual tool-call drilldown.</p>
+<p class="execution-note">Bars use the observed run interval. Agent and turn costs use each agent's recorded model and the linked pricing table. Expand an agent for privacy-safe turn, token, TTFT, cost, aggregated tool detail, and its individual tool-call drilldown.</p>
 {''.join(thread_details)}
 <h2>Work units and attribution</h2>
 <div class="table-scroll"><table><thead><tr><th>Work unit</th><th>Phase</th><th>Lane</th><th>Activity</th><th>Confidence</th><th>Turns</th><th>Agent time</th><th>Tools</th><th>Input</th><th>Cached</th><th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Run share</th><th>Cost estimate</th></tr></thead><tbody>{''.join(work_rows)}</tbody></table></div>

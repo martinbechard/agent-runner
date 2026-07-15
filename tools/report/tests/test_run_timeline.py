@@ -500,6 +500,47 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     assert "<th>Cost estimate</th>" in html
 
 
+def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_costs():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    root = run.threads[0]
+    root.model = "gpt-5.6-sol"
+    root.plan_type = "pro"
+    root.turns[0].usage = module.UsageTotals(
+        input_tokens=2_000_000,
+        cached_input_tokens=1_000_000,
+        uncached_input_tokens=1_000_000,
+        output_tokens=1_000_000,
+        processed_tokens=3_000_000,
+    )
+    root.turns[1].usage = module.UsageTotals(
+        input_tokens=1_000_000,
+        uncached_input_tokens=1_000_000,
+        processed_tokens=1_000_000,
+    )
+    root.token_totals = root.turns[0].usage + root.turns[1].usage
+
+    html = module.render_codex_rollout_html(run)
+
+    root_detail = html.split('<details class="thread-detail">', 1)[1].split(
+        "</details>", 1
+    )[0]
+    assert (
+        'title="Agent cost estimate">cost $40.50 · 1,012.50 credits'
+        in root_detail
+    )
+    assert "<th>Cost estimate</th>" in root_detail
+    assert "$35.50 · 887.50 credits" in root_detail
+    assert "$5.00 · 125.00 credits" in root_detail
+    root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "Model" in root_turn_overlay
+    assert "gpt-5.6-sol" in root_turn_overlay
+    assert "Cost estimate" in root_turn_overlay
+    assert "$35.50 · 887.50 credits" in root_turn_overlay
+
+
 def test_native_codex_html_opens_model_pricing_in_new_tab():
     module = _load_module()
     run = module.build_codex_rollout_run(
