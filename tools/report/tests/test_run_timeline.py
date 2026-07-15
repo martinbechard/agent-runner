@@ -959,6 +959,8 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     root_turn_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>Work unit</th>" in root_turn_table
     assert "<th>Activity</th>" in root_turn_table
+    assert "<th>TTFT</th>" not in root_turn_table
+    assert "<td>500ms</td>" not in root_turn_table
     assert "<th>Processed</th>" not in root_turn_table
     assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in root_turn_table
     assert (

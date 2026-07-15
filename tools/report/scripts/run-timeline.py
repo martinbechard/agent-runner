@@ -2996,11 +2996,6 @@ def render_codex_rollout_html(
             activity_cell = (
                 f"<td>{_escape_html(turn.activity)}</td>" if show_activity else ""
             )
-            ttft_cell = (
-                ""
-                if is_junie
-                else f"<td>{_format_detail_ms(turn.time_to_first_token_ms)}</td>"
-            )
             timeline_label = (
                 f"{turn_singular.capitalize()} {_turn_offset_label(run, turn)} · "
                 f"{_format_detail_ms(turn.duration_ms)}"
@@ -3019,7 +3014,6 @@ def render_codex_rollout_html(
                 f"<td>{turn_link}</td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
-                f"{ttft_cell}"
                 f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
                 f"{work_unit_cell}"
                 f"{activity_cell}"
@@ -3034,7 +3028,7 @@ def render_codex_rollout_html(
                 f"{timeline_cell}"
                 "</tr>"
             )
-        turn_column_count = 13 + int(not is_junie) + int(show_work_unit) + int(show_activity)
+        turn_column_count = 13 + int(show_work_unit) + int(show_activity)
         turn_rows_html = "".join(turn_rows) or (
             f'<tr><td colspan="{turn_column_count}">No {turn_plural} recorded</td></tr>'
         )
@@ -3042,7 +3036,6 @@ def render_codex_rollout_html(
             ("<th>Work unit</th>" if show_work_unit else "")
             + ("<th>Activity</th>" if show_activity else "")
         )
-        ttft_header = "" if is_junie else "<th>TTFT</th>"
         metadata_note = " · ".join(metadata_notes)
         agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
         thread_tool_rows_html = "".join(thread_tool_rows) or (
@@ -3084,7 +3077,7 @@ def render_codex_rollout_html(
             "</div>"
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
-            f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th>{ttft_header}<th>State</th>"
+            f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th>"
             f"{optional_headers}<th>Input</th><th>Cache read</th><th>Cache write</th>"
             '<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Tools</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
