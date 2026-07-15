@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.7.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.8.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -63,7 +63,7 @@ TOOL_RESULT_PREVIEW_CHARS = 200
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
-JUNIE_SESSION_PARSER_VERSION = "1.5.0"
+JUNIE_SESSION_PARSER_VERSION = "1.6.0"
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -77,6 +77,9 @@ CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
         "result",
         "text",
     }
+)
+_SKILL_PATH_PATTERN = re.compile(
+    r"(?<![A-Za-z0-9._:-])(?P<name>[A-Za-z0-9][A-Za-z0-9._:-]*)/SKILL\.md\b"
 )
 
 
@@ -421,6 +424,7 @@ class CodexThreadMetrics:
     turns: list[AgentTurn] = field(default_factory=list)
     activities: list[AgentActivity] = field(default_factory=list)
     tool_intervals: list[ToolInterval] = field(default_factory=list)
+    skills_used: list[str] = field(default_factory=list)
     terminal_state: str = "indeterminate"
     source_path: str = ""
     diagnostics: list[str] = field(default_factory=list)
@@ -863,6 +867,21 @@ def _tool_argument_summary(payload: dict[str, object]) -> str:
     )
 
 
+def _skill_names_from_value(value: object) -> set[str]:
+    """Return skill directory names explicitly referenced by tool arguments."""
+
+    if value is None:
+        return set()
+    if isinstance(value, str):
+        text = value
+    else:
+        try:
+            text = json.dumps(value, ensure_ascii=False)
+        except (TypeError, ValueError):
+            text = str(value)
+    return {match.group("name") for match in _SKILL_PATH_PATTERN.finditer(text)}
+
+
 def _compile_formatter_regex(pattern: str, *, context: str) -> re.Pattern[str]:
     if len(pattern) > 500:
         raise ValueError(f"{context} exceeds 500 characters")
@@ -1171,6 +1190,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     responses: list[ResponseUsage] = []
     activities: list[AgentActivity] = []
     tools: list[ToolInterval] = []
+    skills_used: set[str] = set()
     pending_tools: dict[str, tuple[str, str, str | None, int, str, str]] = {}
     previous_usage = UsageTotals()
     recorded_cost_usd: float | None = None
@@ -1480,6 +1500,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             elif item_type in {"function_call", "custom_tool_call"}:
                 call_id = str(payload.get("call_id") or payload.get("id") or "")
                 if call_id:
+                    skills_used.update(_skill_names_from_value(payload.get("arguments")))
+                    skills_used.update(_skill_names_from_value(payload.get("input")))
                     tool_name = str(payload.get("name") or payload.get("namespace") or "unknown")
                     pending_tools[call_id] = (
                         tool_name,
@@ -1577,6 +1599,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         turns=turns,
         activities=activities,
         tool_intervals=tools,
+        skills_used=sorted(skills_used, key=str.casefold),
         terminal_state=terminal_state,
         source_path=str(path),
         diagnostics=diagnostics,
@@ -2521,6 +2544,28 @@ def _parent_agent_assignment(
     return _agent_assignment(parent) if parent is not None else "outside selected run"
 
 
+def _direct_subagent_assignments(
+    run: CodexRunMetrics,
+    thread: CodexThreadMetrics,
+) -> list[str]:
+    """Return the recorded direct child assignments inside the selected run."""
+
+    return sorted(
+        {
+            _agent_assignment(candidate)
+            for candidate in run.threads
+            if candidate.parent_thread_id == thread.thread_id
+        },
+        key=str.casefold,
+    )
+
+
+def _inventory_text(values: list[str]) -> str:
+    """Render compact agent-inventory values without implying missing evidence."""
+
+    return " · ".join(values) if values else "—"
+
+
 def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     """Render a privacy-safe Markdown summary with execution detail."""
     turn_count = sum(len(thread.turns) for thread in run.threads)
@@ -2583,15 +2628,16 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     lines.extend(
         [
             "",
-            f"| Assignment | Parent assignment | State | {turn_column_label} | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
-            "|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            f"| Assignment | Parent assignment | Skills used | Subagents invoked | {turn_column_label} | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
+            "|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
         ]
     )
     for thread in run.threads:
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         lines.append(
             f"| {_agent_assignment_label(thread)} | {_parent_agent_assignment(run, thread)} | "
-            f"{thread.terminal_state} | "
+            f"{_inventory_text(thread.skills_used)} | "
+            f"{_inventory_text(_direct_subagent_assignments(run, thread))} | "
             f"{len(thread.turns)} | {len(thread.tool_intervals)} | "
             f"{_format_ms(agent_time_ms)} | "
             f"{thread.token_totals.input_tokens} | {thread.token_totals.cached_input_tokens} | "
@@ -2683,11 +2729,14 @@ def render_codex_rollout_html(
     for thread in run.threads:
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         run_share = thread.token_totals.processed_tokens / composition_total * 100
+        skills_used = _inventory_text(thread.skills_used)
+        subagents_invoked = _inventory_text(_direct_subagent_assignments(run, thread))
         agent_rows.append(
             "<tr>"
             f"<td><strong>{_escape_html(_agent_assignment_label(thread))}</strong><br><code>{_escape_html(thread.agent_path or '—')}</code></td>"
             f"<td>{_escape_html(_parent_agent_assignment(run, thread))}</td>"
-            f"<td><span class=\"state state-{_escape_html(thread.terminal_state)}\">{_escape_html(thread.terminal_state)}</span></td>"
+            f"<td>{_escape_html(skills_used)}</td>"
+            f"<td>{_escape_html(subagents_invoked)}</td>"
             f"<td>{_escape_html(thread.model or '—')}</td>"
             f"<td>{len(thread.turns):,}</td>"
             f"<td>{_format_ms(agent_time_ms)}</td>"
@@ -3147,12 +3196,12 @@ def render_codex_rollout_html(
         else ""
     )
     agent_note = (
-        "Agent path is the recorded assignment hierarchy. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles."
+        "Agent path is the recorded assignment hierarchy. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles. Skills are listed only when a SKILL.md reference appears in recorded tool arguments; subagents are direct descendants in the selected run."
         if is_codex
         else (
             "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities. "
             "User tasks count unique TaskStartedEvent IDs; task spans count each participating agent once per task, so delegated work appears in both the parent and custom-agent rows. "
-            "Model responses count LlmResponseMetadataEvent records."
+            "Model responses count LlmResponseMetadataEvent records. Skills are listed only when a SKILL.md reference appears in recorded tool arguments; subagents are direct descendants in the selected run."
         )
     )
     execution_note = (
@@ -3278,7 +3327,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {pricing_link}
 <h2>Agents used</h2>
 <p class="execution-note">{_escape_html(agent_note)}</p>
-<div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Parent assignment</th><th>State</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><thead><tr><th>Assignment</th><th>Parent assignment</th><th>Skills used</th><th>Subagents invoked</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
@@ -5120,6 +5169,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             )
 
         tools: list[ToolInterval] = []
+        skills_used: set[str] = set()
         for (owner_id, _, _), versions in tool_updates.items():
             if owner_id != agent_id:
                 continue
@@ -5130,6 +5180,8 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             if payload is None:
                 continue
             tool_name, argument_summary, argument_content, raw_result = payload
+            skills_used.update(_skill_names_from_value(argument_summary))
+            skills_used.update(_skill_names_from_value(argument_content))
             result_content = _tool_result_content(raw_result)
             tools.append(
                 ToolInterval(
@@ -5226,6 +5278,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
                 turns=turns,
                 activities=sorted(activities, key=lambda item: item.source_ordinal),
                 tool_intervals=sorted(tools, key=lambda tool: tool.source_start_ordinal),
+                skills_used=sorted(skills_used, key=str.casefold),
                 terminal_state="complete" if all_tasks_complete else "active",
                 source_path=str(events_path),
                 diagnostics=thread_diagnostics,

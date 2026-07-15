@@ -88,7 +88,10 @@ def _write_junie_session(root: Path) -> Path:
             kind="TerminalBlockUpdatedEvent",
             stepId="terminal-1",
             status="IN_PROGRESS",
-            command="API_TOKEN=PRIVATE echo hello",
+            command=(
+                "sed -n '1,120p' /opt/codex/skills/python/SKILL.md && "
+                "API_TOKEN=PRIVATE echo hello"
+            ),
             output="",
         ),
         agent_event(
@@ -97,7 +100,10 @@ def _write_junie_session(root: Path) -> Path:
             kind="TerminalBlockUpdatedEvent",
             stepId="terminal-1",
             status="COMPLETED",
-            command="API_TOKEN=PRIVATE echo hello",
+            command=(
+                "sed -n '1,120p' /opt/codex/skills/python/SKILL.md && "
+                "API_TOKEN=PRIVATE echo hello"
+            ),
             output="password=PRIVATE\nhello",
         ),
         agent_event(
@@ -230,8 +236,10 @@ def test_parse_native_codex_rollout_uses_exclusive_cumulative_deltas():
     assert thread.token_totals.reasoning_tokens == 8
     assert thread.token_totals.processed_tokens == 180
     assert thread.unattributed_usage.processed_tokens == 0
+    assert thread.skills_used == ["careful-coding", "python"]
     assert thread.tool_intervals[0].argument_summary == (
-        "API_TOKEN=[redacted] python app.py"
+        "sed -n '1,120p' /opt/codex/skills/careful-coding/SKILL.md "
+        "/opt/codex/skills/python/SKILL.md && API_TOKEN=[redacted] python app.py"
     )
 
 
@@ -394,7 +402,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.runtime == "Junie"
     assert run.state == "complete"
     assert run.format_version == module.JUNIE_SESSION_FORMAT
-    assert run.parser_version == "1.5.0"
+    assert run.parser_version == "1.6.0"
     assert len(run.threads) == 2
     assert sum(len(thread.turns) for thread in run.threads) == 2
     assert sum(len(thread.responses) for thread in run.threads) == 2
@@ -418,6 +426,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
 
     main = next(thread for thread in run.threads if thread.agent_path == "/main")
     assert main.responses[0].model == "gpt-main"
+    assert main.skills_used == ["python"]
     assert [activity.activity_type for activity in main.activities] == [
         "input",
         "reasoning",
@@ -452,6 +461,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<div class="label">Agent task spans</div><div class="value">2</div>' in html
     assert '<div class="label">Model responses</div><div class="value">2</div>' in html
     assert "Turns / responses" not in html
+    agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
+    assert "<td>python</td><td>reviewer</td>" in agent_table
     assert "<th>Task spans</th>" in html
     assert "task span task-1" in html
     assert "Write 2 files" in html
@@ -812,7 +823,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.7.0"
+    assert run.parser_version == "1.8.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -1043,6 +1054,14 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "<strong>reviewer (reviewer)</strong>" in html
     assert "Agent path is the recorded assignment hierarchy" in html
     assert "Runtime nicknames appear in parentheses" in html
+    agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
+    assert "<th>State</th>" not in agent_table
+    assert "<th>Skills used</th>" in agent_table
+    assert "<th>Subagents invoked</th>" in agent_table
+    agent_rows = agent_table.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("</tr>")
+    assert "<td>careful-coding · python</td><td>module-a</td>" in agent_rows[0]
+    assert "<td>—</td><td>reviewer</td>" in agent_rows[1]
+    assert "<td>—</td><td>—</td>" in agent_rows[2]
 
 
 def test_native_codex_markdown_includes_turn_and_tool_breakdown():
@@ -1053,8 +1072,12 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
 
     assert "- Turns: 4" in markdown
     assert "- Matched tool calls: 1" in markdown
-    assert "| Assignment | Parent assignment | State | Turns | Tools | Agent time |" in markdown
-    assert "| module-a (module-a) | root | complete |" in markdown
+    assert (
+        "| Assignment | Parent assignment | Skills used | Subagents invoked | "
+        "Turns | Tools | Agent time |" in markdown
+    )
+    assert "| root | outside selected run | careful-coding · python | module-a |" in markdown
+    assert "| module-a (module-a) | root | — | reviewer |" in markdown
     assert "| Work unit | Turns | Agent time | Tools | Input | Cached | Fresh | Output | Reasoning | Processed |" in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
 
