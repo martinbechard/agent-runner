@@ -1135,6 +1135,7 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert ".agent-table { table-layout:fixed; min-width:1200px; }" in html
     assert ".agent-table .agent-skills-column { width:24%; }" in html
     assert ".agent-table .agent-subagents-column { width:16%; }" in html
+    assert ".agent-table td { vertical-align:top; }" in html
     agent_rows = agent_table.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("</tr>")
     assert 'class="agent-assignment" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
     assert '<strong>root</strong>' in agent_rows[0]

@@ -3197,7 +3197,8 @@ td {{ font-size:.85em; }}
 .agent-table .agent-processed-column {{ width:7%; }}
 .agent-table .agent-share-column {{ width:4%; }}
 .agent-table th {{ white-space:normal; }}
-.agent-table .agent-assignment-cell, .agent-table .agent-skills-cell, .agent-table .agent-subagents-cell {{ vertical-align:top; white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
+.agent-table td {{ vertical-align:top; }}
+.agent-table .agent-assignment-cell, .agent-table .agent-skills-cell, .agent-table .agent-subagents-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
 .agent-assignment {{ padding-left:calc(var(--agent-depth) * 20px); }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
