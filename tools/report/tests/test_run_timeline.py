@@ -423,6 +423,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert custom.recorded_cost_usd == pytest.approx(0.02)
     assert custom.responses[0].recorded_cost_usd == pytest.approx(0.02)
     assert custom.responses[0].model == "claude-reviewer"
+    assert [activity.activity_type for activity in custom.activities] == ["input"]
+    assert custom.activities[0].content == "Synthetic prompt API_TOKEN=[redacted]"
 
     main = next(thread for thread in run.threads if thread.agent_path == "/main")
     assert main.responses[0].model == "gpt-main"
@@ -496,12 +498,29 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<span class="activity-name">output</span>' in custom_tool_table
     assert "claude-reviewer" in custom_tool_table
     assert "4 input · 6 cache-read · 1 cache-create" in custom_tool_table
+    custom_input_row = custom_tool_table.split(
+        '<tr class="turn-detail-lifecycle-row turn-detail-input-row">', 1
+    )[1].split("</tr>", 1)[0]
+    assert '<td><code class="model-name">claude-reviewer</code></td>' in custom_input_row
+    assert "Initial prompt · 37 characters" in custom_input_row
+    assert (
+        '<summary>raw input</summary><pre>Synthetic prompt API_TOKEN=[redacted]</pre>'
+        in custom_input_row
+    )
+    assert "model-input tokens" not in custom_input_row
+    assert "cache-read" not in custom_input_row
+    assert "cache-create" not in custom_input_row
     main_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
     assert "Time to first token" not in main_overlay
     main_tool_table = main_overlay.split('<div class="table-scroll">', 1)[1]
     assert "<td>$0.01</td>" in main_tool_table
+    main_input_row = main_tool_table.split(
+        '<tr class="turn-detail-lifecycle-row turn-detail-input-row">', 1
+    )[1].split("</tr>", 1)[0]
+    assert '<td><code class="model-name">gpt-main</code></td>' in main_input_row
+    assert "model-input tokens" not in main_input_row
     assert (
         '<summary>raw input</summary><pre>Synthetic prompt API_TOKEN=[redacted]</pre>'
         in main_tool_table

@@ -2757,37 +2757,30 @@ def render_codex_rollout_html(
             input_activities = [
                 activity for activity in turn_activities if activity.activity_type == "input"
             ]
-            input_result = (
-                f'<div class="activity-summary">{turn.usage.direct_input_tokens:,} input · '
-                f'{turn.usage.cached_input_tokens:,} cache-read · '
-                f'{turn.usage.cache_create_input_tokens:,} cache-create</div>'
-            )
             if input_activities:
-                input_result += "".join(
+                input_arguments = "".join(
                     _render_activity_detail(activity, raw_label="raw input")
                     for activity in input_activities
                 )
                 input_ordinal = float(input_activities[0].source_ordinal)
                 input_timestamp = input_activities[0].event_timestamp
-            else:
-                input_ordinal = float(turn.source_ordinal) - 0.5
-                input_timestamp = turn.started_at
-            detail_rows.append(
-                (
-                    input_ordinal,
-                    0,
-                    '<tr class="turn-detail-lifecycle-row turn-detail-input-row">'
-                    '<td>—</td>'
-                    f'<td>{_timestamp_offset_label(run, input_timestamp)}</td>'
-                    '<td>—</td><td>—</td>'
-                    '<td><span class="activity-name">input</span></td>'
-                    f'<td><div class="activity-summary">{turn.usage.input_tokens:,} model-input tokens '
-                    f'across {len(turn_responses):,} responses</div></td>'
-                    f'<td>{input_result}</td>'
-                    + ("<td>—</td>" if show_timing_note else "")
-                    + "</tr>",
+                input_model = turn_responses[0].model if turn_responses else ""
+                detail_rows.append(
+                    (
+                        input_ordinal,
+                        0,
+                        '<tr class="turn-detail-lifecycle-row turn-detail-input-row">'
+                        '<td>—</td>'
+                        f'<td>{_timestamp_offset_label(run, input_timestamp)}</td>'
+                        '<td>—</td>'
+                        f'<td>{_render_model_names([input_model] if input_model else [])}</td>'
+                        '<td><span class="activity-name">input</span></td>'
+                        f'<td>{input_arguments}</td>'
+                        '<td>—</td>'
+                        + ("<td>—</td>" if show_timing_note else "")
+                        + "</tr>",
+                    )
                 )
-            )
             for response_index, response in enumerate(turn_responses):
                 response_cost = _cost_for_response(thread, response)
                 response_cost_label = (
@@ -5136,24 +5129,23 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             )
 
         activities: list[AgentActivity] = []
-        if meta["kind"] == "MainAgent":
-            for turn_id in task_order:
-                task = tasks[turn_id]
-                prompt_content = str(task.get("prompt_content") or "")
-                if not prompt_content:
-                    continue
-                activities.append(
-                    AgentActivity(
-                        thread_id=agent_id,
-                        turn_id=turn_id,
-                        activity_type="input",
-                        event_timestamp=str(task.get("prompt_at") or task.get("started_at") or ""),
-                        source_path=str(events_path),
-                        source_ordinal=int(task.get("prompt_ordinal") or task.get("source_ordinal") or 0),
-                        summary=f"Initial prompt · {len(prompt_content):,} characters",
-                        content=prompt_content,
-                    )
+        for turn in turns:
+            task = tasks[turn.turn_id]
+            prompt_content = str(task.get("prompt_content") or "")
+            if not prompt_content:
+                continue
+            activities.append(
+                AgentActivity(
+                    thread_id=agent_id,
+                    turn_id=turn.turn_id,
+                    activity_type="input",
+                    event_timestamp=str(task.get("prompt_at") or task.get("started_at") or ""),
+                    source_path=str(events_path),
+                    source_ordinal=int(task.get("prompt_ordinal") or task.get("source_ordinal") or 0),
+                    summary=f"Initial prompt · {len(prompt_content):,} characters",
+                    content=prompt_content,
                 )
+            )
         for (owner_id, _, _), versions in activity_updates.items():
             if owner_id != agent_id:
                 continue
