@@ -2712,8 +2712,6 @@ def render_codex_rollout_html(
             metadata_notes.append(
                 f"Work unit {_escape_html(next(iter(work_units)))} for all {turn_plural}"
             )
-        if thread.turns and not show_activity:
-            metadata_notes.append("Activity not recorded")
         turn_rows = []
         thread_tool_rows = []
         for turn_index, turn in enumerate(thread.turns, start=1):

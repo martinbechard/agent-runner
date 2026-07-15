@@ -1022,7 +1022,7 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
     assert "<th>Work unit</th>" not in turn_table
     assert "<th>Activity</th>" not in turn_table
     assert "Work unit reviewer for all turns" in html
-    assert "Activity not recorded" in html
+    assert "Activity not recorded" not in html
 
 
 def test_native_codex_html_identifies_agents_and_runtime_nicknames():
