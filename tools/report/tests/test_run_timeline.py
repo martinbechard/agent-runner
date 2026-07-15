@@ -369,6 +369,7 @@ def test_parse_native_codex_rollout_uses_exclusive_cumulative_deltas():
     assert thread.token_totals.processed_tokens == 180
     assert thread.unattributed_usage.processed_tokens == 0
     assert thread.skills_used == ["careful-coding", "python"]
+    assert thread.turns[0].skills_used == ["careful-coding", "python"]
     assert thread.tool_intervals[0].argument_summary == (
         "sed -n '1,120p' /opt/codex/skills/careful-coding/SKILL.md "
         "/opt/codex/skills/python/SKILL.md && API_TOKEN=[redacted] python app.py"
@@ -582,6 +583,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     main = next(thread for thread in run.threads if thread.agent_path == "/main")
     assert main.responses[0].model == "gpt-main"
     assert main.skills_used == ["python"]
+    assert main.turns[0].skills_used == ["python"]
     assert [activity.activity_type for activity in main.activities] == [
         "input",
         "reasoning",
@@ -764,6 +766,7 @@ def test_native_junie_ide_chain_reports_finished_tasks_without_cumulative_double
     assert thread.agent_path == "/main"
     assert thread.model == "gpt-5.6-terra"
     assert thread.skills_used == ["typescript"]
+    assert thread.turns[0].skills_used == ["typescript"]
     assert thread.recorded_cost_usd == pytest.approx(0.30)
     assert [turn.outcome for turn in thread.turns] == ["complete", "complete"]
     assert [tool.tool_name for tool in thread.tool_intervals] == [
@@ -1158,7 +1161,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.10.0"
+    assert run.parser_version == "1.11.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -1341,11 +1344,17 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert '<div class="label">Start T+</div>' in root_turn_overlay
     assert '<div class="label">T+</div>' not in root_turn_overlay
-    assert '<div class="metric"><div class="label">Tools used</div>' in root_turn_overlay
+    assert '<div class="metric turn-tools-metric"><div class="label">Tools used</div>' in root_turn_overlay
     assert '<div class="label">Tools used</div><div class="value">exec × 1</div>' in root_turn_overlay
     assert '<span class="metric-detail">1 call · 500ms</span>' in root_turn_overlay
     assert '<div class="label">Tool calls</div>' not in root_turn_overlay
-    assert "turn-detail-tools-metric" not in html
+    assert '<div class="metric turn-skills-metric"><div class="label">Skills used</div>' in root_turn_overlay
+    assert '<div class="turn-skills-value">careful-coding · python</div>' in root_turn_overlay
+    assert (
+        root_turn_overlay.index('<div class="label">Cost estimate</div>')
+        < root_turn_overlay.index('<div class="label">Skills used</div>')
+        < root_turn_overlay.index('<div class="label">Tools used</div>')
+    )
     assert (
         ".tool-call-panel { display:flex; flex-direction:column; "
         "box-sizing:border-box;"
@@ -1355,8 +1364,14 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
         "max-height:none; }"
     ) in html
     assert ".turn-detail-panel .table-scroll" not in html
-    assert "Time to first token" in root_turn_overlay
+    assert "Time to first token" not in root_turn_overlay
     assert "Processed tokens" in root_turn_overlay
+    assert (
+        ".turn-detail-metrics { grid-template-columns:repeat(6,minmax(0,1fr)); }"
+        in html
+    )
+    assert ".turn-skills-metric { grid-column:span 4; }" in html
+    assert ".turn-tools-metric { grid-column:span 2; }" in html
     assert "Arguments are compact, secret-redacted summaries" not in root_turn_overlay
     assert '<p class="execution-note">' not in root_turn_overlay
     tool_table = root_turn_overlay.split('<div class="table-scroll">', 1)[1].split(

@@ -55,7 +55,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.10.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.11.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -340,6 +340,7 @@ class AgentTurn:
     abort_request_source_path: str = ""
     abort_request_source_ordinal: int = 0
     usage: UsageTotals = field(default_factory=UsageTotals)
+    skills_used: list[str] = field(default_factory=list)
     run_id: str = ""
     phase_id: str = ""
     lane_id: str = ""
@@ -1555,13 +1556,21 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             elif item_type in {"function_call", "custom_tool_call"}:
                 call_id = str(payload.get("call_id") or payload.get("id") or "")
                 if call_id:
-                    skills_used.update(_skill_names_from_value(payload.get("arguments")))
-                    skills_used.update(_skill_names_from_value(payload.get("input")))
+                    tool_skills = _skill_names_from_value(payload.get("arguments"))
+                    tool_skills.update(_skill_names_from_value(payload.get("input")))
+                    skills_used.update(tool_skills)
+                    turn_id = _event_turn_id(payload, active_turns)
+                    if turn_id and turn_id in turns_by_id:
+                        turn = turns_by_id[turn_id]
+                        turn.skills_used = sorted(
+                            set(turn.skills_used) | tool_skills,
+                            key=str.casefold,
+                        )
                     tool_name = str(payload.get("name") or payload.get("namespace") or "unknown")
                     pending_tools[call_id] = (
                         tool_name,
                         timestamp,
-                        _event_turn_id(payload, active_turns),
+                        turn_id,
                         ordinal,
                         _tool_argument_summary(payload),
                         model,
@@ -3162,11 +3171,7 @@ def render_codex_rollout_html(
                 if show_timing_note
                 else "turn-detail-table"
             )
-            ttft_metric = (
-                ""
-                if is_junie
-                else f'<div class="metric"><div class="label">Time to first token</div><div class="value">{_format_detail_ms(turn.time_to_first_token_ms)}</div></div>'
-            )
+            turn_skills = _inventory_text(turn.skills_used)
             abort_provenance_detail = _render_abort_provenance_detail(turn)
             turn_detail_overlays.append(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
@@ -3176,18 +3181,17 @@ def render_codex_rollout_html(
                 '<a class="tool-call-close" href="#execution-timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
-                '<div class="metric">'
-                '<div class="label">Tools used</div>'
-                f'<div class="value">{_escape_html(tool_names)}</div>'
-                f'<span class="metric-detail">{_escape_html(tool_total)}</span>'
-                "</div>"
                 f'<div class="metric"><div class="label">Start T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
                 f'<div class="metric"><div class="label">Duration</div><div class="value">{_format_detail_ms(turn.duration_ms)}</div></div>'
-                f'{ttft_metric}'
                 f'<div class="metric turn-state-metric"><div class="label">State</div><div class="value"><span class="state state-{_escape_html(turn.outcome)}">{_escape_html(turn.outcome)}</span></div>{abort_provenance_detail}</div>'
                 f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_render_turn_model_metric(thread, turn.turn_id)}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
+                '<div class="metric turn-skills-metric"><div class="label">Skills used</div>'
+                f'<div class="turn-skills-value">{_escape_html(turn_skills)}</div></div>'
+                '<div class="metric turn-tools-metric"><div class="label">Tools used</div>'
+                f'<div class="value">{_escape_html(tool_names)}</div>'
+                f'<span class="metric-detail">{_escape_html(tool_total)}</span></div>'
                 "</div>"
                 f'<div class="table-scroll"><table class="{turn_detail_table_class}">'
                 '<colgroup><col class="turn-detail-index-column">'
@@ -3456,6 +3460,10 @@ td {{ font-size:.85em; }}
 .tool-call-overlay:target {{ display:flex; }}
 .tool-call-panel {{ display:flex; flex-direction:column; box-sizing:border-box; width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
 .turn-detail-panel {{ width:min(1500px,94vw); }}
+.turn-detail-metrics {{ grid-template-columns:repeat(6,minmax(0,1fr)); }}
+.turn-skills-metric {{ grid-column:span 4; }}
+.turn-tools-metric {{ grid-column:span 2; }}
+.turn-skills-value {{ margin-top:3px; font-size:1em; font-weight:600; line-height:1.45; overflow-wrap:anywhere; }}
 .tool-call-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
 .tool-call-header h2 {{ margin:0; }}
 .tool-call-close {{ color:#b3261e; font-weight:600; text-decoration:none; }}
@@ -3482,6 +3490,7 @@ td {{ font-size:.85em; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:1240px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
+@media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
 {run_label_html}
@@ -5211,6 +5220,7 @@ def parse_junie_ide_chain(path: Path) -> CodexRunMetrics:
         } if isinstance(previous_observations, list) else set()
         final_observations = final_state.get("observations")
         current_response_data: list[tuple[int, str, UsageTotals, dict[str, object]]] = []
+        task_skills: set[str] = set()
         if isinstance(final_observations, list):
             for observation_index, observation in enumerate(final_observations):
                 response_id = _junie_ide_observation_id(observation)
@@ -5249,7 +5259,9 @@ def parse_junie_ide_chain(path: Path) -> CodexRunMetrics:
                             else None
                         )
                         if isinstance(raw_input, dict) and raw_input.get("name"):
-                            skills_used.add(str(raw_input["name"]))
+                            skill_name = str(raw_input["name"])
+                            skills_used.add(skill_name)
+                            task_skills.add(skill_name)
         task_processed = sum(item[2].processed_tokens for item in current_response_data)
         task_usage = UsageTotals()
         for observation_index, _, usage, _ in current_response_data:
@@ -5395,6 +5407,7 @@ def parse_junie_ide_chain(path: Path) -> CodexRunMetrics:
                 duration_ms=_interval_ms(started_at, completed_at),
                 outcome="complete" if is_finished else "active",
                 usage=task_usage,
+                skills_used=sorted(task_skills, key=str.casefold),
                 run_id=chain_id,
                 work_unit_id="main",
                 attribution_confidence="exact",
@@ -5824,6 +5837,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
 
         tools: list[ToolInterval] = []
         skills_used: set[str] = set()
+        turns_by_id = {turn.turn_id: turn for turn in turns}
         for (owner_id, _, _), versions in tool_updates.items():
             if owner_id != agent_id:
                 continue
@@ -5834,13 +5848,21 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             if payload is None:
                 continue
             tool_name, argument_summary, argument_content, raw_result = payload
-            skills_used.update(_skill_names_from_value(argument_summary))
-            skills_used.update(_skill_names_from_value(argument_content))
+            tool_skills = _skill_names_from_value(argument_summary)
+            tool_skills.update(_skill_names_from_value(argument_content))
+            skills_used.update(tool_skills)
+            tool_turn_id = end_turn_id or start_turn_id or None
+            if tool_turn_id and tool_turn_id in turns_by_id:
+                turn = turns_by_id[tool_turn_id]
+                turn.skills_used = sorted(
+                    set(turn.skills_used) | tool_skills,
+                    key=str.casefold,
+                )
             result_content = _tool_result_content(raw_result)
             tools.append(
                 ToolInterval(
                     thread_id=agent_id,
-                    turn_id=end_turn_id or start_turn_id or None,
+                    turn_id=tool_turn_id,
                     tool_name=tool_name,
                     started_at=started_at,
                     completed_at=completed_at,

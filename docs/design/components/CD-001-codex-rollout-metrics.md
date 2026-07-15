@@ -141,6 +141,8 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Source location of the matched `interrupt_agent` request for audit and reprocessing.
   - **FIELD:** `usage`
     - **SYNOPSIS:** Exclusive response deltas attributed to this turn.
+  - **FIELD:** `skills_used`
+    - **SYNOPSIS:** Sorted skill names explicitly referenced by tool activity attributed to this turn.
   - **FIELD:** `attribution_confidence`
     - **SYNOPSIS:** `exact`, `bounded`, `inferred`, or `unattributed` with a reason.
 
