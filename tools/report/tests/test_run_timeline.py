@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import sys
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 
@@ -30,6 +31,22 @@ def _load_module():
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     return module
+
+
+def test_human_readable_durations_use_hours_at_sixty_minutes():
+    module = _load_module()
+
+    assert module._fmt_duration(59) == "59s"
+    assert module._fmt_duration(3_599) == "59m59s"
+    assert module._fmt_duration(3_600) == "1h00m00s"
+    assert module._fmt_duration(67_513) == "18h45m13s"
+    assert module._format_ms(67_513_000) == "18h45m13s"
+
+    started = datetime(2026, 7, 14, tzinfo=timezone.utc)
+    step = module.Step("long", started, started + timedelta(seconds=67_513))
+    timeline = module.PhaseTimeline("phase", 1, steps=[step])
+    assert step.duration_str == "18h45m13s"
+    assert timeline.total_str == "18h45m13s"
 
 
 def test_parse_native_codex_rollout_uses_exclusive_cumulative_deltas():

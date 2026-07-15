@@ -319,6 +319,7 @@ These conditions define an acceptable implementation and report.
 
 - **REQUIREMENT: REQ-5** Honest time reporting
   - **SYNOPSIS:** The report displays wall time and summed agent time together, explains concurrency, and does not label either one as the other.
+  - **DISPLAYS:** Human-readable durations below one hour use minutes and seconds; durations of one hour or more use hours, minutes, and seconds.
   - **BECAUSE:** A run can consume many agent-hours while finishing in a shorter elapsed interval.
 
 - **REQUIREMENT: REQ-6** Honest cost reporting

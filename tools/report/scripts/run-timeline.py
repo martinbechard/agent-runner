@@ -156,11 +156,7 @@ class Step:
 
     @property
     def duration_str(self) -> str:
-        s = int(self.duration_seconds)
-        if s < 60:
-            return f"{s}s"
-        m, s = divmod(s, 60)
-        return f"{m}m{s:02d}s"
+        return _fmt_duration(self.duration_seconds)
 
 
 @dataclass
@@ -179,9 +175,7 @@ class PhaseTimeline:
 
     @property
     def total_str(self) -> str:
-        s = int(self.total_seconds)
-        m, s = divmod(s, 60)
-        return f"{m}m{s:02d}s"
+        return _fmt_duration(self.total_seconds)
 
     @property
     def total_cost(self) -> float:
@@ -4652,6 +4646,9 @@ def _fmt_duration(seconds: float) -> str:
     if s < 60:
         return f"{s}s"
     m, s = divmod(s, 60)
+    if m >= 60:
+        h, m = divmod(m, 60)
+        return f"{h}h{m:02d}m{s:02d}s"
     return f"{m}m{s:02d}s"
 
 
@@ -4891,8 +4888,6 @@ def render_html(
             step_counter = _render_fork_section(
                 fork, grand_total, step_counter, rows, popups, report_started_at
             )
-
-    grand_m, grand_s = divmod(int(grand_total), 60)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -5234,7 +5229,7 @@ document.addEventListener('keydown', function(e) {{
 </head>
 <body>
 <h1>{run_title}</h1>
-<h2>{workspace} — total {grand_m}m{grand_s:02d}s — ${grand_cost:.2f}</h2>
+<h2>{workspace} — total {_fmt_duration(grand_total)} — ${grand_cost:.2f}</h2>
 {nav_html}
 <table>
 <thead>
