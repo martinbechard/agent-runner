@@ -1913,6 +1913,34 @@ def _render_turn_model_metric(thread: CodexThreadMetrics, turn_id: str) -> str:
     )
 
 
+def _is_empty_delegated_continuation(activity: AgentActivity) -> bool:
+    """Identify content-free inter-agent MESSAGE envelopes in a turn."""
+
+    if (
+        activity.activity_type != "input"
+        or not activity.summary.startswith("Delegated input from ")
+    ):
+        return False
+    lines = activity.content.splitlines()
+    message_type = next(
+        (
+            line.partition(":")[2].strip()
+            for line in lines
+            if line.startswith("Message Type:")
+        ),
+        "",
+    )
+    payload_index = next(
+        (index for index, line in enumerate(lines) if line.startswith("Payload:")),
+        None,
+    )
+    if message_type != "MESSAGE" or payload_index is None:
+        return False
+    inline_payload = lines[payload_index].partition(":")[2].strip()
+    remaining_payload = "\n".join(lines[payload_index + 1 :]).strip()
+    return not inline_payload and not remaining_payload
+
+
 def _render_activity_detail(activity: AgentActivity, *, raw_label: str) -> str:
     summary = _escape_html(activity.summary or "—")
     if not activity.content:
@@ -2972,7 +3000,12 @@ def render_codex_rollout_html(
                 key=lambda response: response.source_ordinal,
             )
             turn_activities = sorted(
-                (activity for activity in thread.activities if activity.turn_id == turn.turn_id),
+                (
+                    activity
+                    for activity in thread.activities
+                    if activity.turn_id == turn.turn_id
+                    and not _is_empty_delegated_continuation(activity)
+                ),
                 key=lambda activity: activity.source_ordinal,
             )
             detail_rows: list[tuple[float, int, str]] = []

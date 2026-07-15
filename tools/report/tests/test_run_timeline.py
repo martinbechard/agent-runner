@@ -1414,6 +1414,61 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert "bounded" not in bounded_tool_table
 
 
+def test_turn_modal_suppresses_empty_delegated_continuations_but_keeps_followups():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    root = run.threads[0]
+    turn_id = root.turns[0].turn_id
+    empty_envelope = (
+        "Message Type: MESSAGE\n"
+        "Task name: /root/child\n"
+        "Sender: /root\n"
+        "Payload:\n"
+    )
+    followup_envelope = empty_envelope + "Continue with verification."
+    next_ordinal = max(activity.source_ordinal for activity in root.activities) + 1
+    for index in range(5):
+        root.activities.append(
+            module.AgentActivity(
+                thread_id=root.thread_id,
+                turn_id=turn_id,
+                activity_type="input",
+                event_timestamp=root.turns[0].started_at,
+                source_path=root.source_path,
+                source_ordinal=next_ordinal + index,
+                summary="Delegated input from parent · 137 characters",
+                content=empty_envelope,
+            )
+        )
+    root.activities.append(
+        module.AgentActivity(
+            thread_id=root.thread_id,
+            turn_id=turn_id,
+            activity_type="input",
+            event_timestamp=root.turns[0].started_at,
+            source_path=root.source_path,
+            source_ordinal=next_ordinal + 5,
+            summary="Delegated input from parent · 164 characters",
+            content=followup_envelope,
+        )
+    )
+
+    assert module.codex_run_to_json(run).count(
+        "Delegated input from parent · 137 characters"
+    ) == 5
+    html = module.render_codex_rollout_html(run)
+    overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    input_row = overlay.split(
+        '<tr class="turn-detail-lifecycle-row turn-detail-input-row">', 1
+    )[1].split("</tr>", 1)[0]
+
+    assert "Delegated input from parent · 137 characters" not in input_row
+    assert "Delegated input from parent · 164 characters" in input_row
+    assert "Continue with verification." in input_row
+
+
 def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp_path):
     module = _load_module()
     rollout = tmp_path / "constant-metadata.jsonl"
