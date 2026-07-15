@@ -714,9 +714,11 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
         '<tr class="turn-detail-lifecycle-row turn-detail-model-row">', 1
     )[1].split("</tr>", 1)[0]
     assert "<summary>raw arguments</summary>" in main_model_row
+    assert '<div class="activity-summary">1 prompt fragment</div>' in main_model_row
     assert "Synthetic prompt API_TOKEN=[redacted]" in main_model_row
     assert "10 input · 5 cache-read · 2 cache-create" in main_model_row
     assert "<summary>raw result</summary>" in main_model_row
+    assert '<div class="activity-summary">1 thinking fragment</div>' in main_model_row
     assert "Inspect the project before running the command." in main_model_row
     assert "recorded</td>" not in main_tool_table
     assert "Open model pricing" not in html
@@ -1186,8 +1188,13 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
         '<tr class="turn-detail-lifecycle-row turn-detail-model-row">', 1
     )[1].split("</tr>", 1)[0]
     assert "<summary>raw arguments</summary>" in model_row
+    assert '<div class="activity-summary">1 prompt fragment</div>' in model_row
     assert "Inspect the project with API_TOKEN=[redacted]" in model_row
     assert "<summary>raw result</summary>" in model_row
+    assert (
+        '<div class="activity-summary">1 thinking fragment · 1 response fragment</div>'
+        in model_row
+    )
     assert "Check password=[redacted] before running the tool" in model_row
     assert "Completed with client_secret=[redacted]" in model_row
 

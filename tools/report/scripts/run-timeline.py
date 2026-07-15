@@ -1980,7 +1980,7 @@ def _render_model_activity_disclosure(
         body = activity.content or activity.summary
         fragments.append(f"[{label}]\n{body}")
     summary = " · ".join(
-        f"{count:,} recorded {label} fragment{'s' if count != 1 else ''}"
+        f"{count:,} {label} fragment{'s' if count != 1 else ''}"
         for label, count in counts.items()
     )
     content = _tool_argument_content("\n\n".join(fragments))
