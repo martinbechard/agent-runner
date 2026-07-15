@@ -11,6 +11,8 @@ import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
+
 
 SPARK_PRICING_MODEL = "gpt-5.3-codex-spark"
 SPARK_LOG_INPUT_TOKENS = 1000
@@ -121,6 +123,111 @@ def test_native_codex_send_message_argument_summary_includes_preview_and_length(
     )
     assert "API_TOKEN=[redacted]" in sensitive_summary
     assert "PRIVATE-SECRET" not in sensitive_summary
+
+
+def test_default_tool_formatters_cover_common_run_patterns():
+    module = _load_module()
+    config = module._load_tool_formatter_config()
+
+    patch = module._format_tool_argument(
+        "exec",
+        'const patch = "*** Begin Patch\\n*** Add File: '
+        '/tmp/docs/frontend-password-reset.md\\n+# Frontend Password Reset Design',
+        config,
+    )
+    claim = module._format_tool_argument(
+        "exec",
+        "python3 claim.py --repo . acquire --claim-id claim-123 --agent root",
+        config,
+    )
+    message = module._format_tool_argument(
+        "send_message",
+        '{"message":"Review complete… [760 chars]","target":"/root"}',
+        config,
+    )
+    wait = module._format_tool_argument(
+        "wait_agent",
+        '{"timeout_ms":30000}',
+        config,
+    )
+
+    assert patch.summary == "Patch · Add · frontend-password-reset.md"
+    assert patch.rule_id == "apply-patch"
+    assert claim.summary == "Claim · acquire · claim-123"
+    assert message.summary == "Message → /root · Review complete… [760 chars]"
+    assert wait.summary == "Wait for agent activity · 30000 ms"
+
+
+def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    tool = run.threads[0].tool_intervals[0]
+    tool.tool_name = "exec"
+    tool.argument_summary = (
+        'const patch = "*** Begin Patch\\n*** Add File: '
+        '/tmp/docs/example.md\\n+# Example'
+    )
+
+    html = module.render_codex_rollout_html(run)
+
+    assert '<div class="tool-argument-formatted">Patch · Add · example.md</div>' in html
+    assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
+    assert "*** Add File: /tmp/docs/example.md" in html
+    assert "<th>Result</th>" not in html
+
+
+def test_tool_formatter_config_rejects_unsafe_regex():
+    module = _load_module()
+
+    with pytest.raises(ValueError, match="unsupported regex construct"):
+        module._parse_tool_formatter_config(
+            {
+                "version": 1,
+                "rules": [
+                    {
+                        "id": "unsafe",
+                        "match": {"tool": "exec", "arguments_regex": "(?=secret)"},
+                        "display": {"parts": ["Unsafe"]},
+                    }
+                ],
+            }
+        )
+
+
+def test_native_codex_cli_accepts_custom_tool_formatter_config(tmp_path):
+    module = _load_module()
+    config_path = tmp_path / "custom-formatters.json"
+    output_path = tmp_path / "report.html"
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "rules": [
+                    {
+                        "id": "custom-exec",
+                        "match": {"tool": "exec"},
+                        "display": {"parts": ["Custom exec summary"]},
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    rc = module.main(
+        [
+            str(CODEX_ROLLOUT_FIXTURES / "root.jsonl"),
+            "--formatter-config",
+            str(config_path),
+            "--output",
+            str(output_path),
+        ]
+    )
+
+    assert rc == 0
+    html = output_path.read_text(encoding="utf-8")
+    assert "Custom exec summary" in html
+    assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
 
 
 def test_discover_native_codex_run_aggregates_only_closed_descendant_set():

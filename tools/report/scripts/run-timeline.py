@@ -46,6 +46,7 @@ POPUP_TRUNCATE_CHARS = 20_000_000  # 20 MB
 MIN_BAR_PCT = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[3]
 PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
+DEFAULT_TOOL_FORMATTER_CONFIG = REPO_ROOT / "tools" / "report" / "tool-formatters.json"
 PRICING_RATE_KEYS = ("input_per_million", "cached_input_per_million", "output_per_million")
 CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_input_per_million",
@@ -327,6 +328,38 @@ class ToolInterval:
     source_path: str
     source_start_ordinal: int
     source_end_ordinal: int
+
+
+@dataclass(frozen=True)
+class ToolFormatterField:
+    name: str
+    json_path: str = ""
+    regex: re.Pattern[str] | None = None
+    group: str = ""
+    transform: str = "identity"
+
+
+@dataclass(frozen=True)
+class ToolFormatterRule:
+    rule_id: str
+    tool_name: str
+    arguments_regex: re.Pattern[str] | None
+    fields: tuple[ToolFormatterField, ...]
+    parts: tuple[str, ...]
+    separator: str = " · "
+
+
+@dataclass(frozen=True)
+class ToolFormatterConfig:
+    version: int
+    rules: tuple[ToolFormatterRule, ...]
+    source_path: str = ""
+
+
+@dataclass(frozen=True)
+class FormattedToolArgument:
+    summary: str
+    rule_id: str
 
 
 @dataclass
@@ -700,6 +733,219 @@ def _tool_argument_summary(payload: dict[str, object]) -> str:
         sanitized["message"] = _message_argument_preview(structured["message"])
     return _truncate_argument_summary(
         json.dumps(sanitized, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
+
+
+def _compile_formatter_regex(pattern: str, *, context: str) -> re.Pattern[str]:
+    if len(pattern) > 500:
+        raise ValueError(f"{context} exceeds 500 characters")
+    if any(token in pattern for token in ("(?=", "(?!", "(?<=", "(?<!", "(?(")):
+        raise ValueError(f"{context} uses an unsupported regex construct")
+    if re.search(r"\\[1-9]", pattern):
+        raise ValueError(f"{context} uses an unsupported regex backreference")
+    if re.search(r"\((?:[^()]|\\.)*[+*](?:[^()]|\\.)*\)[+*{]", pattern):
+        raise ValueError(f"{context} uses a nested regex quantifier")
+    try:
+        return re.compile(pattern)
+    except re.error as exc:
+        raise ValueError(f"Invalid {context}: {exc}") from exc
+
+
+def _parse_tool_formatter_config(
+    data: object,
+    *,
+    source_path: str = "",
+) -> ToolFormatterConfig:
+    if not isinstance(data, dict) or data.get("version") != 1:
+        raise ValueError("Tool formatter config must be an object with version 1")
+    raw_rules = data.get("rules")
+    if not isinstance(raw_rules, list):
+        raise ValueError("Tool formatter config rules must be a list")
+    rules: list[ToolFormatterRule] = []
+    seen_ids: set[str] = set()
+    for rule_index, raw_rule in enumerate(raw_rules, start=1):
+        if not isinstance(raw_rule, dict):
+            raise ValueError(f"Tool formatter rule {rule_index} must be an object")
+        rule_id = str(raw_rule.get("id") or "").strip()
+        if not rule_id or rule_id in seen_ids:
+            raise ValueError(f"Tool formatter rule {rule_index} has a missing or duplicate id")
+        seen_ids.add(rule_id)
+        match = raw_rule.get("match")
+        if not isinstance(match, dict) or not str(match.get("tool") or "").strip():
+            raise ValueError(f"Tool formatter rule {rule_id} must match a tool")
+        tool_name = str(match["tool"]).strip()
+        arguments_pattern = match.get("arguments_regex")
+        arguments_regex = (
+            _compile_formatter_regex(
+                str(arguments_pattern),
+                context=f"arguments regex for rule {rule_id}",
+            )
+            if arguments_pattern is not None
+            else None
+        )
+        raw_fields = raw_rule.get("fields", [])
+        if not isinstance(raw_fields, list):
+            raise ValueError(f"Tool formatter rule {rule_id} fields must be a list")
+        fields: list[ToolFormatterField] = []
+        field_names: set[str] = set()
+        for field_index, raw_field in enumerate(raw_fields, start=1):
+            if not isinstance(raw_field, dict):
+                raise ValueError(f"Field {field_index} in rule {rule_id} must be an object")
+            name = str(raw_field.get("name") or "").strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name) or name in field_names:
+                raise ValueError(f"Rule {rule_id} has an invalid or duplicate field name")
+            field_names.add(name)
+            json_path = str(raw_field.get("json_path") or "").strip()
+            field_pattern = raw_field.get("regex")
+            if bool(json_path) == (field_pattern is not None):
+                raise ValueError(
+                    f"Field {name} in rule {rule_id} needs exactly one of json_path or regex"
+                )
+            field_regex = (
+                _compile_formatter_regex(
+                    str(field_pattern),
+                    context=f"field regex {name} for rule {rule_id}",
+                )
+                if field_pattern is not None
+                else None
+            )
+            transform = str(raw_field.get("transform") or "identity")
+            if transform not in {"identity", "basename"}:
+                raise ValueError(f"Field {name} in rule {rule_id} has an invalid transform")
+            fields.append(
+                ToolFormatterField(
+                    name=name,
+                    json_path=json_path,
+                    regex=field_regex,
+                    group=str(raw_field.get("group") or name),
+                    transform=transform,
+                )
+            )
+        display = raw_rule.get("display")
+        raw_parts = display.get("parts") if isinstance(display, dict) else None
+        if not isinstance(raw_parts, list) or not raw_parts or not all(
+            isinstance(part, str) for part in raw_parts
+        ):
+            raise ValueError(f"Tool formatter rule {rule_id} needs display parts")
+        placeholders = {
+            placeholder
+            for part in raw_parts
+            for placeholder in re.findall(r"{([A-Za-z_][A-Za-z0-9_]*)}", part)
+        }
+        unknown_placeholders = placeholders - field_names
+        if unknown_placeholders:
+            raise ValueError(
+                f"Tool formatter rule {rule_id} uses unknown fields: "
+                + ", ".join(sorted(unknown_placeholders))
+            )
+        rules.append(
+            ToolFormatterRule(
+                rule_id=rule_id,
+                tool_name=tool_name,
+                arguments_regex=arguments_regex,
+                fields=tuple(fields),
+                parts=tuple(raw_parts),
+                separator=str(display.get("separator") or " · "),
+            )
+        )
+    return ToolFormatterConfig(version=1, rules=tuple(rules), source_path=source_path)
+
+
+def _load_tool_formatter_config(path: Path | str | None = None) -> ToolFormatterConfig:
+    config_path = Path(path or DEFAULT_TOOL_FORMATTER_CONFIG).resolve()
+    try:
+        data = json.loads(config_path.read_text(encoding="utf-8"))
+    except OSError as exc:
+        raise ValueError(f"Tool formatter config not found: {config_path}") from exc
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Invalid tool formatter JSON at {config_path}: {exc}") from exc
+    return _parse_tool_formatter_config(data, source_path=str(config_path))
+
+
+def _formatter_json_value(value: object, path: str) -> object | None:
+    current = value
+    for segment in path.split("."):
+        if not isinstance(current, dict) or segment not in current:
+            return None
+        current = current[segment]
+    return current
+
+
+def _formatter_field_value(
+    field: ToolFormatterField,
+    argument_summary: str,
+    structured: object | None,
+) -> str:
+    value: object | None
+    if field.json_path:
+        value = _formatter_json_value(structured, field.json_path)
+    else:
+        match = field.regex.search(argument_summary) if field.regex is not None else None
+        if match is None:
+            value = None
+        else:
+            try:
+                value = match.group(field.group)
+            except (IndexError, KeyError):
+                value = None
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        rendered = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    else:
+        rendered = str(value)
+    if field.transform == "basename":
+        rendered = Path(rendered).name
+    return rendered
+
+
+def _format_tool_argument(
+    tool_name: str,
+    argument_summary: str,
+    config: ToolFormatterConfig,
+) -> FormattedToolArgument | None:
+    try:
+        structured: object | None = json.loads(argument_summary)
+    except json.JSONDecodeError:
+        structured = None
+    for rule in config.rules:
+        if rule.tool_name != tool_name:
+            continue
+        if rule.arguments_regex is not None and not rule.arguments_regex.search(argument_summary):
+            continue
+        values = {
+            field.name: _formatter_field_value(field, argument_summary, structured)
+            for field in rule.fields
+        }
+        rendered_parts = []
+        for part in rule.parts:
+            rendered = re.sub(
+                r"{([A-Za-z_][A-Za-z0-9_]*)}",
+                lambda match: values.get(match.group(1), ""),
+                part,
+            ).strip()
+            if rendered:
+                rendered_parts.append(rendered)
+        if rendered_parts:
+            return FormattedToolArgument(
+                summary=rule.separator.join(rendered_parts),
+                rule_id=rule.rule_id,
+            )
+    return None
+
+
+def _render_tool_argument(
+    tool: ToolInterval,
+    config: ToolFormatterConfig,
+) -> str:
+    raw = _escape_html(tool.argument_summary)
+    formatted = _format_tool_argument(tool.tool_name, tool.argument_summary, config)
+    if formatted is None:
+        return f'<code class="tool-arguments">{raw}</code>'
+    return (
+        f'<div class="tool-argument-formatted">{_escape_html(formatted.summary)}</div>'
+        '<details class="tool-argument-raw"><summary>raw</summary>'
+        f'<code class="tool-arguments">{raw}</code></details>'
     )
 
 
@@ -1870,8 +2116,12 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     return "\n".join(lines) + "\n"
 
 
-def render_codex_rollout_html(run: CodexRunMetrics) -> str:
+def render_codex_rollout_html(
+    run: CodexRunMetrics,
+    formatter_config: ToolFormatterConfig | None = None,
+) -> str:
     """Render methodology-style execution detail without source content."""
+    formatter_config = formatter_config or _load_tool_formatter_config()
     turn_count = sum(len(thread.turns) for thread in run.threads)
     response_count = sum(len(thread.responses) for thread in run.threads)
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
@@ -1949,7 +2199,7 @@ def render_codex_rollout_html(run: CodexRunMetrics) -> str:
                 f"<td>{tool_index}</td>"
                 f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
                 f"<td><code>{_escape_html(tool.tool_name)}</code></td>"
-                f'<td><code class="tool-arguments">{_escape_html(tool.argument_summary)}</code></td>'
+                f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                 + (
                     f"<td>{_escape_html(_tool_timing_note(tool))}</td>"
                     if show_timing_note
@@ -2155,6 +2405,10 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 .tool-arguments {{ display:block; max-width:720px; white-space:normal; overflow-wrap:anywhere; }}
+.tool-argument-formatted {{ font-weight:600; color:#243447; }}
+.tool-argument-raw {{ margin-top:4px; }}
+.tool-argument-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
+.tool-argument-raw[open] .tool-arguments {{ margin-top:5px; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
 .thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
@@ -5004,10 +5258,11 @@ def _render_fork_section(
 
 def render_html(
     document: ReportDocument,
+    formatter_config: ToolFormatterConfig | None = None,
 ) -> str:
     """Render a backend-neutral report document as a complete HTML page."""
     if document.codex_run is not None:
-        return render_codex_rollout_html(document.codex_run)
+        return render_codex_rollout_html(document.codex_run, formatter_config)
     timelines = document.timelines
     workspace = document.workspace
     shared_steps = document.shared_steps
@@ -5462,13 +5717,17 @@ def _write_codex_outputs(
     run: CodexRunMetrics,
     html_output: Path,
     *,
+    formatter_config: ToolFormatterConfig | None = None,
     json_output: Path | None = None,
     turn_csv_output: Path | None = None,
     work_unit_csv_output: Path | None = None,
     markdown_output: Path | None = None,
 ) -> None:
     html_output.parent.mkdir(parents=True, exist_ok=True)
-    html_output.write_text(render_codex_rollout_html(run), encoding="utf-8")
+    html_output.write_text(
+        render_codex_rollout_html(run, formatter_config),
+        encoding="utf-8",
+    )
     companions = (
         (json_output, codex_run_to_json(run)),
         (turn_csv_output, render_codex_rollout_turn_csv(run)),
@@ -5514,6 +5773,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--turn-csv-output", help="Turn-oriented CSV output path.")
     parser.add_argument("--work-unit-csv-output", help="Work-unit cost CSV output path.")
     parser.add_argument("--markdown-output", help="Compact Markdown output path.")
+    parser.add_argument(
+        "--formatter-config",
+        help=(
+            "JSON tool-argument formatter config. Defaults to "
+            "tools/report/tool-formatters.json."
+        ),
+    )
     args = parser.parse_args(argv)
 
     if not args.path and not args.codex_thread:
@@ -5522,6 +5788,14 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("path and --codex-thread are mutually exclusive")
     if args.seal_aborted and not args.seal:
         parser.error("--seal-aborted requires --seal")
+
+    formatter_config = None
+    if args.formatter_config:
+        try:
+            formatter_config = _load_tool_formatter_config(args.formatter_config)
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
 
     input_path = Path(args.path).resolve() if args.path else None
     if input_path is not None and not input_path.exists():
@@ -5567,6 +5841,7 @@ def main(argv: list[str] | None = None) -> int:
         _write_codex_outputs(
             run,
             output,
+            formatter_config=formatter_config,
             json_output=json_output,
             turn_csv_output=turn_csv_output,
             work_unit_csv_output=work_unit_csv_output,
@@ -5607,13 +5882,16 @@ def main(argv: list[str] | None = None) -> int:
             child_document.run_title = f"{child_slug.replace('-', ' ').title()} Timeline"
             child_document.nav_links.append(("bubble up", rel_parent))
 
-            output.write_text(render_html(document), encoding="utf-8")
-            child_output.write_text(render_html(child_document), encoding="utf-8")
+            output.write_text(render_html(document, formatter_config), encoding="utf-8")
+            child_output.write_text(
+                render_html(child_document, formatter_config),
+                encoding="utf-8",
+            )
             print(f"Timeline written to {output}")
             print(f"Nested timeline written to {child_output}")
             return 0
 
-    html = render_html(document)
+    html = render_html(document, formatter_config)
     output.write_text(html, encoding="utf-8")
     print(f"Timeline written to {output}")
     return 0

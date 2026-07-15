@@ -4,6 +4,11 @@
 
 Current contents:
 
+- `tool-formatters.json`
+  - defines first-match formatting rules for recurring native Codex tool
+    argument patterns
+  - extracts display fields from sanitized JSON summaries or bounded regular
+    expressions without changing the underlying privacy filter
 - `scripts/run-timeline.py`
   - generates an HTML timeline report from a `prompt-runner` run directory or
     a `methodology-runner` workspace
@@ -23,7 +28,9 @@ python tools/report/scripts/run-timeline.py <path> [--output report.html]
 Report a live Codex Desktop hierarchy without copying prompt, reasoning, raw
 tool results, or final-message content into the report. `send_message` argument
 summaries include a secret-redacted 50-character message preview followed by
-the original character count; other message-like bodies remain count-only:
+the original character count; other message-like bodies remain count-only.
+Matched tool calls show a concise formatted summary and a collapsed `raw`
+disclosure containing the unformatted, sanitized argument summary:
 
 ```bash
 python tools/report/scripts/run-timeline.py \
@@ -32,6 +39,26 @@ python tools/report/scripts/run-timeline.py \
   --live \
   --output codex-run.html
 ```
+
+The default formatter config recognizes patches, agent claims, inter-agent
+messages, agent lifecycle calls, and waits. Rules are evaluated in file order.
+A rule may match the tool name plus a bounded regular expression, then extract
+display fields from named regex groups or dotted JSON paths. Retain the
+generated config with a run when an agent creates run-specific rules after
+analyzing its sanitized argument summaries:
+
+```bash
+python tools/report/scripts/run-timeline.py \
+  --codex-thread <root-thread-id> \
+  --sessions-root ~/.codex/sessions \
+  --live \
+  --formatter-config path/to/tool-formatters.json \
+  --output codex-run.html
+```
+
+Formatter configs affect HTML presentation only. They never receive unsanitized
+payloads, and tool results remain excluded; sanitized result previews are a
+separate future increment.
 
 Seal a stable completed hierarchy. Sealing writes HTML plus normalized JSON,
 turn CSV, work-unit CSV, and Markdown files using the output stem:

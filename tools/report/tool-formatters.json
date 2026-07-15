@@ -1,0 +1,120 @@
+{
+  "version": 1,
+  "rules": [
+    {
+      "id": "apply-patch",
+      "match": {
+        "tool": "exec",
+        "arguments_regex": "const patch = \"\\*\\*\\* Begin Patch"
+      },
+      "fields": [
+        {
+          "name": "operation",
+          "regex": "\\*\\*\\* (?P<operation>Add|Update|Delete) File:",
+          "group": "operation"
+        },
+        {
+          "name": "path",
+          "regex": "\\*\\*\\* (?:Add|Update|Delete) File: (?P<path>[^\\\\]+?)(?:\\\\n|$)",
+          "group": "path",
+          "transform": "basename"
+        }
+      ],
+      "display": {
+        "parts": ["Patch", "{operation}", "{path}"]
+      }
+    },
+    {
+      "id": "agent-claim",
+      "match": {
+        "tool": "exec",
+        "arguments_regex": "claim\\.py.*\\b(?:acquire|heartbeat|release|status)\\b"
+      },
+      "fields": [
+        {
+          "name": "action",
+          "regex": "claim\\.py.*?\\b(?P<action>acquire|heartbeat|release|status)\\b",
+          "group": "action"
+        },
+        {
+          "name": "claim_id",
+          "regex": "--claim-id\\s+(?:\\\"|')?(?P<claim_id>[^\\s\\\"']+)",
+          "group": "claim_id"
+        }
+      ],
+      "display": {
+        "parts": ["Claim", "{action}", "{claim_id}"]
+      }
+    },
+    {
+      "id": "send-message",
+      "match": {"tool": "send_message"},
+      "fields": [
+        {"name": "target", "json_path": "target"},
+        {"name": "message", "json_path": "message"}
+      ],
+      "display": {
+        "parts": ["Message → {target}", "{message}"]
+      }
+    },
+    {
+      "id": "followup-task",
+      "match": {"tool": "followup_task"},
+      "fields": [
+        {"name": "target", "json_path": "target"},
+        {"name": "message", "json_path": "message"}
+      ],
+      "display": {
+        "parts": ["Follow-up → {target}", "{message}"]
+      }
+    },
+    {
+      "id": "wait-agent",
+      "match": {"tool": "wait_agent"},
+      "fields": [
+        {"name": "timeout_ms", "json_path": "timeout_ms"}
+      ],
+      "display": {
+        "parts": ["Wait for agent activity", "{timeout_ms} ms"]
+      }
+    },
+    {
+      "id": "wait-tool",
+      "match": {"tool": "wait"},
+      "fields": [
+        {"name": "cell_id", "json_path": "cell_id"},
+        {"name": "yield_time_ms", "json_path": "yield_time_ms"}
+      ],
+      "display": {
+        "parts": ["Wait for running tool", "cell {cell_id}", "{yield_time_ms} ms"]
+      }
+    },
+    {
+      "id": "spawn-agent",
+      "match": {"tool": "spawn_agent"},
+      "fields": [
+        {"name": "task_name", "json_path": "task_name"}
+      ],
+      "display": {
+        "parts": ["Spawn agent", "{task_name}"]
+      }
+    },
+    {
+      "id": "list-agents",
+      "match": {"tool": "list_agents"},
+      "display": {
+        "parts": ["List agents"]
+      }
+    },
+    {
+      "id": "interrupt-agent",
+      "match": {"tool": "interrupt_agent"},
+      "fields": [
+        {"name": "target", "json_path": "target"}
+      ],
+      "display": {
+        "parts": ["Interrupt agent", "{target}"]
+      }
+    }
+  ]
+}
