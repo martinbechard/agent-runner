@@ -33,7 +33,7 @@ import re
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from copy import deepcopy
 from functools import lru_cache
@@ -66,7 +66,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.11.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.12.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -352,6 +352,9 @@ class AgentTurn:
     abort_request_source_ordinal: int = 0
     usage: UsageTotals = field(default_factory=UsageTotals)
     skills_used: list[str] = field(default_factory=list)
+    mcp_skills_loaded: list[str] = field(default_factory=list)
+    bash_skills_loaded: list[str] = field(default_factory=list)
+    mcp_call_count: int = 0
     run_id: str = ""
     phase_id: str = ""
     lane_id: str = ""
@@ -397,6 +400,34 @@ class ToolInterval:
     argument_content: str = ""
     result_summary: str = ""
     result_content: str = ""
+    model: str = ""
+
+
+@dataclass
+class McpCallInterval:
+    """One completed native MCP invocation retained for reporting.
+
+    The recorded duration measures MCP execution after approval; it does not
+    include Guardian or user-review latency. Arguments and results are stored
+    only after the report's bounded redaction and special-formatting rules run.
+    """
+
+    thread_id: str
+    turn_id: str | None
+    call_id: str
+    server_name: str
+    tool_name: str
+    started_at: str
+    completed_at: str
+    duration_ms: int
+    argument_summary: str
+    result_summary: str
+    result_content: str
+    succeeded: bool
+    source_path: str
+    source_ordinal: int
+    skills_loaded: list[str] = field(default_factory=list)
+    argument_content: str = ""
     model: str = ""
 
 
@@ -451,7 +482,10 @@ class CodexThreadMetrics:
     turns: list[AgentTurn] = field(default_factory=list)
     activities: list[AgentActivity] = field(default_factory=list)
     tool_intervals: list[ToolInterval] = field(default_factory=list)
+    mcp_calls: list[McpCallInterval] = field(default_factory=list)
     skills_used: list[str] = field(default_factory=list)
+    mcp_skills_loaded: list[str] = field(default_factory=list)
+    bash_skills_loaded: list[str] = field(default_factory=list)
     terminal_state: str = "indeterminate"
     source_path: str = ""
     diagnostics: list[str] = field(default_factory=list)
@@ -910,6 +944,204 @@ def _skill_names_from_value(value: object) -> set[str]:
     return {match.group("name") for match in _SKILL_PATH_PATTERN.finditer(text)}
 
 
+def _is_bash_skill_loader(
+    tool_name: str,
+    arguments: object,
+    input_value: object,
+) -> bool:
+    """Return whether a tool call represents the report's shell-loading path."""
+
+    normalized = tool_name.casefold().replace(":", ".")
+    if normalized in {"exec", "exec_command", "shell", "terminal"}:
+        return True
+    if normalized != "functions.exec":
+        return False
+    source = arguments if arguments is not None else input_value
+    if not isinstance(source, str):
+        try:
+            source = json.dumps(source, ensure_ascii=False)
+        except (TypeError, ValueError):
+            source = str(source)
+    return "exec_command" in source
+
+
+def _mcp_agent_ops_skill_names(tool_name: str, arguments: object) -> set[str]:
+    """Extract skill identities loaded through mcp-agent-ops skill tools."""
+
+    if not isinstance(arguments, dict):
+        return set()
+    if tool_name == "skill_load":
+        names = arguments.get("names")
+        return (
+            {str(name) for name in names if str(name)}
+            if isinstance(names, list)
+            else set()
+        )
+    if tool_name in {"skill_read", "skill_read_resource"}:
+        name = arguments.get("name")
+        return {str(name)} if name else set()
+    if tool_name == "skill_resource_load":
+        requests = arguments.get("requests")
+        if not isinstance(requests, list):
+            return set()
+        return {
+            str(request.get("skill_name"))
+            for request in requests
+            if isinstance(request, dict) and request.get("skill_name")
+        }
+    return set()
+
+
+def _compact_values(values: list[str], *, limit: int = 8) -> str:
+    """Render a bounded inventory for one compact MCP argument summary."""
+
+    visible = values[:limit]
+    summary = " · ".join(visible) if visible else "—"
+    omitted = len(values) - len(visible)
+    return f"{summary} · +{omitted} more" if omitted else summary
+
+
+def _path_basename(value: object) -> str:
+    """Return a compact path label without exposing its full parent path."""
+
+    text = str(value or "")
+    return Path(text).name or text or "—"
+
+
+def _mcp_agent_ops_argument_summary(tool_name: str, arguments: object) -> str | None:
+    """Format mcp-agent-ops arguments around their operator-facing identity."""
+
+    if not isinstance(arguments, dict):
+        return None
+    if tool_name == "skill_load":
+        names = arguments.get("names")
+        values = [str(name) for name in names] if isinstance(names, list) else []
+        return f"skills: {_compact_values(values)}"
+    if tool_name in {"skill_read", "skill_read_resource"}:
+        name = str(arguments.get("name") or "—")
+        resource = str(arguments.get("resource_path") or "")
+        return f"skill: {name}" + (f" · resource: {resource}" if resource else "")
+    if tool_name == "skill_resource_load":
+        requests = arguments.get("requests")
+        values = []
+        if isinstance(requests, list):
+            for request in requests:
+                if not isinstance(request, dict):
+                    continue
+                skill_name = str(request.get("skill_name") or "—")
+                resource_path = str(request.get("resource_path") or "—")
+                values.append(f"{skill_name}:{resource_path}")
+        return f"resources: {_compact_values(values)}"
+    if tool_name in {"skill_list", "skill_refresh"}:
+        return "skill catalog"
+    if tool_name == "skill_validate":
+        paths = arguments.get("paths")
+        count = len(paths) if isinstance(paths, list) else 0
+        return f"skill paths: {count:,}"
+    if tool_name.startswith("claim_"):
+        parts = [f"repository: {_path_basename(arguments.get('repository'))}"]
+        if arguments.get("claim_id"):
+            parts.append(f"claim: {arguments['claim_id']}")
+        for key in ("files", "trees", "resources"):
+            values = arguments.get(key)
+            if isinstance(values, list) and values:
+                parts.append(f"{key}: {len(values):,}")
+        return " · ".join(parts)
+    if tool_name in {"verify_yaml", "verify_markdown_links"}:
+        paths = arguments.get("paths")
+        count = len(paths) if isinstance(paths, list) else 0
+        root = arguments.get("repository_root") or arguments.get("repository")
+        return f"repository: {_path_basename(root)} · paths: {count:,}"
+    if tool_name == "detect_technology_skills":
+        scopes = arguments.get("scopes")
+        count = len(scopes) if isinstance(scopes, list) else 0
+        return (
+            f"project: {_path_basename(arguments.get('project_root'))} · "
+            f"scopes: {count:,}"
+        )
+    return None
+
+
+def _mcp_duration_ms(payload: dict[str, object]) -> int:
+    """Convert a native MCP duration object into rounded milliseconds."""
+
+    duration = payload.get("duration")
+    if not isinstance(duration, dict):
+        return 0
+    seconds = duration.get("secs", 0)
+    nanoseconds = duration.get("nanos", 0)
+    if not isinstance(seconds, (int, float)) or isinstance(seconds, bool):
+        seconds = 0
+    if not isinstance(nanoseconds, (int, float)) or isinstance(nanoseconds, bool):
+        nanoseconds = 0
+    return max(0, round(float(seconds) * 1000 + float(nanoseconds) / 1_000_000))
+
+
+def _timestamp_before(timestamp: str, milliseconds: int) -> str:
+    """Derive an MCP start timestamp from its recorded end and duration."""
+
+    completed = _parse_iso_datetime(timestamp)
+    if completed is None:
+        return timestamp
+    return (
+        (completed - timedelta(milliseconds=milliseconds))
+        .astimezone(timezone.utc)
+        .isoformat()
+    )
+
+
+def _mcp_structured_result(result: object) -> dict[str, object]:
+    """Return the structured content nested in one successful MCP result."""
+
+    if not isinstance(result, dict):
+        return {}
+    success = result.get("Ok")
+    if not isinstance(success, dict):
+        return {}
+    structured = success.get("structuredContent")
+    if structured is None:
+        structured = success.get("structured_content")
+    return structured if isinstance(structured, dict) else {}
+
+
+def _mcp_result_summary(
+    server_name: str,
+    tool_name: str,
+    result: object,
+) -> tuple[bool, str]:
+    """Summarize MCP success without expanding large returned content."""
+
+    succeeded = isinstance(result, dict) and "Ok" in result
+    status = "OK" if succeeded else "Error"
+    structured = _mcp_structured_result(result)
+    if server_name != "mcp-agent-ops" or not structured:
+        return succeeded, status
+    if tool_name.startswith("skill_"):
+        skills = structured.get("skills")
+        errors = structured.get("errors")
+        revision = structured.get("catalog_revision") or structured.get("revision")
+        parts = [status]
+        if isinstance(skills, list):
+            parts.append(f"{len(skills):,} skills")
+        if isinstance(errors, list):
+            parts.append(f"{len(errors):,} errors")
+        if revision:
+            parts.append(f"revision {str(revision)[:8]}")
+        return succeeded, " · ".join(parts)
+    if tool_name.startswith("claim_"):
+        nested = structured.get("result")
+        outcome = nested.get("outcome") if isinstance(nested, dict) else None
+        exit_code = structured.get("exit_code")
+        parts = [str(outcome or status)]
+        if isinstance(exit_code, int):
+            parts.append(f"exit {exit_code}")
+        return succeeded, " · ".join(parts)
+    findings = structured.get("findings")
+    if isinstance(findings, list):
+        return succeeded, f"{status} · {len(findings):,} findings"
+    return succeeded, status
+
+
 def _compile_formatter_regex(pattern: str, *, context: str) -> re.Pattern[str]:
     if len(pattern) > 500:
         raise ValueError(f"{context} exceeds 500 characters")
@@ -1138,6 +1370,35 @@ def _render_tool_result(tool: ToolInterval) -> str:
     )
 
 
+def _render_mcp_argument(call: McpCallInterval) -> str:
+    """Render a specially formatted MCP argument with optional raw disclosure."""
+
+    summary = _escape_html(call.argument_summary)
+    if not call.argument_content:
+        return f'<code class="tool-arguments">{summary}</code>'
+    return (
+        f'<div class="tool-argument-formatted">{summary}</div>'
+        '<details class="tool-argument-raw"><summary>raw</summary>'
+        f'<code class="tool-arguments">{_escape_html(call.argument_content)}</code>'
+        "</details>"
+    )
+
+
+def _render_mcp_result(call: McpCallInterval) -> str:
+    """Render an MCP result summary without expanding large returned payloads."""
+
+    if not call.result_summary:
+        return "—"
+    summary = _escape_html(call.result_summary)
+    if not call.result_content:
+        return f'<div class="tool-result-summary">{summary}</div>'
+    return (
+        f'<div class="tool-result-summary">{summary}</div>'
+        '<details class="tool-result-raw"><summary>raw result</summary>'
+        f'<pre>{_escape_html(call.result_content)}</pre></details>'
+    )
+
+
 def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn]) -> str | None:
     metadata = payload.get("internal_chat_message_metadata_passthrough")
     if isinstance(metadata, dict) and metadata.get("turn_id"):
@@ -1247,7 +1508,10 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     responses: list[ResponseUsage] = []
     activities: list[AgentActivity] = []
     tools: list[ToolInterval] = []
+    mcp_calls: list[McpCallInterval] = []
     skills_used: set[str] = set()
+    mcp_skills_loaded: set[str] = set()
+    bash_skills_loaded: set[str] = set()
     pending_tools: dict[str, tuple[str, str, str | None, int, str, str]] = {}
     previous_usage = UsageTotals()
     recorded_cost_usd: float | None = None
@@ -1373,6 +1637,76 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 saw_usage = True
                 continue
 
+            if event_type == "mcp_tool_call_end":
+                invocation = payload.get("invocation")
+                if not isinstance(invocation, dict):
+                    diagnostics.append(f"invalid mcp_tool_call_end at {path}:{ordinal}")
+                    continue
+                server_name = str(invocation.get("server") or "unknown")
+                tool_name = str(invocation.get("tool") or "unknown")
+                arguments = invocation.get("arguments")
+                raw_argument_summary = _tool_argument_summary({"arguments": arguments})
+                formatted_argument_summary = (
+                    _mcp_agent_ops_argument_summary(tool_name, arguments)
+                    if server_name == "mcp-agent-ops"
+                    else None
+                )
+                argument_summary = formatted_argument_summary or raw_argument_summary
+                duration_ms = _mcp_duration_ms(payload)
+                completed_at = _normalize_timestamp(timestamp)
+                turn_id = _event_turn_id(payload, active_turns)
+                loaded_skills = (
+                    _mcp_agent_ops_skill_names(tool_name, arguments)
+                    if server_name == "mcp-agent-ops"
+                    else set()
+                )
+                skills_used.update(loaded_skills)
+                mcp_skills_loaded.update(loaded_skills)
+                if turn_id and turn_id in turns_by_id:
+                    turn = turns_by_id[turn_id]
+                    turn.skills_used = sorted(
+                        set(turn.skills_used) | loaded_skills,
+                        key=str.casefold,
+                    )
+                    turn.mcp_skills_loaded = sorted(
+                        set(turn.mcp_skills_loaded) | loaded_skills,
+                        key=str.casefold,
+                    )
+                    turn.mcp_call_count += 1
+                result = payload.get("result")
+                succeeded, result_summary = _mcp_result_summary(
+                    server_name,
+                    tool_name,
+                    result,
+                )
+                mcp_calls.append(
+                    McpCallInterval(
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        call_id=str(payload.get("call_id") or ""),
+                        server_name=server_name,
+                        tool_name=tool_name,
+                        started_at=_timestamp_before(completed_at, duration_ms),
+                        completed_at=completed_at,
+                        duration_ms=duration_ms,
+                        argument_summary=argument_summary,
+                        argument_content=(
+                            raw_argument_summary
+                            if formatted_argument_summary
+                            and formatted_argument_summary != raw_argument_summary
+                            else ""
+                        ),
+                        result_summary=result_summary,
+                        result_content=_tool_result_content(result),
+                        succeeded=succeeded,
+                        source_path=str(path),
+                        source_ordinal=ordinal,
+                        skills_loaded=sorted(loaded_skills, key=str.casefold),
+                        model=model,
+                    )
+                )
+                continue
+
             if event_type in {"task_complete", "turn_aborted"}:
                 turn_id = str(payload.get("turn_id") or "")
                 turn = active_turns.pop(turn_id, None)
@@ -1473,9 +1807,17 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 responses.clear()
                 activities.clear()
                 tools.clear()
+                mcp_calls.clear()
+                skills_used.clear()
+                mcp_skills_loaded.clear()
+                bash_skills_loaded.clear()
                 pending_tools.clear()
                 for turn in turns:
                     turn.usage = UsageTotals()
+                    turn.skills_used.clear()
+                    turn.mcp_skills_loaded.clear()
+                    turn.bash_skills_loaded.clear()
+                    turn.mcp_call_count = 0
             continue
 
         if record_type == "response_item":
@@ -1567,9 +1909,19 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             elif item_type in {"function_call", "custom_tool_call"}:
                 call_id = str(payload.get("call_id") or payload.get("id") or "")
                 if call_id:
+                    tool_name = str(
+                        payload.get("name") or payload.get("namespace") or "unknown"
+                    )
                     tool_skills = _skill_names_from_value(payload.get("arguments"))
                     tool_skills.update(_skill_names_from_value(payload.get("input")))
                     skills_used.update(tool_skills)
+                    bash_skill_load = _is_bash_skill_loader(
+                        tool_name,
+                        payload.get("arguments"),
+                        payload.get("input"),
+                    )
+                    if bash_skill_load:
+                        bash_skills_loaded.update(tool_skills)
                     turn_id = _event_turn_id(payload, active_turns)
                     if turn_id and turn_id in turns_by_id:
                         turn = turns_by_id[turn_id]
@@ -1577,7 +1929,11 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                             set(turn.skills_used) | tool_skills,
                             key=str.casefold,
                         )
-                    tool_name = str(payload.get("name") or payload.get("namespace") or "unknown")
+                        if bash_skill_load:
+                            turn.bash_skills_loaded = sorted(
+                                set(turn.bash_skills_loaded) | tool_skills,
+                                key=str.casefold,
+                            )
                     pending_tools[call_id] = (
                         tool_name,
                         timestamp,
@@ -1674,7 +2030,10 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         turns=turns,
         activities=activities,
         tool_intervals=tools,
+        mcp_calls=mcp_calls,
         skills_used=sorted(skills_used, key=str.casefold),
+        mcp_skills_loaded=sorted(mcp_skills_loaded, key=str.casefold),
+        bash_skills_loaded=sorted(bash_skills_loaded, key=str.casefold),
         terminal_state=terminal_state,
         source_path=str(path),
         diagnostics=diagnostics,
@@ -2718,6 +3077,21 @@ def _tool_activity_summary(tools: list[ToolInterval]) -> tuple[str, str]:
     return names, f"{len(tools):,} {call_label} · {duration}"
 
 
+def _mcp_activity_summary(calls: list[McpCallInterval]) -> tuple[str, str]:
+    """Summarize MCP server/tool usage separately from outer Codex tools."""
+
+    if not calls:
+        return "—", "0 calls · 0ms"
+    counts = Counter(f"{call.server_name} → {call.tool_name}" for call in calls)
+    names = ", ".join(
+        f"{name} × {count}"
+        for name, count in sorted(counts.items(), key=lambda item: (-item[1], item[0]))
+    )
+    call_label = "call" if len(calls) == 1 else "calls"
+    duration = _format_detail_ms(sum(call.duration_ms for call in calls))
+    return names, f"{len(calls):,} {call_label} · {duration} recorded execution"
+
+
 def _timestamp_offset_label(run: CodexRunMetrics, timestamp: str) -> str:
     run_start = _parse_iso_datetime(run.wall_started_at)
     event_time = _parse_iso_datetime(timestamp)
@@ -2811,6 +3185,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     )
     response_count = sum(len(thread.responses) for thread in run.threads)
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
+    mcp_call_count = sum(len(thread.mcp_calls) for thread in run.threads)
     is_junie = run.runtime.lower() == "junie"
     turn_column_label = "Task spans" if is_junie else "Turns"
     cached_share = (
@@ -2836,6 +3211,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
             else [f"- Turns: {turn_count}", f"- Model responses: {response_count}"]
         ),
         f"- Matched tool calls: {tool_count}",
+        f"- MCP calls: {mcp_call_count}",
         f"- Processed tokens: {run.usage_totals.processed_tokens:,}",
         f"- Cached input share: {cached_share:.1f}%",
         f"- Wall time: {_format_ms(run.wall_time_ms)}",
@@ -2895,6 +3271,7 @@ def render_codex_rollout_html(
     )
     response_count = sum(len(thread.responses) for thread in run.threads)
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
+    mcp_call_count = sum(len(thread.mcp_calls) for thread in run.threads)
     is_junie = run.runtime.lower() == "junie"
     turn_singular = "task span" if is_junie else "turn"
     turn_plural = "task spans" if is_junie else "turns"
@@ -2909,6 +3286,14 @@ def render_codex_rollout_html(
         else (
             f'<div class="metric"><div class="label">Turns</div><div class="value">{turn_count:,}</div></div>'
             f'<div class="metric"><div class="label">Model responses</div><div class="value">{response_count:,}</div></div>'
+        )
+    )
+    mcp_metric_card = (
+        ""
+        if is_junie
+        else (
+            '<div class="metric"><div class="label">MCP calls</div>'
+            f'<div class="value">{mcp_call_count:,}</div></div>'
         )
     )
     composition_total = run.usage_totals.processed_tokens or 1
@@ -2985,7 +3370,9 @@ def render_codex_rollout_html(
         thread_tool_rows = []
         for turn_index, turn in enumerate(thread.turns, start=1):
             tools = [tool for tool in thread.tool_intervals if tool.turn_id == turn.turn_id]
+            mcp_calls = [call for call in thread.mcp_calls if call.turn_id == turn.turn_id]
             tool_names, tool_total = _tool_activity_summary(tools)
+            mcp_names, mcp_total = _mcp_activity_summary(mcp_calls)
             turn_cost = _cost_for_turn(thread, turn)
             turn_detail_overlay_id = f"{tool_call_overlay_id}-{turn_index}"
             turn_link = (
@@ -3003,7 +3390,7 @@ def render_codex_rollout_html(
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 "</tr>"
             )
-            show_timing_note = any(
+            show_timing_note = bool(mcp_calls) or any(
                 tool.attribution_confidence != "bounded" for tool in tools
             )
             turn_responses = sorted(
@@ -3172,11 +3559,44 @@ def render_codex_rollout_html(
                         + "</tr>",
                     )
                 )
+            for mcp_index, call in enumerate(mcp_calls, start=1):
+                call_models = (
+                    [call.model]
+                    if call.model
+                    else _models_before_source(
+                        thread,
+                        turn_id=turn.turn_id,
+                        source_path=call.source_path,
+                        source_ordinal=call.source_ordinal,
+                    )
+                )
+                mcp_name = f"{call.server_name} → {call.tool_name}"
+                detail_rows.append(
+                    (
+                        float(call.source_ordinal),
+                        2,
+                        '<tr class="turn-detail-tool-row turn-detail-mcp-row">'
+                        f"<td>M{mcp_index}</td>"
+                        f"<td>{_timestamp_offset_label(run, call.started_at)}</td>"
+                        '<td>—</td>'
+                        f'<td>{_render_model_names(call_models, attributed=not bool(call.model))}</td>'
+                        f'<td><code class="tool-name mcp-tool-name">{_escape_html(mcp_name)}</code></td>'
+                        f"<td>{_render_mcp_argument(call)}</td>"
+                        f"<td>{_render_mcp_result(call)}</td>"
+                        + (
+                            "<td>MCP-recorded execution time</td>"
+                            if show_timing_note
+                            else ""
+                        )
+                        + "</tr>",
+                    )
+                )
             final_ordinal = max(
                 [float(turn.source_ordinal)]
                 + [float(response.source_ordinal) for response in turn_responses]
                 + [float(activity.source_ordinal) for activity in turn_activities]
                 + [float(tool.source_end_ordinal) for tool in tools]
+                + [float(call.source_ordinal) for call in mcp_calls]
             ) + 1
             output_activities = [
                 activity for activity in turn_activities if activity.activity_type == "output"
@@ -3216,6 +3636,8 @@ def render_codex_rollout_html(
                 else "turn-detail-table"
             )
             turn_skills = _inventory_text(turn.skills_used)
+            mcp_skills = _inventory_text(turn.mcp_skills_loaded)
+            bash_skills = _inventory_text(turn.bash_skills_loaded)
             abort_provenance_detail = _render_abort_provenance_detail(turn)
             turn_detail_overlays.append(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
@@ -3231,6 +3653,16 @@ def render_codex_rollout_html(
                 f'<div class="metric"><div class="label">Processed tokens</div><div class="value">{turn.usage.processed_tokens:,}</div></div>'
                 f'<div class="metric"><div class="label">Model</div><div class="value">{_render_turn_model_metric(thread, turn.turn_id)}</div></div>'
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
+                '<div class="metric turn-mcp-count-metric"><div class="label">MCP calls</div>'
+                f'<div class="value">{turn.mcp_call_count:,}</div>'
+                f'<span class="metric-detail">{_escape_html(mcp_names)}</span>'
+                f'<span class="turn-state-source">{_escape_html(mcp_total)}</span></div>'
+                '<div class="metric turn-mcp-skills-metric"><div class="label">Skills via MCP</div>'
+                f'<div class="value">{len(turn.mcp_skills_loaded):,}</div>'
+                f'<span class="metric-detail">{_escape_html(mcp_skills)}</span></div>'
+                '<div class="metric turn-bash-skills-metric"><div class="label">Skills via Bash</div>'
+                f'<div class="value">{len(turn.bash_skills_loaded):,}</div>'
+                f'<span class="metric-detail">{_escape_html(bash_skills)}</span></div>'
                 '<div class="metric turn-skills-metric"><div class="label">Skills used</div>'
                 f'<div class="turn-skills-value">{_escape_html(turn_skills)}</div></div>'
                 '<div class="metric turn-tools-metric"><div class="label">Tools used</div>'
@@ -3505,6 +3937,7 @@ td {{ font-size:.85em; }}
 .tool-call-panel {{ display:flex; flex-direction:column; box-sizing:border-box; width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }}
 .turn-detail-panel {{ width:min(1500px,94vw); }}
 .turn-detail-metrics {{ grid-template-columns:repeat(6,minmax(0,1fr)); }}
+.turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric {{ grid-column:span 2; }}
 .turn-skills-metric {{ grid-column:span 4; }}
 .turn-tools-metric {{ grid-column:span 2; }}
 .turn-skills-value {{ margin-top:3px; font-size:1em; font-weight:600; line-height:1.45; overflow-wrap:anywhere; }}
@@ -3534,7 +3967,7 @@ td {{ font-size:.85em; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:1240px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
-@media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
+@media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
 {run_label_html}
@@ -3544,6 +3977,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
 {activity_metric_cards}
 <div class="metric"><div class="label">Matched tool calls</div><div class="value">{tool_count:,}</div></div>
+{mcp_metric_card}
 <div class="metric"><div class="label">Wall time</div><div class="value">{_format_ms(run.wall_time_ms)}</div></div>
 <div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>

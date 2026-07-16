@@ -376,6 +376,192 @@ def test_parse_native_codex_rollout_uses_exclusive_cumulative_deltas():
     )
 
 
+def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
+    module = _load_module()
+    assert module._is_bash_skill_loader(
+        "functions.exec",
+        "await tools.exec_command({cmd: 'sed SKILL.md'})",
+        None,
+    )
+    assert not module._is_bash_skill_loader(
+        "functions.exec",
+        "await tools.mcp__mcp_agent_ops__skill_load({names: ['python']})",
+        None,
+    )
+    rollout = tmp_path / "mcp-trace.jsonl"
+    records = [
+        {
+            "timestamp": "2026-07-16T22:50:00Z",
+            "type": "session_meta",
+            "payload": {"id": "mcp-trace-thread", "source": "user"},
+        },
+        {
+            "timestamp": "2026-07-16T22:50:00Z",
+            "type": "turn_context",
+            "payload": {"turn_id": "mcp-turn", "model": "gpt-5.4-mini"},
+        },
+        {
+            "timestamp": "2026-07-16T22:50:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "mcp-turn",
+                "started_at": "2026-07-16T22:50:00Z",
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:50:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "shell-skill-load",
+                "name": "exec",
+                "input": "sed -n '1,220p' /opt/codex/skills/python/SKILL.md",
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:50:01.100Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "shell-skill-load",
+                "output": '{"wall_time_seconds":0.1,"output":"loaded"}',
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:50:03Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "mcp_tool_call_end",
+                "call_id": "exec-skill-load",
+                "invocation": {
+                    "server": "mcp-agent-ops",
+                    "tool": "skill_load",
+                    "arguments": {"names": ["structured-design", "python"]},
+                },
+                "duration": {"secs": 0, "nanos": 10_371_917},
+                "result": {
+                    "Ok": {
+                        "content": [
+                            {"type": "text", "text": "API_TOKEN=PRIVATE-MCP-CONTENT"}
+                        ],
+                        "structuredContent": {
+                            "ok": True,
+                            "catalog_revision": "af37d9acecca2823",
+                            "skills": [
+                                {
+                                    "name": "structured-design",
+                                    "content": "PRIVATE-SKILL-CONTENT",
+                                },
+                                {"name": "python", "content": "PRIVATE-PYTHON-CONTENT"},
+                            ],
+                            "errors": [],
+                        },
+                        "isError": False,
+                    }
+                },
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:50:04Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "mcp_tool_call_end",
+                "call_id": "exec-claim-status",
+                "invocation": {
+                    "server": "mcp-agent-ops",
+                    "tool": "claim_status",
+                    "arguments": {"repository": "/work/agent-runner"},
+                },
+                "duration": {"secs": 0, "nanos": 5_000_000},
+                "result": {
+                    "Ok": {
+                        "structuredContent": {
+                            "exit_code": 0,
+                            "result": {"outcome": "STATUS", "claims": []},
+                        },
+                        "isError": False,
+                    }
+                },
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:50:04.500Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "mcp_tool_call_end",
+                "call_id": "exec-verify-failed",
+                "invocation": {
+                    "server": "mcp-agent-ops",
+                    "tool": "verify_yaml",
+                    "arguments": {
+                        "repository_root": "/work/agent-runner",
+                        "paths": ["broken.yaml"],
+                    },
+                },
+                "duration": {"secs": 0, "nanos": 3_000_000},
+                "result": {"Err": "connection failed"},
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:50:05Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "mcp-turn",
+                "completed_at": "2026-07-16T22:50:05Z",
+                "duration_ms": 5_000,
+            },
+        },
+    ]
+    rollout.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("mcp-trace-thread", tmp_path)
+    thread = run.threads[0]
+    turn = thread.turns[0]
+
+    assert run.parser_version == "1.12.0"
+    assert thread.skills_used == ["python", "structured-design"]
+    assert thread.mcp_skills_loaded == ["python", "structured-design"]
+    assert thread.bash_skills_loaded == ["python"]
+    assert turn.skills_used == ["python", "structured-design"]
+    assert turn.mcp_skills_loaded == ["python", "structured-design"]
+    assert turn.bash_skills_loaded == ["python"]
+    assert turn.mcp_call_count == 3
+    assert len(thread.mcp_calls) == 3
+    assert thread.mcp_calls[0].duration_ms == 10
+    assert thread.mcp_calls[0].argument_summary == (
+        "skills: structured-design · python"
+    )
+    assert thread.mcp_calls[0].result_summary == (
+        "OK · 2 skills · 0 errors · revision af37d9ac"
+    )
+    assert thread.mcp_calls[1].argument_summary == "repository: agent-runner"
+    assert thread.mcp_calls[1].result_summary == "STATUS · exit 0"
+    assert thread.mcp_calls[2].succeeded is False
+    assert thread.mcp_calls[2].result_summary == "Error"
+
+    html = module.render_codex_rollout_html(run)
+    markdown = module.render_codex_rollout_markdown(run)
+    overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+
+    assert '<div class="label">MCP calls</div><div class="value">3</div>' in html
+    assert '<div class="label">Skills via MCP</div><div class="value">2</div>' in overlay
+    assert '<div class="label">Skills via Bash</div><div class="value">1</div>' in overlay
+    assert '<div class="turn-skills-value">python · structured-design</div>' in overlay
+    assert "mcp-agent-ops → skill_load" in overlay
+    assert "skills: structured-design · python" in overlay
+    assert "OK · 2 skills · 0 errors · revision af37d9ac" in overlay
+    assert "MCP-recorded execution time" in overlay
+    assert "- MCP calls: 3" in markdown
+    assert "PRIVATE" not in html
+
+
 def test_native_codex_tool_argument_summary_redacts_sensitive_content():
     module = _load_module()
 
@@ -1161,7 +1347,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.11.0"
+    assert run.parser_version == "1.12.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
