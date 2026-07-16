@@ -268,10 +268,17 @@
 - **Mirrors:** tools/backlog-runner/src/
 
 ### tools/report/
-- **Purpose:** Root for the repository's cross-tool reporting utilities. Use this path for reporting-specific documentation and support files when they are not owned by prompt-runner or methodology-runner alone.
-- **Signals:** timeline report tool, reporting utility root, cross-tool diagnostics, report-specific README, tooling that inspects both prompt-runner and methodology-runner outputs.
-- **Filename pattern:** fixed tool-root filenames such as `README.md`.
+- **Purpose:** Package root for the repository's cross-tool reporting utilities. Use this path for reporting-specific packaging files, documentation, and support files when they are not owned by prompt-runner or methodology-runner alone.
+- **Signals:** timeline report tool, reporting utility root, cross-tool diagnostics, report package metadata, report-specific README, tooling that inspects both prompt-runner and methodology-runner outputs.
+- **Filename pattern:** fixed tool-root filenames such as `pyproject.toml` and `README.md`.
 - **Example:** `tools/report/README.md`
+
+### tools/report/src/
+- **Purpose:** Installable Python package source for the cross-tool reporting utilities. Use this path for the packaged command launcher and other importable report-tool modules.
+- **Signals:** agent-report console entry point, installed report command, Python package code imported as `agent_report`.
+- **Filename pattern:** `snake_case.py` for modules and fixed Python package files such as `__init__.py`.
+- **Tests location:** `tools/report/tests/` -- mirror path, `test_<module>.py`.
+- **Example:** `tools/report/src/agent_report/cli.py`
 
 ### tools/report/scripts/
 - **Purpose:** Reporting scripts and direct-entry utilities that analyze or render run data across tools. Use this path when a script belongs to the reporting tool rather than to prompt-runner, methodology-runner, or generic repo maintenance.

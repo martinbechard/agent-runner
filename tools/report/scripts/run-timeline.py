@@ -46,8 +46,19 @@ from functools import lru_cache
 POPUP_TRUNCATE_CHARS = 20_000_000  # 20 MB
 MIN_BAR_PCT = 0.5
 REPO_ROOT = Path(__file__).resolve().parents[3]
-PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
-DEFAULT_TOOL_FORMATTER_CONFIG = REPO_ROOT / "tools" / "report" / "tool-formatters.json"
+_CHECKOUT_PRICING_FILE = REPO_ROOT / "docs" / "reference" / "openai-model-pricing.json"
+_INSTALLED_DATA_ROOT = Path(__file__).resolve().parent
+PRICING_FILE = (
+    _CHECKOUT_PRICING_FILE
+    if _CHECKOUT_PRICING_FILE.is_file()
+    else _INSTALLED_DATA_ROOT / "openai-model-pricing.json"
+)
+_CHECKOUT_FORMATTER_CONFIG = REPO_ROOT / "tools" / "report" / "tool-formatters.json"
+DEFAULT_TOOL_FORMATTER_CONFIG = (
+    _CHECKOUT_FORMATTER_CONFIG
+    if _CHECKOUT_FORMATTER_CONFIG.is_file()
+    else _INSTALLED_DATA_ROOT / "tool-formatters.json"
+)
 PRICING_RATE_KEYS = ("input_per_million", "cached_input_per_million", "output_per_million")
 CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_input_per_million",

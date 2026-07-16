@@ -27,6 +27,15 @@ Run the timeline tool directly from the checkout:
 python tools/report/scripts/run-timeline.py <path> [--output report.html]
 ```
 
+Install the wheel attached to the GitHub release and run the same tool as an
+installed command:
+
+```bash
+python -m pip install \
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.1.0/agent_report-0.1.0-py3-none-any.whl
+agent-report <path> --output report.html
+```
+
 Report a live Codex Desktop hierarchy with lifecycle rows for input ingestion,
 model usage, available reasoning summaries, tool execution, and output
 generation. Plaintext input, reasoning summaries, and assistant output use
