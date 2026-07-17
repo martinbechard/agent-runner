@@ -72,6 +72,22 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
   - **SYNOPSIS:** A sealed report must record source file identifiers, sizes, modification times, digests, parser version, pricing-table version, observation interval, and terminal-state assessment before source runs are pruned.
   - **BECAUSE:** Later comparison requires proof of which telemetry produced the archived metrics.
 
+- **RULE: RULE-19** Prefer an explicit task title and otherwise derive one from genuine user input
+  - **SYNOPSIS:** Use a caller-supplied or stored task title when available. Otherwise derive a bounded title from the first genuine recorded user request after excluding injected plugin catalogs, repository instructions, environment blocks, and ambient browser context. Use the resulting report title for both the HTML document title and visible page heading, with a generic metrics title only as the fallback.
+  - **BECAUSE:** Host-provided context is useful runtime input but does not identify the work the report is about.
+
+- **RULE: RULE-20** Keep the HTML report frame compact
+  - **SYNOPSIS:** Place the run identifier, state, observation timestamp, and the single API-equivalent estimate disclaimer together in the page subtitle; label the agent-and-turn execution section `Timeline`; do not render a separate diagnostics section.
+  - **BECAUSE:** The primary report should lead with task identity, resource use, and execution chronology while keeping parser diagnostics in machine-readable provenance rather than a low-value page section.
+
+- **RULE: RULE-21** Render recognized semantic arguments before their raw representation
+  - **SYNOPSIS:** Render `update_plan` arguments as a complete bulleted plan with each step's state, and render other recognized tool arguments with their configured human-readable formatter. Keep a collapsed sanitized `raw` disclosure beside the semantic representation.
+  - **BECAUSE:** Semantic structures are easier to scan in their natural form, while the raw representation remains available for audit.
+
+- **RULE: RULE-22** Clamp only generic long argument presentations
+  - **SYNOPSIS:** Do not clamp a recognized semantic plan or formatted summary. Clamp long generic argument cells to a preview with `more` and `less` controls, and expose their complete bounded sanitized content when expanded.
+  - **BECAUSE:** Clamping a specially formatted structure can remove bullets or other meaning, while unformatted payloads still need a bounded initial table height.
+
 ## 3. Information Model
 
 This model retains exact source measurements and progressively aggregated views.
@@ -90,6 +106,8 @@ This model retains exact source measurements and progressively aggregated views.
     - **SYNOPSIS:** Earliest included run event through the latest included event.
   - **FIELD:** `source_manifest`
     - **SYNOPSIS:** Rollout file paths and optional immutable source digests.
+  - **FIELD:** `run_label`
+    - **SYNOPSIS:** Caller-supplied task title when available, otherwise a bounded title derived from the first genuine recorded user request, with `report` appended once.
 
 - **ENTITY: ENTITY-2** Thread
   - **SYNOPSIS:** One Codex session and its local usage-accounting boundary.
@@ -364,8 +382,12 @@ These conditions define an acceptable implementation and report.
   - **BECAUSE:** The observed live run demonstrated this exact accounting boundary and provides a concrete regression case.
 
 - **REQUIREMENT: REQ-10** Configurable tool-argument presentation
-  - **SYNOPSIS:** The HTML renderer evaluates ordered, versioned formatter rules against sanitized tool-argument summaries, displays the first matching human-readable summary, and retains a collapsed sanitized `raw` disclosure. A caller may supply a run-specific config with `--formatter-config`.
+  - **SYNOPSIS:** The HTML renderer evaluates ordered, versioned formatter rules against sanitized tool-argument summaries, displays the first matching human-readable summary in full, and retains a collapsed sanitized `raw` disclosure. It renders recognized plans as full bulleted lists and clamps only long generic argument presentations with access to their complete bounded content. A caller may supply a run-specific config with `--formatter-config`.
   - **BECAUSE:** Claims, patches, messages, waits, and agent lifecycle calls repeat recognizable structures that are easier to scan when reduced to their meaningful fields, while a config lets an agent describe new run-specific patterns without changing parser code.
+
+- **REQUIREMENT: REQ-11** Task-specific and compact report presentation
+  - **SYNOPSIS:** The HTML document title and page heading identify the reported task, the subtitle carries the observed timestamp and one estimate disclaimer, the execution hierarchy is labeled `Timeline`, and no diagnostics section competes with the primary metrics.
+  - **BECAUSE:** A report should be recognizable in a browser tab and understandable at a glance without requiring the reader to infer the task from a thread identifier.
 
 ## 7. Test Cases
 
@@ -438,6 +460,22 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 - **TASK: TEST-17** Parse a native Junie session
   - **SYNOPSIS:** Build a synthetic session with a main agent, custom agent, repeated terminal updates, file reads, terminal heredoc writes, per-model token metadata, recorded cost, and secret-shaped command output.
   - **VALIDATES:** The adapter detects the session, assigns custom-agent model usage correctly, collapses tool updates by `stepId`, separates one user task from two agent task spans, exposes created file paths without treating heredoc body examples as commands, reports recorded cost, preserves task completion, and excludes the secret value from HTML.
+
+- **TASK: TEST-18** Select a semantic report title
+  - **SYNOPSIS:** Provide injected plugin, repository, environment, and browser context before a genuine user request, then repeat the case with an explicit stored title.
+  - **VALIDATES:** The first genuine request supplies both the HTML document title and visible heading when no explicit title exists, while the explicit title takes precedence and the generic metrics title remains only a fallback.
+
+- **TASK: TEST-19** Render the compact report frame
+  - **SYNOPSIS:** Render a priced report with a fixed observation timestamp.
+  - **VALIDATES:** The subtitle places the API-equivalent estimate disclaimer after the observed timestamp exactly once, the execution section is labeled `Timeline`, and the HTML contains no diagnostics section.
+
+- **TASK: TEST-20** Render a complete structured plan
+  - **SYNOPSIS:** Provide a long `update_plan` call containing multiple steps and states plus its raw source.
+  - **VALIDATES:** Every step appears as a bulleted item with its state, the semantic plan is not clamped, and the collapsed sanitized raw disclosure remains available.
+
+- **TASK: TEST-21** Expand a long generic argument cell
+  - **SYNOPSIS:** Provide an unrecognized long tool argument whose bounded full content extends beyond its preview.
+  - **VALIDATES:** The initial cell is clamped, `more` reveals the complete bounded sanitized content, `less` restores the preview, and recognized formatted arguments remain unclamped.
 
 ## 8. Proposed Modifications
 
