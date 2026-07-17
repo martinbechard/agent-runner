@@ -66,11 +66,12 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.12.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.13.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
 TOOL_RESULT_PREVIEW_CHARS = 200
+TOOL_ARGUMENT_CLAMP_CHARS = 320
 TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
@@ -98,6 +99,10 @@ _FAILED_VERDICT_PATTERN = re.compile(
 _REVIEW_FINDING_PATTERN = re.compile(
     r"^\s*(?:\d+[.)]|[-*])\s+\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)\b",
     re.IGNORECASE | re.MULTILINE,
+)
+_UPDATE_PLAN_ITEM_PATTERN = re.compile(
+    r"\{\s*[\"']?step[\"']?\s*:\s*\"(?P<step>(?:\\.|[^\"\\])*)\"\s*,\s*"
+    r"[\"']?status[\"']?\s*:\s*\"(?P<status>completed|in_progress|pending)\"\s*\}"
 )
 
 
@@ -809,6 +814,21 @@ def _redact_unstructured_text(value: str) -> str:
         redact_assignment,
         value,
     )
+
+    def redact_mapping_value(match: re.Match[str]) -> str:
+        key = match.group("key")
+        if not _is_sensitive_argument_key(key):
+            return match.group(0)
+        raw_value = match.group("value")
+        quote = raw_value[0] if raw_value[:1] in {'"', "'"} else ""
+        return f"{key}{match.group('separator')}{quote}[redacted]{quote}"
+
+    summary = re.sub(
+        r"(?P<key>[A-Za-z_][A-Za-z0-9_-]*)(?P<separator>\s*:\s*)"
+        r"(?P<value>\"(?:\\.|[^\"\\])*\"|'(?:\\.|[^'\\])*'|[^\s,}]+)",
+        redact_mapping_value,
+        summary,
+    )
     summary = re.sub(
         r"(?i)(?P<prefix>\b(?:authorization|bearer)\s*[:=]?\s+)(?P<value>\S+)",
         lambda match: f"{match.group('prefix')}[redacted]",
@@ -837,6 +857,30 @@ def _tool_argument_content(value: str) -> str:
         return content
     omitted = len(content) - TOOL_ARGUMENT_RAW_CHARS
     return content[:TOOL_ARGUMENT_RAW_CHARS] + f"\n… [{omitted:,} chars omitted]"
+
+
+def _tool_argument_payload_content(payload: dict[str, object]) -> str:
+    """Return bounded, secret-redacted source arguments from a tool event."""
+
+    value = payload.get("arguments")
+    if value is None:
+        value = payload.get("input")
+    if value is None or value == "":
+        return ""
+    if isinstance(value, str):
+        try:
+            structured = json.loads(value)
+        except json.JSONDecodeError:
+            return _tool_argument_content(value)
+    else:
+        structured = value
+    if isinstance(structured, (dict, list)):
+        value = json.dumps(
+            _sanitize_structured_argument("", structured),
+            ensure_ascii=False,
+            indent=2,
+        )
+    return _tool_argument_content(str(value))
 
 
 def _sanitize_result_value(value: object) -> object:
@@ -1357,16 +1401,101 @@ def _render_tool_argument(
     tool: ToolInterval,
     config: ToolFormatterConfig,
 ) -> str:
+    raw_source = tool.argument_content or tool.argument_summary
+    plan_items = _update_plan_items(raw_source)
+    if plan_items:
+        plan_preview = _render_update_plan(plan_items, preview=True)
+        plan_html = _render_update_plan(plan_items, preview=False)
+        full_html = (
+            plan_html
+            + '<details class="tool-argument-raw"><summary>raw</summary>'
+            + f'<code class="tool-arguments">{_escape_html(raw_source)}</code></details>'
+        )
+        return _clamped_argument_html(plan_preview, full_html, raw_source)
+
     formatted = _format_tool_argument(tool.tool_name, tool.argument_summary, config)
     if formatted is None:
-        return f'<code class="tool-arguments">{_escape_html(tool.argument_summary)}</code>'
-    raw_source = tool.argument_content or tool.argument_summary
+        preview_html = (
+            f'<code class="tool-arguments">{_escape_html(tool.argument_summary)}</code>'
+        )
+        full_html = f'<code class="tool-arguments">{_escape_html(raw_source)}</code>'
+        return _clamped_argument_html(preview_html, full_html, raw_source)
     raw = _escape_html(raw_source)
     raw_label = "raw source command (redacted)" if tool.argument_content else "raw"
-    return (
-        f'<div class="tool-argument-formatted">{_escape_html(formatted.summary)}</div>'
+    formatted_summary = _escape_html(formatted.summary)
+    full_html = (
+        f'<div class="tool-argument-formatted">{formatted_summary}</div>'
         f'<details class="tool-argument-raw"><summary>{raw_label}</summary>'
         f'<code class="tool-arguments">{raw}</code></details>'
+    )
+    return _clamped_argument_html(
+        f'<span class="tool-argument-formatted">{formatted_summary}</span>',
+        full_html,
+        raw_source,
+    )
+
+
+def _update_plan_items(source: str) -> list[tuple[str, str]]:
+    """Extract display-safe update-plan steps from a recorded tool wrapper."""
+
+    if "tools.update_plan" not in source:
+        return []
+    items: list[tuple[str, str]] = []
+    for match in _UPDATE_PLAN_ITEM_PATTERN.finditer(source):
+        encoded_step = match.group("step")
+        try:
+            step = json.loads(f'"{encoded_step}"')
+        except json.JSONDecodeError:
+            step = encoded_step.replace(r'\"', '"').replace(r"\n", " ")
+        items.append((str(step), match.group("status")))
+    return items
+
+
+def _plan_status_html(status: str) -> str:
+    status_class = {
+        "completed": " state-complete",
+        "in_progress": " state-active",
+    }.get(status, "")
+    return (
+        f'<span class="state{status_class}">'
+        f"{_escape_html(status.replace('_', ' '))}</span>"
+    )
+
+
+def _render_update_plan(items: list[tuple[str, str]], *, preview: bool) -> str:
+    if preview:
+        rendered_items = "".join(
+            '<span class="tool-plan-preview-item">'
+            f'<span class="tool-plan-step">{_escape_html(step)}</span> '
+            f"{_plan_status_html(status)}</span>"
+            for step, status in items
+        )
+        return f'<span class="tool-plan-preview">{rendered_items}</span>'
+    rendered_items = "".join(
+        '<li class="tool-plan-item">'
+        f'<span class="tool-plan-step">{_escape_html(step)}</span> '
+        f"{_plan_status_html(status)}</li>"
+        for step, status in items
+    )
+    return f'<ul class="tool-plan">{rendered_items}</ul>'
+
+
+def _clamped_argument_html(
+    preview_html: str,
+    full_html: str,
+    source: str,
+) -> str:
+    """Clamp long argument cells while retaining their complete bounded content."""
+
+    if len(source) <= TOOL_ARGUMENT_CLAMP_CHARS and source.count("\n") < 5:
+        return full_html
+    return (
+        '<details class="clamped-disclosure tool-argument-disclosure">'
+        f'<summary><span class="clamped-preview">{preview_html}</span>'
+        '<span class="clamped-toggle clamped-more">more</span></summary>'
+        f'<div class="clamped-full">{full_html}'
+        '<button type="button" class="clamped-toggle clamped-less">less</button>'
+        "</div></details>"
     )
 
 
@@ -1387,13 +1516,20 @@ def _render_mcp_argument(call: McpCallInterval) -> str:
     """Render a specially formatted MCP argument with optional raw disclosure."""
 
     summary = _escape_html(call.argument_summary)
+    raw_source = call.argument_content or call.argument_summary
     if not call.argument_content:
-        return f'<code class="tool-arguments">{summary}</code>'
-    return (
+        argument_html = f'<code class="tool-arguments">{summary}</code>'
+        return _clamped_argument_html(argument_html, argument_html, raw_source)
+    full_html = (
         f'<div class="tool-argument-formatted">{summary}</div>'
         '<details class="tool-argument-raw"><summary>raw</summary>'
         f'<code class="tool-arguments">{_escape_html(call.argument_content)}</code>'
         "</details>"
+    )
+    return _clamped_argument_html(
+        f'<span class="tool-argument-formatted">{summary}</span>',
+        full_html,
+        raw_source,
     )
 
 
@@ -1527,7 +1663,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     skills_used: set[str] = set()
     mcp_skills_loaded: set[str] = set()
     bash_skills_loaded: set[str] = set()
-    pending_tools: dict[str, tuple[str, str, str | None, int, str, str]] = {}
+    pending_tools: dict[str, tuple[str, str, str | None, int, str, str, str]] = {}
     previous_usage = UsageTotals()
     recorded_cost_usd: float | None = None
     saw_usage = False
@@ -1961,6 +2097,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         turn_id,
                         ordinal,
                         _tool_argument_summary(payload),
+                        _tool_argument_payload_content(payload),
                         model,
                     )
             elif item_type in {"function_call_output", "custom_tool_call_output"}:
@@ -1973,6 +2110,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         turn_id,
                         start_ordinal,
                         argument_summary,
+                        argument_content,
                         tool_model,
                     ) = pending
                     raw_output = payload.get("output")
@@ -1995,6 +2133,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                             ),
                             attribution_confidence="exact" if reported_ms is not None else "bounded",
                             argument_summary=argument_summary,
+                            argument_content=argument_content,
                             source_path=str(path),
                             source_start_ordinal=start_ordinal,
                             source_end_ordinal=ordinal,
@@ -3985,6 +4124,11 @@ td {{ font-size:.85em; }}
 .activity-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
 .tool-arguments {{ display:block; max-width:720px; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
 .tool-argument-formatted {{ font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }}
+.tool-plan, .tool-plan-preview {{ margin:0; padding-left:1.25em; font-family:var(--font-ui); white-space:normal; }}
+.tool-plan-preview {{ display:block; }}
+.tool-plan-item, .tool-plan-preview-item {{ margin:0 0 5px; line-height:1.35; }}
+.tool-plan-preview-item {{ display:list-item; }}
+.tool-plan .state, .tool-plan-preview .state {{ margin-left:5px; white-space:nowrap; }}
 .tool-argument-raw {{ margin-top:4px; }}
 .tool-argument-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
 .tool-argument-raw[open] .tool-arguments {{ margin-top:5px; }}

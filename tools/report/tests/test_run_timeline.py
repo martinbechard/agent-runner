@@ -529,7 +529,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.12.0"
+    assert run.parser_version == "1.13.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -623,6 +623,88 @@ def test_native_codex_tool_argument_summary_redacts_sensitive_content():
     assert '"api_key":"[redacted]"' in summary
     assert '"max_tokens":100' in summary
     assert "PRIVATE" not in summary
+
+    content = module._tool_argument_payload_content(
+        {
+            "input": (
+                'const r = await tools.example({api_key:"PRIVATE-API-KEY",'
+                'value:"visible"}); text(r);'
+            )
+        }
+    )
+    assert 'api_key:"[redacted]"' in content
+    assert 'value:"visible"' in content
+    assert "PRIVATE" not in content
+
+
+def test_native_codex_parser_retains_full_bounded_tool_argument_content(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "root.jsonl"
+    plan_source = (
+        'const r = await tools.update_plan({plan:['
+        '{step:"Inspect memory",status:"completed"},'
+        '{step:"Run required validation, review diff, and commit coherent changes",'
+        'status:"pending"}'
+        ']}); text(r);'
+    )
+    records = [
+        {
+            "timestamp": "2026-07-16T22:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "root", "source": "user"},
+        },
+        {
+            "timestamp": "2026-07-16T22:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "turn-1",
+                "started_at": "2026-07-16T22:00:00Z",
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:00:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call",
+                "call_id": "call-1",
+                "name": "exec",
+                "input": plan_source,
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:00:02Z",
+            "type": "response_item",
+            "payload": {
+                "type": "custom_tool_call_output",
+                "call_id": "call-1",
+                "output": [{"type": "input_text", "text": "{}"}],
+            },
+        },
+        {
+            "timestamp": "2026-07-16T22:00:03Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "turn-1",
+                "completed_at": "2026-07-16T22:00:03Z",
+            },
+        },
+    ]
+    rollout.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("root", tmp_path)
+
+    assert len(run.threads[0].tool_intervals) == 1
+    tool = run.threads[0].tool_intervals[0]
+    assert len(tool.argument_summary) <= module.CODEX_TOOL_ARGUMENT_SUMMARY_CHARS
+    assert tool.argument_content == plan_source
+    assert "Run required validation, review diff, and commit coherent changes" in (
+        module._render_tool_argument(tool, module._load_tool_formatter_config())
+    )
 
 
 def test_native_codex_send_message_argument_summary_includes_preview_and_length():
@@ -741,6 +823,7 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
         'const patch = "*** Begin Patch\\n*** Add File: '
         '/tmp/docs/example.md\\n+# Example'
     )
+    tool.argument_content = ""
 
     html = module.render_codex_rollout_html(run)
 
@@ -769,6 +852,84 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
     assert "<th>Result</th>" in html
     assert "<summary>raw result</summary>" in html
     assert "raw result (redacted)" not in html
+
+
+def test_native_codex_html_formats_update_plan_as_clamped_bulleted_plan():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    tool = run.threads[0].tool_intervals[0]
+    tool.tool_name = "exec"
+    tool.argument_summary = (
+        'const r = await tools.update_plan({plan:[{step:"Inspect memory",'
+        'status:"in_progress"},{step:"Research Quarkus",status:"pending"},...'
+    )
+    tool.argument_content = (
+        'const r = await tools.update_plan({explanation:"Current status",plan:['
+        '{step:"Inspect memory",status:"in_progress"},'
+        '{step:"Research Quarkus",status:"pending"},'
+        '{step:"Author Quarkus skills",status:"pending"},'
+        '{step:"Regenerate documentation",status:"pending"},'
+        '{step:"Run required verification",status:"pending"}'
+        "]}); text(r);"
+    )
+
+    rendered = module._render_tool_argument(tool, module._load_tool_formatter_config())
+
+    assert '<details class="clamped-disclosure tool-argument-disclosure">' in rendered
+    assert rendered.count('<span class="tool-plan-preview-item">') == 5
+    assert rendered.count('<li class="tool-plan-item">') == 5
+    assert rendered.count('<ul class="tool-plan">') == 1
+    assert '<span class="state state-active">in progress</span>' in rendered
+    assert '<span class="state">pending</span>' in rendered
+    assert "Inspect memory" in rendered
+    assert "Run required verification" in rendered
+    assert '<span class="clamped-toggle clamped-more">more</span>' in rendered
+    assert '<button type="button" class="clamped-toggle clamped-less">less</button>' in rendered
+    assert '<details class="tool-argument-raw"><summary>raw</summary>' in rendered
+    assert "tools.update_plan" in rendered
+
+
+def test_native_codex_long_argument_cells_expand_to_full_bounded_content():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    tool = run.threads[0].tool_intervals[0]
+    tool.tool_name = "exec"
+    config = module._load_tool_formatter_config()
+
+    tool.argument_summary = '{"cmd":"short"}'
+    tool.argument_content = ""
+    short_rendered = module._render_tool_argument(tool, config)
+    assert "tool-argument-disclosure" not in short_rendered
+
+    tool.argument_summary = '{"cmd":"' + ("preview " * 50) + '..."}'
+    tool.argument_content = '{"cmd":"' + ("full argument " * 80) + 'END"}'
+    long_rendered = module._render_tool_argument(tool, config)
+
+    assert '<details class="clamped-disclosure tool-argument-disclosure">' in long_rendered
+    assert '<span class="clamped-preview">' in long_rendered
+    assert '<div class="clamped-full">' in long_rendered
+    assert "END" in long_rendered
+
+    mcp_call = module.McpCallInterval(
+        thread_id="root-thread",
+        turn_id="root-turn-1",
+        call_id="mcp-call-1",
+        server_name="mcp-agent-ops",
+        tool_name="claim_status",
+        started_at="2026-07-14T00:00:01Z",
+        completed_at="2026-07-14T00:00:02Z",
+        duration_ms=1_000,
+        argument_summary="repository: agent-runner",
+        argument_content='{"scope":"' + ("full MCP argument " * 40) + 'END"}',
+        result_summary="OK",
+        result_content="",
+        succeeded=True,
+        source_path="fixture.jsonl",
+        source_ordinal=1,
+    )
+    mcp_rendered = module._render_mcp_argument(mcp_call)
+    assert '<details class="clamped-disclosure tool-argument-disclosure">' in mcp_rendered
+    assert "END" in mcp_rendered
 
 
 def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tmp_path):
@@ -1180,7 +1341,10 @@ def test_native_codex_cli_accepts_custom_tool_formatter_config(tmp_path):
     assert rc == 0
     html = output_path.read_text(encoding="utf-8")
     assert "Custom exec summary" in html
-    assert '<details class="tool-argument-raw"><summary>raw</summary>' in html
+    assert (
+        '<details class="tool-argument-raw">'
+        '<summary>raw source command (redacted)</summary>' in html
+    )
 
 
 def test_discover_native_codex_run_aggregates_only_closed_descendant_set():
@@ -1396,7 +1560,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.12.0"
+    assert run.parser_version == "1.13.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
