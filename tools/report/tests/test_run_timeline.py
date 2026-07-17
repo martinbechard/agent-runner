@@ -809,7 +809,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "<summary>raw result</summary>" in html
     assert "raw result (redacted)" not in html
     assert "Agent path is reconstructed from Junie" in html
-    assert '<div class="agents-heading"><h2>Agents used</h2>' in html
+    assert '<div id="agents-used" class="agents-heading"><h2>Agents used</h2>' in html
     assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
     assert '<div class="agent-note-popover" role="note">' in html
     assert (
@@ -817,22 +817,19 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
         not in html
     )
     assert "Bars share a common run-wide time axis" in html
-    main_span_duration = module._format_detail_ms(
-        sum(turn.duration_ms for turn in main.turns)
-    )
-    custom_span_duration = module._format_detail_ms(
-        sum(turn.duration_ms for turn in custom.turns)
-    )
-    assert f"2 calls · {main_span_duration}" in html
-    assert f"1 call · {custom_span_duration}" in html
+    assert html.count('class="agent-summary-row"') == 2
+    assert html.count('class="agent-expanded-row" hidden') == 2
     assert "Cached input is part of input" not in html
     assert "Reasoning is part of output" not in html
     assert 'class="composition-output">output 5</span>' in html
     assert 'class="composition-reasoning">reasoning 0</span>' in html
     assert 'class="token-segment reasoning"' not in html
     assert "View task spans and tool calls" not in html
-    assert '.thread-detail > summary::before { content:"+";' in html
-    assert '.thread-detail[open] > summary::before { content:"−"; }' in html
+    assert '.agent-row-toggle-icon::before { content:"+"; }' in html
+    assert (
+        '.agent-row-toggle[aria-expanded="true"] '
+        '.agent-row-toggle-icon::before { content:"−"; }'
+    ) in html
     assert '<div class="label">User tasks</div><div class="value">1</div>' in html
     assert '<div class="label">Agent task spans</div><div class="value">2</div>' in html
     assert '<div class="label">Model responses</div><div class="value">2</div>' in html
@@ -1430,14 +1427,14 @@ def test_native_codex_identifies_encrypted_reasoning_without_exposing_it(tmp_pat
     assert "CIPHER-TEXT-MUST-NOT-APPEAR" not in html
 
 
-def test_native_codex_html_reuses_methodology_style_execution_drilldown():
+def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
 
     html = module.render_codex_rollout_html(run)
 
     assert "Token composition" in html
-    assert "Execution timeline" in html
+    assert "Execution timeline" not in html
     assert "Work units and attribution" not in html
     assert "Phase and lane aggregates" not in html
     assert "Bars share a common run-wide time axis" in html
@@ -1455,24 +1452,21 @@ def test_native_codex_html_reuses_methodology_style_execution_drilldown():
     assert 'class="composition-reasoning">reasoning 38</span>' in html
     assert 'class="token-segment output" style="width:14.000%"' in html
     assert 'class="token-segment reasoning" style="width:4.750%"' in html
-    assert 'class="thread-detail"' in html
+    assert 'class="agent-summary-row"' in html
+    assert 'class="agent-expanded-row" hidden' in html
+    assert 'class="agent-row-toggle" aria-expanded="false"' in html
     assert (
         ".turn-table .turn-timeline-header, .turn-table .turn-timeline-cell "
         "{ width:20%; min-width:220px; }" in html
     )
-    assert (
-        ".thread-detail > summary { display:grid; "
-        "grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px "
-        "minmax(220px,20%);"
-    ) in html
-    assert '.thread-detail > summary::before { content:"+";' in html
-    assert '.thread-detail[open] > summary::before { content:"−"; }' in html
-    assert "grid-template-columns:minmax(250px,2fr) auto auto" not in html
+    assert '.agent-row-toggle-icon::before { content:"+"; }' in html
+    assert "document.querySelectorAll(\".agent-summary-row\")" in html
+    assert 'href="#execution-timeline"' not in html
+    assert 'href="#agents-used"' in html
     assert "root-turn-1" in html
     assert "T+0s" in html
     assert "500ms" in html
     assert "exec × 1" in html
-    assert "1 call · 500ms" in html
     assert "Cached input is part of input" not in html
     assert "Reasoning is part of output" not in html
     assert "% of input" not in html
@@ -1538,7 +1532,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
-    assert 'href="#execution-timeline">close</a>' in root_turn_overlay
+    assert 'href="#agents-used">close</a>' in root_turn_overlay
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert '<div class="label">Start T+</div>' in root_turn_overlay
     assert '<div class="label">T+</div>' not in root_turn_overlay
@@ -1697,15 +1691,16 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "Nested rows are indented under their parent assignment" in html
     assert "Runtime nicknames appear in parentheses" in html
     agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
-    assert "<th>Parent assignment</th>" not in agent_table
-    assert "<th>State</th>" not in agent_table
-    assert "<th>Skills used</th>" in agent_table
-    assert '<th>Turns<br><span class="column-detail">(Tools/MCP)</span></th>' in agent_table
-    assert '<th>Agent time<br><span class="column-detail">(Cost)</span></th>' in agent_table
-    assert "<th>Model</th>" not in agent_table
-    assert "<th>Tools</th>" not in agent_table
-    assert "<th>Run share</th>" not in agent_table
-    assert "<th>Subagents invoked</th>" not in agent_table
+    agent_header = agent_table.split("</thead>", 1)[0]
+    assert "<th>Parent assignment</th>" not in agent_header
+    assert "<th>State</th>" not in agent_header
+    assert "<th>Skills used</th>" in agent_header
+    assert '<th>Turns<br><span class="column-detail">(Tools/MCP)</span></th>' in agent_header
+    assert '<th>Agent time<br><span class="column-detail">(Cost)</span></th>' in agent_header
+    assert "<th>Model</th>" not in agent_header
+    assert "<th>Tools</th>" not in agent_header
+    assert "<th>Run share</th>" not in agent_header
+    assert "<th>Subagents invoked</th>" not in agent_header
     assert '<col class="agent-skills-column">' in agent_table
     assert '<col class="agent-timeline-column">' in agent_table
     assert ".agent-table { table-layout:fixed; min-width:1200px; }" in html
@@ -1724,7 +1719,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
         ".agent-assignment-cell { --agent-indent:calc(var(--agent-depth) * 20px); "
         "padding-left:calc(7px + var(--agent-indent)); background:linear-gradient(to right,#0d47a1 0 var(--agent-indent),transparent var(--agent-indent)); }"
     ) in html
-    agent_rows = agent_table.split("<tbody>", 1)[1].split("</tbody>", 1)[0].split("</tr>")
+    agent_rows = [
+        '<tr class="agent-summary-row"' + fragment.split("</tr>", 1)[0]
+        for fragment in html.split('<tr class="agent-summary-row"')[1:]
+    ]
+    assert len(agent_rows) == 3
     assert 'class="agent-assignment-cell" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
     assert '<span class="visually-hidden">Top-level assignment.</span>' in agent_rows[0]
     assert '<strong>root</strong>' in agent_rows[0]
@@ -1738,7 +1737,9 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
     assert '<span class="cell-secondary">(1/0)</span>' in agent_rows[0]
     assert '<span class="cell-secondary">(22.5%)</span>' in agent_rows[0]
-    assert agent_table.count('class="timeline-bar agent-timeline-bar"') == 3
+    assert sum(
+        row.count('class="timeline-bar agent-timeline-bar"') for row in agent_rows
+    ) == 3
     for thread in run.threads:
         style = module._timeline_style(
             run,
@@ -1747,7 +1748,7 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
         )
         assert (
             'class="timeline-bar agent-timeline-bar" '
-            f'style="{style}"' in agent_table
+            f'style="{style}"' in html
         )
     assert 'class="agent-assignment-cell" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
     assert '<span class="visually-hidden">Nested assignment, depth 1.</span>' in agent_rows[1]
@@ -1952,7 +1953,7 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     assert "credits" not in markdown.lower()
 
 
-def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_costs():
+def test_native_codex_agent_details_use_agent_model_for_turn_and_agent_costs():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
@@ -1980,10 +1981,9 @@ def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_cos
         "</table>", 1
     )[0]
     assert '<span class="cell-secondary">($40.50)</span>' in agent_table
-    root_detail = html.split('<details class="thread-detail">', 1)[1].split(
-        "</details>", 1
-    )[0]
-    assert 'title="Agent cost estimate">cost $40.50' in root_detail
+    root_detail = html.split(
+        'id="agent-detail-1" class="agent-expanded-row" hidden', 1
+    )[1].split('data-agent-detail="agent-detail-2"', 1)[0]
     assert "<th>Cost est.</th>" in root_detail
     assert "$35.50" in root_detail
     assert "$5.00" in root_detail

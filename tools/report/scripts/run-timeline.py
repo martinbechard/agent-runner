@@ -3340,8 +3340,13 @@ def render_codex_rollout_html(
         if run.usage_totals.reasoning_tokens
         else ""
     )
-    agent_rows = []
-    for thread, agent_depth in _agent_inventory_threads(run):
+    agent_rows: list[tuple[str, str]] = []
+    agent_detail_ids: dict[str, str] = {}
+    for agent_index, (thread, agent_depth) in enumerate(
+        _agent_inventory_threads(run), start=1
+    ):
+        agent_detail_id = f"agent-detail-{agent_index}"
+        agent_detail_ids[thread.thread_id] = agent_detail_id
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         agent_cost = _cost_for_thread_usage(thread, thread.token_totals)
         run_share = thread.token_totals.processed_tokens / composition_total * 100
@@ -3360,15 +3365,20 @@ def render_codex_rollout_html(
             f"{_agent_assignment_label(thread)} observed span · "
             f"{_timestamp_offset_label(run, thread.started_at)}"
         )
-        agent_rows.append(
-            "<tr>"
+        agent_rows.append((
+            thread.thread_id,
+            f'<tr class="agent-summary-row" data-agent-detail="{agent_detail_id}">'
             f'<td class="agent-assignment-cell" data-depth="{agent_depth}" style="--agent-depth:{agent_depth}">'
             f'<span class="visually-hidden">{hierarchy_label}</span>'
+            '<div class="agent-assignment-line">'
+            '<button type="button" class="agent-row-toggle" aria-expanded="false" '
+            f'aria-controls="{agent_detail_id}" aria-label="Toggle details for {_escape_html(_agent_assignment_label(thread))}">'
+            '<span class="agent-row-toggle-icon" aria-hidden="true"></span></button>'
             '<div class="agent-assignment">'
             '<div class="agent-assignment-heading">'
             f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
             f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span></div>'
-            f'<code class="model-name">{_escape_html(thread.model or "—")}</code></div></td>'
+            f'<code class="model-name">{_escape_html(thread.model or "—")}</code></div></div></td>'
             f'<td class="agent-skills-cell">{skills_used_html}</td>'
             '<td class="agent-activity-cell">'
             f'<span class="cell-primary">{len(thread.turns):,}</span>'
@@ -3385,24 +3395,15 @@ def render_codex_rollout_html(
             '<span class="timeline-bar agent-timeline-bar" '
             f'style="{_timeline_style(run, thread.started_at, thread.last_observed_at)}"></span>'
             "</span></td>"
-            "</tr>"
-        )
-    thread_details = []
+            "</tr>",
+        ))
+    thread_details: dict[str, str] = {}
     tool_call_overlays = []
     turn_detail_overlays = []
     for thread_index, thread in enumerate(run.threads, start=1):
         tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
         agent_assignment = _agent_assignment(thread)
-        agent_cost = _cost_for_thread_usage(thread, thread.token_totals)
         thread_tools_label, _ = _tool_activity_summary(thread.tool_intervals)
-        thread_call_label = "call" if len(thread.tool_intervals) == 1 else "calls"
-        thread_span_duration = _format_detail_ms(
-            sum(turn.duration_ms for turn in thread.turns)
-        )
-        thread_tools_total = (
-            f"{len(thread.tool_intervals):,} {thread_call_label} · "
-            f"{thread_span_duration}"
-        )
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
         show_work_unit = len(work_units) > 1
         show_activity = any(turn.activity for turn in thread.turns)
@@ -3661,7 +3662,7 @@ def render_codex_rollout_html(
                 '<div class="tool-call-panel turn-detail-panel">'
                 '<div class="tool-call-header">'
                 f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_singular.capitalize()} {_escape_html(turn.turn_id)}</h2>'
-                '<a class="tool-call-close" href="#execution-timeline">close</a>'
+                '<a class="tool-call-close" href="#agents-used">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
                 f'<div class="metric"><div class="label">Start T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
@@ -3749,7 +3750,6 @@ def render_codex_rollout_html(
             + ("<th>Activity</th>" if show_activity else "")
         )
         metadata_note = " · ".join(metadata_notes)
-        agent_label = thread.agent_path or thread.agent_nickname or thread.thread_id
         thread_tool_rows_html = "".join(thread_tool_rows) or (
             f'<tr><td colspan="7">No {turn_plural} recorded</td></tr>'
         )
@@ -3758,7 +3758,7 @@ def render_codex_rollout_html(
             '<div class="tool-call-panel">'
             '<div class="tool-call-header">'
             f'<h2 id="{tool_call_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_plural} and tool calls</h2>'
-            '<a class="tool-call-close" href="#execution-timeline">close</a>'
+            '<a class="tool-call-close" href="#agents-used">close</a>'
             "</div>"
             f'<p class="execution-note">Select a {turn_singular} to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p>'
             f'<div class="table-scroll"><table><thead><tr><th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th><th>Cost estimate</th></tr></thead>'
@@ -3766,19 +3766,10 @@ def render_codex_rollout_html(
             "</div>"
             "</section>"
         )
-        thread_details.append(
-            '<details class="thread-detail">'
-            "<summary>"
-            f'<span class="thread-name">{_escape_html(agent_label)}</span>'
-            f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span>'
-            f'<span>{len(thread.turns)} {turn_singular if len(thread.turns) == 1 else turn_plural}</span>'
-            f'<span>{_escape_html(thread_tools_total)}</span>'
-            f'<span>{thread.token_totals.processed_tokens:,} tokens</span>'
-            f'<span title="Agent cost estimate">cost {_escape_html(_compact_cost_summary(agent_cost))}</span>'
-            '<span class="timeline-track">'
-            f'<span class="timeline-bar" style="{_timeline_style(run, thread.started_at, thread.last_observed_at)}"></span>'
-            "</span>"
-            "</summary>"
+        agent_detail_id = agent_detail_ids[thread.thread_id]
+        thread_details[thread.thread_id] = (
+            f'<tr id="{agent_detail_id}" class="agent-expanded-row" hidden>'
+            '<td colspan="6">'
             '<div class="thread-meta">'
             f"Thread <code>{_escape_html(thread.thread_id)}</code> · "
             f"parent <code>{_escape_html(thread.parent_thread_id or '—')}</code> · "
@@ -3792,8 +3783,12 @@ def render_codex_rollout_html(
             f"{optional_headers}<th>Input</th><th>Cache read</th><th>Cache write</th>"
             '<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
-            "</details>"
+            "</td></tr>"
         )
+    agent_rows_html = "".join(
+        summary_row + thread_details.get(thread_id, "")
+        for thread_id, summary_row in agent_rows
+    )
     diagnostics = "".join(f"<li>{_escape_html(item)}</li>" for item in run.diagnostics)
     pricing_rows = []
     for model, prices in _pricing_reference_rows():
@@ -3904,8 +3899,13 @@ td {{ font-size:.85em; }}
 .agent-skills-disclosure[open] .agent-skills-preview, .agent-skills-disclosure[open] .agent-skills-more {{ display:none; }}
 .agent-skills-disclosure[open] .agent-skills-less {{ display:inline-block; }}
 .agent-skills-full {{ margin-top:3px; }}
+.agent-assignment-line {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
+.agent-row-toggle {{ flex:0 0 auto; width:20px; height:20px; margin-top:1px; padding:0; border:1px solid #90a4ae; border-radius:50%; color:#455a64; background:#fff; cursor:pointer; font:700 14px/18px var(--font-ui); }}
+.agent-row-toggle-icon::before {{ content:"+"; }}
+.agent-row-toggle[aria-expanded="true"] .agent-row-toggle-icon::before {{ content:"−"; }}
+.agent-row-toggle:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
 .cell-primary, .cell-secondary {{ display:block; }}
 .cell-secondary {{ margin-top:2px; color:#607d8b; font-size:.86em; }}
@@ -3936,16 +3936,12 @@ td {{ font-size:.85em; }}
 .tool-result-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
 .drilldown-link {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .drilldown-link:hover {{ text-decoration:underline; }}
-.thread-detail {{ background:#fff; border:1px solid #dce3e7; border-radius:6px; margin:8px 0; }}
-.thread-detail > summary {{ display:grid; grid-template-columns:minmax(260px,2fr) 96px 78px 170px 150px 110px minmax(220px,20%); gap:12px; align-items:center; position:relative; padding:11px 13px 11px 40px; cursor:pointer; list-style:none; }}
-.thread-detail > summary::-webkit-details-marker {{ display:none; }}
-.thread-detail > summary::before {{ content:"+"; position:absolute; left:13px; width:18px; height:18px; display:grid; place-items:center; border:1px solid #90a4ae; border-radius:50%; color:#455a64; font-weight:700; line-height:1; }}
-.thread-detail[open] > summary::before {{ content:"−"; }}
-.thread-detail[open] > summary {{ border-bottom:1px solid #dce3e7; background:#f7f9fa; }}
-.thread-name {{ font-weight:600; overflow-wrap:anywhere; }}
+.agent-summary-row {{ cursor:pointer; }}
+.agent-summary-row.is-expanded > td {{ border-bottom:0; background-color:#f7f9fa; }}
+.agent-expanded-row > td {{ padding:0 13px 13px; white-space:normal; background:#f7f9fa; }}
 .thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
-.thread-detail h3, .thread-detail .table-scroll {{ margin-left:13px; margin-right:13px; }}
-.thread-detail .table-scroll {{ margin-bottom:13px; }}
+.agent-expanded-row h3, .agent-expanded-row .table-scroll {{ margin-left:13px; margin-right:13px; }}
+.agent-expanded-row .table-scroll {{ max-height:none; margin-bottom:0; }}
 .timeline-track {{ position:relative; display:block; height:12px; background:#e8edf0; border-radius:3px; min-width:180px; }}
 .timeline-bar {{ position:absolute; top:0; bottom:0; background:#4a90d9; border-radius:3px; }}
 .turn-table .turn-timeline-header, .turn-table .turn-timeline-cell {{ width:20%; min-width:220px; }}
@@ -3984,7 +3980,6 @@ td {{ font-size:.85em; }}
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
-@media (max-width:1240px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
@@ -4010,15 +4005,34 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </div>
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
-<div class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
-<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
-<h2 id="execution-timeline">Execution timeline</h2>
+<div id="agents-used" class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
-{''.join(thread_details)}
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
 {pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
 <h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
+<script>
+document.querySelectorAll(".agent-summary-row").forEach(function(row) {{
+  var button = row.querySelector(".agent-row-toggle");
+  var detail = document.getElementById(row.dataset.agentDetail);
+  if (!button || !detail) return;
+  function toggleAgentDetail() {{
+    var expanded = button.getAttribute("aria-expanded") === "true";
+    button.setAttribute("aria-expanded", expanded ? "false" : "true");
+    detail.hidden = expanded;
+    row.classList.toggle("is-expanded", !expanded);
+  }}
+  button.addEventListener("click", function(event) {{
+    event.stopPropagation();
+    toggleAgentDetail();
+  }});
+  row.addEventListener("click", function(event) {{
+    if (event.target.closest("a, button, details, summary")) return;
+    toggleAgentDetail();
+  }});
+}});
+</script>
 </body></html>"""
 
 
