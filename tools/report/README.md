@@ -32,7 +32,7 @@ installed command:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.2.0/agent_report-0.2.0-py3-none-any.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.3.0/agent_report-0.3.0-py3-none-any.whl
 agent-report <path> --output report.html
 ```
 
