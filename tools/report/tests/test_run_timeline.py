@@ -1700,6 +1700,7 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "<th>State</th>" not in agent_table
     assert "<th>Skills used</th>" in agent_table
     assert '<th>Turns<br><span class="column-detail">(Tools/MCP)</span></th>' in agent_table
+    assert '<th>Agent time<br><span class="column-detail">(Cost)</span></th>' in agent_table
     assert "<th>Model</th>" not in agent_table
     assert "<th>Tools</th>" not in agent_table
     assert "<th>Run share</th>" not in agent_table
@@ -1721,6 +1722,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert 'class="agent-assignment-cell" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
     assert '<span class="visually-hidden">Top-level assignment.</span>' in agent_rows[0]
     assert '<strong>root</strong>' in agent_rows[0]
+    assert (
+        '<div class="agent-assignment-heading"><strong>root</strong>'
+        '<span class="state state-complete">complete</span></div>'
+        in agent_rows[0]
+    )
     assert '<code class="model-name">gpt-5.4-mini</code>' in agent_rows[0]
     assert "/root" not in agent_rows[0]
     assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
@@ -1938,6 +1944,10 @@ def test_native_codex_execution_timeline_uses_agent_model_for_turn_and_agent_cos
 
     html = module.render_codex_rollout_html(run)
 
+    agent_table = html.split('<table class="agent-table">', 1)[1].split(
+        "</table>", 1
+    )[0]
+    assert '<span class="cell-secondary">($40.50)</span>' in agent_table
     root_detail = html.split('<details class="thread-detail">', 1)[1].split(
         "</details>", 1
     )[0]

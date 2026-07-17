@@ -3325,6 +3325,7 @@ def render_codex_rollout_html(
     agent_rows = []
     for thread, agent_depth in _agent_inventory_threads(run):
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
+        agent_cost = _cost_for_thread_usage(thread, thread.token_totals)
         run_share = thread.token_totals.processed_tokens / composition_total * 100
         skills_used = _inventory_text(thread.skills_used)
         activity_detail = (
@@ -3346,13 +3347,17 @@ def render_codex_rollout_html(
             f'<td class="agent-assignment-cell" data-depth="{agent_depth}" style="--agent-depth:{agent_depth}">'
             f'<span class="visually-hidden">{hierarchy_label}</span>'
             '<div class="agent-assignment">'
+            '<div class="agent-assignment-heading">'
             f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
-            f'<br><code class="model-name">{_escape_html(thread.model or "—")}</code></div></td>'
+            f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span></div>'
+            f'<code class="model-name">{_escape_html(thread.model or "—")}</code></div></td>'
             f'<td class="agent-skills-cell">{_escape_html(skills_used)}</td>'
             '<td class="agent-activity-cell">'
             f'<span class="cell-primary">{len(thread.turns):,}</span>'
             f'<span class="cell-secondary">{activity_detail}</span></td>'
-            f"<td>{_format_ms(agent_time_ms)}</td>"
+            '<td class="agent-time-cell">'
+            f'<span class="cell-primary">{_format_ms(agent_time_ms)}</span>'
+            f'<span class="cell-secondary">({_escape_html(_compact_cost_summary(agent_cost))})</span></td>'
             '<td class="agent-processed-cell">'
             f'<span class="cell-primary">{_format_compact_count(thread.token_totals.processed_tokens)}</span>'
             f'<span class="cell-secondary">({run_share:.1f}%)</span></td>'
@@ -3873,6 +3878,8 @@ td {{ font-size:.85em; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
 .agent-table .agent-skills-cell {{ font-size:.765em; }}
+.agent-assignment-heading {{ display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }}
+.agent-assignment-heading .state {{ flex:0 0 auto; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
 .cell-primary, .cell-secondary {{ display:block; }}
 .cell-secondary {{ margin-top:2px; color:#607d8b; font-size:.86em; }}
@@ -3978,7 +3985,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 <div class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
-<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
