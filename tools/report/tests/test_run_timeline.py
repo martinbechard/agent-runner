@@ -546,11 +546,17 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
 
     html = module.render_codex_rollout_html(run)
     markdown = module.render_codex_rollout_markdown(run)
+    agent_table = html.split('<table class="agent-table">', 1)[1].split(
+        "</table>", 1
+    )[0]
     overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
 
     assert '<div class="label">MCP calls</div><div class="value">3</div>' in html
+    assert "<th>Turns<br><span class=\"column-detail\">(Tools/MCP)</span></th>" in agent_table
+    assert '<span class="cell-secondary">(1/3)</span>' in agent_table
+    assert "gpt-5.4-mini" in agent_table
     assert '<div class="label">Skills via MCP</div><div class="value">2</div>' in overlay
     assert '<div class="label">Skills via Bash</div><div class="value">1</div>' in overlay
     assert '<div class="turn-skills-value">python · structured-design</div>' in overlay
@@ -845,7 +851,10 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
         "<td>17</td><td>5</td><td>2</td><td>10</td>"
         "<td>3</td><td>0</td>" in task_span_table
     )
-    assert "<th>Task spans</th>" in html
+    assert (
+        '<th>Task spans<br><span class="column-detail">(Tools)</span></th>'
+        in html
+    )
     assert "Task span task-1" in html
     assert "Write 2 files" in html
     assert "docs/architecture/example.md" in html
@@ -1706,11 +1715,16 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "<th>Parent assignment</th>" not in agent_table
     assert "<th>State</th>" not in agent_table
     assert "<th>Skills used</th>" in agent_table
+    assert '<th>Turns<br><span class="column-detail">(Tools/MCP)</span></th>' in agent_table
+    assert "<th>Model</th>" not in agent_table
+    assert "<th>Tools</th>" not in agent_table
+    assert "<th>Run share</th>" not in agent_table
     assert "<th>Subagents invoked</th>" not in agent_table
     assert '<col class="agent-skills-column">' in agent_table
     assert ".agent-table { table-layout:fixed; min-width:1200px; }" in html
-    assert ".agent-table .agent-assignment-column { width:30%; }" in html
-    assert ".agent-table .agent-skills-column { width:30%; }" in html
+    assert ".agent-table .agent-assignment-column { width:40%; }" in html
+    assert ".agent-table .agent-skills-column { width:15%; }" in html
+    assert ".agent-table .agent-skills-cell { font-size:.765em; }" in html
     assert "agent-subagents-column" not in html
     assert ".agent-table td { vertical-align:top; }" in html
     assert (
@@ -1721,13 +1735,28 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert 'class="agent-assignment-cell" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
     assert '<span class="visually-hidden">Top-level assignment.</span>' in agent_rows[0]
     assert '<strong>root</strong>' in agent_rows[0]
+    assert '<code class="model-name">gpt-5.4-mini</code>' in agent_rows[0]
+    assert "/root" not in agent_rows[0]
     assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
+    assert '<span class="cell-secondary">(1/0)</span>' in agent_rows[0]
+    assert '<span class="cell-secondary">(22.5%)</span>' in agent_rows[0]
     assert 'class="agent-assignment-cell" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
     assert '<span class="visually-hidden">Nested assignment, depth 1.</span>' in agent_rows[1]
     assert '<strong>module-a (module-a)</strong>' in agent_rows[1]
     assert 'class="agent-assignment-cell" data-depth="2" style="--agent-depth:2"' in agent_rows[2]
     assert '<span class="visually-hidden">Nested assignment, depth 2.</span>' in agent_rows[2]
     assert '<strong>reviewer (reviewer)</strong>' in agent_rows[2]
+
+
+def test_compact_count_uses_thousands_and_millions():
+    module = _load_module()
+
+    assert module._format_compact_count(999) == "999"
+    assert module._format_compact_count(1_000) == "1.0K"
+    assert module._format_compact_count(12_345) == "12.3K"
+    assert module._format_compact_count(1_000_000) == "1.0M"
+    assert module._format_compact_count(12_345_678) == "12.3M"
+    assert module._format_compact_count(1_234_567_890) == "1,234.6M"
 
 
 def test_native_codex_markdown_includes_turn_and_tool_breakdown():

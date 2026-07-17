@@ -3002,6 +3002,15 @@ def _format_ms(milliseconds: int) -> str:
     return _fmt_duration(milliseconds / 1000)
 
 
+def _format_compact_count(value: int) -> str:
+    """Format large table counts with one decimal and a stable unit suffix."""
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:,.1f}M"
+    if value >= 1_000:
+        return f"{value / 1_000:,.1f}K"
+    return f"{value:,}"
+
+
 def _cost_summary(cost: CostAssessment) -> str:
     if cost.status == "estimated" and cost.total_cost is not None:
         return (
@@ -3276,6 +3285,11 @@ def render_codex_rollout_html(
     turn_singular = "task span" if is_junie else "turn"
     turn_plural = "task spans" if is_junie else "turns"
     turn_column_label = "Task spans" if is_junie else "Turns"
+    agent_activity_heading = (
+        f'{turn_column_label}<br><span class="column-detail">(Tools)</span>'
+        if is_junie
+        else f'{turn_column_label}<br><span class="column-detail">(Tools/MCP)</span>'
+    )
     turn_activity_label = "Task span activity" if is_junie else "Turn activity"
     turn_id_label = "Task ID" if is_junie else "Turn"
     activity_metric_cards = (
@@ -3321,6 +3335,11 @@ def render_codex_rollout_html(
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         run_share = thread.token_totals.processed_tokens / composition_total * 100
         skills_used = _inventory_text(thread.skills_used)
+        activity_detail = (
+            f"({len(thread.tool_intervals):,})"
+            if is_junie
+            else f"({len(thread.tool_intervals):,}/{len(thread.mcp_calls):,})"
+        )
         hierarchy_label = (
             "Top-level assignment."
             if agent_depth == 0
@@ -3332,14 +3351,15 @@ def render_codex_rollout_html(
             f'<span class="visually-hidden">{hierarchy_label}</span>'
             '<div class="agent-assignment">'
             f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
-            f"<br><code>{_escape_html(thread.agent_path or '—')}</code></div></td>"
+            f'<br><code class="model-name">{_escape_html(thread.model or "—")}</code></div></td>'
             f'<td class="agent-skills-cell">{_escape_html(skills_used)}</td>'
-            f"<td>{_escape_html(thread.model or '—')}</td>"
-            f"<td>{len(thread.turns):,}</td>"
+            '<td class="agent-activity-cell">'
+            f'<span class="cell-primary">{len(thread.turns):,}</span>'
+            f'<span class="cell-secondary">{activity_detail}</span></td>'
             f"<td>{_format_ms(agent_time_ms)}</td>"
-            f"<td>{len(thread.tool_intervals):,}</td>"
-            f"<td>{thread.token_totals.processed_tokens:,}</td>"
-            f"<td>{run_share:.1f}%</td>"
+            '<td class="agent-processed-cell">'
+            f'<span class="cell-primary">{_format_compact_count(thread.token_totals.processed_tokens)}</span>'
+            f'<span class="cell-secondary">({run_share:.1f}%)</span></td>'
             "</tr>"
         )
     thread_details = []
@@ -3871,17 +3891,18 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
-.agent-table .agent-assignment-column {{ width:30%; }}
-.agent-table .agent-skills-column {{ width:30%; }}
-.agent-table .agent-model-column {{ width:10%; }}
-.agent-table .agent-count-column {{ width:6%; }}
-.agent-table .agent-time-column {{ width:8%; }}
-.agent-table .agent-tools-column {{ width:5%; }}
-.agent-table .agent-processed-column {{ width:7%; }}
-.agent-table .agent-share-column {{ width:4%; }}
+.agent-table .agent-assignment-column {{ width:40%; }}
+.agent-table .agent-skills-column {{ width:15%; }}
+.agent-table .agent-count-column {{ width:15%; }}
+.agent-table .agent-time-column {{ width:15%; }}
+.agent-table .agent-processed-column {{ width:15%; }}
 .agent-table th {{ white-space:normal; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
+.agent-table .agent-skills-cell {{ font-size:.765em; }}
+.column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
+.cell-primary, .cell-secondary {{ display:block; }}
+.cell-secondary {{ margin-top:2px; color:#607d8b; font-size:.86em; }}
 .agent-assignment-cell {{ --agent-indent:calc(var(--agent-depth) * 20px); padding-left:calc(7px + var(--agent-indent)); background:linear-gradient(to right,#0d47a1 0 var(--agent-indent),transparent var(--agent-indent)); }}
 .agents-heading {{ position:relative; display:flex; align-items:center; margin-top:30px; }}
 .agents-heading h2 {{ margin:0; }}
@@ -3973,7 +3994,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
 <div class="metrics">
-<div class="metric"><div class="label">Processed tokens</div><div class="value">{run.usage_totals.processed_tokens:,}</div></div>
+<div class="metric"><div class="label">Processed tokens</div><div class="value">{_format_compact_count(run.usage_totals.processed_tokens)}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
 {activity_metric_cards}
 <div class="metric"><div class="label">Matched tool calls</div><div class="value">{tool_count:,}</div></div>
@@ -3993,7 +4014,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 <div class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
-<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-model-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-tools-column"><col class="agent-processed-column"><col class="agent-share-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>Model</th><th>{turn_column_label}</th><th>Agent time</th><th>Tools</th><th>Processed</th><th>Run share</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time</th><th>Processed</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
