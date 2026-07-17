@@ -3178,22 +3178,36 @@ def _inventory_text(values: list[str]) -> str:
     return " · ".join(values) if values else "—"
 
 
-def _agent_skills_html(values: list[str]) -> str:
-    """Render long skill inventories as a five-line expandable disclosure."""
+def _clamped_inventory_html(
+    text: str,
+    item_count: int,
+    context_class: str,
+) -> str:
+    """Render long inventory text as a reusable five-line disclosure."""
 
-    skills_text = _escape_html(_inventory_text(values))
-    if len(values) <= 5:
-        return skills_text
+    inventory_text = _escape_html(text)
+    if item_count <= 5:
+        return inventory_text
     return (
-        '<details class="agent-skills-disclosure">'
-        '<summary><span class="agent-skills-preview">'
-        f"{skills_text}</span>"
-        '<span class="agent-skills-toggle agent-skills-more">more</span>'
+        f'<details class="clamped-disclosure {context_class}">'
+        '<summary><span class="clamped-preview">'
+        f"{inventory_text}</span>"
+        '<span class="clamped-toggle clamped-more">more</span>'
         "</summary>"
-        f'<div class="agent-skills-full">{skills_text}'
-        '<button type="button" class="agent-skills-toggle agent-skills-less">less</button>'
+        f'<div class="clamped-full">{inventory_text}'
+        '<button type="button" class="clamped-toggle clamped-less">less</button>'
         "</div>"
         "</details>"
+    )
+
+
+def _agent_skills_html(values: list[str]) -> str:
+    """Render agent skills using the shared inventory disclosure."""
+
+    return _clamped_inventory_html(
+        _inventory_text(values),
+        len(values),
+        "agent-skills-disclosure",
     )
 
 
@@ -3657,6 +3671,21 @@ def render_codex_rollout_html(
             )
             mcp_skills = _inventory_text(turn.mcp_skills_loaded)
             bash_skills = _inventory_text(turn.bash_skills_loaded)
+            mcp_calls_html = _clamped_inventory_html(
+                mcp_names,
+                len(mcp_calls),
+                "turn-mcp-calls-disclosure",
+            )
+            mcp_skills_html = _clamped_inventory_html(
+                mcp_skills,
+                len(turn.mcp_skills_loaded),
+                "turn-mcp-skills-disclosure",
+            )
+            bash_skills_html = _clamped_inventory_html(
+                bash_skills,
+                len(turn.bash_skills_loaded),
+                "turn-bash-skills-disclosure",
+            )
             abort_provenance_detail = _render_abort_provenance_detail(turn)
             turn_detail_overlays.append(
                 f'<section id="{turn_detail_overlay_id}" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="{turn_detail_overlay_id}-title">'
@@ -3674,14 +3703,14 @@ def render_codex_rollout_html(
                 f'<div class="metric"><div class="label">Cost estimate</div><div class="value">{_escape_html(_compact_cost_summary(turn_cost))}</div></div>'
                 '<div class="metric turn-mcp-count-metric"><div class="label">MCP calls</div>'
                 f'<div class="value">{turn.mcp_call_count:,}</div>'
-                f'<span class="metric-detail">{_escape_html(mcp_names)}</span>'
+                f'<div class="metric-detail">{mcp_calls_html}</div>'
                 f'<span class="turn-state-source">{_escape_html(mcp_total)}</span></div>'
                 '<div class="metric turn-mcp-skills-metric"><div class="label">Skills via MCP</div>'
                 f'<div class="value">{len(turn.mcp_skills_loaded):,}</div>'
-                f'<span class="metric-detail">{_escape_html(mcp_skills)}</span></div>'
+                f'<div class="metric-detail">{mcp_skills_html}</div></div>'
                 '<div class="metric turn-bash-skills-metric"><div class="label">Skills via Bash</div>'
                 f'<div class="value">{len(turn.bash_skills_loaded):,}</div>'
-                f'<span class="metric-detail">{_escape_html(bash_skills)}</span></div>'
+                f'<div class="metric-detail">{bash_skills_html}</div></div>'
                 '<div class="metric turn-tools-metric"><div class="label">Tools used</div>'
                 f'<div class="value">{_escape_html(tool_names)}</div>'
                 f'<span class="metric-detail">{_escape_html(tool_total)}</span></div>'
@@ -3892,13 +3921,13 @@ td {{ font-size:.85em; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
 .agent-table .agent-skills-cell {{ font-size:.765em; }}
-.agent-skills-disclosure > summary {{ list-style:none; cursor:pointer; }}
-.agent-skills-disclosure > summary::-webkit-details-marker {{ display:none; }}
-.agent-skills-preview {{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }}
-.agent-skills-toggle {{ display:inline-block; margin-top:2px; padding:0; border:0; color:#2563a6; background:none; cursor:pointer; font:inherit; text-decoration:underline; }}
-.agent-skills-disclosure[open] > summary {{ display:none; }}
-.agent-skills-full {{ margin-top:0; }}
-.agent-skills-less {{ display:block; margin-top:3px; }}
+.clamped-disclosure > summary {{ list-style:none; cursor:pointer; }}
+.clamped-disclosure > summary::-webkit-details-marker {{ display:none; }}
+.clamped-preview {{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }}
+.clamped-toggle {{ display:inline-block; margin-top:2px; padding:0; border:0; color:#2563a6; background:none; cursor:pointer; font:inherit; text-decoration:underline; }}
+.clamped-disclosure[open] > summary {{ display:none; }}
+.clamped-full {{ margin-top:0; }}
+.clamped-less {{ display:block; margin-top:3px; }}
 .agent-assignment-line {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
@@ -4032,10 +4061,10 @@ document.querySelectorAll(".agent-summary-row").forEach(function(row) {{
     toggleAgentDetail();
   }});
 }});
-document.querySelectorAll(".agent-skills-less").forEach(function(button) {{
+document.querySelectorAll(".clamped-less").forEach(function(button) {{
   button.addEventListener("click", function(event) {{
     event.stopPropagation();
-    var disclosure = button.closest(".agent-skills-disclosure");
+    var disclosure = button.closest(".clamped-disclosure");
     if (disclosure) disclosure.open = false;
   }});
 }});

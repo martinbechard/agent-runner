@@ -566,6 +566,32 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     assert "skills: structured-design · python" in overlay
     assert "OK · 2 skills · 0 errors · revision af37d9ac" in overlay
     assert "MCP-recorded execution time" not in overlay
+
+    thread.mcp_calls = thread.mcp_calls * 2
+    turn.mcp_call_count = len(thread.mcp_calls)
+    turn.mcp_skills_loaded = [f"mcp-skill-{index}" for index in range(1, 7)]
+    turn.bash_skills_loaded = [f"bash-skill-{index}" for index in range(1, 7)]
+    clamped_html = module.render_codex_rollout_html(run)
+    clamped_overlay = clamped_html.split(
+        'id="turn-tool-call-list-1-1"', 1
+    )[1].split("</section>", 1)[0]
+
+    assert (
+        '<details class="clamped-disclosure turn-mcp-calls-disclosure">'
+        in clamped_overlay
+    )
+    assert (
+        '<details class="clamped-disclosure turn-mcp-skills-disclosure">'
+        in clamped_overlay
+    )
+    assert (
+        '<details class="clamped-disclosure turn-bash-skills-disclosure">'
+        in clamped_overlay
+    )
+    assert clamped_overlay.count('class="clamped-toggle clamped-more"') == 3
+    assert clamped_overlay.count('class="clamped-toggle clamped-less"') == 3
+    assert "mcp-skill-6" in clamped_overlay
+    assert "bash-skill-6" in clamped_overlay
     assert "- MCP calls: 3" in markdown
     assert "PRIVATE" not in html
 
@@ -1769,24 +1795,24 @@ def test_native_codex_html_clamps_long_agent_skill_lists_with_disclosure():
         "</table>", 1
     )[0]
 
-    assert '<details class="agent-skills-disclosure">' in agent_table
+    assert '<details class="clamped-disclosure agent-skills-disclosure">' in agent_table
     assert (
-        '<span class="agent-skills-preview">skill-1 · skill-2 · skill-3 · '
+        '<span class="clamped-preview">skill-1 · skill-2 · skill-3 · '
         "skill-4 · skill-5 · skill-6</span>"
     ) in agent_table
-    assert '<span class="agent-skills-toggle agent-skills-more">more</span>' in agent_table
+    assert '<span class="clamped-toggle clamped-more">more</span>' in agent_table
     assert (
-        '<div class="agent-skills-full">skill-1 · skill-2 · skill-3 · skill-4 · '
+        '<div class="clamped-full">skill-1 · skill-2 · skill-3 · skill-4 · '
         'skill-5 · skill-6<button type="button" '
-        'class="agent-skills-toggle agent-skills-less">less</button></div>'
+        'class="clamped-toggle clamped-less">less</button></div>'
     ) in agent_table
-    assert '<span class="agent-skills-toggle agent-skills-less">' not in agent_table
+    assert '<span class="clamped-toggle clamped-less">' not in agent_table
     assert (
-        ".agent-skills-preview { display:-webkit-box; -webkit-box-orient:vertical; "
+        ".clamped-preview { display:-webkit-box; -webkit-box-orient:vertical; "
         "-webkit-line-clamp:5; overflow:hidden; }"
     ) in html
-    assert ".agent-skills-disclosure[open] > summary { display:none; }" in html
-    assert 'document.querySelectorAll(".agent-skills-less")' in html
+    assert ".clamped-disclosure[open] > summary { display:none; }" in html
+    assert 'document.querySelectorAll(".clamped-less")' in html
 
 
 def test_compact_count_uses_thousands_and_millions():
