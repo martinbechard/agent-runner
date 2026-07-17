@@ -3904,7 +3904,7 @@ td {{ font-size:.85em; }}
 .agent-skills-disclosure[open] .agent-skills-preview, .agent-skills-disclosure[open] .agent-skills-more {{ display:none; }}
 .agent-skills-disclosure[open] .agent-skills-less {{ display:inline-block; }}
 .agent-skills-full {{ margin-top:3px; }}
-.agent-assignment-heading {{ display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }}
+.agent-assignment-heading {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
 .cell-primary, .cell-secondary {{ display:block; }}

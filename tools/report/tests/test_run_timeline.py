@@ -1713,6 +1713,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert ".agent-table .agent-skills-column { width:15%; }" in html
     assert ".agent-table .agent-timeline-column { width:25%; }" in html
     assert ".agent-table .agent-skills-cell { font-size:.765em; }" in html
+    assert ".agent-assignment-heading { display:flex; align-items:flex-start; gap:8px; }" in html
+    assert (
+        ".agent-assignment-heading { display:flex; align-items:flex-start; "
+        "justify-content:space-between; gap:8px; }"
+    ) not in html
     assert "agent-subagents-column" not in html
     assert ".agent-table td { vertical-align:top; }" in html
     assert (
