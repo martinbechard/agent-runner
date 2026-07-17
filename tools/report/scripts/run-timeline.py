@@ -2151,7 +2151,7 @@ def _cost_for_usage(
         cached_input_cost=cached_cost,
         output_cost=output_cost,
         total_cost=input_cost + cached_cost + output_cost,
-        method="API-equivalent token-price estimate; not an actual Codex charge",
+        method="API-equivalent token-price estimate; not an actual charge",
     )
 
 
@@ -3015,7 +3015,7 @@ def _cost_summary(cost: CostAssessment) -> str:
     if cost.status == "estimated" and cost.total_cost is not None:
         return (
             f"API-equivalent estimate: ${cost.total_cost:.2f} USD "
-            "(estimate, not an actual Codex charge or invoice)"
+            "(estimate, not an actual charge or invoice)"
         )
     if cost.status == "subscription-no-charge-data":
         return "Subscription usage; no monetary charge telemetry available"
@@ -4000,7 +4000,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
 </div>
-<p class="notice">{_escape_html(_cost_summary(run.cost))}. Critical path: {_format_ms(run.critical_path_ms)} ({_escape_html(run.critical_path_method)}).</p>
+<p class="notice">{_escape_html(_cost_summary(run.cost))}.</p>
 <h2>Token composition</h2>
 <div class="token-composition" title="Processed token composition">
 <span class="token-segment cached" style="width:{cached_width:.3f}%"></span>

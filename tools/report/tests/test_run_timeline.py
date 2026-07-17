@@ -1349,7 +1349,8 @@ def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
         assert "PRIVATE-FINAL-CONTENT" not in output
     assert run.cost.status == "estimated"
     assert "API-equivalent estimate" in outputs[-1]
-    assert "not an actual Codex charge" in outputs[-1]
+    assert "not an actual charge" in outputs[-1]
+    assert "Critical path:" not in outputs[-1]
 
 
 def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
@@ -1913,7 +1914,7 @@ def test_native_codex_cost_uses_api_usd_without_credit_estimates():
     assert cost.status == "estimated"
     assert cost.total_cost == 35.5
     assert not hasattr(cost, "estimated_credits")
-    assert cost.method == "API-equivalent token-price estimate; not an actual Codex charge"
+    assert cost.method == "API-equivalent token-price estimate; not an actual charge"
 
 
 def test_native_codex_cost_display_is_compact_and_rounded():
@@ -1929,14 +1930,16 @@ def test_native_codex_cost_display_is_compact_and_rounded():
 
     assert module._cost_summary(cost) == (
         "API-equivalent estimate: $1.33 USD "
-        "(estimate, not an actual Codex charge or invoice)"
+        "(estimate, not an actual charge or invoice)"
     )
     assert module._compact_cost_summary(cost) == "$1.33"
     assert module._compact_cost_summary(recorded_cost) == "$1.33"
 
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     html = module.render_codex_rollout_html(run)
-    assert html.count("not an actual Codex charge or invoice") == 1
+    assert html.count("not an actual charge or invoice") == 1
+    assert "not an actual Codex charge or invoice" not in html
+    assert "Critical path:" not in html
     assert "<th>Cost estimate</th>" in html
     assert "Codex rate-card estimate" not in html
     assert "credits" not in html.lower()
