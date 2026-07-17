@@ -849,8 +849,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
         "<strong>Thread: Review the implementation · Agent: reviewer</strong>"
         in html
     )
-    assert '<div id="agents-used" class="agents-heading"><h2>Agents used</h2>' in html
-    assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
+    assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in html
+    assert '<summary aria-label="About Timeline">ⓘ</summary>' in html
     assert '<div class="agent-note-popover" role="note">' in html
     assert (
         '<p class="execution-note">Thread names come from Junie'
@@ -1024,7 +1024,7 @@ def test_native_junie_ide_chain_reports_finished_tasks_without_cumulative_double
     assert "gpt-5.6-terra" in html
     assert "typescript" in html
     assert "This Junie IDE chain contains one main agent." in html
-    assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
+    assert '<summary aria-label="About Timeline">ⓘ</summary>' in html
     assert '<div class="agent-note-popover" role="note">' in html
     assert '<p class="run-label">Synthetic Junie IDE chain</p>' in html
     assert "Task costs come directly from Junie" in html
@@ -1502,7 +1502,7 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert '.agent-row-toggle-icon::before { content:"+"; }' in html
     assert "document.querySelectorAll(\".agent-summary-row\")" in html
     assert 'href="#execution-timeline"' not in html
-    assert 'href="#agents-used"' in html
+    assert 'href="#timeline"' in html
     assert "root-turn-1" in html
     assert "T+0s" in html
     assert "500ms" in html
@@ -1572,7 +1572,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
-    assert 'href="#agents-used">close</a>' in root_turn_overlay
+    assert 'href="#timeline">close</a>' in root_turn_overlay
     assert 'href="#turn-tool-call-list-1"' not in root_turn_overlay
     assert '<div class="label">Start T+</div>' in root_turn_overlay
     assert '<div class="label">T+</div>' not in root_turn_overlay
@@ -1727,10 +1727,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
 
     html = module.render_codex_rollout_html(run)
 
-    assert "Agents used" in html
+    assert '<div class="label">Agents used</div>' in html
+    assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in html
     assert '<div class="label">Summed agent time</div>' not in html
     assert '<div class="label">Active interval union</div>' not in html
-    assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
+    assert '<summary aria-label="About Timeline">ⓘ</summary>' in html
     assert '<div class="agent-note-popover" role="note">' in html
     assert "Assignment" in html
     assert "<th>Runtime nickname</th>" not in html
@@ -2052,8 +2053,17 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     assert module._compact_cost_summary(recorded_cost) == "$1.33"
 
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    run.cost = module.CostAssessment(status="estimated", total_cost=917.35)
+    run.observed_at = "2026-07-16T22:15:00+00:00"
     html = module.render_codex_rollout_html(run)
+    assert (
+        "· observed 2026-07-16T22:15:00+00:00 · "
+        "API-equivalent estimate: $917.35 USD "
+        "(estimate, not an actual charge or invoice).</p>"
+    ) in html
     assert html.count("not an actual charge or invoice") == 1
+    assert '<p class="notice">' not in html
+    assert "<h2>Diagnostics</h2>" not in html
     assert "not an actual Codex charge or invoice" not in html
     assert "Critical path:" not in html
     assert "<th>Cost estimate</th>" in html
@@ -2117,7 +2127,7 @@ def test_native_codex_html_opens_model_pricing_in_new_tab():
     html = module.render_codex_rollout_html(run)
 
     normal_flow_before_agents = html.split("<body>", 1)[1].split(
-        '<div class="agents-heading"><h2>Agents used</h2>', 1
+        '<div id="timeline" class="agents-heading"><h2>Timeline</h2>', 1
     )[0]
     assert "<h2>Model pricing</h2>" not in normal_flow_before_agents
     assert 'href="#model-pricing" target="_blank" rel="noopener"' in html

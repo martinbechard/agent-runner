@@ -3723,7 +3723,7 @@ def render_codex_rollout_html(
                 '<div class="tool-call-panel turn-detail-panel">'
                 '<div class="tool-call-header">'
                 f'<h2 id="{turn_detail_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_singular.capitalize()} {_escape_html(turn.turn_id)}</h2>'
-                '<a class="tool-call-close" href="#agents-used">close</a>'
+                '<a class="tool-call-close" href="#timeline">close</a>'
                 "</div>"
                 '<div class="metrics turn-detail-metrics">'
                 f'<div class="metric"><div class="label">Start T+</div><div class="value">{_turn_offset_label(run, turn).removeprefix("T+")}</div></div>'
@@ -3819,7 +3819,7 @@ def render_codex_rollout_html(
             '<div class="tool-call-panel">'
             '<div class="tool-call-header">'
             f'<h2 id="{tool_call_overlay_id}-title">{_escape_html(agent_assignment)} — {turn_plural} and tool calls</h2>'
-            '<a class="tool-call-close" href="#agents-used">close</a>'
+            '<a class="tool-call-close" href="#timeline">close</a>'
             "</div>"
             f'<p class="execution-note">Select a {turn_singular} to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p>'
             f'<div class="table-scroll"><table><thead><tr><th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th><th>Cost estimate</th></tr></thead>'
@@ -3850,7 +3850,6 @@ def render_codex_rollout_html(
         summary_row + thread_details.get(thread_id, "")
         for thread_id, summary_row in agent_rows
     )
-    diagnostics = "".join(f"<li>{_escape_html(item)}</li>" for item in run.diagnostics)
     pricing_rows = []
     for model, prices in _pricing_reference_rows():
         pricing_rows.append(
@@ -3935,7 +3934,6 @@ th,td {{ border-bottom:1px solid #e1e6ea; padding:7px; text-align:left; white-sp
 th {{ color:#546e7a; font-size:.8em; background:#f5f7f8; position:sticky; top:0; }}
 td {{ font-size:.85em; }}
 .table-scroll {{ overflow:auto; max-height:65vh; border:1px solid #e1e6ea; border-radius:5px; }}
-.notice {{ background:#fff8dc; border-left:4px solid #d6a700; padding:10px; }}
 .token-composition {{ display:flex; height:18px; overflow:hidden; border-radius:5px; background:#e8edf0; max-width:900px; }}
 .token-segment {{ min-width:1px; }}
 .cached {{ background:var(--token-cached); }} .fresh {{ background:var(--token-fresh); }} .output {{ background:var(--token-output); }} .reasoning {{ background:var(--token-reasoning); }}
@@ -4038,13 +4036,12 @@ td {{ font-size:.85em; }}
 .turn-detail-table .turn-detail-result-column {{ width:29.5%; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
-.diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
 {run_label_html}
-<p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)}</p>
+<p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{_format_compact_count(run.usage_totals.processed_tokens)}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
@@ -4055,7 +4052,6 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
 </div>
-<p class="notice">{_escape_html(_cost_summary(run.cost))}.</p>
 <h2>Token composition</h2>
 <div class="token-composition" title="Processed token composition">
 <span class="token-segment cached" style="width:{cached_width:.3f}%"></span>
@@ -4065,13 +4061,12 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </div>
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
-<div id="agents-used" class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
+<div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
 {pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
-<h2>Diagnostics</h2><details class="diagnostics"><summary>{len(run.diagnostics):,} diagnostics</summary><ul>{diagnostics or '<li>None</li>'}</ul></details>
 <script>
 document.querySelectorAll(".agent-summary-row").forEach(function(row) {{
   var button = row.querySelector(".agent-row-toggle");
