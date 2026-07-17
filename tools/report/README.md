@@ -57,6 +57,39 @@ python tools/report/scripts/run-timeline.py \
   --output codex-run.html
 ```
 
+Discover reportable root runs by inclusive UTC date range without first finding
+a thread ID. The Codex catalog scans both `~/.codex/sessions` and
+`~/.codex/archived_sessions` by default. It lists each root run's bounded task
+title, start time, workspace, store, thread ID, and rollout path; descendant
+rollouts remain part of their root report rather than appearing as separate
+catalog entries:
+
+```bash
+agent-report \
+  --codex-catalog \
+  --from-date 2026-07-14 \
+  --to-date 2026-07-17 \
+  --output agent-reports/index.html
+```
+
+Add `--generate-batch` to generate every selected report under a sibling
+`reports/` directory. The catalog links down to each report and every report
+links back to the catalog:
+
+```bash
+agent-report \
+  --codex-catalog \
+  --from-date 2026-07-14 \
+  --to-date 2026-07-17 \
+  --workspace-contains agent-runner \
+  --generate-batch \
+  --output agent-reports/index.html
+```
+
+Use `--title-contains` for a case-insensitive task-title filter and repeat
+`--catalog-root PATH` to replace the default stores with caller-bounded search
+roots.
+
 The default formatter config recognizes patches, agent claims, repository
 checks combined with skill-file line counts, standalone skill-file line counts,
 inter-agent messages, agent lifecycle calls, and waits. Rules are evaluated in
@@ -84,6 +117,19 @@ Report a Junie session directly from its durable event stream:
 python tools/report/scripts/run-timeline.py \
   ~/.junie/sessions/session-YYMMDD-HHMMSS-ID \
   --output junie-run.html
+```
+
+Junie has the parallel catalog and batch workflow. It scans
+`~/.junie/sessions` for durable `events.jsonl` streams by default and accepts
+the same date, title, workspace/source-path, and custom-root filters:
+
+```bash
+agent-report \
+  --junie-catalog \
+  --from-date 2026-07-14 \
+  --to-date 2026-07-17 \
+  --generate-batch \
+  --output junie-reports/index.html
 ```
 
 Junie reports collapse repeated block updates by `stepId`, reconstruct the main

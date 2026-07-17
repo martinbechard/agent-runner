@@ -20,6 +20,10 @@ This section defines the outcome and boundary of native Codex and Junie executio
   - **SYNOPSIS:** Detect Junie `events.jsonl` session streams, reconstruct task and custom-agent boundaries, distinguish user tasks from per-agent task spans and model responses, collapse repeated block updates, recognize terminal heredoc file writes, and aggregate recorded model usage and cost.
   - **BECAUSE:** The rendered Junie transcript omits timestamps, full results, and accounting metadata that remain available in the durable session event stream.
 
+- **GOAL: GOAL-5** Discover reportable runs before selecting one
+  - **SYNOPSIS:** Generate separate Codex and Junie HTML catalogs over caller-bounded log stores, filter root runs by inclusive UTC date range, bounded title, or workspace/source path, and optionally generate every selected report as a linked batch.
+  - **BECAUSE:** Operators should not need to know a thread ID or manually search active and archived log directories before using the reporter.
+
 - **REQUIREMENT: REQ-1** Support live and sealed reports
   - **SYNOPSIS:** A live report records an observation timestamp and incomplete work; a sealed report fixes the discovered thread set, terminal states, source digests, metrics, and report artifacts for an archived run.
   - **BECAUSE:** Operators need progress visibility during long runs and reproducible evidence after a run finishes.
@@ -87,6 +91,10 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
 - **RULE: RULE-22** Clamp only generic long argument presentations
   - **SYNOPSIS:** Do not clamp a recognized semantic plan or formatted summary. Clamp long generic argument cells to a preview with `more` and `less` controls, and expose their complete bounded sanitized content when expanded.
   - **BECAUSE:** Clamping a specially formatted structure can remove bullets or other meaning, while unformatted payloads still need a bounded initial table height.
+
+- **RULE: RULE-23** Catalog root runs rather than individual agent logs
+  - **SYNOPSIS:** A Codex catalog lists only rollouts without `parent_thread_id`; generated reports still include the selected root's closed descendant set. A Junie catalog lists each durable session event stream once.
+  - **BECAUSE:** Descendant Codex rollouts are components of one reportable run, not independent operator-facing report choices.
 
 ## 3. Information Model
 
@@ -264,6 +272,11 @@ flowchart LR
   - **PRODUCES:** Interactive HTML with a new-tab model-rate reference and nested per-agent and per-turn tool-call drilldowns, machine-readable JSON, turn-oriented CSV, work-unit cost CSV, and compact Markdown summary with the same rates.
   - **SUPPORTS:** Live refresh and sealed archive generation from the same normalized data model.
 
+- **MODULE: MODULE-8** Report catalog indexer
+  - **SYNOPSIS:** Read minimal session identity, first-event time, bounded task title, workspace, parent identity, and source path from Codex rollout and Junie event stores.
+  - **READS:** `~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.junie/sessions`, or repeated caller-supplied `--catalog-root` paths.
+  - **PRODUCES:** A filtered local HTML catalog plus optional child reports under `reports/`, with catalog-to-report and report-to-catalog links.
+
 - **PROCESS: PROCESS-1** Discover and parse a run
   - **SYNOPSIS:** Resolve the selected root, index candidate rollout files, traverse descendants, parse each file once, and record all parse gaps.
   - **VALIDATES:** The root exists and every included thread is connected to it.
@@ -292,9 +305,17 @@ flowchart LR
   - **SYNOPSIS:** Re-scan until the descendant set and source sizes are stable, reject active or indeterminate threads unless the caller explicitly seals an aborted run, write source digests and report artifacts, then mark the snapshot sealed.
   - **BECAUSE:** A live snapshot can change after it is rendered and is not sufficient archival evidence.
 
+- **PROCESS: PROCESS-6** Catalog and batch-generate reports
+  - **SYNOPSIS:** Index the selected runtime's bounded log stores, discard Codex descendants from the operator-facing list, apply inclusive UTC date and text filters, write the catalog, and when `--generate-batch` is present generate each selected run through the existing native parser.
+  - **PRODUCES:** One catalog in list-only mode or one catalog plus a linked `reports/` directory in batch mode.
+
 - **COMMAND: CMD-1** Extend the timeline reporter CLI
   - **SYNOPSIS:** Add a native rollout input form such as `--codex-thread THREAD_ID` with optional `--sessions-root`, `--live`, `--seal`, and machine-output flags while preserving existing path-based prompt-runner and methodology-runner behavior.
   - **PRODUCES:** The same HTML report entry point plus optional JSON, CSV, and Markdown companions.
+
+- **COMMAND: CMD-2** Catalog native agent logs
+  - **SYNOPSIS:** Use mutually exclusive `--codex-catalog` and `--junie-catalog` modes with optional `--from-date`, `--to-date`, `--title-contains`, `--workspace-contains`, repeated `--catalog-root`, and `--generate-batch` flags.
+  - **PRODUCES:** A runtime-specific HTML catalog and, only when requested, linked per-run HTML reports.
 
 - **FILE: FILE-1** Component design authority
   - **SYNOPSIS:** `docs/design/components/CD-001-codex-rollout-metrics.md` defines the ingestion and aggregation contract.
@@ -389,6 +410,10 @@ These conditions define an acceptable implementation and report.
   - **SYNOPSIS:** The HTML document title and page heading identify the reported task, the subtitle carries the observed timestamp and one estimate disclaimer, the execution hierarchy is labeled `Timeline`, and no diagnostics section competes with the primary metrics.
   - **BECAUSE:** A report should be recognizable in a browser tab and understandable at a glance without requiring the reader to infer the task from a thread identifier.
 
+- **REQUIREMENT: REQ-12** Searchable native-run catalogs
+  - **SYNOPSIS:** Codex and Junie catalog modes select runs by inclusive UTC date range and optional case-insensitive title or workspace/source-path criteria, show the exact source log, and can batch-generate two-way-linked reports without changing one-off report behavior.
+  - **BECAUSE:** Log discovery and report generation are one operator workflow even when report parsing remains runtime-specific.
+
 ## 7. Test Cases
 
 These cases verify parsing, accounting, attribution, concurrency, privacy, and compatibility.
@@ -476,6 +501,10 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 - **TASK: TEST-21** Expand a long generic argument cell
   - **SYNOPSIS:** Provide an unrecognized long tool argument whose bounded full content extends beyond its preview.
   - **VALIDATES:** The initial cell is clamped, `more` reveals the complete bounded sanitized content, `less` restores the preview, and recognized formatted arguments remain unclamped.
+
+- **TASK: TEST-22** Catalog and batch-generate native reports
+  - **SYNOPSIS:** Place root and descendant Codex rollouts across active and archived stores plus a Junie session under bounded test roots, then select them by date and text criteria with and without `--generate-batch`.
+  - **VALIDATES:** Codex descendants do not appear as separate catalog rows, out-of-range and text-mismatched roots are excluded, Junie sessions are discoverable, list-only mode writes no child directory, and batch mode produces working links in both directions.
 
 ## 8. Proposed Modifications
 

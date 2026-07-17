@@ -36,6 +36,65 @@ def _load_module():
     return module
 
 
+def _write_codex_catalog_rollout(
+    root: Path,
+    *,
+    thread_id: str,
+    timestamp: str,
+    request: str,
+    workspace: str,
+    parent_thread_id: str = "",
+) -> Path:
+    """Write one minimal native Codex rollout for catalog CLI tests."""
+    rollout = root / f"rollout-{thread_id}.jsonl"
+    rollout.parent.mkdir(parents=True, exist_ok=True)
+    source: object = "user"
+    if parent_thread_id:
+        source = {
+            "subagent": {
+                "thread_spawn": {
+                    "parent_thread_id": parent_thread_id,
+                    "agent_path": f"/root/{thread_id}",
+                }
+            }
+        }
+    records = [
+        {
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": {
+                "id": thread_id,
+                "source": source,
+                "cwd": workspace,
+            },
+        },
+        {
+            "timestamp": timestamp,
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": request}],
+            },
+        },
+        {
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": f"{thread_id}-turn",
+                "completed_at": timestamp,
+                "duration_ms": 1,
+            },
+        },
+    ]
+    rollout.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+    return rollout
+
+
 def _write_junie_session(root: Path) -> Path:
     session = root / "session-260714-000000-test"
     session.mkdir()
@@ -2430,6 +2489,160 @@ def test_main_writes_native_codex_machine_outputs_and_sealed_manifest(tmp_path):
     assert "API-equivalent estimate" in html
     assert '<title>"Stored task title" Agent Report</title>' in html
     assert '<h1>"Stored task title" Agent Report</h1>' in html
+
+
+def test_main_catalogs_filtered_codex_roots_without_generating_reports(tmp_path):
+    module = _load_module()
+    active_root = tmp_path / "sessions"
+    archive_root = tmp_path / "archived_sessions"
+    _write_codex_catalog_rollout(
+        active_root,
+        thread_id="quarkus-root",
+        timestamp="2026-07-14T12:00:00Z",
+        request="Create Quarkus skills.",
+        workspace="/work/agent-runner",
+    )
+    _write_codex_catalog_rollout(
+        active_root,
+        thread_id="quarkus-child",
+        parent_thread_id="quarkus-root",
+        timestamp="2026-07-14T12:00:01Z",
+        request="Review the implementation.",
+        workspace="/work/agent-runner",
+    )
+    _write_codex_catalog_rollout(
+        archive_root,
+        thread_id="docs-root",
+        timestamp="2026-07-15T12:00:00Z",
+        request="Review the documentation.",
+        workspace="/work/agent-runner",
+    )
+    _write_codex_catalog_rollout(
+        archive_root,
+        thread_id="old-root",
+        timestamp="2026-07-13T23:59:59Z",
+        request="Create Quarkus skills from old logs.",
+        workspace="/work/agent-runner",
+    )
+    output = tmp_path / "catalog" / "index.html"
+
+    rc = module.main(
+        [
+            "--codex-catalog",
+            "--catalog-root",
+            str(active_root),
+            "--catalog-root",
+            str(archive_root),
+            "--from-date",
+            "2026-07-14",
+            "--to-date",
+            "2026-07-15",
+            "--title-contains",
+            "quarkus",
+            "--workspace-contains",
+            "agent-runner",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    html = output.read_text(encoding="utf-8")
+    assert "Available Codex Agent Reports" in html
+    assert "quarkus-root" in html
+    assert "Create Quarkus skills" in html
+    assert "quarkus-child" not in html
+    assert "docs-root" not in html
+    assert "old-root" not in html
+    assert not (output.parent / "reports").exists()
+
+
+def test_main_catalog_generates_reports_with_two_way_links(tmp_path):
+    module = _load_module()
+    active_root = tmp_path / "sessions"
+    archive_root = tmp_path / "archived_sessions"
+    _write_codex_catalog_rollout(
+        active_root,
+        thread_id="active-root",
+        timestamp="2026-07-14T12:00:00Z",
+        request="Build the active feature.",
+        workspace="/work/active",
+    )
+    _write_codex_catalog_rollout(
+        archive_root,
+        thread_id="archived-root",
+        timestamp="2026-07-15T12:00:00Z",
+        request="Build the archived feature.",
+        workspace="/work/archive",
+    )
+    output = tmp_path / "catalog" / "index.html"
+
+    rc = module.main(
+        [
+            "--codex-catalog",
+            "--catalog-root",
+            str(active_root),
+            "--catalog-root",
+            str(archive_root),
+            "--from-date",
+            "2026-07-14",
+            "--to-date",
+            "2026-07-15",
+            "--generate-batch",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    catalog_html = output.read_text(encoding="utf-8")
+    active_report = output.parent / "reports" / "active-root.html"
+    archived_report = output.parent / "reports" / "archived-root.html"
+    assert 'href="reports/active-root.html"' in catalog_html
+    assert 'href="reports/archived-root.html"' in catalog_html
+    assert active_report.exists()
+    assert archived_report.exists()
+    assert 'href="../index.html">All reports</a>' in active_report.read_text(
+        encoding="utf-8"
+    )
+    assert 'href="../index.html">All reports</a>' in archived_report.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_main_junie_catalog_generates_reports_with_two_way_links(tmp_path):
+    module = _load_module()
+    sessions_root = tmp_path / "junie-sessions"
+    sessions_root.mkdir()
+    session = _write_junie_session(sessions_root)
+    output = tmp_path / "catalog" / "junie-index.html"
+
+    rc = module.main(
+        [
+            "--junie-catalog",
+            "--catalog-root",
+            str(sessions_root),
+            "--from-date",
+            "2026-07-14",
+            "--to-date",
+            "2026-07-14",
+            "--title-contains",
+            "synthetic prompt",
+            "--generate-batch",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    catalog_html = output.read_text(encoding="utf-8")
+    report = output.parent / "reports" / f"{session.name}.html"
+    assert "Available Junie Agent Reports" in catalog_html
+    assert f'href="reports/{session.name}.html"' in catalog_html
+    assert report.exists()
+    assert 'href="../junie-index.html">All reports</a>' in report.read_text(
+        encoding="utf-8"
+    )
 
 
 def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_path):

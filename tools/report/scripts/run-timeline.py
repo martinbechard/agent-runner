@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 # AI attribution: Modified with AI assistance.
-# Responsibility: Generate privacy-safe cross-tool, Codex, and Junie execution reports.
+# Responsibility: Generate privacy-safe cross-tool, Codex, and Junie execution reports and report catalogs.
 # Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
 """Generate an HTML timeline report for a methodology-runner workspace or
@@ -497,6 +497,19 @@ class CodexThreadMetrics:
     terminal_state: str = "indeterminate"
     source_path: str = ""
     diagnostics: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class _AgentCatalogEntry:
+    """Minimal local metadata used to select one reportable agent log."""
+
+    run_id: str
+    parent_thread_id: str
+    started_at: datetime
+    task_title: str
+    workspace: str
+    source_path: Path
+    source_store: str
 
 
 @dataclass
@@ -3541,9 +3554,17 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
 def render_codex_rollout_html(
     run: CodexRunMetrics,
     formatter_config: ToolFormatterConfig | None = None,
+    *,
+    nav_links: list[tuple[str, str]] | None = None,
 ) -> str:
-    """Render methodology-style execution detail without source content."""
+    """Render execution detail with optional navigation to an owning catalog."""
     formatter_config = formatter_config or _load_tool_formatter_config()
+    nav_html = ""
+    if nav_links:
+        nav_html = '<nav class="report-nav">' + " | ".join(
+            f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
+            for label, href in nav_links
+        ) + "</nav>"
     turn_count = sum(len(thread.turns) for thread in run.threads)
     unique_turn_count = len(
         {turn.turn_id for thread in run.threads for turn in thread.turns}
@@ -4142,6 +4163,9 @@ body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#faf
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
+.report-nav {{ margin:0 0 14px; }}
+.report-nav a {{ color:#2563a6; font-weight:600; text-decoration:none; }}
+.report-nav a:hover {{ text-decoration:underline; }}
 .visually-hidden {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
@@ -4264,6 +4288,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{_escape_html(report_title)}</h1>
+{nav_html}
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 <div class="metrics">
@@ -8660,6 +8685,7 @@ def _write_codex_outputs(
     html_output: Path,
     *,
     formatter_config: ToolFormatterConfig | None = None,
+    nav_links: list[tuple[str, str]] | None = None,
     json_output: Path | None = None,
     turn_csv_output: Path | None = None,
     work_unit_csv_output: Path | None = None,
@@ -8667,7 +8693,7 @@ def _write_codex_outputs(
 ) -> None:
     html_output.parent.mkdir(parents=True, exist_ok=True)
     html_output.write_text(
-        render_codex_rollout_html(run, formatter_config),
+        render_codex_rollout_html(run, formatter_config, nav_links=nav_links),
         encoding="utf-8",
     )
     companions = (
@@ -8681,6 +8707,379 @@ def _write_codex_outputs(
             continue
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(content, encoding="utf-8")
+
+
+def _catalog_task_title(request: str) -> str:
+    """Derive the same bounded, redacted title used by a generated report."""
+
+    redacted = _redact_unstructured_text(request)
+    activity = AgentActivity(
+        thread_id="",
+        turn_id=None,
+        activity_type="input",
+        event_timestamp="",
+        source_path="",
+        source_ordinal=0,
+        summary="User input",
+        content=redacted,
+    )
+    return _derived_task_title([activity])
+
+
+def _read_codex_catalog_entry(
+    path: Path,
+    source_store: str,
+    *,
+    include_title: bool = True,
+) -> _AgentCatalogEntry | None:
+    """Read only the metadata and first genuine request needed by the catalog."""
+
+    thread_id = ""
+    parent_thread_id = ""
+    started_at: datetime | None = None
+    task_title = ""
+    workspace = ""
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for record_count, line in enumerate(handle, start=1):
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                record_timestamp = _parse_iso_datetime(record.get("timestamp"))
+                if record_timestamp is not None and started_at is None:
+                    started_at = record_timestamp
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if record.get("type") == "session_meta" and not thread_id:
+                    thread_id = str(payload.get("id") or payload.get("session_id") or "")
+                    parent_thread_id, _, _ = _spawn_metadata(payload)
+                    recorded_title = next(
+                        (
+                            str(payload[key]).strip()
+                            for key in ("task_title", "thread_title", "title")
+                            if isinstance(payload.get(key), str)
+                            and str(payload[key]).strip()
+                        ),
+                        "",
+                    )
+                    task_title = (
+                        _catalog_task_title(recorded_title) if recorded_title else ""
+                    )
+                    workspace = str(payload.get("cwd") or payload.get("workspace") or "")
+                    if parent_thread_id or task_title or not include_title:
+                        break
+                    continue
+                if (
+                    thread_id
+                    and not task_title
+                    and record.get("type") == "response_item"
+                    and payload.get("type") == "message"
+                    and payload.get("role") == "user"
+                ):
+                    task_title = _catalog_task_title(
+                        _response_item_text(payload, "content")
+                    )
+                    if task_title:
+                        break
+                if thread_id and record_count >= 200:
+                    break
+    except OSError:
+        return None
+    if not thread_id:
+        return None
+    return _AgentCatalogEntry(
+        run_id=thread_id,
+        parent_thread_id=parent_thread_id,
+        started_at=started_at or _mtime(path),
+        task_title=task_title,
+        workspace=workspace,
+        source_path=path.resolve(),
+        source_store=source_store,
+    )
+
+
+def _catalog_path_date(path: Path) -> str:
+    """Return the calendar date encoded in a native log filename when present."""
+
+    codex_match = re.search(r"rollout-(\d{4}-\d{2}-\d{2})T", path.name)
+    if codex_match:
+        return codex_match.group(1)
+    junie_match = re.search(r"session-(\d{2})(\d{2})(\d{2})-", str(path))
+    if junie_match:
+        return f"20{junie_match.group(1)}-{junie_match.group(2)}-{junie_match.group(3)}"
+    return ""
+
+
+def _catalog_path_matches_dates(path: Path, from_date: str, to_date: str) -> bool:
+    """Use an encoded path date as a cheap prefilter before opening a log."""
+
+    path_date = _catalog_path_date(path)
+    if not path_date:
+        return True
+    earliest_path_date = (
+        (_parse_catalog_date(from_date, end_of_day=False) - timedelta(days=1))
+        .date()
+        .isoformat()
+        if from_date
+        else ""
+    )
+    latest_path_date = (
+        _parse_catalog_date(to_date, end_of_day=True).date().isoformat()
+        if to_date
+        else ""
+    )
+    if earliest_path_date and path_date < earliest_path_date:
+        return False
+    if latest_path_date and path_date > latest_path_date:
+        return False
+    return True
+
+
+def _index_codex_catalog(
+    roots: list[Path],
+    *,
+    from_date: str = "",
+    to_date: str = "",
+    include_all_identities: bool = False,
+) -> dict[str, _AgentCatalogEntry]:
+    """Index reportable Codex rollouts across active and archived stores."""
+
+    entries: dict[str, _AgentCatalogEntry] = {}
+    for root in roots:
+        source_store = root.name or str(root)
+        for path in _candidate_rollouts(root):
+            in_date_range = _catalog_path_matches_dates(path, from_date, to_date)
+            if not in_date_range and not include_all_identities:
+                continue
+            entry = _read_codex_catalog_entry(
+                path,
+                source_store,
+                include_title=in_date_range,
+            )
+            if entry is None:
+                continue
+            existing = entries.get(entry.run_id)
+            if existing is not None and existing.source_path != entry.source_path:
+                raise ValueError(
+                    f"Duplicate rollout ownership for thread {entry.run_id}: "
+                    f"{existing.source_path} and {entry.source_path}"
+                )
+            entries[entry.run_id] = entry
+    return entries
+
+
+def _read_junie_catalog_entry(path: Path, source_store: str) -> _AgentCatalogEntry | None:
+    """Read one Junie event stream's session identity, date, and prompt title."""
+
+    if not _is_native_junie_session(path):
+        return None
+    started_at: datetime | None = None
+    task_title = ""
+    workspace = ""
+    events_path = _junie_events_path(path).resolve()
+    try:
+        with events_path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    record = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                timestamp = _parse_iso_datetime(record.get("timestampMs"))
+                if timestamp is not None and started_at is None:
+                    started_at = timestamp
+                workspace = workspace or str(
+                    record.get("cwd")
+                    or record.get("workspace")
+                    or record.get("projectPath")
+                    or ""
+                )
+                if record.get("kind") == "UserPromptEvent":
+                    raw_prompt = record.get("presentablePrompt") or record.get("prompt")
+                    if isinstance(raw_prompt, str):
+                        task_title = _catalog_task_title(raw_prompt)
+                    if task_title:
+                        break
+    except OSError:
+        return None
+    return _AgentCatalogEntry(
+        run_id=events_path.parent.name,
+        parent_thread_id="",
+        started_at=started_at or _mtime(events_path),
+        task_title=task_title,
+        workspace=workspace,
+        source_path=events_path,
+        source_store=source_store,
+    )
+
+
+def _index_junie_catalog(
+    roots: list[Path],
+    *,
+    from_date: str = "",
+    to_date: str = "",
+) -> dict[str, _AgentCatalogEntry]:
+    """Index reportable Junie session event streams under caller-bounded roots."""
+
+    entries: dict[str, _AgentCatalogEntry] = {}
+    for root in roots:
+        candidates = (
+            [root]
+            if root.is_file()
+            else sorted(root.rglob("events.jsonl"))
+            if root.exists()
+            else []
+        )
+        for path in candidates:
+            if not _catalog_path_matches_dates(path, from_date, to_date):
+                continue
+            entry = _read_junie_catalog_entry(path, root.name or str(root))
+            if entry is None:
+                continue
+            existing = entries.get(entry.run_id)
+            if existing is not None and existing.source_path != entry.source_path:
+                raise ValueError(
+                    f"Duplicate Junie session ownership for {entry.run_id}: "
+                    f"{existing.source_path} and {entry.source_path}"
+                )
+            entries[entry.run_id] = entry
+    return entries
+
+
+def _parse_catalog_date(raw: str, *, end_of_day: bool) -> datetime:
+    """Parse an inclusive UTC catalog date boundary from YYYY-MM-DD."""
+
+    try:
+        parsed = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError as exc:
+        raise ValueError(f"Invalid catalog date {raw!r}; expected YYYY-MM-DD") from exc
+    return parsed + timedelta(days=1) if end_of_day else parsed
+
+
+def _select_catalog_entries(
+    entries: list[_AgentCatalogEntry],
+    *,
+    from_date: str = "",
+    to_date: str = "",
+    title_contains: str = "",
+    workspace_contains: str = "",
+) -> list[_AgentCatalogEntry]:
+    """Apply inclusive UTC date and case-insensitive text filters."""
+
+    lower_bound = _parse_catalog_date(from_date, end_of_day=False) if from_date else None
+    upper_bound = _parse_catalog_date(to_date, end_of_day=True) if to_date else None
+    if lower_bound and upper_bound and lower_bound >= upper_bound:
+        raise ValueError("--from-date must not be after --to-date")
+    title_query = title_contains.casefold()
+    workspace_query = workspace_contains.casefold()
+    selected = []
+    for entry in entries:
+        started_at = entry.started_at.astimezone(timezone.utc)
+        if lower_bound is not None and started_at < lower_bound:
+            continue
+        if upper_bound is not None and started_at >= upper_bound:
+            continue
+        if title_query and title_query not in entry.task_title.casefold():
+            continue
+        workspace_haystack = f"{entry.workspace}\n{entry.source_path}".casefold()
+        if workspace_query and workspace_query not in workspace_haystack:
+            continue
+        selected.append(entry)
+    return sorted(selected, key=lambda item: (item.started_at, item.run_id), reverse=True)
+
+
+def _codex_hierarchy_paths(
+    root_thread_id: str,
+    entries: dict[str, _AgentCatalogEntry],
+) -> list[Path]:
+    """Return one selected Codex root and all recursively indexed descendants."""
+
+    children: dict[str, list[str]] = {}
+    for entry in entries.values():
+        if entry.parent_thread_id:
+            children.setdefault(entry.parent_thread_id, []).append(entry.run_id)
+    queue = [root_thread_id]
+    selected: list[Path] = []
+    seen: set[str] = set()
+    while queue:
+        thread_id = queue.pop(0)
+        if thread_id in seen:
+            raise ValueError(f"Cycle detected in Codex thread hierarchy at {thread_id}")
+        seen.add(thread_id)
+        entry = entries.get(thread_id)
+        if entry is None:
+            continue
+        selected.append(entry.source_path)
+        queue.extend(sorted(children.get(thread_id, [])))
+    return selected
+
+
+def _catalog_report_filename(run_id: str) -> str:
+    """Return a stable HTML filename for one locally recorded run identifier."""
+
+    safe_id = re.sub(r"[^A-Za-z0-9._-]+", "-", run_id).strip("-.") or "run"
+    return f"{safe_id}.html"
+
+
+def _render_agent_catalog_html(
+    runtime: str,
+    entries: list[_AgentCatalogEntry],
+    report_hrefs: dict[str, str],
+    *,
+    from_date: str = "",
+    to_date: str = "",
+) -> str:
+    """Render a local HTML index of reportable logs and generated child reports."""
+
+    rows = []
+    for entry in entries:
+        report = "available"
+        if entry.run_id in report_hrefs:
+            report = (
+                f'<a href="{_escape_html(report_hrefs[entry.run_id])}">open report</a>'
+            )
+        rows.append(
+            "<tr>"
+            f"<td>{_escape_html(entry.started_at.astimezone(timezone.utc).isoformat())}</td>"
+            f"<td>{_escape_html(entry.task_title or '(title unavailable)')}</td>"
+            f"<td><code>{_escape_html(entry.run_id)}</code></td>"
+            f"<td>{_escape_html(entry.workspace or '—')}</td>"
+            f"<td>{_escape_html(entry.source_store)}</td>"
+            f"<td><code>{_escape_html(str(entry.source_path))}</code></td>"
+            f"<td>{report}</td>"
+            "</tr>"
+        )
+    range_label = "all dates"
+    if from_date or to_date:
+        range_label = f"{from_date or 'earliest'} through {to_date or 'latest'} UTC"
+    return f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>Available {runtime} Agent Reports</title>
+<style>
+body {{ font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; margin:2em; color:#263238; background:#fafbfc; }}
+h1 {{ margin-bottom:.25em; }}
+p {{ color:#607d8b; }}
+.table-scroll {{ overflow:auto; border:1px solid #e1e6ea; border-radius:6px; }}
+table {{ border-collapse:collapse; width:100%; background:#fff; }}
+th,td {{ padding:8px; border-bottom:1px solid #e1e6ea; text-align:left; vertical-align:top; }}
+th {{ color:#546e7a; font-size:.82em; background:#f5f7f8; }}
+td {{ font-size:.86em; }}
+code {{ font-family:ui-monospace,SFMono-Regular,Menlo,monospace; overflow-wrap:anywhere; }}
+a {{ color:#2563a6; font-weight:600; text-decoration:none; }}
+</style></head><body>
+<h1>Available {runtime} Agent Reports</h1>
+<p>{len(entries):,} root run(s) selected for {_escape_html(range_label)}. Dates use the first recorded event and are inclusive.</p>
+<div class="table-scroll"><table><thead><tr><th>Started (UTC)</th><th>Task</th><th>Run ID</th><th>Workspace</th><th>Store</th><th>Log</th><th>Report</th></tr></thead>
+<tbody>{''.join(rows)}</tbody></table></div>
+</body></html>"""
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -8699,6 +9098,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", help="Path to analyze (workspace, run, rollout, or manifest).")
     parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
     parser.add_argument("--codex-thread", help="Root Codex Desktop thread ID to report.")
+    catalog_group = parser.add_mutually_exclusive_group()
+    catalog_group.add_argument(
+        "--codex-catalog",
+        action="store_true",
+        help="Generate an HTML catalog of reportable root Codex rollouts.",
+    )
+    catalog_group.add_argument(
+        "--junie-catalog",
+        action="store_true",
+        help="Generate an HTML catalog of reportable Junie sessions.",
+    )
+    parser.add_argument(
+        "--catalog-root",
+        action="append",
+        default=[],
+        help="Catalog search root; repeat to scan multiple active or archived stores.",
+    )
+    parser.add_argument("--from-date", help="Inclusive catalog start date in UTC (YYYY-MM-DD).")
+    parser.add_argument("--to-date", help="Inclusive catalog end date in UTC (YYYY-MM-DD).")
+    parser.add_argument(
+        "--title-contains",
+        default="",
+        help="Keep catalog entries whose bounded task title contains this text.",
+    )
+    parser.add_argument(
+        "--workspace-contains",
+        default="",
+        help="Keep catalog entries whose workspace or source path contains this text.",
+    )
+    parser.add_argument(
+        "--generate-batch",
+        action="store_true",
+        help="Generate every selected catalog report and link it back to the catalog.",
+    )
     parser.add_argument(
         "--title",
         help=(
@@ -8731,10 +9164,25 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
-    if not args.path and not args.codex_thread:
-        parser.error("provide a path or --codex-thread")
+    catalog_mode = args.codex_catalog or args.junie_catalog
+    if not args.path and not args.codex_thread and not catalog_mode:
+        parser.error("provide a path, --codex-thread, --codex-catalog, or --junie-catalog")
     if args.path and args.codex_thread:
         parser.error("path and --codex-thread are mutually exclusive")
+    if catalog_mode and (args.path or args.codex_thread):
+        parser.error("catalog modes cannot be combined with a path or --codex-thread")
+    if args.generate_batch and not catalog_mode:
+        parser.error("--generate-batch requires --codex-catalog or --junie-catalog")
+    if not catalog_mode and any(
+        (
+            args.catalog_root,
+            args.from_date,
+            args.to_date,
+            args.title_contains,
+            args.workspace_contains,
+        )
+    ):
+        parser.error("catalog filters require --codex-catalog or --junie-catalog")
     if args.seal_aborted and not args.seal:
         parser.error("--seal-aborted requires --seal")
 
@@ -8745,6 +9193,115 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+
+    if catalog_mode:
+        if args.live or args.seal or args.seal_aborted:
+            parser.error("catalog modes do not support live or sealing flags")
+        if any(
+            (
+                args.json_output,
+                args.turn_csv_output,
+                args.work_unit_csv_output,
+                args.markdown_output,
+                args.title,
+                args.sessions_root,
+            )
+        ):
+            parser.error(
+                "catalog modes use --catalog-root and do not support single-report output flags"
+            )
+        if args.catalog_root:
+            catalog_roots = [Path(value).expanduser().resolve() for value in args.catalog_root]
+        elif args.codex_catalog:
+            catalog_roots = [
+                Path.home() / ".codex" / "sessions",
+                Path.home() / ".codex" / "archived_sessions",
+            ]
+        else:
+            catalog_roots = [Path.home() / ".junie" / "sessions"]
+        try:
+            if args.codex_catalog:
+                catalog_index = _index_codex_catalog(
+                    catalog_roots,
+                    from_date=args.from_date or "",
+                    to_date=args.to_date or "",
+                    include_all_identities=args.generate_batch,
+                )
+                catalog_candidates = [
+                    entry
+                    for entry in catalog_index.values()
+                    if not entry.parent_thread_id
+                ]
+                runtime = "Codex"
+            else:
+                catalog_index = _index_junie_catalog(
+                    catalog_roots,
+                    from_date=args.from_date or "",
+                    to_date=args.to_date or "",
+                )
+                catalog_candidates = list(catalog_index.values())
+                runtime = "Junie"
+            selected = _select_catalog_entries(
+                catalog_candidates,
+                from_date=args.from_date or "",
+                to_date=args.to_date or "",
+                title_contains=args.title_contains,
+                workspace_contains=args.workspace_contains,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+
+        output = (
+            Path(args.output).expanduser().resolve()
+            if args.output
+            else Path.cwd() / f"{runtime.lower()}-agent-report-catalog.html"
+        )
+        report_hrefs: dict[str, str] = {}
+        if args.generate_batch:
+            reports_dir = output.parent / "reports"
+            for entry in selected:
+                report_filename = _catalog_report_filename(entry.run_id)
+                report_output = reports_dir / report_filename
+                try:
+                    if args.codex_catalog:
+                        run = build_codex_rollout_run(
+                            entry.run_id,
+                            entry.source_path.parent,
+                            candidate_paths=_codex_hierarchy_paths(
+                                entry.run_id, catalog_index
+                            ),
+                        )
+                    else:
+                        run = parse_junie_session(entry.source_path)
+                        run.run_label = _report_title(entry.task_title)
+                except ValueError as exc:
+                    print(f"Cannot generate {entry.run_id}: {exc}", file=sys.stderr)
+                    return 1
+                _write_codex_outputs(
+                    run,
+                    report_output,
+                    formatter_config=formatter_config,
+                    nav_links=[("All reports", f"../{output.name}")],
+                )
+                report_hrefs[entry.run_id] = (
+                    Path("reports") / report_filename
+                ).as_posix()
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text(
+            _render_agent_catalog_html(
+                runtime,
+                selected,
+                report_hrefs,
+                from_date=args.from_date or "",
+                to_date=args.to_date or "",
+            ),
+            encoding="utf-8",
+        )
+        print(f"{runtime} report catalog written to {output} ({len(selected)} run(s))")
+        if args.generate_batch:
+            print(f"Generated {len(report_hrefs)} linked report(s) under {output.parent / 'reports'}")
+        return 0
 
     input_path = Path(args.path).resolve() if args.path else None
     if input_path is not None and not input_path.exists():
