@@ -469,7 +469,9 @@ class CodexThreadMetrics:
 
     thread_id: str
     parent_thread_id: str = ""
+    thread_name: str = ""
     agent_path: str = ""
+    agent_role: str = ""
     agent_nickname: str = ""
     model: str = ""
     plan_type: str = ""
@@ -668,6 +670,17 @@ def _spawn_metadata(payload: dict[str, object]) -> tuple[str, str, str]:
         str(thread_spawn.get("agent_path") or ""),
         str(thread_spawn.get("agent_nickname") or ""),
     )
+
+
+def _spawn_agent_role(payload: dict[str, object]) -> str:
+    role = payload.get("agent_role")
+    source = payload.get("source")
+    if not role and isinstance(source, dict):
+        subagent = source.get("subagent")
+        thread_spawn = subagent.get("thread_spawn") if isinstance(subagent, dict) else None
+        if isinstance(thread_spawn, dict):
+            role = thread_spawn.get("agent_role")
+    return str(role or "")
 
 
 def _rollout_identity(path: Path) -> tuple[str, str, str, str] | None:
@@ -1496,7 +1509,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     records, diagnostics = _parse_jsonl_append_safe(path)
     thread_id = ""
     parent_thread_id = ""
+    thread_name = ""
     agent_path = ""
+    agent_role = ""
     agent_nickname = ""
     model = ""
     plan_type = ""
@@ -1536,6 +1551,12 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             if candidate_id and not thread_id:
                 thread_id = candidate_id
                 parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
+                thread_name = (
+                    agent_path.rstrip("/").rsplit("/", 1)[-1]
+                    if agent_path
+                    else ("root" if not parent_thread_id else "")
+                )
+                agent_role = _spawn_agent_role(payload)
             elif candidate_id and candidate_id != thread_id:
                 diagnostics.append(
                     f"replayed session_meta ignored at {path}:{ordinal}: {candidate_id}"
@@ -2017,7 +2038,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     return CodexThreadMetrics(
         thread_id=thread_id,
         parent_thread_id=parent_thread_id,
+        thread_name=thread_name,
         agent_path=agent_path,
+        agent_role=agent_role,
         agent_nickname=agent_nickname,
         model=model,
         plan_type=plan_type,
@@ -3128,16 +3151,24 @@ def _timeline_style(run: CodexRunMetrics, started_at: str, ended_at: str) -> str
 
 
 def _agent_assignment(thread: CodexThreadMetrics) -> str:
+    if thread.thread_name:
+        return thread.thread_name
     if thread.agent_path:
         return thread.agent_path.rstrip("/").rsplit("/", 1)[-1]
     return thread.agent_nickname or "root"
 
 
 def _agent_assignment_label(thread: CodexThreadMetrics) -> str:
-    assignment = _agent_assignment(thread)
+    assignment = thread.thread_name
+    if not assignment and thread.agent_path:
+        assignment = thread.agent_path.rstrip("/").rsplit("/", 1)[-1]
+    if not assignment:
+        assignment = "—" if thread.parent_thread_id else "root"
+    agent_role = thread.agent_role or ("default" if thread.parent_thread_id else "main")
+    label = f"Thread: {assignment} · Agent: {agent_role}"
     if thread.agent_nickname:
-        return f"{assignment} ({thread.agent_nickname})"
-    return assignment
+        return f"{label} ({thread.agent_nickname})"
+    return label
 
 
 def _agent_inventory_threads(
@@ -3853,17 +3884,17 @@ def render_codex_rollout_html(
         else ""
     )
     agent_note = (
-        "Agent rows follow the recorded assignment hierarchy. Nested rows are indented under their parent assignment. Runtime nicknames appear in parentheses after the assignment name; they are Codex per-thread labels, not reusable custom-agent roles. Skills are listed only when a SKILL.md reference appears in recorded tool arguments."
+        "Agent rows follow the recorded assignment hierarchy. Each identity separates the thread name, resolved agent type, and optional runtime nickname. Main identifies the root agent; default is Codex's built-in role when a spawn omits agent_type; any other value is the explicitly selected role. Nested rows are indented under their parent assignment. Skills are listed only when a SKILL.md reference appears in recorded tool arguments."
         if is_codex
         else (
             "This Junie IDE chain contains one main agent. User tasks are the durable "
             "task records in the selected chain; model responses are de-duplicated "
-            "assistant-request usage records. Skills are listed when Junie recorded an "
+            "assistant-request usage records. The main agent has no custom-agent type. Skills are listed when Junie recorded an "
             "agent_skill_read_doc tool use."
         )
         if is_junie_ide
         else (
-            "Agent path is reconstructed from Junie's recorded main-agent and custom-agent identities. Nested rows are indented under their parent assignment. "
+            "Thread names come from Junie's AgentTaskNameUpdatedEvent when available; custom-agent names are shown separately as agent types. Nested rows are indented under their parent assignment. "
             "User tasks count unique TaskStartedEvent IDs; task spans count each participating agent once per task, so delegated work appears in both the parent and custom-agent rows. "
             "Model responses count LlmResponseMetadataEvent records. Skills are listed only when a SKILL.md reference appears in recorded tool arguments."
         )
@@ -5983,6 +6014,7 @@ def parse_junie_ide_chain(path: Path) -> CodexRunMetrics:
         model_label = f"mixed ({len(models)} models)" if models else ""
     thread = CodexThreadMetrics(
         thread_id=chain_id,
+        thread_name="main",
         agent_path="/main",
         model=model_label,
         recorded_cost_usd=recorded_cost if has_complete_cost else None,
@@ -6169,6 +6201,7 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
     pending_prompt_ordinal = 0
     pending_prompt_content = ""
     agent_meta: dict[str, dict[str, str]] = {}
+    agent_task_names: dict[str, str] = {}
     custom_agent_ids_by_name: dict[str, str] = {}
     for _, record in records:
         event = record.get("event")
@@ -6243,13 +6276,17 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
         if not raw_agent_id:
             diagnostics.append(f"Junie agent event without agent id at line {ordinal}")
             continue
+        agent_id = raw_agent_id
         event_kind = str(agent_event.get("kind") or "")
+        if event_kind == "AgentTaskNameUpdatedEvent":
+            task_name = str(agent_event.get("name") or "")
+            if task_name:
+                agent_task_names[agent_id] = task_name
         if event_kind == "CustomAgentBlockUpdatedEvent":
             custom_name = str(agent_event.get("name") or "")
             custom_model = str(agent_event.get("model") or "")
             if custom_name and custom_model:
                 active_custom_models[custom_model] = custom_name
-        agent_id = raw_agent_id
         if event_kind == "LlmResponseMetadataEvent" and raw_agent.get("kind") == "MainAgent":
             usage_list = agent_event.get("modelUsage")
             usage_models = {
@@ -6487,9 +6524,14 @@ def parse_junie_session(path: Path) -> CodexRunMetrics:
             CodexThreadMetrics(
                 thread_id=agent_id,
                 parent_thread_id="" if agent_id == main_agent_id else main_agent_id,
+                thread_name=(
+                    agent_task_names.get(agent_id)
+                    or ("main" if agent_id == main_agent_id else meta["name"])
+                ),
                 agent_path=(
                     "/main" if agent_id == main_agent_id else f"/main/{meta['name']}"
                 ),
+                agent_role=meta["name"] if meta["kind"] == "CustomAgent" else "",
                 model=model_label,
                 recorded_cost_usd=recorded_costs.get(agent_id),
                 started_at=thread_started,

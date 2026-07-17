@@ -153,6 +153,12 @@ def _write_junie_session(root: Path) -> Path:
             model="claude-reviewer",
         ),
         agent_event(
+            1_783_993_818_055,
+            custom,
+            kind="AgentTaskNameUpdatedEvent",
+            name="Review the implementation",
+        ),
+        agent_event(
             1_783_993_818_060,
             custom,
             kind="AgentCurrentStatusUpdatedEvent",
@@ -792,6 +798,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert run.cost.total_cost == pytest.approx(0.03)
 
     custom = next(thread for thread in run.threads if thread.agent_path.endswith("/reviewer"))
+    assert custom.thread_name == "Review the implementation"
+    assert custom.agent_role == "reviewer"
     assert custom.model == "claude-reviewer"
     assert custom.token_totals.processed_tokens == 13
     assert custom.recorded_cost_usd == pytest.approx(0.02)
@@ -801,6 +809,8 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert custom.activities[0].content == "Synthetic prompt API_TOKEN=[redacted]"
 
     main = next(thread for thread in run.threads if thread.agent_path == "/main")
+    assert main.thread_name == "main"
+    assert main.agent_role == ""
     assert main.responses[0].model == "gpt-main"
     assert main.skills_used == ["python"]
     assert main.turns[0].skills_used == ["python"]
@@ -834,12 +844,16 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<div class="label">Active interval union</div>' not in html
     assert "<summary>raw result</summary>" in html
     assert "raw result (redacted)" not in html
-    assert "Agent path is reconstructed from Junie" in html
+    assert "Thread names come from Junie's AgentTaskNameUpdatedEvent" in html
+    assert (
+        "<strong>Thread: Review the implementation · Agent: reviewer</strong>"
+        in html
+    )
     assert '<div id="agents-used" class="agents-heading"><h2>Agents used</h2>' in html
     assert '<summary aria-label="About Agents used">ⓘ</summary>' in html
     assert '<div class="agent-note-popover" role="note">' in html
     assert (
-        '<p class="execution-note">Agent path is reconstructed from Junie'
+        '<p class="execution-note">Thread names come from Junie'
         not in html
     )
     assert "Bars share a common run-wide time axis" in html
@@ -1675,7 +1689,7 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
     rollout.write_text(
         "\n".join(
             [
-                '{"timestamp":"2026-07-14T12:00:00Z","type":"session_meta","payload":{"id":"reviewer-thread","source":{"subagent":{"thread_spawn":{"parent_thread_id":"outside","agent_path":"/root/reviewer","agent_nickname":"Review"}}}}}',
+                '{"timestamp":"2026-07-14T12:00:00Z","type":"session_meta","payload":{"id":"reviewer-thread","agent_role":"wiki-topic-verifier","source":{"subagent":{"thread_spawn":{"parent_thread_id":"outside","agent_path":"/root/reviewer","agent_nickname":"Review","agent_role":"wiki-topic-verifier"}}}}}',
                 '{"timestamp":"2026-07-14T12:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one","started_at":"2026-07-14T12:00:00Z"}}',
                 '{"timestamp":"2026-07-14T12:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":2,"reasoning_output_tokens":1,"total_tokens":12}}}}',
                 '{"timestamp":"2026-07-14T12:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one","completed_at":"2026-07-14T12:00:02Z","duration_ms":2000}}',
@@ -1688,6 +1702,8 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
         encoding="utf-8",
     )
     run = module.build_codex_rollout_run("reviewer-thread", tmp_path)
+    assert run.threads[0].thread_name == "reviewer"
+    assert run.threads[0].agent_role == "wiki-topic-verifier"
 
     html = module.render_codex_rollout_html(run)
     turn_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
@@ -1701,6 +1717,12 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
 def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    next(thread for thread in run.threads if thread.thread_id == "child-thread").agent_role = (
+        "dev-coder"
+    )
+    next(thread for thread in run.threads if thread.thread_id == "nested-thread").agent_role = (
+        "dev-code-reviewer"
+    )
     run.threads = [run.threads[2], run.threads[0], run.threads[1]]
 
     html = module.render_codex_rollout_html(run)
@@ -1712,10 +1734,16 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert '<div class="agent-note-popover" role="note">' in html
     assert "Assignment" in html
     assert "<th>Runtime nickname</th>" not in html
-    assert "<strong>module-a (module-a)</strong>" in html
-    assert "<strong>reviewer (reviewer)</strong>" in html
+    assert (
+        "<strong>Thread: module-a · Agent: dev-coder (module-a)</strong>" in html
+    )
+    assert (
+        "<strong>Thread: reviewer · Agent: dev-code-reviewer (reviewer)</strong>"
+        in html
+    )
     assert "Nested rows are indented under their parent assignment" in html
-    assert "Runtime nicknames appear in parentheses" in html
+    assert "Each identity separates the thread name, resolved agent type" in html
+    assert "default is Codex's built-in role when a spawn omits agent_type" in html
     agent_table = html.split('<table class="agent-table">', 1)[1].split("</table>", 1)[0]
     agent_header = agent_table.split("</thead>", 1)[0]
     assert "<th>Parent assignment</th>" not in agent_header
@@ -1752,9 +1780,9 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert len(agent_rows) == 3
     assert 'class="agent-assignment-cell" data-depth="0" style="--agent-depth:0"' in agent_rows[0]
     assert '<span class="visually-hidden">Top-level assignment.</span>' in agent_rows[0]
-    assert '<strong>root</strong>' in agent_rows[0]
+    assert '<strong>Thread: root · Agent: main</strong>' in agent_rows[0]
     assert (
-        '<div class="agent-assignment-heading"><strong>root</strong>'
+        '<div class="agent-assignment-heading"><strong>Thread: root · Agent: main</strong>'
         '<span class="state state-complete">complete</span></div>'
         in agent_rows[0]
     )
@@ -1778,10 +1806,47 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
         )
     assert 'class="agent-assignment-cell" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
     assert '<span class="visually-hidden">Nested assignment, depth 1.</span>' in agent_rows[1]
-    assert '<strong>module-a (module-a)</strong>' in agent_rows[1]
+    assert (
+        '<strong>Thread: module-a · Agent: dev-coder (module-a)</strong>'
+        in agent_rows[1]
+    )
     assert 'class="agent-assignment-cell" data-depth="2" style="--agent-depth:2"' in agent_rows[2]
     assert '<span class="visually-hidden">Nested assignment, depth 2.</span>' in agent_rows[2]
-    assert '<strong>reviewer (reviewer)</strong>' in agent_rows[2]
+    assert (
+        '<strong>Thread: reviewer · Agent: dev-code-reviewer (reviewer)</strong>'
+        in agent_rows[2]
+    )
+
+
+def test_agent_identity_does_not_substitute_nickname_for_missing_thread_name():
+    module = _load_module()
+    thread = module.CodexThreadMetrics(
+        thread_id="role-backed-child",
+        parent_thread_id="root",
+        agent_role="wiki-topic-verifier",
+        agent_nickname="Aristotle",
+    )
+
+    assert module._agent_assignment_label(thread) == (
+        "Thread: — · Agent: wiki-topic-verifier (Aristotle)"
+    )
+
+
+def test_agent_identity_resolves_implicit_codex_agent_types():
+    module = _load_module()
+
+    root = module.CodexThreadMetrics(thread_id="root", thread_name="root")
+    child = module.CodexThreadMetrics(
+        thread_id="child",
+        parent_thread_id="root",
+        thread_name="implementation_review",
+        agent_nickname="Franklin",
+    )
+
+    assert module._agent_assignment_label(root) == "Thread: root · Agent: main"
+    assert module._agent_assignment_label(child) == (
+        "Thread: implementation_review · Agent: default (Franklin)"
+    )
 
 
 def test_native_codex_html_clamps_long_agent_skill_lists_with_disclosure():
@@ -1829,6 +1894,12 @@ def test_compact_count_uses_thousands_and_millions():
 def test_native_codex_markdown_includes_turn_and_tool_breakdown():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    next(thread for thread in run.threads if thread.thread_id == "child-thread").agent_role = (
+        "dev-coder"
+    )
+    next(thread for thread in run.threads if thread.thread_id == "nested-thread").agent_role = (
+        "dev-code-reviewer"
+    )
 
     markdown = module.render_codex_rollout_markdown(run)
 
@@ -1840,9 +1911,15 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
     )
     assert "Subagents invoked" not in markdown
     assert "Parent assignment" not in markdown
-    assert "| root | careful-coding · python | 2 |" in markdown
-    assert "| ↳ module-a (module-a) | — | 1 |" in markdown
-    assert "| ↳ ↳ reviewer (reviewer) | — | 1 |" in markdown
+    assert "| Thread: root · Agent: main | careful-coding · python | 2 |" in markdown
+    assert (
+        "| ↳ Thread: module-a · Agent: dev-coder (module-a) | — | 1 |"
+        in markdown
+    )
+    assert (
+        "| ↳ ↳ Thread: reviewer · Agent: dev-code-reviewer (reviewer) | — | 1 |"
+        in markdown
+    )
     assert "| Work unit |" not in markdown
     assert "| Phase | Lane | Work units |" not in markdown
     assert "PRIVATE-TOOL-PAYLOAD" not in markdown
