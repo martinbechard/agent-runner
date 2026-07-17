@@ -854,7 +854,7 @@ def test_native_codex_html_formats_tool_arguments_with_sanitized_raw_disclosure(
     assert "raw result (redacted)" not in html
 
 
-def test_native_codex_html_formats_update_plan_as_clamped_bulleted_plan():
+def test_native_codex_html_formats_update_plan_as_complete_bulleted_plan():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     tool = run.threads[0].tool_intervals[0]
@@ -875,18 +875,38 @@ def test_native_codex_html_formats_update_plan_as_clamped_bulleted_plan():
 
     rendered = module._render_tool_argument(tool, module._load_tool_formatter_config())
 
-    assert '<details class="clamped-disclosure tool-argument-disclosure">' in rendered
-    assert rendered.count('<span class="tool-plan-preview-item">') == 5
+    assert "clamped-disclosure" not in rendered
+    assert "tool-plan-preview" not in rendered
     assert rendered.count('<li class="tool-plan-item">') == 5
     assert rendered.count('<ul class="tool-plan">') == 1
     assert '<span class="state state-active">in progress</span>' in rendered
     assert '<span class="state">pending</span>' in rendered
     assert "Inspect memory" in rendered
     assert "Run required verification" in rendered
-    assert '<span class="clamped-toggle clamped-more">more</span>' in rendered
-    assert '<button type="button" class="clamped-toggle clamped-less">less</button>' in rendered
     assert '<details class="tool-argument-raw"><summary>raw</summary>' in rendered
     assert "tools.update_plan" in rendered
+
+
+def test_native_codex_special_formatting_is_not_clamped_for_long_raw_source():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    tool = run.threads[0].tool_intervals[0]
+    tool.tool_name = "exec"
+    tool.argument_summary = (
+        'const patch = "*** Begin Patch\\n*** Update File: '
+        '/tmp/docs/example.md\\n' + ("+detail\\n" * 50) + '*** End Patch"'
+    )
+    tool.argument_content = ""
+
+    rendered = module._render_tool_argument(
+        tool,
+        module._load_tool_formatter_config(),
+    )
+
+    assert "clamped-disclosure" not in rendered
+    assert '<div class="tool-argument-formatted">Patch · Update · example.md</div>' in rendered
+    assert '<details class="tool-argument-raw"><summary>raw</summary>' in rendered
+    assert "*** End Patch" in rendered
 
 
 def test_native_codex_long_argument_cells_expand_to_full_bounded_content():

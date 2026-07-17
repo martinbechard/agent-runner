@@ -1404,14 +1404,11 @@ def _render_tool_argument(
     raw_source = tool.argument_content or tool.argument_summary
     plan_items = _update_plan_items(raw_source)
     if plan_items:
-        plan_preview = _render_update_plan(plan_items, preview=True)
-        plan_html = _render_update_plan(plan_items, preview=False)
-        full_html = (
-            plan_html
+        return (
+            _render_update_plan(plan_items)
             + '<details class="tool-argument-raw"><summary>raw</summary>'
             + f'<code class="tool-arguments">{_escape_html(raw_source)}</code></details>'
         )
-        return _clamped_argument_html(plan_preview, full_html, raw_source)
 
     formatted = _format_tool_argument(tool.tool_name, tool.argument_summary, config)
     if formatted is None:
@@ -1428,11 +1425,7 @@ def _render_tool_argument(
         f'<details class="tool-argument-raw"><summary>{raw_label}</summary>'
         f'<code class="tool-arguments">{raw}</code></details>'
     )
-    return _clamped_argument_html(
-        f'<span class="tool-argument-formatted">{formatted_summary}</span>',
-        full_html,
-        raw_source,
-    )
+    return full_html
 
 
 def _update_plan_items(source: str) -> list[tuple[str, str]]:
@@ -1462,15 +1455,7 @@ def _plan_status_html(status: str) -> str:
     )
 
 
-def _render_update_plan(items: list[tuple[str, str]], *, preview: bool) -> str:
-    if preview:
-        rendered_items = "".join(
-            '<span class="tool-plan-preview-item">'
-            f'<span class="tool-plan-step">{_escape_html(step)}</span> '
-            f"{_plan_status_html(status)}</span>"
-            for step, status in items
-        )
-        return f'<span class="tool-plan-preview">{rendered_items}</span>'
+def _render_update_plan(items: list[tuple[str, str]]) -> str:
     rendered_items = "".join(
         '<li class="tool-plan-item">'
         f'<span class="tool-plan-step">{_escape_html(step)}</span> '
@@ -4124,11 +4109,9 @@ td {{ font-size:.85em; }}
 .activity-raw pre {{ max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }}
 .tool-arguments {{ display:block; max-width:720px; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
 .tool-argument-formatted {{ font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }}
-.tool-plan, .tool-plan-preview {{ margin:0; padding-left:1.25em; font-family:var(--font-ui); white-space:normal; }}
-.tool-plan-preview {{ display:block; }}
-.tool-plan-item, .tool-plan-preview-item {{ margin:0 0 5px; line-height:1.35; }}
-.tool-plan-preview-item {{ display:list-item; }}
-.tool-plan .state, .tool-plan-preview .state {{ margin-left:5px; white-space:nowrap; }}
+.tool-plan {{ margin:0; padding-left:1.25em; font-family:var(--font-ui); white-space:normal; }}
+.tool-plan-item {{ margin:0 0 5px; line-height:1.35; }}
+.tool-plan .state {{ margin-left:5px; white-space:nowrap; }}
 .tool-argument-raw {{ margin-top:4px; }}
 .tool-argument-raw summary {{ color:#b23a2b; cursor:pointer; font-size:.84em; }}
 .tool-argument-raw[open] .tool-arguments {{ margin-top:5px; }}
