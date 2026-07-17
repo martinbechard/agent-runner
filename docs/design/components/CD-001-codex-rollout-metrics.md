@@ -73,7 +73,7 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
   - **BECAUSE:** Later comparison requires proof of which telemetry produced the archived metrics.
 
 - **RULE: RULE-19** Prefer an explicit task title and otherwise derive one from genuine user input
-  - **SYNOPSIS:** Use a caller-supplied or stored task title when available. Otherwise derive a bounded title from the first genuine recorded user request after excluding injected plugin catalogs, repository instructions, environment blocks, and ambient browser context. Use the resulting report title for both the HTML document title and visible page heading, with a generic metrics title only as the fallback.
+  - **SYNOPSIS:** Use a caller-supplied or stored task title when available. Otherwise derive a bounded title from the first genuine recorded user request after excluding injected plugin catalogs, repository instructions, environment blocks, and ambient browser context. Compose the result as `"<task title>" Agent Report` for both the HTML document title and visible page heading, with a generic metrics title only as the fallback.
   - **BECAUSE:** Host-provided context is useful runtime input but does not identify the work the report is about.
 
 - **RULE: RULE-20** Keep the HTML report frame compact
@@ -107,7 +107,7 @@ This model retains exact source measurements and progressively aggregated views.
   - **FIELD:** `source_manifest`
     - **SYNOPSIS:** Rollout file paths and optional immutable source digests.
   - **FIELD:** `run_label`
-    - **SYNOPSIS:** Caller-supplied task title when available, otherwise a bounded title derived from the first genuine recorded user request, with `report` appended once.
+    - **SYNOPSIS:** Caller-supplied task title when available, otherwise a bounded title derived from the first genuine recorded user request, composed as `"<task title>" Agent Report` without duplicating an existing `Agent Report` suffix.
 
 - **ENTITY: ENTITY-2** Thread
   - **SYNOPSIS:** One Codex session and its local usage-accounting boundary.
@@ -463,7 +463,7 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 
 - **TASK: TEST-18** Select a semantic report title
   - **SYNOPSIS:** Provide injected plugin, repository, environment, and browser context before a genuine user request, then repeat the case with an explicit stored title.
-  - **VALIDATES:** The first genuine request supplies both the HTML document title and visible heading when no explicit title exists, while the explicit title takes precedence and the generic metrics title remains only a fallback.
+  - **VALIDATES:** The first genuine request supplies the quoted task name in `"<task title>" Agent Report` for both the HTML document title and visible heading when no explicit title exists, while the explicit title takes precedence and the generic metrics title remains only a fallback.
 
 - **TASK: TEST-19** Render the compact report frame
   - **SYNOPSIS:** Render a priced report with a fixed observation timestamp.

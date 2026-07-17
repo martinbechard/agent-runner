@@ -1612,9 +1612,16 @@ def _report_title(task_title: str) -> str:
     normalized = re.sub(r"\s+", " ", task_title).strip().rstrip(". ")
     if not normalized:
         return ""
-    if normalized.casefold().endswith(" report"):
-        return normalized
-    return f"{normalized} report"
+    suffix = " Agent Report"
+    if normalized.casefold() == suffix.strip().casefold():
+        return ""
+    if normalized.casefold().endswith(suffix.casefold()):
+        normalized = normalized[: -len(suffix)].rstrip()
+    if len(normalized) >= 2 and normalized[0] == normalized[-1] == '"':
+        normalized = normalized[1:-1].strip()
+    if not normalized:
+        return ""
+    return f'"{normalized}" Agent Report'
 
 
 def _append_codex_activity(

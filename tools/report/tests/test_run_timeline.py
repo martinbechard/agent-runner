@@ -1720,12 +1720,28 @@ def test_native_codex_report_uses_first_genuine_request_as_title():
     html = module.render_codex_rollout_html(run)
     markdown = module.render_codex_rollout_markdown(run)
 
-    assert run.run_label == "Inspect the project report"
-    assert "<title>Inspect the project report</title>" in html
-    assert "<h1>Inspect the project report</h1>" in html
-    assert markdown.startswith("# Inspect the project report\n")
+    assert run.run_label == '"Inspect the project" Agent Report'
+    assert '<title>"Inspect the project" Agent Report</title>' in html
+    assert '<h1>"Inspect the project" Agent Report</h1>' in html
+    assert markdown.startswith('# "Inspect the project" Agent Report\n')
     assert "Codex Rollout Metrics" not in html
     assert "Codex Rollout Metrics" not in markdown
+
+
+@pytest.mark.parametrize(
+    ("task_title", "expected"),
+    [
+        ("Create Quarkus Skills", '"Create Quarkus Skills" Agent Report'),
+        ('"Create Quarkus Skills"', '"Create Quarkus Skills" Agent Report'),
+        ("Create Quarkus Skills agent report", '"Create Quarkus Skills" Agent Report'),
+        ('"Create Quarkus Skills" Agent Report', '"Create Quarkus Skills" Agent Report'),
+        ("Agent Report", ""),
+    ],
+)
+def test_report_title_uses_canonical_agent_report_form(task_title, expected):
+    module = _load_module()
+
+    assert module._report_title(task_title) == expected
 
 
 def test_native_codex_report_skips_host_context_when_deriving_title(tmp_path):
@@ -1745,7 +1761,7 @@ def test_native_codex_report_skips_host_context_when_deriving_title(tmp_path):
 
     run = module.build_codex_rollout_run("host-context-thread", tmp_path)
 
-    assert run.run_label == "Create Quarkus skills report"
+    assert run.run_label == '"Create Quarkus skills" Agent Report'
 
 
 def test_native_codex_report_prefers_explicit_title_over_derived_request():
@@ -1757,10 +1773,10 @@ def test_native_codex_report_prefers_explicit_title_over_derived_request():
         title="Stored task title",
     )
 
-    assert run.run_label == "Stored task title report"
+    assert run.run_label == '"Stored task title" Agent Report'
     html = module.render_codex_rollout_html(run)
-    assert "<title>Stored task title report</title>" in html
-    assert "<h1>Stored task title report</h1>" in html
+    assert '<title>"Stored task title" Agent Report</title>' in html
+    assert '<h1>"Stored task title" Agent Report</h1>' in html
 
 
 def test_native_codex_report_prefers_recorded_metadata_title(tmp_path):
@@ -1779,13 +1795,13 @@ def test_native_codex_report_prefers_recorded_metadata_title(tmp_path):
 
     run = module.build_codex_rollout_run("recorded-title-thread", tmp_path)
 
-    assert run.run_label == "Recorded task title report"
+    assert run.run_label == '"Recorded task title" Agent Report'
     explicit = module.build_codex_rollout_run(
         "recorded-title-thread",
         tmp_path,
         title="Catalog task title",
     )
-    assert explicit.run_label == "Catalog task title report"
+    assert explicit.run_label == '"Catalog task title" Agent Report'
 
 
 def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
@@ -2412,8 +2428,8 @@ def test_main_writes_native_codex_machine_outputs_and_sealed_manifest(tmp_path):
     assert html_path.with_suffix(".md").exists()
     html = html_path.read_text(encoding="utf-8")
     assert "API-equivalent estimate" in html
-    assert "<title>Stored task title report</title>" in html
-    assert "<h1>Stored task title report</h1>" in html
+    assert '<title>"Stored task title" Agent Report</title>' in html
+    assert '<h1>"Stored task title" Agent Report</h1>' in html
 
 
 def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_path):
