@@ -555,7 +555,9 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
 
     assert '<div class="label">MCP calls</div><div class="value">3</div>' in html
     assert "<th>Turns<br><span class=\"column-detail\">(Tools/MCP)</span></th>" in agent_table
+    assert '<th class="agent-timeline-header">Timeline</th>' in agent_table
     assert '<span class="cell-secondary">(1/3)</span>' in agent_table
+    assert agent_table.count('class="timeline-bar agent-timeline-bar"') == 1
     assert "gpt-5.4-mini" in agent_table
     assert '<div class="label">Skills via MCP</div><div class="value">2</div>' in overlay
     assert '<div class="label">Skills via Bash</div><div class="value">1</div>' in overlay
@@ -1721,9 +1723,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert "<th>Run share</th>" not in agent_table
     assert "<th>Subagents invoked</th>" not in agent_table
     assert '<col class="agent-skills-column">' in agent_table
+    assert '<col class="agent-timeline-column">' in agent_table
     assert ".agent-table { table-layout:fixed; min-width:1200px; }" in html
-    assert ".agent-table .agent-assignment-column { width:40%; }" in html
+    assert ".agent-table .agent-assignment-column { width:30%; }" in html
     assert ".agent-table .agent-skills-column { width:15%; }" in html
+    assert ".agent-table .agent-timeline-column { width:25%; }" in html
     assert ".agent-table .agent-skills-cell { font-size:.765em; }" in html
     assert "agent-subagents-column" not in html
     assert ".agent-table td { vertical-align:top; }" in html
@@ -1740,6 +1744,17 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
     assert '<span class="cell-secondary">(1/0)</span>' in agent_rows[0]
     assert '<span class="cell-secondary">(22.5%)</span>' in agent_rows[0]
+    assert agent_table.count('class="timeline-bar agent-timeline-bar"') == 3
+    for thread in run.threads:
+        style = module._timeline_style(
+            run,
+            thread.started_at,
+            thread.last_observed_at,
+        )
+        assert (
+            'class="timeline-bar agent-timeline-bar" '
+            f'style="{style}"' in agent_table
+        )
     assert 'class="agent-assignment-cell" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
     assert '<span class="visually-hidden">Nested assignment, depth 1.</span>' in agent_rows[1]
     assert '<strong>module-a (module-a)</strong>' in agent_rows[1]

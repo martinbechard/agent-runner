@@ -3345,6 +3345,10 @@ def render_codex_rollout_html(
             if agent_depth == 0
             else f"Nested assignment, depth {agent_depth}."
         )
+        timeline_label = (
+            f"{_agent_assignment_label(thread)} observed span · "
+            f"{_timestamp_offset_label(run, thread.started_at)}"
+        )
         agent_rows.append(
             "<tr>"
             f'<td class="agent-assignment-cell" data-depth="{agent_depth}" style="--agent-depth:{agent_depth}">'
@@ -3360,6 +3364,12 @@ def render_codex_rollout_html(
             '<td class="agent-processed-cell">'
             f'<span class="cell-primary">{_format_compact_count(thread.token_totals.processed_tokens)}</span>'
             f'<span class="cell-secondary">({run_share:.1f}%)</span></td>'
+            '<td class="agent-timeline-cell">'
+            '<span class="timeline-track agent-timeline-track" role="img" '
+            f'aria-label="{_escape_html(timeline_label)}">'
+            '<span class="timeline-bar agent-timeline-bar" '
+            f'style="{_timeline_style(run, thread.started_at, thread.last_observed_at)}"></span>'
+            "</span></td>"
             "</tr>"
         )
     thread_details = []
@@ -3891,11 +3901,12 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
-.agent-table .agent-assignment-column {{ width:40%; }}
+.agent-table .agent-assignment-column {{ width:30%; }}
 .agent-table .agent-skills-column {{ width:15%; }}
-.agent-table .agent-count-column {{ width:15%; }}
-.agent-table .agent-time-column {{ width:15%; }}
-.agent-table .agent-processed-column {{ width:15%; }}
+.agent-table .agent-count-column {{ width:10%; }}
+.agent-table .agent-time-column {{ width:10%; }}
+.agent-table .agent-processed-column {{ width:10%; }}
+.agent-table .agent-timeline-column {{ width:25%; }}
 .agent-table th {{ white-space:normal; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
@@ -3903,6 +3914,7 @@ td {{ font-size:.85em; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
 .cell-primary, .cell-secondary {{ display:block; }}
 .cell-secondary {{ margin-top:2px; color:#607d8b; font-size:.86em; }}
+.agent-table .agent-timeline-track {{ width:100%; min-width:220px; }}
 .agent-assignment-cell {{ --agent-indent:calc(var(--agent-depth) * 20px); padding-left:calc(7px + var(--agent-indent)); background:linear-gradient(to right,#0d47a1 0 var(--agent-indent),transparent var(--agent-indent)); }}
 .agents-heading {{ position:relative; display:flex; align-items:center; margin-top:30px; }}
 .agents-heading h2 {{ margin:0; }}
@@ -4014,7 +4026,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 <div class="agents-heading"><h2>Agents used</h2><details class="agent-info"><summary aria-label="About Agents used">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
-<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time</th><th>Processed</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{''.join(agent_rows)}</tbody></table></div>
 <h2 id="execution-timeline">Execution timeline</h2>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 {''.join(thread_details)}
