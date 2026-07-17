@@ -3189,9 +3189,10 @@ def _agent_skills_html(values: list[str]) -> str:
         '<summary><span class="agent-skills-preview">'
         f"{skills_text}</span>"
         '<span class="agent-skills-toggle agent-skills-more">more</span>'
-        '<span class="agent-skills-toggle agent-skills-less">less</span>'
         "</summary>"
-        f'<div class="agent-skills-full">{skills_text}</div>'
+        f'<div class="agent-skills-full">{skills_text}'
+        '<button type="button" class="agent-skills-toggle agent-skills-less">less</button>'
+        "</div>"
         "</details>"
     )
 
@@ -3894,11 +3895,10 @@ td {{ font-size:.85em; }}
 .agent-skills-disclosure > summary {{ list-style:none; cursor:pointer; }}
 .agent-skills-disclosure > summary::-webkit-details-marker {{ display:none; }}
 .agent-skills-preview {{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }}
-.agent-skills-toggle {{ display:inline-block; margin-top:2px; color:#2563a6; text-decoration:underline; }}
-.agent-skills-less {{ display:none; }}
-.agent-skills-disclosure[open] .agent-skills-preview, .agent-skills-disclosure[open] .agent-skills-more {{ display:none; }}
-.agent-skills-disclosure[open] .agent-skills-less {{ display:inline-block; }}
-.agent-skills-full {{ margin-top:3px; }}
+.agent-skills-toggle {{ display:inline-block; margin-top:2px; padding:0; border:0; color:#2563a6; background:none; cursor:pointer; font:inherit; text-decoration:underline; }}
+.agent-skills-disclosure[open] > summary {{ display:none; }}
+.agent-skills-full {{ margin-top:0; }}
+.agent-skills-less {{ display:block; margin-top:3px; }}
 .agent-assignment-line {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
@@ -4030,6 +4030,13 @@ document.querySelectorAll(".agent-summary-row").forEach(function(row) {{
   row.addEventListener("click", function(event) {{
     if (event.target.closest("a, button, details, summary")) return;
     toggleAgentDetail();
+  }});
+}});
+document.querySelectorAll(".agent-skills-less").forEach(function(button) {{
+  button.addEventListener("click", function(event) {{
+    event.stopPropagation();
+    var disclosure = button.closest(".agent-skills-disclosure");
+    if (disclosure) disclosure.open = false;
   }});
 }});
 </script>

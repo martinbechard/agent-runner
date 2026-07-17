@@ -1775,11 +1775,18 @@ def test_native_codex_html_clamps_long_agent_skill_lists_with_disclosure():
         "skill-4 · skill-5 · skill-6</span>"
     ) in agent_table
     assert '<span class="agent-skills-toggle agent-skills-more">more</span>' in agent_table
-    assert '<span class="agent-skills-toggle agent-skills-less">less</span>' in agent_table
+    assert (
+        '<div class="agent-skills-full">skill-1 · skill-2 · skill-3 · skill-4 · '
+        'skill-5 · skill-6<button type="button" '
+        'class="agent-skills-toggle agent-skills-less">less</button></div>'
+    ) in agent_table
+    assert '<span class="agent-skills-toggle agent-skills-less">' not in agent_table
     assert (
         ".agent-skills-preview { display:-webkit-box; -webkit-box-orient:vertical; "
         "-webkit-line-clamp:5; overflow:hidden; }"
     ) in html
+    assert ".agent-skills-disclosure[open] > summary { display:none; }" in html
+    assert 'document.querySelectorAll(".agent-skills-less")' in html
 
 
 def test_compact_count_uses_thousands_and_millions():
