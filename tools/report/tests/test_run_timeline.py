@@ -529,7 +529,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.13.0"
+    assert run.parser_version == "1.14.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1580,7 +1580,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.13.0"
+    assert run.parser_version == "1.14.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -1713,18 +1713,79 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     )
 
 
-def test_native_codex_report_uses_backend_neutral_title():
+def test_native_codex_report_uses_first_genuine_request_as_title():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
 
     html = module.render_codex_rollout_html(run)
     markdown = module.render_codex_rollout_markdown(run)
 
-    assert "<title>Agent Execution Metrics</title>" in html
-    assert "<h1>Agent Execution Metrics</h1>" in html
-    assert markdown.startswith("# Agent Execution Metrics\n")
+    assert run.run_label == "Inspect the project report"
+    assert "<title>Inspect the project report</title>" in html
+    assert "<h1>Inspect the project report</h1>" in html
+    assert markdown.startswith("# Inspect the project report\n")
     assert "Codex Rollout Metrics" not in html
     assert "Codex Rollout Metrics" not in markdown
+
+
+def test_native_codex_report_skips_host_context_when_deriving_title(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "host-context.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-16T22:00:00Z","type":"session_meta","payload":{"id":"host-context-thread","source":"user"}}',
+                '{"timestamp":"2026-07-16T22:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<recommended_plugins>\\nInjected catalog\\n</recommended_plugins>"},{"type":"input_text","text":"# AGENTS.md instructions for /work/project\\n\\n<INSTRUCTIONS>Injected</INSTRUCTIONS>"},{"type":"input_text","text":"<environment_context>Injected</environment_context>"}]}}',
+                '{"timestamp":"2026-07-16T22:00:02Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"<in-app-browser-context source=\\"ambient-ui-state\\">Injected</in-app-browser-context>\\n\\n## My request for Codex:\\nCreate Quarkus skills."}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("host-context-thread", tmp_path)
+
+    assert run.run_label == "Create Quarkus skills report"
+
+
+def test_native_codex_report_prefers_explicit_title_over_derived_request():
+    module = _load_module()
+
+    run = module.build_codex_rollout_run(
+        "root-thread",
+        CODEX_ROLLOUT_FIXTURES,
+        title="Stored task title",
+    )
+
+    assert run.run_label == "Stored task title report"
+    html = module.render_codex_rollout_html(run)
+    assert "<title>Stored task title report</title>" in html
+    assert "<h1>Stored task title report</h1>" in html
+
+
+def test_native_codex_report_prefers_recorded_metadata_title(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "recorded-title.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-16T22:00:00Z","type":"session_meta","payload":{"id":"recorded-title-thread","thread_title":"Recorded task title","source":"user"}}',
+                '{"timestamp":"2026-07-16T22:00:01Z","type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"Create a different fallback title."}]}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("recorded-title-thread", tmp_path)
+
+    assert run.run_label == "Recorded task title report"
+    explicit = module.build_codex_rollout_run(
+        "recorded-title-thread",
+        tmp_path,
+        title="Catalog task title",
+    )
+    assert explicit.run_label == "Catalog task title report"
 
 
 def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
@@ -2336,6 +2397,8 @@ def test_main_writes_native_codex_machine_outputs_and_sealed_manifest(tmp_path):
             "--sessions-root",
             str(CODEX_ROLLOUT_FIXTURES),
             "--seal",
+            "--title",
+            "Stored task title",
             "--output",
             str(html_path),
         ]
@@ -2347,7 +2410,10 @@ def test_main_writes_native_codex_machine_outputs_and_sealed_manifest(tmp_path):
     assert html_path.with_suffix(".turns.csv").exists()
     assert html_path.with_suffix(".work-units.csv").exists()
     assert html_path.with_suffix(".md").exists()
-    assert "API-equivalent estimate" in html_path.read_text(encoding="utf-8")
+    html = html_path.read_text(encoding="utf-8")
+    assert "API-equivalent estimate" in html
+    assert "<title>Stored task title report</title>" in html
+    assert "<h1>Stored task title report</h1>" in html
 
 
 def test_native_codex_interrupted_resumed_and_stale_turns_remain_bounded(tmp_path):

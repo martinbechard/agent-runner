@@ -66,7 +66,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.13.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.14.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -475,6 +475,7 @@ class CodexThreadMetrics:
     thread_id: str
     parent_thread_id: str = ""
     thread_name: str = ""
+    task_title: str = ""
     agent_path: str = ""
     agent_role: str = ""
     agent_nickname: str = ""
@@ -1558,6 +1559,64 @@ def _response_item_text(payload: dict[str, object], field: str) -> str:
     return "\n".join(fragments)
 
 
+def _genuine_user_request(content: str) -> str:
+    """Return human-authored request text without known Codex host envelopes."""
+
+    normalized = content.strip()
+    request_marker = "## My request for Codex:"
+    if request_marker in normalized:
+        return normalized.partition(request_marker)[2].strip()
+    host_prefixes = (
+        "<recommended_plugins>",
+        "# AGENTS.md instructions for ",
+        "<environment_context>",
+        '<in-app-browser-context source="ambient-ui-state">',
+    )
+    if normalized.startswith(host_prefixes):
+        return ""
+    return normalized
+
+
+def _derived_task_title(activities: list[AgentActivity]) -> str:
+    """Derive a bounded task title from the first genuine recorded user request."""
+
+    for activity in activities:
+        if (
+            activity.activity_type != "input"
+            or not activity.summary.startswith("User input")
+        ):
+            continue
+        request = _genuine_user_request(activity.content)
+        if not request:
+            continue
+        title = re.sub(r"\b[A-Z][A-Z0-9_]*\s*=\s*\[redacted\]", "", request)
+        title = re.sub(r"\s+", " ", title).strip()
+        title = re.sub(
+            r"^(?:please\s+|can you\s+|could you\s+|would you\s+)",
+            "",
+            title,
+            flags=re.IGNORECASE,
+        )
+        title = re.split(r"[.!?](?:\s|$)", title, maxsplit=1)[0].strip()
+        words = title.split()
+        title = " ".join(words[:10]).rstrip(" ,:;-.")
+        title = re.sub(r"\s+(?:and|for|from|to|using|with)$", "", title, flags=re.IGNORECASE)
+        if title:
+            return title[0].upper() + title[1:]
+    return ""
+
+
+def _report_title(task_title: str) -> str:
+    """Normalize one task title for report display without duplicating the suffix."""
+
+    normalized = re.sub(r"\s+", " ", task_title).strip().rstrip(". ")
+    if not normalized:
+        return ""
+    if normalized.casefold().endswith(" report"):
+        return normalized
+    return f"{normalized} report"
+
+
 def _append_codex_activity(
     activities: list[AgentActivity],
     *,
@@ -1631,6 +1690,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     thread_id = ""
     parent_thread_id = ""
     thread_name = ""
+    task_title = ""
     agent_path = ""
     agent_role = ""
     agent_nickname = ""
@@ -1671,6 +1731,14 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             candidate_id = str(payload.get("id") or payload.get("session_id") or "")
             if candidate_id and not thread_id:
                 thread_id = candidate_id
+                task_title = next(
+                    (
+                        str(payload[key]).strip()
+                        for key in ("task_title", "thread_title", "title")
+                        if isinstance(payload.get(key), str) and str(payload[key]).strip()
+                    ),
+                    "",
+                )
                 parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
                 thread_name = (
                     agent_path.rstrip("/").rsplit("/", 1)[-1]
@@ -2163,6 +2231,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         thread_id=thread_id,
         parent_thread_id=parent_thread_id,
         thread_name=thread_name,
+        task_title=task_title,
         agent_path=agent_path,
         agent_role=agent_role,
         agent_nickname=agent_nickname,
@@ -2935,6 +3004,7 @@ def build_codex_rollout_run(
     allow_aborted: bool = False,
     observed_at: datetime | None = None,
     candidate_paths: list[Path] | None = None,
+    title: str = "",
 ) -> CodexRunMetrics:
     """Discover, parse, reconcile, and aggregate one native Codex subtree.
 
@@ -3004,6 +3074,12 @@ def build_codex_rollout_run(
     cost = _run_cost_assessment(threads, usage_totals, model_usage, plan_types)
     pricing_version, pricing_digest = _pricing_metadata()
     observed = observed_at or datetime.now(timezone.utc)
+    root_thread = next(
+        thread for thread in threads if thread.thread_id == root_thread_id
+    )
+    run_label = _report_title(
+        title or root_thread.task_title or _derived_task_title(root_thread.activities)
+    )
     return CodexRunMetrics(
         run_id=root_thread_id,
         root_thread_id=root_thread_id,
@@ -3027,6 +3103,7 @@ def build_codex_rollout_run(
         diagnostics=sorted(set(diagnostics)),
         pricing_version=pricing_version,
         pricing_digest=pricing_digest if seal else "",
+        run_label=run_label,
     )
 
 
@@ -3081,6 +3158,7 @@ def reprocess_sealed_codex_run(manifest_path: Path) -> CodexRunMetrics:
         ),
         observed_at=observed_at,
         candidate_paths=paths,
+        title=str(data.get("run_label") or ""),
     )
 
 
@@ -3382,8 +3460,13 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         if run.usage_totals.input_tokens
         else 0
     )
+    report_title = (
+        run.run_label
+        if run.runtime.casefold() == "codex" and run.run_label
+        else AGENT_EXECUTION_METRICS_TITLE
+    )
     lines = [
-        f"# {AGENT_EXECUTION_METRICS_TITLE}",
+        f"# {report_title}",
         "",
         f"- Runtime: `{run.runtime}`",
         f"- Run: `{run.root_thread_id}`",
@@ -4034,11 +4117,18 @@ def render_codex_rollout_html(
         if is_junie_ide
         else "Bars share a common run-wide time axis and show each agent and task span's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
     )
+    report_title = (
+        run.run_label
+        if run.runtime.casefold() == "codex" and run.run_label
+        else AGENT_EXECUTION_METRICS_TITLE
+    )
     run_label_html = (
-        f'<p class="run-label">{_escape_html(run.run_label)}</p>' if run.run_label else ""
+        f'<p class="run-label">{_escape_html(run.run_label)}</p>'
+        if run.run_label and run.run_label != report_title
+        else ""
     )
     return f"""<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>{AGENT_EXECUTION_METRICS_TITLE}</title>
+<html><head><meta charset="utf-8"><title>{_escape_html(report_title)}</title>
 <style>
 :root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; }}
 body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }}
@@ -4166,7 +4256,7 @@ td {{ font-size:.85em; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
-<h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
+<h1>{_escape_html(report_title)}</h1>
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 <div class="metrics">
@@ -8603,6 +8693,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
     parser.add_argument("--codex-thread", help="Root Codex Desktop thread ID to report.")
     parser.add_argument(
+        "--title",
+        help=(
+            "Explicit task title. Takes precedence over recorded metadata and the "
+            "first genuine user request."
+        ),
+    )
+    parser.add_argument(
         "--sessions-root",
         help="Bounded Codex sessions root. Defaults to ~/.codex/sessions.",
     )
@@ -8670,6 +8767,7 @@ def main(argv: list[str] | None = None) -> int:
                 sessions_root,
                 seal=args.seal,
                 allow_aborted=args.seal_aborted,
+                title=args.title or "",
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
