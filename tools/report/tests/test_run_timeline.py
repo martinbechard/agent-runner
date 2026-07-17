@@ -561,11 +561,11 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     assert "gpt-5.4-mini" in agent_table
     assert '<div class="label">Skills via MCP</div><div class="value">2</div>' in overlay
     assert '<div class="label">Skills via Bash</div><div class="value">1</div>' in overlay
-    assert '<div class="turn-skills-value">python · structured-design</div>' in overlay
+    assert '<div class="label">Skills used</div>' not in overlay
     assert "mcp-agent-ops → skill_load" in overlay
     assert "skills: structured-design · python" in overlay
     assert "OK · 2 skills · 0 errors · revision af37d9ac" in overlay
-    assert "MCP-recorded execution time" in overlay
+    assert "MCP-recorded execution time" not in overlay
     assert "- MCP calls: 3" in markdown
     assert "PRIVATE" not in html
 
@@ -1545,13 +1545,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert '<div class="label">Tools used</div><div class="value">exec × 1</div>' in root_turn_overlay
     assert '<span class="metric-detail">1 call · 500ms</span>' in root_turn_overlay
     assert '<div class="label">Tool calls</div>' not in root_turn_overlay
-    assert '<div class="metric turn-skills-metric"><div class="label">Skills used</div>' in root_turn_overlay
-    assert '<div class="turn-skills-value">careful-coding · python</div>' in root_turn_overlay
-    assert (
-        root_turn_overlay.index('<div class="label">Cost estimate</div>')
-        < root_turn_overlay.index('<div class="label">Skills used</div>')
-        < root_turn_overlay.index('<div class="label">Tools used</div>')
-    )
+    assert '<div class="label">Skills used</div>' not in root_turn_overlay
     assert (
         ".tool-call-panel { display:flex; flex-direction:column; "
         "box-sizing:border-box;"
@@ -1567,19 +1561,19 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
         ".turn-detail-metrics { grid-template-columns:repeat(6,minmax(0,1fr)); }"
         in html
     )
-    assert ".turn-skills-metric { grid-column:span 4; }" in html
-    assert ".turn-tools-metric { grid-column:span 2; }" in html
+    assert "turn-skills-metric" not in html
+    assert ".turn-tools-metric { grid-column:span 6; }" in html
     assert "Arguments are compact, secret-redacted summaries" not in root_turn_overlay
     assert '<p class="execution-note">' not in root_turn_overlay
     tool_table = root_turn_overlay.split('<div class="table-scroll">', 1)[1].split(
         "</table>", 1
     )[0]
-    assert '<table class="turn-detail-table has-timing">' in tool_table
+    assert '<table class="turn-detail-table">' in tool_table
     assert '<col class="turn-detail-arguments-column">' in tool_table
     assert '<col class="turn-detail-cost-column">' in tool_table
     assert '<col class="turn-detail-model-column">' in tool_table
     assert '<col class="turn-detail-result-column">' in tool_table
-    assert '<col class="turn-detail-timing-column">' in tool_table
+    assert 'turn-detail-timing-column' not in tool_table
     assert "<th>T+</th>" in tool_table
     assert '>Cost</th>' in tool_table
     assert '<th>Model</th><th>Activity</th>' in tool_table
@@ -1588,27 +1582,15 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert "<th>Arguments</th>" in tool_table
     assert "<th>Result</th>" in tool_table
     assert "<th>Confidence</th>" not in tool_table
-    assert "<th>Timing note</th>" in tool_table
+    assert "<th>Timing note</th>" not in tool_table
     assert '<tr class="turn-detail-tool-row"><td>1</td><td>T+3s</td>' in tool_table
     assert "API_TOKEN=[redacted] python app.py</code></td>" in tool_table
     assert "[20 chars]" in tool_table
-    assert "tool-reported duration available</td></tr>" in tool_table
+    assert "tool-reported duration available" not in tool_table
     assert '<code>root-turn-1</code>' in html
     assert "PRIVATE-TOOL-PAYLOAD" not in html
 
-    run.threads[0].tool_intervals[0].attribution_confidence = "bounded"
-    bounded_html = module.render_codex_rollout_html(run)
-    bounded_overlay = bounded_html.split(
-        'id="turn-tool-call-list-1-1"', 1
-    )[1].split("</section>", 1)[0]
-    bounded_tool_table = bounded_overlay.split(
-        '<div class="table-scroll">', 1
-    )[1].split("</table>", 1)[0]
-    assert '<table class="turn-detail-table">' in bounded_tool_table
-    assert "has-timing" not in bounded_tool_table
-    assert "turn-detail-timing-column" not in bounded_tool_table
-    assert "<th>Timing note</th>" not in bounded_tool_table
-    assert "bounded" not in bounded_tool_table
+    assert "MCP-recorded execution time" not in tool_table
 
 
 def test_turn_modal_suppresses_empty_delegated_continuations_but_keeps_followups():

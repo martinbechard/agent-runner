@@ -3114,14 +3114,6 @@ def _turn_offset_label(run: CodexRunMetrics, turn: AgentTurn) -> str:
     return _timestamp_offset_label(run, turn.started_at)
 
 
-def _tool_timing_note(tool: ToolInterval) -> str:
-    if tool.attribution_confidence == "exact":
-        return "tool-reported duration available"
-    if tool.attribution_confidence == "bounded":
-        return ""
-    return f"{tool.attribution_confidence} timing"
-
-
 def _timeline_style(run: CodexRunMetrics, started_at: str, ended_at: str) -> str:
     run_start = _parse_iso_datetime(run.wall_started_at)
     start = _parse_iso_datetime(started_at)
@@ -3420,9 +3412,6 @@ def render_codex_rollout_html(
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 "</tr>"
             )
-            show_timing_note = bool(mcp_calls) or any(
-                tool.attribution_confidence != "bounded" for tool in tools
-            )
             turn_responses = sorted(
                 (response for response in thread.responses if response.turn_id == turn.turn_id),
                 key=lambda response: response.source_ordinal,
@@ -3460,8 +3449,7 @@ def render_codex_rollout_html(
                         '<td><span class="activity-name">input</span></td>'
                         f'<td>{input_arguments}</td>'
                         '<td>—</td>'
-                        + ("<td>—</td>" if show_timing_note else "")
-                        + "</tr>",
+                        "</tr>",
                     )
                 )
             for response_index, response in enumerate(turn_responses):
@@ -3505,8 +3493,7 @@ def render_codex_rollout_html(
                         '<td><span class="activity-name">model</span></td>'
                         f'<td>{model_arguments}</td>'
                         f'<td>{model_result}</td>'
-                        + ("<td>—</td>" if show_timing_note else "")
-                        + "</tr>",
+                        "</tr>",
                     )
                 )
             reasoning_index = 0
@@ -3536,8 +3523,7 @@ def render_codex_rollout_html(
                         '<td><span class="activity-name">reasoning</span></td>'
                         '<td>—</td>'
                         f'<td>{_render_activity_detail(activity, raw_label="raw reasoning")}</td>'
-                        + ("<td>—</td>" if show_timing_note else "")
-                        + "</tr>",
+                        "</tr>",
                     )
                 )
             if not reasoning_index and turn.usage.reasoning_tokens:
@@ -3554,8 +3540,7 @@ def render_codex_rollout_html(
                         '<td><span class="activity-name">reasoning</span></td>'
                         '<td>—</td>'
                         f'<td><div class="activity-summary">{turn.usage.reasoning_tokens:,} recorded reasoning tokens</div></td>'
-                        + ("<td>—</td>" if show_timing_note else "")
-                        + "</tr>",
+                        "</tr>",
                     )
                 )
             for tool_index, tool in enumerate(tools, start=1):
@@ -3581,12 +3566,7 @@ def render_codex_rollout_html(
                         f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
                         f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                         f"<td>{_render_tool_result(tool)}</td>"
-                        + (
-                            f"<td>{_escape_html(_tool_timing_note(tool))}</td>"
-                            if show_timing_note
-                            else ""
-                        )
-                        + "</tr>",
+                        "</tr>",
                     )
                 )
             for mcp_index, call in enumerate(mcp_calls, start=1):
@@ -3613,12 +3593,7 @@ def render_codex_rollout_html(
                         f'<td><code class="tool-name mcp-tool-name">{_escape_html(mcp_name)}</code></td>'
                         f"<td>{_render_mcp_argument(call)}</td>"
                         f"<td>{_render_mcp_result(call)}</td>"
-                        + (
-                            "<td>MCP-recorded execution time</td>"
-                            if show_timing_note
-                            else ""
-                        )
-                        + "</tr>",
+                        "</tr>",
                     )
                 )
             final_ordinal = max(
@@ -3649,23 +3624,12 @@ def render_codex_rollout_html(
                     f'{output_detail}</td>'
                     f'<td><div class="activity-summary">{turn.usage.output_tokens:,} model-output tokens '
                     f'across {len(turn_responses):,} responses</div></td>'
-                    + ("<td>—</td>" if show_timing_note else "")
-                    + "</tr>",
+                    "</tr>",
                 )
             )
             turn_detail_tool_rows = "".join(
                 row for _, _, row in sorted(detail_rows, key=lambda item: (item[0], item[1]))
             )
-            timing_note_header = "<th>Timing note</th>" if show_timing_note else ""
-            timing_note_column = (
-                '<col class="turn-detail-timing-column">' if show_timing_note else ""
-            )
-            turn_detail_table_class = (
-                "turn-detail-table has-timing"
-                if show_timing_note
-                else "turn-detail-table"
-            )
-            turn_skills = _inventory_text(turn.skills_used)
             mcp_skills = _inventory_text(turn.mcp_skills_loaded)
             bash_skills = _inventory_text(turn.bash_skills_loaded)
             abort_provenance_detail = _render_abort_provenance_detail(turn)
@@ -3693,13 +3657,11 @@ def render_codex_rollout_html(
                 '<div class="metric turn-bash-skills-metric"><div class="label">Skills via Bash</div>'
                 f'<div class="value">{len(turn.bash_skills_loaded):,}</div>'
                 f'<span class="metric-detail">{_escape_html(bash_skills)}</span></div>'
-                '<div class="metric turn-skills-metric"><div class="label">Skills used</div>'
-                f'<div class="turn-skills-value">{_escape_html(turn_skills)}</div></div>'
                 '<div class="metric turn-tools-metric"><div class="label">Tools used</div>'
                 f'<div class="value">{_escape_html(tool_names)}</div>'
                 f'<span class="metric-detail">{_escape_html(tool_total)}</span></div>'
                 "</div>"
-                f'<div class="table-scroll"><table class="{turn_detail_table_class}">'
+                '<div class="table-scroll"><table class="turn-detail-table">'
                 '<colgroup><col class="turn-detail-index-column">'
                 '<col class="turn-detail-offset-column">'
                 '<col class="turn-detail-cost-column">'
@@ -3707,11 +3669,11 @@ def render_codex_rollout_html(
                 '<col class="turn-detail-activity-column">'
                 '<col class="turn-detail-arguments-column">'
                 '<col class="turn-detail-result-column">'
-                f"{timing_note_column}</colgroup>"
+                '</colgroup>'
                 '<thead><tr><th>#</th><th>T+</th>'
                 '<th title="Cost of the model response on this row; tool execution has no separately recorded model cost">Cost</th>'
                 '<th>Model</th><th>Activity</th><th>Arguments</th><th>Result</th>'
-                f"{timing_note_header}</tr></thead>"
+                '</tr></thead>'
                 f"<tbody>{turn_detail_tool_rows}</tbody></table></div>"
                 "</div>"
                 "</section>"
@@ -3971,9 +3933,7 @@ td {{ font-size:.85em; }}
 .turn-detail-panel {{ width:min(1500px,94vw); }}
 .turn-detail-metrics {{ grid-template-columns:repeat(6,minmax(0,1fr)); }}
 .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric {{ grid-column:span 2; }}
-.turn-skills-metric {{ grid-column:span 4; }}
-.turn-tools-metric {{ grid-column:span 2; }}
-.turn-skills-value {{ margin-top:3px; font-size:1em; font-weight:600; line-height:1.45; overflow-wrap:anywhere; }}
+.turn-tools-metric {{ grid-column:span 6; }}
 .tool-call-header {{ display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }}
 .tool-call-header h2 {{ margin:0; }}
 .tool-call-close {{ color:#b3261e; font-weight:600; text-decoration:none; }}
@@ -3987,20 +3947,12 @@ td {{ font-size:.85em; }}
 .turn-detail-table .turn-detail-activity-column {{ width:9%; }}
 .turn-detail-table .turn-detail-arguments-column,
 .turn-detail-table .turn-detail-result-column {{ width:29.5%; }}
-.turn-detail-table.has-timing .turn-detail-index-column {{ width:3%; }}
-.turn-detail-table.has-timing .turn-detail-offset-column {{ width:6%; }}
-.turn-detail-table.has-timing .turn-detail-cost-column {{ width:7%; }}
-.turn-detail-table.has-timing .turn-detail-model-column {{ width:12%; }}
-.turn-detail-table.has-timing .turn-detail-activity-column {{ width:8%; }}
-.turn-detail-table.has-timing .turn-detail-arguments-column,
-.turn-detail-table.has-timing .turn-detail-result-column {{ width:24%; }}
-.turn-detail-table.has-timing .turn-detail-timing-column {{ width:16%; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
 .diagnostics {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:10px 14px; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:1240px) {{ .thread-detail > summary {{ grid-template-columns:1fr auto; }} .timeline-track {{ grid-column:1 / -1; }} }}
-@media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
+@media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1>{AGENT_EXECUTION_METRICS_TITLE}</h1>
 {run_label_html}
