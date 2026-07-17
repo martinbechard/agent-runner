@@ -1751,6 +1751,30 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert '<strong>reviewer (reviewer)</strong>' in agent_rows[2]
 
 
+def test_native_codex_html_clamps_long_agent_skill_lists_with_disclosure():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    root = next(thread for thread in run.threads if thread.thread_id == run.root_thread_id)
+    root.skills_used = [f"skill-{index}" for index in range(1, 7)]
+
+    html = module.render_codex_rollout_html(run)
+    agent_table = html.split('<table class="agent-table">', 1)[1].split(
+        "</table>", 1
+    )[0]
+
+    assert '<details class="agent-skills-disclosure">' in agent_table
+    assert (
+        '<span class="agent-skills-preview">skill-1 · skill-2 · skill-3 · '
+        "skill-4 · skill-5 · skill-6</span>"
+    ) in agent_table
+    assert '<span class="agent-skills-toggle agent-skills-more">more</span>' in agent_table
+    assert '<span class="agent-skills-toggle agent-skills-less">less</span>' in agent_table
+    assert (
+        ".agent-skills-preview { display:-webkit-box; -webkit-box-orient:vertical; "
+        "-webkit-line-clamp:5; overflow:hidden; }"
+    ) in html
+
+
 def test_compact_count_uses_thousands_and_millions():
     module = _load_module()
 

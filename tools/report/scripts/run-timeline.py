@@ -3178,6 +3178,24 @@ def _inventory_text(values: list[str]) -> str:
     return " · ".join(values) if values else "—"
 
 
+def _agent_skills_html(values: list[str]) -> str:
+    """Render long skill inventories as a five-line expandable disclosure."""
+
+    skills_text = _escape_html(_inventory_text(values))
+    if len(values) <= 5:
+        return skills_text
+    return (
+        '<details class="agent-skills-disclosure">'
+        '<summary><span class="agent-skills-preview">'
+        f"{skills_text}</span>"
+        '<span class="agent-skills-toggle agent-skills-more">more</span>'
+        '<span class="agent-skills-toggle agent-skills-less">less</span>'
+        "</summary>"
+        f'<div class="agent-skills-full">{skills_text}</div>'
+        "</details>"
+    )
+
+
 def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     """Render a privacy-safe Markdown summary with execution detail."""
     turn_count = sum(len(thread.turns) for thread in run.threads)
@@ -3327,7 +3345,7 @@ def render_codex_rollout_html(
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         agent_cost = _cost_for_thread_usage(thread, thread.token_totals)
         run_share = thread.token_totals.processed_tokens / composition_total * 100
-        skills_used = _inventory_text(thread.skills_used)
+        skills_used_html = _agent_skills_html(thread.skills_used)
         activity_detail = (
             f"({len(thread.tool_intervals):,})"
             if is_junie
@@ -3351,7 +3369,7 @@ def render_codex_rollout_html(
             f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
             f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span></div>'
             f'<code class="model-name">{_escape_html(thread.model or "—")}</code></div></td>'
-            f'<td class="agent-skills-cell">{_escape_html(skills_used)}</td>'
+            f'<td class="agent-skills-cell">{skills_used_html}</td>'
             '<td class="agent-activity-cell">'
             f'<span class="cell-primary">{len(thread.turns):,}</span>'
             f'<span class="cell-secondary">{activity_detail}</span></td>'
@@ -3878,6 +3896,14 @@ td {{ font-size:.85em; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
 .agent-table .agent-skills-cell {{ font-size:.765em; }}
+.agent-skills-disclosure > summary {{ list-style:none; cursor:pointer; }}
+.agent-skills-disclosure > summary::-webkit-details-marker {{ display:none; }}
+.agent-skills-preview {{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }}
+.agent-skills-toggle {{ display:inline-block; margin-top:2px; color:#2563a6; text-decoration:underline; }}
+.agent-skills-less {{ display:none; }}
+.agent-skills-disclosure[open] .agent-skills-preview, .agent-skills-disclosure[open] .agent-skills-more {{ display:none; }}
+.agent-skills-disclosure[open] .agent-skills-less {{ display:inline-block; }}
+.agent-skills-full {{ margin-top:3px; }}
 .agent-assignment-heading {{ display:flex; align-items:flex-start; justify-content:space-between; gap:8px; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
