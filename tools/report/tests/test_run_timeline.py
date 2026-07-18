@@ -1126,6 +1126,11 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "Subagents invoked" not in agent_table
     task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>TTFT</th>" not in task_span_table
+    assert "<th>State</th>" not in task_span_table
+    assert (
+        '<code>task-1</code></a> <span class="state state-complete">complete</span>'
+        in task_span_table
+    )
     assert (
         "<th>Fresh Input</th><th>Cache read</th><th>Cache write</th>"
         in task_span_table
@@ -1827,6 +1832,12 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert "<td>500ms</td>" not in root_turn_table
     assert "<th>Processed</th>" not in root_turn_table
     assert "<th>Tools</th>" not in root_turn_table
+    assert "<th>State</th>" not in root_turn_table
+    assert (
+        '<code>root-turn-1</code></a> '
+        '<span class="state state-complete">complete</span>'
+        in root_turn_table
+    )
     assert "<th>Input</th>" not in root_turn_table
     assert "<th>Cache write</th>" not in root_turn_table
     assert "<th>Fresh Input</th><th>Cache read</th><th>Output</th>" in root_turn_table
@@ -1856,6 +1867,10 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     )[0]
     assert "60 fresh-input · 40 cache-read" in root_overlay
     assert "cache-write</div>" not in root_overlay
+    root_tool_overlay = html.split('id="turn-tool-call-list-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "<th>State</th>" in root_tool_overlay
 
 
 def test_native_codex_report_uses_first_genuine_request_as_title():

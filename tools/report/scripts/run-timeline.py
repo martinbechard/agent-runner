@@ -3942,12 +3942,16 @@ def render_codex_rollout_html(
                 f'<a class="drilldown-link" href="#{turn_detail_overlay_id}">'
                 f"<code>{_escape_html(turn.turn_id)}</code></a>"
             )
+            turn_state_badge = (
+                f'<span class="state state-{_escape_html(turn.outcome)}">'
+                f'{_escape_html(turn.outcome)}</span>'
+            )
             thread_tool_rows.append(
                 '<tr class="turn-tool-row">'
                 f"<td>{turn_link}</td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
-                f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
+                f"<td>{turn_state_badge}</td>"
                 f"<td>{len(tools):,}</td>"
                 f'<td title="{_escape_html(tool_total)}">{_escape_html(tool_names)}</td>'
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
@@ -4267,10 +4271,9 @@ def render_codex_rollout_html(
             )
             turn_rows.append(
                 "<tr>"
-                f"<td>{turn_link}</td>"
+                f"<td>{turn_link} {turn_state_badge}</td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
                 f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
-                f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
                 f"{work_unit_cell}"
                 f"{activity_cell}"
                 f"<td>{turn.usage.direct_input_tokens:,}</td>"
@@ -4283,7 +4286,7 @@ def render_codex_rollout_html(
                 "</tr>"
             )
         turn_column_count = (
-            10 + int(show_cache_write) + int(show_work_unit) + int(show_activity)
+            9 + int(show_cache_write) + int(show_work_unit) + int(show_activity)
         )
         turn_rows_html = "".join(turn_rows) or (
             f'<tr><td colspan="{turn_column_count}">No {turn_plural} recorded</td></tr>'
@@ -4322,7 +4325,7 @@ def render_codex_rollout_html(
             "</div>"
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
-            f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th>"
+            f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th>"
             f"{optional_headers}<th>Fresh Input</th><th>Cache read</th>"
             f'{"<th>Cache write</th>" if show_cache_write else ""}'
             '<th>Output</th><th>Reasoning</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
