@@ -1390,6 +1390,16 @@ def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path)
     assert html.index('<section id="model-usage"') < html.index('<div id="timeline"')
     assert "<h2>Usage by model</h2>" in model_usage
     assert model_usage.count('class="model-usage-group"') == 1
+    assert (
+        '<summary><span class="model-usage-toggle-icon" aria-hidden="true"></span>'
+        '<span class="model-usage-parent">'
+    ) in model_usage
+    assert '.model-usage-group > summary::-webkit-details-marker { display:none; }' in html
+    assert '.model-usage-toggle-icon::before { content:"+"; }' in html
+    assert (
+        '.model-usage-group[open] > summary .model-usage-toggle-icon::before '
+        '{ content:"−"; }'
+    ) in html
     assert f'<code class="model-name">{main.model}</code>' in model_usage
     assert 'class="model-effort"' not in model_usage
     assert "33 processed tokens" in model_usage

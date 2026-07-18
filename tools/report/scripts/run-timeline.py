@@ -3555,7 +3555,8 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
         run_share = total.processed_tokens / run_total * 100
         rendered_groups.append(
             '<details class="model-usage-group">'
-            '<summary><span class="model-usage-parent">'
+            '<summary><span class="model-usage-toggle-icon" aria-hidden="true"></span>'
+            '<span class="model-usage-parent">'
             '<span class="model-identity">'
             f'<code class="model-name">{_escape_html(model)}</code>{effort_html}</span>'
             f'<span class="model-usage-total">{total.processed_tokens:,} processed tokens · '
@@ -4354,9 +4355,10 @@ td {{ font-size:.85em; }}
 .composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .model-usage-groups {{ display:grid; gap:8px; }}
 .model-usage-group {{ overflow:hidden; border:1px solid #e1e6ea; border-radius:6px; background:#fff; }}
-.model-usage-group > summary {{ padding:11px 13px; color:#455a64; cursor:pointer; }}
+.model-usage-group > summary {{ display:flex; align-items:center; gap:8px; padding:11px 13px; color:#455a64; cursor:pointer; list-style:none; }}
+.model-usage-group > summary::-webkit-details-marker {{ display:none; }}
 .model-usage-group[open] > summary {{ border-bottom:1px solid #e1e6ea; }}
-.model-usage-parent {{ display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-left:5px; }}
+.model-usage-parent {{ display:flex; flex:1 1 auto; align-items:baseline; justify-content:space-between; gap:18px; min-width:0; }}
 .model-identity {{ display:flex; align-items:baseline; gap:4px; }}
 .model-effort, .model-usage-total {{ color:#607d8b; font-size:.85em; }}
 .model-usage-total {{ text-align:right; }}
@@ -4387,9 +4389,11 @@ td {{ font-size:.85em; }}
 .agent-model-metadata {{ white-space:nowrap; }}
 .agent-model-metadata .model-name {{ font-size:.82em; }}
 .effort-level {{ color:#607d8b; font-size:.82em; }}
-.agent-row-toggle {{ flex:0 0 auto; width:20px; height:20px; margin-top:1px; padding:0; border:1px solid #90a4ae; border-radius:50%; color:#455a64; background:#fff; cursor:pointer; font:700 14px/18px var(--font-ui); }}
+.agent-row-toggle, .model-usage-toggle-icon {{ box-sizing:border-box; flex:0 0 auto; width:20px; height:20px; margin-top:1px; padding:0; border:1px solid #90a4ae; border-radius:50%; color:#455a64; background:#fff; cursor:pointer; font:700 14px/18px var(--font-ui); text-align:center; }}
 .agent-row-toggle-icon::before {{ content:"+"; }}
 .agent-row-toggle[aria-expanded="true"] .agent-row-toggle-icon::before {{ content:"−"; }}
+.model-usage-toggle-icon::before {{ content:"+"; }}
+.model-usage-group[open] > summary .model-usage-toggle-icon::before {{ content:"−"; }}
 .agent-row-toggle:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
 .cell-primary, .cell-secondary {{ display:block; }}
