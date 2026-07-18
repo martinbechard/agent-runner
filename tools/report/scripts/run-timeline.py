@@ -3792,6 +3792,9 @@ def render_codex_rollout_html(
         if is_junie
         else f'{turn_column_label}<br><span class="column-detail">(Tools/MCP)</span>'
     )
+    agent_time_heading = (
+        'Agent time<br><span class="column-detail">(Cost)</span>'
+    )
     turn_activity_label = "Task span activity" if is_junie else "Turn activity"
     turn_id_label = "Task ID" if is_junie else "Turn"
     activity_metric_cards = (
@@ -4269,19 +4272,34 @@ def render_codex_rollout_html(
                 if show_cache_write
                 else ""
             )
+            turn_activity_detail = (
+                f"({len(tools):,})"
+                if is_junie
+                else f"({len(tools):,}/{len(mcp_calls):,})"
+            )
+            turn_activity_cell = (
+                '<td class="turn-activity-cell">'
+                '<span class="cell-primary">1</span>'
+                f'<span class="cell-secondary">{turn_activity_detail}</span></td>'
+            )
+            turn_time_cell = (
+                '<td class="turn-time-cell">'
+                f'<span class="cell-primary">{_format_detail_ms(turn.duration_ms)}</span>'
+                f'<span class="cell-secondary">({_escape_html(_compact_cost_summary(turn_cost))})</span></td>'
+            )
             turn_rows.append(
                 "<tr>"
                 f"<td>{turn_link} {turn_state_badge}</td>"
                 f"<td>{_turn_offset_label(run, turn)}</td>"
-                f"<td>{_format_detail_ms(turn.duration_ms)}</td>"
                 f"{work_unit_cell}"
                 f"{activity_cell}"
+                f"{turn_activity_cell}"
+                f"{turn_time_cell}"
                 f"<td>{turn.usage.direct_input_tokens:,}</td>"
                 f"<td>{turn.usage.cached_input_tokens:,}</td>"
                 f"{cache_write_cell}"
                 f"<td>{turn.usage.output_tokens:,}</td>"
                 f"<td>{turn.usage.reasoning_tokens:,}</td>"
-                f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 f"{timeline_cell}"
                 "</tr>"
             )
@@ -4325,10 +4343,11 @@ def render_codex_rollout_html(
             "</div>"
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
-            f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th>"
-            f"{optional_headers}<th>Fresh Input</th><th>Cache read</th>"
+            f"<th>{turn_id_label}</th><th>T+</th>{optional_headers}"
+            f"<th>{agent_activity_heading}</th><th>{agent_time_heading}</th>"
+            "<th>Fresh Input</th><th>Cache read</th>"
             f'{"<th>Cache write</th>" if show_cache_write else ""}'
-            '<th>Output</th><th>Reasoning</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
+            '<th>Output</th><th>Reasoning</th><th class="turn-timeline-header">Timeline</th>'
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</td></tr>"
         )
@@ -4583,7 +4602,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {model_usage_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
-<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>{agent_time_heading}</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
 {pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}

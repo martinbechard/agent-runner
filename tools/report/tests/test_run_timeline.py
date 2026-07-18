@@ -1127,8 +1127,22 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>TTFT</th>" not in task_span_table
     assert "<th>State</th>" not in task_span_table
+    assert "<th>Duration</th>" not in task_span_table
+    assert "<th>Cost est.</th>" not in task_span_table
     assert (
         '<code>task-1</code></a> <span class="state state-complete">complete</span>'
+        in task_span_table
+    )
+    assert (
+        '<th>Task spans<br><span class="column-detail">(Tools)</span></th>'
+        '<th>Agent time<br><span class="column-detail">(Cost)</span></th>'
+        in task_span_table
+    )
+    assert (
+        '<td class="turn-activity-cell"><span class="cell-primary">1</span>'
+        '<span class="cell-secondary">(2)</span></td>'
+        '<td class="turn-time-cell"><span class="cell-primary">100ms</span>'
+        '<span class="cell-secondary">($0.01)</span></td>'
         in task_span_table
     )
     assert (
@@ -1138,8 +1152,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "<th>Input</th>" not in task_span_table
     assert "<th>Processed</th>" not in task_span_table
     assert "<th>Tools</th>" not in task_span_table
-    assert "<th>Reasoning</th><th>Cost est.</th>" in task_span_table
-    assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in task_span_table
+    assert '<th>Reasoning</th><th class="turn-timeline-header">Timeline</th>' in task_span_table
     assert "recorded" not in task_span_table.lower()
     assert task_span_table.count('class="timeline-bar turn-timeline-bar"') == 1
     assert (
@@ -1833,6 +1846,8 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert "<th>Processed</th>" not in root_turn_table
     assert "<th>Tools</th>" not in root_turn_table
     assert "<th>State</th>" not in root_turn_table
+    assert "<th>Duration</th>" not in root_turn_table
+    assert "<th>Cost est.</th>" not in root_turn_table
     assert (
         '<code>root-turn-1</code></a> '
         '<span class="state state-complete">complete</span>'
@@ -1840,10 +1855,21 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     )
     assert "<th>Input</th>" not in root_turn_table
     assert "<th>Cache write</th>" not in root_turn_table
+    assert (
+        '<th>Turns<br><span class="column-detail">(Tools/MCP)</span></th>'
+        '<th>Agent time<br><span class="column-detail">(Cost)</span></th>'
+        in root_turn_table
+    )
+    assert (
+        '<td class="turn-activity-cell"><span class="cell-primary">1</span>'
+        '<span class="cell-secondary">(1/0)</span></td>'
+        '<td class="turn-time-cell"><span class="cell-primary">4s</span>'
+        '<span class="cell-secondary">($0.00)</span></td>'
+        in root_turn_table
+    )
     assert "<th>Fresh Input</th><th>Cache read</th><th>Output</th>" in root_turn_table
     assert "<td>60</td><td>40</td><td>20</td><td>5</td>" in root_turn_table
-    assert "<th>Reasoning</th><th>Cost est.</th>" in root_turn_table
-    assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in root_turn_table
+    assert '<th>Reasoning</th><th class="turn-timeline-header">Timeline</th>' in root_turn_table
     assert (
         'class="timeline-bar turn-timeline-bar" '
         'style="left:0.000%;width:22.222%"' in root_turn_table
@@ -2557,9 +2583,13 @@ def test_native_codex_agent_details_use_agent_model_for_turn_and_agent_costs():
     root_detail = html.split(
         'id="agent-detail-1" class="agent-expanded-row" hidden', 1
     )[1].split('data-agent-detail="agent-detail-2"', 1)[0]
-    assert "<th>Cost est.</th>" in root_detail
-    assert "$35.50" in root_detail
-    assert "$5.00" in root_detail
+    assert (
+        '<th>Agent time<br><span class="column-detail">(Cost)</span></th>'
+        in root_detail
+    )
+    assert "<th>Cost est.</th>" not in root_detail
+    assert '<span class="cell-secondary">($35.50)</span>' in root_detail
+    assert '<span class="cell-secondary">($5.00)</span>' in root_detail
     root_turn_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]
