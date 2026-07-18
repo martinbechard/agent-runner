@@ -3425,6 +3425,134 @@ def _agent_inventory_threads(
     return ordered
 
 
+def _usage_bounded_by(usage: UsageTotals, limit: UsageTotals) -> UsageTotals:
+    """Bound one usage allocation to the counters that remain available."""
+
+    return UsageTotals(
+        input_tokens=min(usage.input_tokens, limit.input_tokens),
+        cached_input_tokens=min(
+            usage.cached_input_tokens, limit.cached_input_tokens
+        ),
+        cache_create_input_tokens=min(
+            usage.cache_create_input_tokens, limit.cache_create_input_tokens
+        ),
+        uncached_input_tokens=min(
+            usage.uncached_input_tokens, limit.uncached_input_tokens
+        ),
+        output_tokens=min(usage.output_tokens, limit.output_tokens),
+        reasoning_tokens=min(usage.reasoning_tokens, limit.reasoning_tokens),
+        processed_tokens=min(usage.processed_tokens, limit.processed_tokens),
+    )
+
+
+def _model_usage_by_agent(
+    run: CodexRunMetrics,
+) -> dict[str, dict[str, UsageTotals]]:
+    """Return reconciled model usage keyed by contributing agent thread."""
+
+    model_usage: dict[str, dict[str, UsageTotals]] = {}
+    for thread in run.threads:
+        remaining = thread.token_totals
+        fallback_model = (
+            thread.model
+            if thread.model and not thread.model.startswith("mixed (")
+            else "Unknown model"
+        )
+        for response in sorted(thread.responses, key=lambda item: item.source_ordinal):
+            allocated = _usage_bounded_by(response.usage, remaining)
+            if _usage_is_zero(allocated):
+                continue
+            model = response.model or fallback_model
+            agents = model_usage.setdefault(model, {})
+            agents[thread.thread_id] = (
+                agents.get(thread.thread_id, UsageTotals()) + allocated
+            )
+            remaining = remaining.subtract(allocated)
+        if not _usage_is_zero(remaining):
+            agents = model_usage.setdefault(fallback_model, {})
+            agents[thread.thread_id] = (
+                agents.get(thread.thread_id, UsageTotals()) + remaining
+            )
+    return model_usage
+
+
+def _render_model_usage_section(run: CodexRunMetrics) -> str:
+    """Render expandable model totals with contributing agents as children."""
+
+    model_usage = _model_usage_by_agent(run)
+    inventory = _agent_inventory_threads(run)
+    threads = {thread.thread_id: thread for thread in run.threads}
+    inventory_order = {
+        thread.thread_id: index for index, (thread, _) in enumerate(inventory)
+    }
+    run_total = run.usage_totals.processed_tokens or 1
+    groups: list[tuple[str, UsageTotals, dict[str, UsageTotals]]] = []
+    for model, agents in model_usage.items():
+        total = UsageTotals()
+        for usage in agents.values():
+            total = total + usage
+        groups.append((model, total, agents))
+    groups.sort(key=lambda item: (-item[1].processed_tokens, item[0].casefold()))
+
+    rendered_groups = []
+    for model, total, agents in groups:
+        agent_rows = []
+        for thread_id, usage in sorted(
+            agents.items(),
+            key=lambda item: (
+                inventory_order.get(item[0], len(inventory_order)),
+                item[0],
+            ),
+        ):
+            model_share = (
+                usage.processed_tokens / total.processed_tokens * 100
+                if total.processed_tokens
+                else 0
+            )
+            thread = threads[thread_id]
+            agent_rows.append(
+                '<tr class="model-usage-agent-row">'
+                f'<td>{_escape_html(_agent_assignment_label(thread))}</td>'
+                f'<td>{usage.input_tokens:,}</td>'
+                f'<td>{usage.cached_input_tokens:,}</td>'
+                f'<td>{usage.cache_create_input_tokens:,}</td>'
+                f'<td>{usage.direct_input_tokens:,}</td>'
+                f'<td>{usage.output_tokens:,}</td>'
+                f'<td>{usage.reasoning_tokens:,}</td>'
+                f'<td>{usage.processed_tokens:,}</td>'
+                f'<td>{model_share:.1f}%</td>'
+                "</tr>"
+            )
+        agent_label = "agent" if len(agents) == 1 else "agents"
+        run_share = total.processed_tokens / run_total * 100
+        rendered_groups.append(
+            '<details class="model-usage-group">'
+            '<summary><span class="model-usage-parent">'
+            f'<code class="model-name">{_escape_html(model)}</code>'
+            f'<span>{total.processed_tokens:,} processed tokens · '
+            f'{len(agents):,} {agent_label} · {run_share:.1f}% of run</span>'
+            "</span></summary>"
+            '<div class="table-scroll"><table class="model-usage-table">'
+            "<thead><tr><th>Agent</th><th>Input</th><th>Cache read</th>"
+            "<th>Cache write</th><th>Fresh</th><th>Output</th><th>Reasoning</th>"
+            "<th>Processed</th><th>Model share</th></tr></thead>"
+            f"<tbody>{''.join(agent_rows)}</tbody></table></div>"
+            "</details>"
+        )
+    if not rendered_groups:
+        rendered_groups.append(
+            '<p class="execution-note">No model usage was recorded.</p>'
+        )
+    return (
+        '<section id="model-usage">'
+        '<div class="agents-heading"><h2>Usage by model</h2></div>'
+        '<p class="execution-note">Expand a model to see the agents that contributed '
+        'to its total. Fresh input excludes cache reads and cache writes.</p>'
+        f'<div class="model-usage-groups">{"".join(rendered_groups)}</div>'
+        "</section>"
+    )
+
+
 def _inventory_text(values: list[str]) -> str:
     """Render compact agent-inventory values without implying missing evidence."""
 
@@ -4155,6 +4283,7 @@ def render_codex_rollout_html(
         if run.run_label and run.run_label != report_title
         else ""
     )
+    model_usage_html = _render_model_usage_section(run)
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{_escape_html(report_title)}</title>
 <style>
@@ -4184,6 +4313,15 @@ td {{ font-size:.85em; }}
 .cached {{ background:var(--token-cached); }} .fresh {{ background:var(--token-fresh); }} .output {{ background:var(--token-output); }} .reasoning {{ background:var(--token-reasoning); }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
+.model-usage-groups {{ display:grid; gap:8px; }}
+.model-usage-group {{ overflow:hidden; border:1px solid #e1e6ea; border-radius:6px; background:#fff; }}
+.model-usage-group > summary {{ padding:11px 13px; color:#455a64; cursor:pointer; }}
+.model-usage-group[open] > summary {{ border-bottom:1px solid #e1e6ea; }}
+.model-usage-parent {{ display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-left:5px; }}
+.model-usage-parent > span {{ color:#607d8b; font-size:.85em; text-align:right; }}
+.model-usage-group .table-scroll {{ max-height:45vh; border:0; border-radius:0; }}
+.model-usage-table {{ min-width:940px; margin:0; }}
+.model-usage-table th:first-child, .model-usage-table td:first-child {{ white-space:normal; }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
 .agent-table .agent-assignment-column {{ width:30%; }}
 .agent-table .agent-skills-column {{ width:15%; }}
@@ -4310,6 +4448,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </div>
 <div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
+{model_usage_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>

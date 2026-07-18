@@ -1369,6 +1369,40 @@ def test_turn_model_tile_lists_mixed_models_and_tool_rows_show_event_order_model
     ) in overlay
 
 
+def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path):
+    module = _load_module()
+    session = _write_junie_session(tmp_path)
+    run = module.load_report_document(session).codex_run
+
+    assert run is not None
+    main = next(thread for thread in run.threads if thread.agent_path == "/main")
+    reviewer = next(
+        thread for thread in run.threads if thread.agent_path.endswith("/reviewer")
+    )
+    reviewer.model = main.model
+    reviewer.responses[0].model = main.model
+
+    html = module.render_codex_rollout_html(run)
+    model_usage = html.split('<section id="model-usage"', 1)[1].split(
+        '<div id="timeline"', 1
+    )[0]
+
+    assert html.index('<section id="model-usage"') < html.index('<div id="timeline"')
+    assert "<h2>Usage by model</h2>" in model_usage
+    assert model_usage.count('class="model-usage-group"') == 1
+    assert f'<code class="model-name">{main.model}</code>' in model_usage
+    assert "33 processed tokens" in model_usage
+    assert "2 agents" in model_usage
+    assert "Thread: main · Agent: main" in model_usage
+    assert "Thread: Review the implementation · Agent: reviewer" in model_usage
+    assert model_usage.count('class="model-usage-agent-row"') == 2
+    assert (
+        "<th>Agent</th><th>Input</th><th>Cache read</th><th>Cache write</th>"
+        "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th>"
+        "<th>Model share</th>"
+    ) in model_usage
+
+
 def test_tool_formatter_config_rejects_unsafe_regex():
     module = _load_module()
 
@@ -1881,7 +1915,8 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert "reviewer — turns and tool calls" in html
     assert "root — Turn root-turn-1" in html
     assert "All turns and tool calls" not in html
-    assert "<th>Agent</th>" not in html
+    tool_overlays = html.split('<section id="turn-tool-call-list-1"', 1)[1]
+    assert "<th>Agent</th>" not in tool_overlays
     assert html.count('class="turn-tool-row"') == 4
     module_overlay = html.split('id="turn-tool-call-list-2"', 1)[1].split(
         "</section>", 1
