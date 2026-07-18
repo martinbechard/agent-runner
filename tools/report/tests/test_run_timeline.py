@@ -2162,6 +2162,36 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
     assert "Activity not recorded" not in html
 
 
+def test_native_codex_agent_timeline_draws_separate_turn_segments(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "turn-gaps.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T12:00:00Z","type":"session_meta","payload":{"id":"root-thread"}}',
+                '{"timestamp":"2026-07-14T12:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"one","started_at":"2026-07-14T12:00:00Z"}}',
+                '{"timestamp":"2026-07-14T12:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"one","completed_at":"2026-07-14T12:00:02Z","duration_ms":2000}}',
+                '{"timestamp":"2026-07-14T12:00:10Z","type":"event_msg","payload":{"type":"task_started","turn_id":"two","started_at":"2026-07-14T12:00:10Z"}}',
+                '{"timestamp":"2026-07-14T12:00:12Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"two","completed_at":"2026-07-14T12:00:12Z","duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    run = module.build_codex_rollout_run("root-thread", tmp_path)
+
+    html = module.render_codex_rollout_html(run)
+    agent_row = html.split('<tr class="agent-summary-row"', 1)[1].split("</tr>", 1)[0]
+
+    assert agent_row.count('class="timeline-bar agent-timeline-bar"') == 2
+    for turn in run.threads[0].turns:
+        assert (
+            'class="timeline-bar agent-timeline-bar" '
+            f'style="{module._timeline_style(run, turn.started_at, turn.completed_at)}"'
+            in agent_row
+        )
+
+
 def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
@@ -2248,17 +2278,19 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert '<span class="cell-secondary">(22.5%)</span>' in agent_rows[0]
     assert sum(
         row.count('class="timeline-bar agent-timeline-bar"') for row in agent_rows
-    ) == 3
+    ) == sum(len(thread.turns) or 1 for thread in run.threads)
     for thread in run.threads:
-        style = module._timeline_style(
-            run,
-            thread.started_at,
-            thread.last_observed_at,
-        )
-        assert (
-            'class="timeline-bar agent-timeline-bar" '
-            f'style="{style}"' in html
-        )
+        intervals = [
+            (turn.started_at, turn.completed_at or thread.last_observed_at)
+            for turn in thread.turns
+            if turn.started_at
+        ] or [(thread.started_at, thread.last_observed_at)]
+        for started_at, ended_at in intervals:
+            style = module._timeline_style(run, started_at, ended_at)
+            assert (
+                'class="timeline-bar agent-timeline-bar" '
+                f'style="{style}"' in html
+            )
     assert 'class="agent-assignment-cell" data-depth="1" style="--agent-depth:1"' in agent_rows[1]
     assert '<span class="visually-hidden">Nested assignment, depth 1.</span>' in agent_rows[1]
     assert (

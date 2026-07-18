@@ -3871,9 +3871,21 @@ def render_codex_rollout_html(
             if agent_depth == 0
             else f"Nested assignment, depth {agent_depth}."
         )
+        agent_timeline_intervals = [
+            (turn.started_at, turn.completed_at or thread.last_observed_at)
+            for turn in thread.turns
+            if turn.started_at
+        ]
+        if not agent_timeline_intervals:
+            agent_timeline_intervals = [(thread.started_at, thread.last_observed_at)]
+        agent_timeline_bars = "".join(
+            '<span class="timeline-bar agent-timeline-bar" '
+            f'style="{_timeline_style(run, started_at, ended_at)}"></span>'
+            for started_at, ended_at in agent_timeline_intervals
+        )
         timeline_label = (
-            f"{_agent_assignment_label(thread)} observed span · "
-            f"{_timestamp_offset_label(run, thread.started_at)}"
+            f"{_agent_assignment_label(thread)} turn activity · "
+            f"{_timestamp_offset_label(run, agent_timeline_intervals[0][0])}"
         )
         effort_html = (
             f' · <span class="effort-level">effort {_escape_html(thread.effort)}</span>'
@@ -3912,8 +3924,7 @@ def render_codex_rollout_html(
             '<td class="agent-timeline-cell">'
             '<span class="timeline-track agent-timeline-track" role="img" '
             f'aria-label="{_escape_html(timeline_label)}">'
-            '<span class="timeline-bar agent-timeline-bar" '
-            f'style="{_timeline_style(run, thread.started_at, thread.last_observed_at)}"></span>'
+            f"{agent_timeline_bars}"
             "</span></td>"
             "</tr>",
         ))
@@ -4404,7 +4415,7 @@ def render_codex_rollout_html(
         )
     )
     execution_note = (
-        "Bars share a common run-wide time axis and show each agent and turn's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table."
+        "Bars share a common run-wide time axis and show each agent's active turns and each turn's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table."
         if is_codex
         else (
             "Bars share a common run-wide time axis and show the Junie IDE task spans "
