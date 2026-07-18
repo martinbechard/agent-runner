@@ -66,7 +66,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.14.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.15.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -480,6 +480,7 @@ class CodexThreadMetrics:
     agent_role: str = ""
     agent_nickname: str = ""
     model: str = ""
+    effort: str = ""
     plan_type: str = ""
     recorded_cost_usd: float | None = None
     started_at: str = ""
@@ -1715,6 +1716,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     agent_role = ""
     agent_nickname = ""
     model = ""
+    efforts: list[str] = []
     plan_type = ""
     timestamps: list[str] = []
     contexts: dict[str, dict[str, object]] = {}
@@ -1794,6 +1796,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         existing_turn.attribution_reason = reason
             if payload.get("model"):
                 model = str(payload["model"])
+            effort = str(payload.get("effort") or "").strip()
+            if effort and effort not in efforts:
+                efforts.append(effort)
             continue
 
         if record_type == "event_msg":
@@ -2256,6 +2261,11 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         agent_role=agent_role,
         agent_nickname=agent_nickname,
         model=model,
+        effort=(
+            efforts[0]
+            if len(efforts) == 1
+            else f"mixed ({', '.join(efforts)})" if efforts else ""
+        ),
         plan_type=plan_type,
         recorded_cost_usd=recorded_cost_usd,
         started_at=min(timestamps) if timestamps else "",
@@ -3523,13 +3533,32 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
                 f'<td>{model_share:.1f}%</td>'
                 "</tr>"
             )
+        efforts = sorted(
+            {
+                threads[thread_id].effort
+                for thread_id in agents
+                if threads[thread_id].effort
+            },
+            key=str.casefold,
+        )
+        effort_label = (
+            efforts[0]
+            if len(efforts) == 1
+            else f"mixed ({', '.join(efforts)})" if efforts else ""
+        )
+        effort_html = (
+            f' · <span class="model-effort">effort {_escape_html(effort_label)}</span>'
+            if effort_label
+            else ""
+        )
         agent_label = "agent" if len(agents) == 1 else "agents"
         run_share = total.processed_tokens / run_total * 100
         rendered_groups.append(
             '<details class="model-usage-group">'
             '<summary><span class="model-usage-parent">'
-            f'<code class="model-name">{_escape_html(model)}</code>'
-            f'<span>{total.processed_tokens:,} processed tokens · '
+            '<span class="model-identity">'
+            f'<code class="model-name">{_escape_html(model)}</code>{effort_html}</span>'
+            f'<span class="model-usage-total">{total.processed_tokens:,} processed tokens · '
             f'{len(agents):,} {agent_label} · {run_share:.1f}% of run</span>'
             "</span></summary>"
             '<div class="table-scroll"><table class="model-usage-table">'
@@ -3774,6 +3803,16 @@ def render_codex_rollout_html(
             f"{_agent_assignment_label(thread)} observed span · "
             f"{_timestamp_offset_label(run, thread.started_at)}"
         )
+        effort_html = (
+            f' · <span class="effort-level">effort {_escape_html(thread.effort)}</span>'
+            if thread.effort
+            else ""
+        )
+        model_metadata = (
+            '<span class="agent-model-metadata">'
+            f'<code class="model-name">{_escape_html(thread.model or "—")}</code>'
+            f"{effort_html}</span>"
+        )
         agent_rows.append((
             thread.thread_id,
             f'<tr class="agent-summary-row" data-agent-detail="{agent_detail_id}">'
@@ -3786,8 +3825,8 @@ def render_codex_rollout_html(
             '<div class="agent-assignment">'
             '<div class="agent-assignment-heading">'
             f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
-            f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span></div>'
-            f'<code class="model-name">{_escape_html(thread.model or "—")}</code></div></div></td>'
+            f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span>'
+            f"{model_metadata}</div></div></div></td>"
             f'<td class="agent-skills-cell">{skills_used_html}</td>'
             '<td class="agent-activity-cell">'
             f'<span class="cell-primary">{len(thread.turns):,}</span>'
@@ -4318,7 +4357,9 @@ td {{ font-size:.85em; }}
 .model-usage-group > summary {{ padding:11px 13px; color:#455a64; cursor:pointer; }}
 .model-usage-group[open] > summary {{ border-bottom:1px solid #e1e6ea; }}
 .model-usage-parent {{ display:flex; align-items:baseline; justify-content:space-between; gap:18px; margin-left:5px; }}
-.model-usage-parent > span {{ color:#607d8b; font-size:.85em; text-align:right; }}
+.model-identity {{ display:flex; align-items:baseline; gap:4px; }}
+.model-effort, .model-usage-total {{ color:#607d8b; font-size:.85em; }}
+.model-usage-total {{ text-align:right; }}
 .model-usage-group .table-scroll {{ max-height:45vh; border:0; border-radius:0; }}
 .model-usage-table {{ min-width:940px; margin:0; }}
 .model-usage-table th:first-child, .model-usage-table td:first-child {{ white-space:normal; }}
@@ -4341,8 +4382,11 @@ td {{ font-size:.85em; }}
 .clamped-full {{ margin-top:0; }}
 .clamped-less {{ display:block; margin-top:3px; }}
 .agent-assignment-line {{ display:flex; align-items:flex-start; gap:8px; }}
-.agent-assignment-heading {{ display:flex; align-items:flex-start; gap:8px; }}
+.agent-assignment-heading {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
+.agent-model-metadata {{ white-space:nowrap; }}
+.agent-model-metadata .model-name {{ font-size:.82em; }}
+.effort-level {{ color:#607d8b; font-size:.82em; }}
 .agent-row-toggle {{ flex:0 0 auto; width:20px; height:20px; margin-top:1px; padding:0; border:1px solid #90a4ae; border-radius:50%; color:#455a64; background:#fff; cursor:pointer; font:700 14px/18px var(--font-ui); }}
 .agent-row-toggle-icon::before {{ content:"+"; }}
 .agent-row-toggle[aria-expanded="true"] .agent-row-toggle-icon::before {{ content:"−"; }}

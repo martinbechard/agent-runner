@@ -588,7 +588,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.14.0"
+    assert run.parser_version == "1.15.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1391,6 +1391,7 @@ def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path)
     assert "<h2>Usage by model</h2>" in model_usage
     assert model_usage.count('class="model-usage-group"') == 1
     assert f'<code class="model-name">{main.model}</code>' in model_usage
+    assert 'class="model-effort"' not in model_usage
     assert "33 processed tokens" in model_usage
     assert "2 agents" in model_usage
     assert "Thread: main · Agent: main" in model_usage
@@ -1673,7 +1674,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.14.0"
+    assert run.parser_version == "1.15.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -2118,7 +2119,11 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert ".agent-table .agent-skills-column { width:15%; }" in html
     assert ".agent-table .agent-timeline-column { width:25%; }" in html
     assert ".agent-table .agent-skills-cell { font-size:.765em; }" in html
-    assert ".agent-assignment-heading { display:flex; align-items:flex-start; gap:8px; }" in html
+    assert (
+        ".agent-assignment-heading { display:flex; align-items:center; gap:8px; "
+        "flex-wrap:wrap; }"
+    ) in html
+    assert ".agent-model-metadata { white-space:nowrap; }" in html
     assert (
         ".agent-assignment-heading { display:flex; align-items:flex-start; "
         "justify-content:space-between; gap:8px; }"
@@ -2139,10 +2144,12 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert '<strong>Thread: root · Agent: main</strong>' in agent_rows[0]
     assert (
         '<div class="agent-assignment-heading"><strong>Thread: root · Agent: main</strong>'
-        '<span class="state state-complete">complete</span></div>'
+        '<span class="state state-complete">complete</span>'
+        '<span class="agent-model-metadata">'
+        '<code class="model-name">gpt-5.4-mini</code></span></div>'
         in agent_rows[0]
     )
-    assert '<code class="model-name">gpt-5.4-mini</code>' in agent_rows[0]
+    assert '</div><code class="model-name">' not in agent_rows[0]
     assert "/root" not in agent_rows[0]
     assert '<td class="agent-skills-cell">careful-coding · python</td>' in agent_rows[0]
     assert '<span class="cell-secondary">(1/0)</span>' in agent_rows[0]
@@ -2334,7 +2341,7 @@ def test_native_codex_unsupported_subscription_model_has_no_monetary_estimate(tm
         "\n".join(
             [
                 '{"timestamp":"2026-07-14T02:00:00Z","type":"session_meta","payload":{"id":"unsupported-thread","source":"user"}}',
-                '{"timestamp":"2026-07-14T02:00:00Z","type":"turn_context","payload":{"model":"internal-subscription-model","turn_id":"u1"}}',
+                '{"timestamp":"2026-07-14T02:00:00Z","type":"turn_context","payload":{"model":"internal-subscription-model","effort":"high","turn_id":"u1"}}',
                 '{"timestamp":"2026-07-14T02:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"u1","started_at":"2026-07-14T02:00:00Z"}}',
                 '{"timestamp":"2026-07-14T02:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":10,"cached_input_tokens":2,"output_tokens":3,"reasoning_output_tokens":1,"total_tokens":13}},"rate_limits":{"plan_type":"pro","credits":null}}}',
                 '{"timestamp":"2026-07-14T02:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"u1","completed_at":"2026-07-14T02:00:02Z","duration_ms":2000,"time_to_first_token_ms":100}}',
@@ -2348,6 +2355,23 @@ def test_native_codex_unsupported_subscription_model_has_no_monetary_estimate(tm
 
     assert run.cost.status == "subscription-no-charge-data"
     assert run.cost.total_cost is None
+    assert run.threads[0].effort == "high"
+
+    html = module.render_codex_rollout_html(run)
+    agent_table = html.split('<table class="agent-table">', 1)[1].split(
+        "</table>", 1
+    )[0]
+    assert (
+        '<span class="state state-complete">complete</span>'
+        '<span class="agent-model-metadata">'
+        '<code class="model-name">internal-subscription-model</code> · '
+        '<span class="effort-level">effort high</span></span>'
+        in agent_table
+    )
+    model_usage = html.split('<section id="model-usage"', 1)[1].split(
+        '<div id="timeline"', 1
+    )[0]
+    assert '<span class="model-effort">effort high</span>' in model_usage
 
 
 def test_pricing_registry_contains_current_codex_and_claude_rates():
