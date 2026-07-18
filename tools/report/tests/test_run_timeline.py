@@ -2162,7 +2162,8 @@ def test_native_codex_turn_table_hides_constant_work_unit_and_empty_activity(tmp
 
     assert "<th>Work unit</th>" not in turn_table
     assert "<th>Activity</th>" not in turn_table
-    assert "Work unit reviewer for all turns" in html
+    assert '<div class="thread-meta">' not in html
+    assert "Work unit reviewer for all turns" not in html
     assert "Activity not recorded" not in html
 
 
@@ -2244,7 +2245,7 @@ def test_native_codex_html_identifies_agents_and_runtime_nicknames():
     assert ".agent-table .agent-assignment-column { width:30%; }" in html
     assert ".agent-table .agent-skills-column { width:15%; }" in html
     assert ".agent-table .agent-timeline-column { width:25%; }" in html
-    assert ".agent-table .agent-skills-cell { font-size:.765em; }" in html
+    assert ".agent-table .agent-skills-cell { font-size:.7em; }" in html
     assert (
         ".agent-assignment-heading { display:flex; align-items:center; gap:8px; "
         "flex-wrap:wrap; }"

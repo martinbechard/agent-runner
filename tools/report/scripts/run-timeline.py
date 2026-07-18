@@ -3934,15 +3934,9 @@ def render_codex_rollout_html(
     for thread_index, thread in enumerate(run.threads, start=1):
         tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
         agent_assignment = _agent_assignment(thread)
-        thread_tools_label, _ = _tool_activity_summary(thread.tool_intervals)
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
         show_work_unit = len(work_units) > 1
         show_activity = any(turn.activity for turn in thread.turns)
-        metadata_notes = []
-        if len(work_units) == 1:
-            metadata_notes.append(
-                f"Work unit {_escape_html(next(iter(work_units)))} for all {turn_plural}"
-            )
         turn_rows = []
         thread_tool_rows = []
         for turn_index, turn in enumerate(thread.turns, start=1):
@@ -4324,7 +4318,6 @@ def render_codex_rollout_html(
             ("<th>Work unit</th>" if show_work_unit else "")
             + ("<th>Activity</th>" if show_activity else "")
         )
-        metadata_note = " · ".join(metadata_notes)
         thread_tool_rows_html = "".join(thread_tool_rows) or (
             f'<tr><td colspan="7">No {turn_plural} recorded</td></tr>'
         )
@@ -4345,13 +4338,6 @@ def render_codex_rollout_html(
         thread_details[thread.thread_id] = (
             f'<tr id="{agent_detail_id}" class="agent-expanded-row" hidden>'
             '<td colspan="6">'
-            '<div class="thread-meta">'
-            f"Thread <code>{_escape_html(thread.thread_id)}</code> · "
-            f"parent <code>{_escape_html(thread.parent_thread_id or '—')}</code> · "
-            f"model {_escape_html(thread.model or '—')} · "
-            f"tools {_escape_html(thread_tools_label)}"
-            f"{' · ' + metadata_note if metadata_note else ''}"
-            "</div>"
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             f"<th>{turn_id_label}</th><th>T+</th>{optional_headers}"
@@ -4488,7 +4474,7 @@ td {{ font-size:.85em; }}
 .agent-table th {{ white-space:normal; }}
 .agent-table td {{ vertical-align:top; }}
 .agent-table .agent-assignment-cell, .agent-table .agent-skills-cell {{ white-space:normal; overflow-wrap:anywhere; line-height:1.4; }}
-.agent-table .agent-skills-cell {{ font-size:.765em; }}
+.agent-table .agent-skills-cell {{ font-size:.7em; }}
 .clamped-disclosure > summary {{ list-style:none; cursor:pointer; }}
 .clamped-disclosure > summary::-webkit-details-marker {{ display:none; }}
 .clamped-preview {{ display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }}
@@ -4544,7 +4530,6 @@ td {{ font-size:.85em; }}
 .agent-summary-row {{ cursor:pointer; }}
 .agent-summary-row.is-expanded > td {{ border-bottom:0; background-color:#f7f9fa; }}
 .agent-expanded-row > td {{ padding:0 13px 13px; white-space:normal; background:#f7f9fa; }}
-.thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
 .agent-expanded-row h3 {{ margin-left:13px; margin-right:13px; }}
 .agent-expanded-row .table-scroll {{ max-height:none; margin:0 -13px; }}
 .timeline-track {{ position:relative; display:block; height:12px; background:#e8edf0; border-radius:3px; min-width:180px; }}
