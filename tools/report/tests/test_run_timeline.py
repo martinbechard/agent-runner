@@ -1825,7 +1825,11 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert 'class="agent-row-toggle" aria-expanded="false"' in html
     assert (
         ".turn-table .turn-timeline-header, .turn-table .turn-timeline-cell "
-        "{ width:20%; min-width:220px; }" in html
+        "{ width:25%; min-width:220px; }" in html
+    )
+    assert (
+        ".agent-expanded-row .table-scroll { max-height:none; margin:0 -13px; }"
+        in html
     )
     assert '.agent-row-toggle-icon::before { content:"+"; }' in html
     assert "document.querySelectorAll(\".agent-summary-row\")" in html

@@ -4545,11 +4545,11 @@ td {{ font-size:.85em; }}
 .agent-summary-row.is-expanded > td {{ border-bottom:0; background-color:#f7f9fa; }}
 .agent-expanded-row > td {{ padding:0 13px 13px; white-space:normal; background:#f7f9fa; }}
 .thread-meta {{ padding:10px 13px 0; color:#607d8b; font-size:.85em; overflow-wrap:anywhere; }}
-.agent-expanded-row h3, .agent-expanded-row .table-scroll {{ margin-left:13px; margin-right:13px; }}
-.agent-expanded-row .table-scroll {{ max-height:none; margin-bottom:0; }}
+.agent-expanded-row h3 {{ margin-left:13px; margin-right:13px; }}
+.agent-expanded-row .table-scroll {{ max-height:none; margin:0 -13px; }}
 .timeline-track {{ position:relative; display:block; height:12px; background:#e8edf0; border-radius:3px; min-width:180px; }}
 .timeline-bar {{ position:absolute; top:0; bottom:0; background:#4a90d9; border-radius:3px; }}
-.turn-table .turn-timeline-header, .turn-table .turn-timeline-cell {{ width:20%; min-width:220px; }}
+.turn-table .turn-timeline-header, .turn-table .turn-timeline-cell {{ width:25%; min-width:220px; }}
 .turn-table .turn-timeline-track {{ width:100%; min-width:220px; }}
 .state {{ display:inline-block; border-radius:10px; padding:2px 7px; background:#eceff1; font-size:.82em; }}
 .state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
