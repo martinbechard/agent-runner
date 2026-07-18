@@ -1078,6 +1078,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "cat > ignored-example.md <<'NOT_A_COMMAND'" in write.argument_content
 
     html = module.render_html(document)
+    markdown = module.render_codex_rollout_markdown(run)
     assert "Junie run" in html
     assert "Recorded cost: $0.03 USD" in html
     assert '<div class="label">Summed agent time</div>' not in html
@@ -1103,6 +1104,12 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "Reasoning is part of output" not in html
     assert 'class="composition-output">output 5</span>' in html
     assert 'class="composition-reasoning">reasoning 0</span>' in html
+    assert (
+        '<span class="composition-fresh">Fresh input 14</span> · '
+        '<span class="composition-cached">Cache read 11</span> · '
+        '<span class="composition-cache-write">Cache write 3</span>'
+        in html
+    )
     assert 'class="token-segment reasoning"' not in html
     assert "View task spans and tool calls" not in html
     assert '.agent-row-toggle-icon::before { content:"+"; }' in html
@@ -1119,7 +1126,11 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "Subagents invoked" not in agent_table
     task_span_table = html.split('<table class="turn-table"', 1)[1].split("</table>", 1)[0]
     assert "<th>TTFT</th>" not in task_span_table
-    assert "<th>Cache read</th><th>Cache write</th><th>Fresh</th>" in task_span_table
+    assert (
+        "<th>Fresh Input</th><th>Cache read</th><th>Cache write</th>"
+        in task_span_table
+    )
+    assert "<th>Input</th>" not in task_span_table
     assert "<th>Processed</th>" not in task_span_table
     assert "<th>Tools</th>" not in task_span_table
     assert "<th>Reasoning</th><th>Cost est.</th>" in task_span_table
@@ -1127,9 +1138,15 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "recorded" not in task_span_table.lower()
     assert task_span_table.count('class="timeline-bar turn-timeline-bar"') == 1
     assert (
-        "<td>17</td><td>5</td><td>2</td><td>10</td>"
-        "<td>3</td><td>0</td>" in task_span_table
+        "<td>10</td><td>5</td><td>2</td><td>3</td><td>0</td>"
+        in task_span_table
     )
+    assert (
+        "| Assignment | Skills used | Task spans | Tools | Agent time | "
+        "Fresh Input | Cache read | Cache write | Output | Reasoning | Processed |"
+        in markdown
+    )
+    assert "| Input |" not in markdown
     assert (
         '<th>Task spans<br><span class="column-detail">(Tools)</span></th>'
         in html
@@ -1154,7 +1171,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert '<span class="activity-name">model</span>' in custom_tool_table
     assert '<span class="activity-name">output</span>' in custom_tool_table
     assert "claude-reviewer" in custom_tool_table
-    assert "4 input · 6 cache-read · 1 cache-create" in custom_tool_table
+    assert "4 fresh-input · 6 cache-read · 1 cache-write" in custom_tool_table
     custom_input_row = custom_tool_table.split(
         '<tr class="turn-detail-lifecycle-row turn-detail-input-row">', 1
     )[1].split("</tr>", 1)[0]
@@ -1192,7 +1209,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     assert "<summary>raw arguments</summary>" in main_model_row
     assert '<div class="activity-summary">1 prompt fragment</div>' in main_model_row
     assert "Synthetic prompt API_TOKEN=[redacted]" in main_model_row
-    assert "10 input · 5 cache-read · 2 cache-create" in main_model_row
+    assert "10 fresh-input · 5 cache-read · 2 cache-write" in main_model_row
     assert "<summary>raw result</summary>" in main_model_row
     assert '<div class="activity-summary">1 thinking fragment</div>' in main_model_row
     assert "Inspect the project before running the command." in main_model_row
@@ -1408,8 +1425,8 @@ def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path)
     assert "Thread: Review the implementation · Agent: reviewer" in model_usage
     assert model_usage.count('class="model-usage-agent-row"') == 2
     assert (
-        "<th>Agent</th><th>Input</th><th>Cache read</th><th>Cache write</th>"
-        "<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Processed</th>"
+        "<th>Agent</th><th>Fresh Input</th><th>Cache read</th>"
+        "<th>Cache write</th><th>Output</th><th>Reasoning</th><th>Processed</th>"
         "<th>Model share</th>"
     ) in model_usage
 
@@ -1772,8 +1789,13 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert ".reasoning { background:var(--token-reasoning); }" in html
     assert ".composition-cached { color:var(--token-cached); }" in html
     assert ".composition-reasoning { color:var(--token-reasoning); }" in html
-    assert 'class="composition-cached">Cached input' in html
-    assert 'class="composition-fresh">fresh input' in html
+    composition_legend = html.split('<div class="composition-legend">', 1)[1].split(
+        "</div>", 1
+    )[0]
+    assert 'class="composition-fresh">Fresh input' in composition_legend
+    assert 'class="composition-cached">Cache read' in composition_legend
+    assert composition_legend.index("Fresh input") < composition_legend.index("Cache read")
+    assert 'class="composition-cache-write"' not in composition_legend
     assert html.count('class="composition-output">') == 1
     assert html.count('class="composition-reasoning">') == 1
     assert 'class="composition-output">output 112</span>' in html
@@ -1805,6 +1827,10 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert "<td>500ms</td>" not in root_turn_table
     assert "<th>Processed</th>" not in root_turn_table
     assert "<th>Tools</th>" not in root_turn_table
+    assert "<th>Input</th>" not in root_turn_table
+    assert "<th>Cache write</th>" not in root_turn_table
+    assert "<th>Fresh Input</th><th>Cache read</th><th>Output</th>" in root_turn_table
+    assert "<td>60</td><td>40</td><td>20</td><td>5</td>" in root_turn_table
     assert "<th>Reasoning</th><th>Cost est.</th>" in root_turn_table
     assert '<th>Cost est.</th><th class="turn-timeline-header">Timeline</th>' in root_turn_table
     assert (
@@ -1815,6 +1841,21 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
         'class="timeline-bar turn-timeline-bar" '
         'style="left:88.889%;width:11.111%"' in root_turn_table
     )
+    model_usage = html.split('<section id="model-usage"', 1)[1].split(
+        '<div id="timeline"', 1
+    )[0]
+    assert (
+        "<th>Agent</th><th>Fresh Input</th><th>Cache read</th><th>Output</th>"
+        in model_usage
+    )
+    assert "<th>Input</th>" not in model_usage
+    assert "<th>Cache write</th>" not in model_usage
+    assert "Codex telemetry does not report cache-write tokens" in model_usage
+    root_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert "60 fresh-input · 40 cache-read" in root_overlay
+    assert "cache-write</div>" not in root_overlay
 
 
 def test_native_codex_report_uses_first_genuine_request_as_title():
@@ -2282,6 +2323,14 @@ def test_native_codex_markdown_includes_turn_and_tool_breakdown():
         "| Assignment | Skills used | "
         "Turns | Tools | Agent time |" in markdown
     )
+    assert (
+        "| Assignment | Skills used | Turns | Tools | Agent time | Fresh Input | "
+        "Cache read | Output | Reasoning | Processed |"
+        in markdown
+    )
+    assert "| Input |" not in markdown
+    assert "| Cache write |" not in markdown
+    assert "Codex telemetry does not report cache-write tokens" in markdown
     assert "Subagents invoked" not in markdown
     assert "Parent assignment" not in markdown
     assert "| Thread: root · Agent: main | careful-coding · python | 2 |" in markdown

@@ -3455,6 +3455,12 @@ def _usage_bounded_by(usage: UsageTotals, limit: UsageTotals) -> UsageTotals:
     )
 
 
+def _reports_cache_write_tokens(run: CodexRunMetrics) -> bool:
+    """Return whether the runtime telemetry distinguishes cache writes."""
+
+    return run.runtime.casefold() == "junie"
+
+
 def _model_usage_by_agent(
     run: CodexRunMetrics,
 ) -> dict[str, dict[str, UsageTotals]]:
@@ -3489,6 +3495,7 @@ def _model_usage_by_agent(
 def _render_model_usage_section(run: CodexRunMetrics) -> str:
     """Render expandable model totals with contributing agents as children."""
 
+    show_cache_write = _reports_cache_write_tokens(run)
     model_usage = _model_usage_by_agent(run)
     inventory = _agent_inventory_threads(run)
     threads = {thread.thread_id: thread for thread in run.threads}
@@ -3520,13 +3527,17 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
                 else 0
             )
             thread = threads[thread_id]
+            cache_write_cell = (
+                f'<td>{usage.cache_create_input_tokens:,}</td>'
+                if show_cache_write
+                else ""
+            )
             agent_rows.append(
                 '<tr class="model-usage-agent-row">'
                 f'<td>{_escape_html(_agent_assignment_label(thread))}</td>'
-                f'<td>{usage.input_tokens:,}</td>'
-                f'<td>{usage.cached_input_tokens:,}</td>'
-                f'<td>{usage.cache_create_input_tokens:,}</td>'
                 f'<td>{usage.direct_input_tokens:,}</td>'
+                f'<td>{usage.cached_input_tokens:,}</td>'
+                f'{cache_write_cell}'
                 f'<td>{usage.output_tokens:,}</td>'
                 f'<td>{usage.reasoning_tokens:,}</td>'
                 f'<td>{usage.processed_tokens:,}</td>'
@@ -3563,8 +3574,9 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
             f'{len(agents):,} {agent_label} · {run_share:.1f}% of run</span>'
             "</span></summary>"
             '<div class="table-scroll"><table class="model-usage-table">'
-            "<thead><tr><th>Agent</th><th>Input</th><th>Cache read</th>"
-            "<th>Cache write</th><th>Fresh</th><th>Output</th><th>Reasoning</th>"
+            "<thead><tr><th>Agent</th><th>Fresh Input</th><th>Cache read</th>"
+            f'{"<th>Cache write</th>" if show_cache_write else ""}'
+            "<th>Output</th><th>Reasoning</th>"
             "<th>Processed</th><th>Model share</th></tr></thead>"
             f"<tbody>{''.join(agent_rows)}</tbody></table></div>"
             "</details>"
@@ -3573,11 +3585,19 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
         rendered_groups.append(
             '<p class="execution-note">No model usage was recorded.</p>'
         )
+    usage_note = (
+        "Fresh input excludes cache reads and cache writes."
+        if show_cache_write
+        else (
+            "Fresh input excludes cache reads. Codex telemetry does not report "
+            "cache-write tokens, so that column is omitted."
+        )
+    )
     return (
         '<section id="model-usage">'
         '<div class="agents-heading"><h2>Usage by model</h2></div>'
         '<p class="execution-note">Expand a model to see the agents that contributed '
-        'to its total. Fresh input excludes cache reads and cache writes.</p>'
+        f'to its total. {usage_note}</p>'
         f'<div class="model-usage-groups">{"".join(rendered_groups)}</div>'
         "</section>"
     )
@@ -3632,6 +3652,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
     mcp_call_count = sum(len(thread.mcp_calls) for thread in run.threads)
     is_junie = run.runtime.lower() == "junie"
+    show_cache_write = _reports_cache_write_tokens(run)
     turn_column_label = "Task spans" if is_junie else "Turns"
     cached_share = (
         run.usage_totals.cached_input_tokens / run.usage_totals.input_tokens * 100
@@ -3688,24 +3709,55 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
                 f"{_rate_triplet(prices, PRICING_RATE_KEYS, '$')} | "
                 f"{prices.get('pricing_note', '')} |"
             )
+    if not show_cache_write:
+        lines.extend(
+            [
+                "",
+                "Codex telemetry does not report cache-write tokens, so that column is omitted.",
+            ]
+        )
+    headers = [
+        "Assignment",
+        "Skills used",
+        turn_column_label,
+        "Tools",
+        "Agent time",
+        "Fresh Input",
+        "Cache read",
+    ]
+    if show_cache_write:
+        headers.append("Cache write")
+    headers.extend(["Output", "Reasoning", "Processed"])
+    alignments = ["---", "---", *("---:" for _ in headers[2:])]
     lines.extend(
         [
             "",
-            f"| Assignment | Skills used | {turn_column_label} | Tools | Agent time | Input | Cached | Fresh | Output | Reasoning | Processed |",
-            "|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|",
+            f"| {' | '.join(headers)} |",
+            f"|{'|'.join(alignments)}|",
         ]
     )
     for thread, depth in _agent_inventory_threads(run):
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
         assignment_label = f'{"↳ " * depth}{_agent_assignment_label(thread)}'
-        lines.append(
-            f"| {assignment_label} | {_inventory_text(thread.skills_used)} | "
-            f"{len(thread.turns)} | {len(thread.tool_intervals)} | "
-            f"{_format_ms(agent_time_ms)} | "
-            f"{thread.token_totals.input_tokens} | {thread.token_totals.cached_input_tokens} | "
-            f"{thread.token_totals.uncached_input_tokens} | {thread.token_totals.output_tokens} | "
-            f"{thread.token_totals.reasoning_tokens} | {thread.token_totals.processed_tokens} |"
+        values = [
+            assignment_label,
+            _inventory_text(thread.skills_used),
+            str(len(thread.turns)),
+            str(len(thread.tool_intervals)),
+            _format_ms(agent_time_ms),
+            str(thread.token_totals.direct_input_tokens),
+            str(thread.token_totals.cached_input_tokens),
+        ]
+        if show_cache_write:
+            values.append(str(thread.token_totals.cache_create_input_tokens))
+        values.extend(
+            [
+                str(thread.token_totals.output_tokens),
+                str(thread.token_totals.reasoning_tokens),
+                str(thread.token_totals.processed_tokens),
+            ]
         )
+        lines.append(f"| {' | '.join(values)} |")
     return "\n".join(lines) + "\n"
 
 
@@ -3731,6 +3783,7 @@ def render_codex_rollout_html(
     tool_count = sum(len(thread.tool_intervals) for thread in run.threads)
     mcp_call_count = sum(len(thread.mcp_calls) for thread in run.threads)
     is_junie = run.runtime.lower() == "junie"
+    show_cache_write = _reports_cache_write_tokens(run)
     turn_singular = "task span" if is_junie else "turn"
     turn_plural = "task spans" if is_junie else "turns"
     turn_column_label = "Task spans" if is_junie else "Turns"
@@ -3763,8 +3816,11 @@ def render_codex_rollout_html(
     visible_output_tokens = max(
         0, run.usage_totals.output_tokens - run.usage_totals.reasoning_tokens
     )
+    fresh_width = run.usage_totals.direct_input_tokens / composition_total * 100
     cached_width = run.usage_totals.cached_input_tokens / composition_total * 100
-    fresh_width = run.usage_totals.uncached_input_tokens / composition_total * 100
+    cache_write_width = (
+        run.usage_totals.cache_create_input_tokens / composition_total * 100
+    )
     output_width = visible_output_tokens / composition_total * 100
     reasoning_width = run.usage_totals.reasoning_tokens / composition_total * 100
     output_segment = (
@@ -3777,6 +3833,18 @@ def render_codex_rollout_html(
         '<span class="token-segment reasoning" '
         f'style="width:{reasoning_width:.3f}%"></span>'
         if run.usage_totals.reasoning_tokens
+        else ""
+    )
+    cache_write_segment = (
+        '<span class="token-segment cache-write" '
+        f'style="width:{cache_write_width:.3f}%"></span>'
+        if show_cache_write and run.usage_totals.cache_create_input_tokens
+        else ""
+    )
+    cache_write_legend = (
+        ' · <span class="composition-cache-write">Cache write '
+        f'{run.usage_totals.cache_create_input_tokens:,}</span>'
+        if show_cache_write
         else ""
     )
     agent_rows: list[tuple[str, str]] = []
@@ -3937,10 +4005,15 @@ def render_codex_rollout_html(
                     response_index,
                     turn_activities,
                 )
+                cache_write_summary = (
+                    f' · {response.usage.cache_create_input_tokens:,} cache-write'
+                    if show_cache_write
+                    else ""
+                )
                 model_arguments = (
-                    f'<div class="activity-summary">{response.usage.direct_input_tokens:,} input · '
-                    f'{response.usage.cached_input_tokens:,} cache-read · '
-                    f'{response.usage.cache_create_input_tokens:,} cache-create</div>'
+                    f'<div class="activity-summary">{response.usage.direct_input_tokens:,} fresh-input · '
+                    f'{response.usage.cached_input_tokens:,} cache-read'
+                    f'{cache_write_summary}</div>'
                     + _render_model_activity_disclosure(
                         prompt_fragments,
                         raw_label="raw arguments",
@@ -4187,6 +4260,11 @@ def render_codex_rollout_html(
                 f'style="{_timeline_style(run, turn.started_at, timeline_end)}"></span>'
                 "</span></td>"
             )
+            cache_write_cell = (
+                f"<td>{turn.usage.cache_create_input_tokens:,}</td>"
+                if show_cache_write
+                else ""
+            )
             turn_rows.append(
                 "<tr>"
                 f"<td>{turn_link}</td>"
@@ -4195,17 +4273,18 @@ def render_codex_rollout_html(
                 f"<td><span class=\"state state-{_escape_html(turn.outcome)}\">{_escape_html(turn.outcome)}</span></td>"
                 f"{work_unit_cell}"
                 f"{activity_cell}"
-                f"<td>{turn.usage.input_tokens:,}</td>"
-                f"<td>{turn.usage.cached_input_tokens:,}</td>"
-                f"<td>{turn.usage.cache_create_input_tokens:,}</td>"
                 f"<td>{turn.usage.direct_input_tokens:,}</td>"
+                f"<td>{turn.usage.cached_input_tokens:,}</td>"
+                f"{cache_write_cell}"
                 f"<td>{turn.usage.output_tokens:,}</td>"
                 f"<td>{turn.usage.reasoning_tokens:,}</td>"
                 f"<td>{_escape_html(_compact_cost_summary(turn_cost))}</td>"
                 f"{timeline_cell}"
                 "</tr>"
             )
-        turn_column_count = 12 + int(show_work_unit) + int(show_activity)
+        turn_column_count = (
+            10 + int(show_cache_write) + int(show_work_unit) + int(show_activity)
+        )
         turn_rows_html = "".join(turn_rows) or (
             f'<tr><td colspan="{turn_column_count}">No {turn_plural} recorded</td></tr>'
         )
@@ -4244,8 +4323,9 @@ def render_codex_rollout_html(
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             f"<th>{turn_id_label}</th><th>T+</th><th>Duration</th><th>State</th>"
-            f"{optional_headers}<th>Input</th><th>Cache read</th><th>Cache write</th>"
-            '<th>Fresh</th><th>Output</th><th>Reasoning</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
+            f"{optional_headers}<th>Fresh Input</th><th>Cache read</th>"
+            f'{"<th>Cache write</th>" if show_cache_write else ""}'
+            '<th>Output</th><th>Reasoning</th><th>Cost est.</th><th class="turn-timeline-header">Timeline</th>'
             f"</tr></thead><tbody>{turn_rows_html}</tbody></table></div>"
             "</td></tr>"
         )
@@ -4327,7 +4407,7 @@ def render_codex_rollout_html(
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{_escape_html(report_title)}</title>
 <style>
-:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; }}
+:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-cache-write:#2ecc71; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; }}
 body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
@@ -4350,9 +4430,9 @@ td {{ font-size:.85em; }}
 .table-scroll {{ overflow:auto; max-height:65vh; border:1px solid #e1e6ea; border-radius:5px; }}
 .token-composition {{ display:flex; height:18px; overflow:hidden; border-radius:5px; background:#e8edf0; max-width:900px; }}
 .token-segment {{ min-width:1px; }}
-.cached {{ background:var(--token-cached); }} .fresh {{ background:var(--token-fresh); }} .output {{ background:var(--token-output); }} .reasoning {{ background:var(--token-reasoning); }}
+.fresh {{ background:var(--token-fresh); }} .cached {{ background:var(--token-cached); }} .cache-write {{ background:var(--token-cache-write); }} .output {{ background:var(--token-output); }} .reasoning {{ background:var(--token-reasoning); }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
-.composition-cached {{ color:var(--token-cached); }} .composition-fresh {{ color:var(--token-fresh); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
+.composition-fresh {{ color:var(--token-fresh); }} .composition-cached {{ color:var(--token-cached); }} .composition-cache-write {{ color:var(--token-cache-write); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .model-usage-groups {{ display:grid; gap:8px; }}
 .model-usage-group {{ overflow:hidden; border:1px solid #e1e6ea; border-radius:6px; background:#fff; }}
 .model-usage-group > summary {{ display:flex; align-items:center; gap:8px; padding:11px 13px; color:#455a64; cursor:pointer; list-style:none; }}
@@ -4489,12 +4569,13 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </div>
 <h2>Token composition</h2>
 <div class="token-composition" title="Processed token composition">
-<span class="token-segment cached" style="width:{cached_width:.3f}%"></span>
 <span class="token-segment fresh" style="width:{fresh_width:.3f}%"></span>
+<span class="token-segment cached" style="width:{cached_width:.3f}%"></span>
+{cache_write_segment}
 {output_segment}
 {reasoning_segment}
 </div>
-<div class="composition-legend"><span class="composition-cached">Cached input {run.usage_totals.cached_input_tokens:,}</span> · <span class="composition-fresh">fresh input {run.usage_totals.uncached_input_tokens:,}</span> · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
+<div class="composition-legend"><span class="composition-fresh">Fresh input {run.usage_totals.direct_input_tokens:,}</span> · <span class="composition-cached">Cache read {run.usage_totals.cached_input_tokens:,}</span>{cache_write_legend} · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 {model_usage_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
