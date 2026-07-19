@@ -4009,8 +4009,10 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
     assert f'<pre class="sequence-thought-full">{sanitized_thought}</pre>' in sequence
     assert f'<pre class="sequence-thought-full">{timeline_thought}</pre>' in sequence
     assert f'<pre class="sequence-thought-full">{successive_thought}</pre>' in sequence
-    assert module._sequence_compact_text(sanitized_thought, 44) in sequence
-    assert module._sequence_compact_text(timeline_thought, 44) in sequence
+    for line in module._sequence_chat_lines(sanitized_thought):
+        assert f'>{line}</tspan>' in sequence
+    for line in module._sequence_chat_lines(timeline_thought):
+        assert f'>{line}</tspan>' in sequence
     assert "Send it now." in sequence
     assert "<title>Encrypted reasoning" not in sequence
     first_bubble = sequence.split(
@@ -4020,6 +4022,9 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
     sequence_document = sequence.split("<!-- agent-sequence:end -->", 1)[0]
     assert "**" not in sequence_document
     assert 'class="sequence-conversation-tail"' in sequence
+    assert '<rect x="-98" y="-18" width="196" height="40" rx="10">' in sequence
+    assert 'd="M -8 22 L 0 30 L 8 22 Z"' in sequence
+    assert '<tspan class="sequence-thinking-line"' in sequence
     assert 'class="sequence-conversation-link" href="#sequence-thought-1"' in sequence
     assert 'class="tool-call-overlay sequence-thought-overlay"' in sequence
     assert "sequence-thinking-tail-large" not in sequence
@@ -4027,8 +4032,11 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
     assert 'data-sequence-thinking-count="5"' in sequence
     assert "var thoughtNodes = Array.from(" in html
     assert "var visibleThoughts = [];" in html
-    assert "var visibleThoughtGroups = new Map();" in html
-    assert "thought.displaySlot = visibleEvents.filter" in html
+    assert "var visibleTimelineRows = visibleEvents.map" in html
+    assert "visibleTimelineRows.forEach(function(entry, index)" in html
+    assert "visibleThoughtGroups" not in html
+    assert "visibleRows" not in html
+    assert "bubbleOnRight" not in html
     assert 'enabledCategories.has("thinking")' in html
     assert ".sequence-conversation-bubble { cursor:pointer; }" in html
     assert ".sequence-event-link .sequence-event > * { pointer-events:none; }" in html
@@ -4047,14 +4055,25 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
             sequence,
         )
     ]
-    thought_positions = re.findall(
-        r'class="sequence-conversation-bubble"[^>]*data-row-index="(\d+)"'
-        r'[^>]*data-base-y="([^"]+)"',
-        sequence,
+    timeline_positions = sorted(
+        (int(order), float(y))
+        for order, y in re.findall(
+            r'class="sequence-(?:event-link|conversation-bubble)"[^>]*'
+            r'data-sequence-order="(\d+)"[^>]*data-base-y="([^"]+)"',
+            sequence,
+        )
     )
     assert event_row_indexes == list(range(len(event_row_indexes)))
-    assert thought_positions[-2][0] == thought_positions[-1][0]
-    assert thought_positions[-2][1] != thought_positions[-1][1]
+    assert [order for order, _ in timeline_positions] == list(
+        range(len(timeline_positions))
+    )
+    assert all(
+        later_y - earlier_y >= 64
+        for (_, earlier_y), (_, later_y) in zip(
+            timeline_positions,
+            timeline_positions[1:],
+        )
+    )
     assert '<line class="sequence-line"' in sequence
 
 
