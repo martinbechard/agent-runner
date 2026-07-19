@@ -4275,6 +4275,54 @@ def _sequence_visible_event_label(
     return f"{action} · {suffix}"
 
 
+def _sequence_event_category(kind: str) -> str:
+    """Map native event kinds to the five user-facing filter categories."""
+
+    if kind in {"spawn", "message"}:
+        return "message"
+    if kind in {"complete", "aborted", "failed"}:
+        return "complete"
+    return kind
+
+
+def _sequence_repeat_metadata(
+    events: list[AgentSequenceEvent],
+    visible_labels: list[str],
+) -> list[tuple[int, int]]:
+    """Return zero-based position and size for consecutive repeated messages."""
+
+    metadata = [(0, 1) for _ in events]
+    cursor = 0
+    while cursor < len(events):
+        event = events[cursor]
+        if event.kind not in {"message", "followup"}:
+            cursor += 1
+            continue
+        key = (
+            event.kind,
+            event.source_thread_id,
+            event.target_thread_id,
+            visible_labels[cursor],
+        )
+        end = cursor + 1
+        while end < len(events):
+            candidate = events[end]
+            candidate_key = (
+                candidate.kind,
+                candidate.source_thread_id,
+                candidate.target_thread_id,
+                visible_labels[end],
+            )
+            if candidate_key != key:
+                break
+            end += 1
+        count = end - cursor
+        for index in range(cursor, end):
+            metadata[index] = (index - cursor, count)
+        cursor = end
+    return metadata
+
+
 def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     """Render one offline SVG sequence view plus an exact text event ledger."""
 
@@ -4284,13 +4332,9 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     participants = [thread for thread, _ in inventory]
     events = _codex_sequence_events(run)
     heading = (
-        '<section id="agent-sequence" aria-labelledby="agent-sequence-title">'
+        '<section id="agent-sequence" class="sequence-group-repeats" '
+        'aria-labelledby="agent-sequence-title">'
         '<div class="agents-heading"><h2 id="agent-sequence-title">Agent sequence</h2>'
-        '<a class="sequence-open-link" href="#agent-sequence" target="_blank" '
-        'rel="noopener">Open in new tab</a>'
-        '<a class="sequence-open-link sequence-open-window" '
-        'href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
-        'data-sequence-window>Open in window</a>'
         '<details class="agent-info"><summary aria-label="About Agent sequence">ⓘ</summary>'
         '<div class="agent-note-popover" role="note">'
         "Rows are chronological recorded coordination events, not duration-scaled activity. "
@@ -4298,7 +4342,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         "subagent turn endings. Message text uses the report's bounded redaction rules."
         "</div></details></div>"
         '<p class="execution-note">Read downward to follow who dispatched, resumed, interrupted, '
-        "or completed work. Lifelines are ordered by the recorded thread hierarchy.</p>"
+        "or completed work. Select an agent to focus it; use the +/− control beside a parent "
+        "to collapse its descendants.</p>"
     )
     if not participants or not events:
         return (
@@ -4306,6 +4351,36 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             + '<div class="sequence-empty">No inter-agent coordination or child-ending events '
             "were recorded in this report scope.</div></section>"
         )
+    controls = (
+        '<div class="sequence-controls" aria-label="Agent sequence view controls">'
+        '<div class="sequence-control-group" role="group" aria-label="Zoom">'
+        '<button type="button" data-sequence-zoom-out aria-label="Zoom out">−</button>'
+        '<output data-sequence-zoom-value aria-live="polite">100%</output>'
+        '<button type="button" data-sequence-zoom-in aria-label="Zoom in">+</button>'
+        '<button type="button" data-sequence-fit>Fit</button></div>'
+        '<div class="sequence-control-group" role="group" aria-label="Hierarchy">'
+        '<button type="button" data-sequence-collapse-all>Collapse all</button>'
+        '<button type="button" data-sequence-expand-all>Expand all</button></div>'
+        '<button type="button" data-sequence-clear-focus disabled>Clear focus</button>'
+        '<button type="button" data-sequence-group-repeats aria-pressed="true">'
+        'Group repeats</button>'
+        '<button type="button" data-sequence-reset>Reset view</button>'
+        '<fieldset class="sequence-filter-fieldset"><legend>Events</legend>'
+        '<label><input type="checkbox" data-sequence-event-filter="delegation" checked>'
+        'Delegation</label>'
+        '<label><input type="checkbox" data-sequence-event-filter="message" checked>'
+        'Message / spawn</label>'
+        '<label><input type="checkbox" data-sequence-event-filter="followup" checked>'
+        'Follow-up</label>'
+        '<label><input type="checkbox" data-sequence-event-filter="interrupt" checked>'
+        'Interrupt</label>'
+        '<label><input type="checkbox" data-sequence-event-filter="complete" checked>'
+        'Turn end</label></fieldset>'
+        '<output class="sequence-view-status" data-sequence-view-status '
+        f'aria-live="polite">{len(participants):,} agents · {len(events):,} events</output>'
+        '</div><p class="sequence-filter-empty" data-sequence-empty hidden>'
+        'No events match the current sequence view.</p>'
+    )
     participant_gap = 220
     side_padding = 110
     participant_header_height = 82
@@ -4320,6 +4395,11 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     name_by_thread_id = {
         thread.thread_id: _sequence_participant_name(run, thread)
         for thread in participants
+    }
+    parent_ids_with_children = {
+        thread.parent_thread_id
+        for thread in participants
+        if thread.parent_thread_id in x_by_thread_id
     }
     marker_colors = {
         "delegation": ("teal", "#00695c"),
@@ -4356,32 +4436,47 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         detail = f"{agent_role} · {identity}"
         if thread.agent_nickname:
             detail = f"{thread.agent_nickname} · {detail}"
+        hierarchy_toggle = ""
+        if thread.thread_id in parent_ids_with_children:
+            hierarchy_toggle = (
+                '<g class="sequence-hierarchy-toggle" role="button" tabindex="0" '
+                'aria-label="Collapse descendants of {name}" aria-expanded="true">'
+                '<circle cx="100" cy="37" r="9"></circle>'
+                '<text x="100" y="41" text-anchor="middle">−</text></g>'
+            ).format(name=_escape_html(full_name))
         participant_svg.append(
-            '<g class="sequence-participant" data-depth="{depth}"{focusable} '
-            'aria-label="{aria}">{tooltip}'
-            '<rect x="{box_x}" y="10" width="176" height="54" rx="5"></rect>'
-            '<text x="{x}" y="32" text-anchor="middle">'
-            '<tspan class="sequence-participant-name" x="{x}">{name}</tspan>'
-            '<tspan class="sequence-participant-detail" x="{x}" dy="18">{detail}</tspan>'
-            "</text>"
-            "</g>".format(
+            '<g class="sequence-participant" data-depth="{depth}" '
+            'data-thread-id="{thread_id}" data-parent-thread-id="{parent_id}" '
+            'data-participant-name="{full_name}" data-sequence-x="{x}" '
+            'transform="translate({x} 0)">'
+            '<g class="sequence-focus-target" role="button" tabindex="0" '
+            'aria-pressed="false" aria-label="Focus on {aria}">{tooltip}'
+            '<rect x="-88" y="10" width="176" height="54" rx="5"></rect>'
+            '<text x="0" y="32" text-anchor="middle">'
+            '<tspan class="sequence-participant-name" x="0">{name}</tspan>'
+            '<tspan class="sequence-participant-detail" x="0" dy="18">{detail}</tspan>'
+            "</text></g>{hierarchy_toggle}</g>".format(
                 depth=depth,
-                focusable=' tabindex="0"' if name_is_truncated else "",
+                thread_id=_escape_html(thread.thread_id),
+                parent_id=_escape_html(thread.parent_thread_id),
+                full_name=_escape_html(full_name),
+                x=x,
                 aria=_escape_html(f"{full_name} · {detail}"),
                 tooltip=(
                     f"<title>{_escape_html(full_name)}</title>"
                     if name_is_truncated
                     else ""
                 ),
-                box_x=x - 88,
-                x=x,
                 name=_escape_html(visible_name),
                 detail=_escape_html(_sequence_compact_text(detail, 28)),
+                hierarchy_toggle=hierarchy_toggle,
             )
         )
     lifeline_svg = "".join(
-        '<line class="sequence-lifeline" x1="{x}" y1="0" x2="{x}" '
+        '<line class="sequence-lifeline" data-thread-id="{thread_id}" '
+        'x1="{x}" y1="0" x2="{x}" '
         'y2="{end_y}"></line>'.format(
+            thread_id=_escape_html(thread.thread_id),
             x=x_by_thread_id[thread.thread_id],
             end_y=height - 16,
         )
@@ -4391,16 +4486,27 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     ledger_rows = []
     event_overlays = []
     return_kinds = {"complete", "aborted", "failed"}
-    for index, event in enumerate(events):
+    event_contexts = []
+    for event in events:
+        sender_update = _sequence_sender_update(run, event)
+        recipient_update = _sequence_recipient_update(run, event)
+        display_label = _sequence_visible_event_label(event, recipient_update)
+        event_contexts.append((sender_update, recipient_update, display_label))
+    repeat_metadata = _sequence_repeat_metadata(
+        events,
+        [display_label for _, _, display_label in event_contexts],
+    )
+    for index, (event, context, repetition) in enumerate(
+        zip(events, event_contexts, repeat_metadata, strict=True)
+    ):
         y = index * event_height + 24
         source_x = x_by_thread_id[event.source_thread_id]
         target_x = x_by_thread_id[event.target_thread_id]
         marker_name, color = marker_colors[event.kind]
         line_length = abs(target_x - source_x)
         label_limit = max(14, min(48, line_length // 7))
-        sender_update = _sequence_sender_update(run, event)
-        recipient_update = _sequence_recipient_update(run, event)
-        display_label = _sequence_visible_event_label(event, recipient_update)
+        sender_update, recipient_update, display_label = context
+        repeat_index, repeat_count = repetition
         visible_label = _sequence_compact_text(display_label, label_limit)
         source_name = name_by_thread_id[event.source_thread_id]
         target_name = name_by_thread_id[event.target_thread_id]
@@ -4409,10 +4515,24 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             f"{offset}: {source_name} to {target_name} · {event.label}"
         )
         detail_id = f"sequence-event-{index + 1}"
+        category = _sequence_event_category(event.kind)
+        repeat_count_html = (
+            f'<tspan class="sequence-repeat-count" dx="4">×{repeat_count}</tspan>'
+            if repeat_count > 1
+            else ""
+        )
+        repeat_aria = (
+            f" · {repeat_count} consecutive repeated events grouped"
+            if repeat_count > 1 and repeat_index == 0
+            else ""
+        )
         dash = ' stroke-dasharray="6 4"' if event.kind in return_kinds else ""
         event_svg.append(
             '<a class="sequence-event-link" href="#{detail_id}" tabindex="0" '
-            'role="listitem" aria-label="{aria}">'
+            'role="listitem" aria-label="{aria}" data-event-index="{event_index}" '
+            'data-source-thread-id="{source_id}" data-target-thread-id="{target_id}" '
+            'data-event-category="{category}" data-base-y="{y}" '
+            'data-repeat-count="{repeat_count}" data-repeat-index="{repeat_index}">'
             '<g class="sequence-event sequence-event-{kind}">'
             '<rect class="sequence-event-band" x="0" y="{band_y}" width="{width}" height="44"></rect>'
             '<text class="sequence-offset" x="12" y="{text_y}">{offset}</text>'
@@ -4420,11 +4540,17 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             'stroke="{color}" marker-end="url(#sequence-arrow-{marker})"{dash}></line>'
             '<circle class="sequence-source-dot" cx="{source_x}" cy="{y}" r="3" fill="{color}"></circle>'
             '<text class="sequence-event-label" x="{label_x}" y="{label_y}" '
-            'text-anchor="middle">{label}</text>'
+            'text-anchor="middle">{label}{repeat_count_html}</text>'
             "</g></a>".format(
                 detail_id=detail_id,
                 kind=event.kind,
-                aria=_escape_html(event_description),
+                aria=_escape_html(event_description + repeat_aria),
+                event_index=index,
+                source_id=_escape_html(event.source_thread_id),
+                target_id=_escape_html(event.target_thread_id),
+                category=category,
+                repeat_count=repeat_count,
+                repeat_index=repeat_index,
                 band_y=y - 20,
                 width=width,
                 text_y=y + 4,
@@ -4438,17 +4564,35 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 label_x=(source_x + target_x) / 2,
                 label_y=y - 8,
                 label=_escape_html(visible_label),
+                repeat_count_html=repeat_count_html,
             )
         )
+        ledger_repeat_count = (
+            '<span class="sequence-ledger-repeat-count"> · ×{count} grouped</span>'.format(
+                count=repeat_count
+            )
+            if repeat_count > 1
+            else ""
+        )
         ledger_rows.append(
-            '<li><a class="sequence-ledger-link" href="#{detail_id}">'
+            '<li data-event-index="{event_index}" data-source-thread-id="{source_id}" '
+            'data-target-thread-id="{target_id}" data-event-category="{category}" '
+            'data-repeat-count="{repeat_count}" data-repeat-index="{repeat_index}">'
+            '<a class="sequence-ledger-link" href="#{detail_id}">'
             '<time>{offset}</time><strong>{source}</strong><span aria-hidden="true">→</span>'
-            '<strong>{target}</strong><span>{label}</span></a></li>'.format(
+            '<strong>{target}</strong><span>{label}</span>{repeat_count_html}</a></li>'.format(
                 detail_id=detail_id,
+                event_index=index,
+                source_id=_escape_html(event.source_thread_id),
+                target_id=_escape_html(event.target_thread_id),
+                category=category,
+                repeat_count=repeat_count,
+                repeat_index=repeat_index,
                 offset=_escape_html(offset),
                 source=_escape_html(source_name),
                 target=_escape_html(target_name),
                 label=_escape_html(event.label),
+                repeat_count_html=ledger_repeat_count,
             )
         )
         opaque_message_note = (
@@ -4563,7 +4707,10 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     )
     diagram = (
         '<div class="sequence-scroll" tabindex="0" aria-label="Scrollable agent sequence diagram">'
-        f'<div class="sequence-canvas" style="width:{width}px">'
+        f'<div class="sequence-canvas" style="width:{width}px" '
+        f'data-participant-gap="{participant_gap}" data-side-padding="{side_padding}" '
+        f'data-header-height="{participant_header_height}" data-event-height="{event_height}" '
+        f'data-footer-height="{footer_height}">'
         '<div class="sequence-sticky-header">'
         f'{legend}<svg class="sequence-participant-header" role="img" '
         f'aria-label="{len(participants)} agent lifelines" viewBox="0 0 {width} '
@@ -4572,15 +4719,17 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         '<svg class="agent-sequence-diagram" role="list" '
         'aria-labelledby="agent-sequence-title agent-sequence-description" '
         f'viewBox="0 0 {width} {height}" width="{width}" height="{height}">'
-        f'<desc id="agent-sequence-description">{len(events)} recorded events across '
+        f'<desc id="agent-sequence-description" data-sequence-description>'
+        f'{len(events)} recorded events across '
         f"{len(participants)} agent lifelines.</desc>"
         f"<defs>{marker_defs}</defs>{lifeline_svg}{''.join(event_svg)}</svg></div></div>"
     )
     ledger = (
-        '<details class="sequence-ledger"><summary>Event ledger · '
+        '<details class="sequence-ledger"><summary data-sequence-ledger-summary>'
+        'Event ledger · '
         f"{len(events):,} recorded events</summary><ol>{''.join(ledger_rows)}</ol></details>"
     )
-    return heading + diagram + ledger + "".join(event_overlays) + "</section>"
+    return heading + controls + diagram + ledger + "".join(event_overlays) + "</section>"
 
 
 def render_codex_rollout_html(
@@ -5249,7 +5398,8 @@ def render_codex_rollout_html(
     view_nav_html = (
         '<nav class="view-nav" aria-label="Report views"><span>Views</span>'
         '<a href="#timeline">Timeline</a>'
-        '<a href="#agent-sequence" target="_blank" rel="noopener">Sequence</a></nav>'
+        '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
+        'data-sequence-window>Sequence window</a></nav>'
         if sequence_html
         else ""
     )
@@ -5263,10 +5413,10 @@ body.sequence-only > :not(#agent-sequence) {{ display:none; }}
 body.sequence-only #agent-sequence {{ display:flex; height:calc(100vh - 32px); min-height:0; flex-direction:column; }}
 body.sequence-only #agent-sequence > .agents-heading {{ flex:0 0 auto; margin-top:0; }}
 body.sequence-only #agent-sequence > .execution-note,
+body.sequence-only #agent-sequence > .sequence-controls,
 body.sequence-only #agent-sequence > .sequence-ledger {{ flex:0 0 auto; }}
 body.sequence-only .sequence-scroll {{ flex:1 1 auto; min-height:0; max-height:none; }}
 body.sequence-only .sequence-ledger[open] {{ max-height:35vh; overflow:auto; }}
-body.sequence-only .sequence-open-link {{ display:none; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
@@ -5277,7 +5427,7 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .view-nav span {{ margin-right:2px; color:#607d8b; font-size:.78em; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }}
 .view-nav a {{ padding:5px 10px; color:#2563a6; background:#fff; border:1px solid #cfd8dc; border-radius:999px; font-size:.86em; font-weight:600; text-decoration:none; }}
 .view-nav a:hover {{ border-color:#2563a6; }}
-.view-nav a:focus-visible, .sequence-open-link:focus-visible, .sequence-scroll:focus-visible, .sequence-event-link:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.view-nav a:focus-visible, .sequence-scroll:focus-visible, .sequence-event-link:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .visually-hidden {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
@@ -5350,9 +5500,22 @@ td {{ font-size:.85em; }}
 .agent-info > summary::-webkit-details-marker {{ display:none; }}
 .agent-note-popover {{ position:absolute; z-index:20; top:calc(100% + 8px); right:0; box-sizing:border-box; width:min(620px,calc(100vw - 4em)); padding:12px 14px; color:#455a64; background:#fff; border:1px solid #cfd8dc; border-radius:6px; box-shadow:0 8px 24px rgba(38,50,56,.18); font-size:.88em; font-weight:400; line-height:1.45; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
-#agent-sequence {{ scroll-margin-top:12px; }}
-.sequence-open-link {{ margin-left:12px; color:#2563a6; font-size:.82em; font-weight:600; text-decoration:none; }}
-.sequence-open-link:hover {{ text-decoration:underline; }}
+#agent-sequence {{ display:none; scroll-margin-top:12px; }}
+.sequence-controls {{ display:flex; flex-wrap:wrap; align-items:center; gap:7px 10px; margin:2px 0 10px; color:#455a64; font-size:.8em; }}
+.sequence-control-group {{ display:inline-flex; align-items:center; gap:5px; }}
+.sequence-controls button {{ min-height:30px; padding:4px 9px; color:#455a64; background:#fff; border:1px solid #90a4ae; border-radius:5px; cursor:pointer; font:600 1em var(--font-ui); }}
+.sequence-controls button:hover {{ color:#0d47a1; border-color:#2563a6; }}
+.sequence-controls button:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.sequence-controls button:disabled {{ color:#90a4ae; background:#f5f7f8; border-color:#cfd8dc; cursor:not-allowed; }}
+.sequence-controls button[aria-pressed="true"] {{ color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }}
+.sequence-controls output[data-sequence-zoom-value] {{ min-width:42px; color:#263238; text-align:center; font-family:var(--font-code); }}
+.sequence-filter-fieldset {{ display:flex; flex-wrap:wrap; align-items:center; gap:5px 9px; min-width:0; margin:0; padding:4px 8px 5px; border:1px solid #cfd8dc; border-radius:5px; }}
+.sequence-filter-fieldset legend {{ padding:0 4px; color:#546e7a; font-weight:600; }}
+.sequence-filter-fieldset label {{ display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }}
+.sequence-filter-fieldset input {{ accent-color:#2563a6; }}
+.sequence-view-status {{ margin-left:auto; color:#546e7a; font-family:var(--font-code); }}
+.sequence-filter-empty {{ margin:0 0 8px; padding:8px 10px; color:#455a64; background:#fff8e1; border:1px solid #ffe082; border-radius:5px; font-size:.84em; }}
+.sequence-hidden {{ display:none; }}
 .sequence-empty {{ padding:18px; color:#607d8b; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
 .sequence-legend {{ position:sticky; left:0; display:flex; width:max-content; flex-wrap:wrap; gap:8px 16px; box-sizing:border-box; margin:0; padding:8px 12px 2px; color:#546e7a; background:#fff; font-size:.78em; }}
 .sequence-legend span {{ display:inline-flex; align-items:center; gap:6px; }}
@@ -5369,9 +5532,13 @@ td {{ font-size:.85em; }}
 .agent-sequence-diagram {{ display:block; background:#fff; }}
 .sequence-participant rect {{ fill:#f5f7f8; stroke:#90a4ae; stroke-width:1; }}
 .sequence-participant[data-depth="0"] rect {{ fill:#eef4f8; stroke:#607d8b; }}
-.sequence-participant[tabindex] {{ cursor:help; }}
-.sequence-participant:focus-visible {{ outline:none; }}
-.sequence-participant:focus-visible rect {{ stroke:#2563a6; stroke-width:2; }}
+.sequence-focus-target {{ cursor:pointer; }}
+.sequence-focus-target:focus-visible, .sequence-hierarchy-toggle:focus-visible {{ outline:none; }}
+.sequence-focus-target:focus-visible rect, .sequence-focus-target[aria-pressed="true"] rect {{ fill:#e3f2fd; stroke:#2563a6; stroke-width:2; }}
+.sequence-hierarchy-toggle {{ cursor:pointer; }}
+.sequence-hierarchy-toggle circle {{ fill:#fff; stroke:#607d8b; stroke-width:1; }}
+.sequence-hierarchy-toggle:focus-visible circle {{ stroke:#2563a6; stroke-width:2; }}
+.sequence-hierarchy-toggle text {{ font-size:13px; font-weight:700; }}
 .sequence-participant text {{ fill:#263238; font-family:var(--font-ui); }}
 .sequence-participant-name {{ font-size:12px; font-weight:700; }}
 .sequence-participant-detail {{ fill:#607d8b; font-family:var(--font-code); font-size:9px; }}
@@ -5383,6 +5550,10 @@ td {{ font-size:.85em; }}
 .sequence-event-link:hover .sequence-line, .sequence-event-link:focus-visible .sequence-line {{ stroke-width:3; }}
 .sequence-offset {{ fill:#78909c; font-family:var(--font-code); font-size:9px; }}
 .sequence-event-label {{ fill:#263238; stroke:#fff; stroke-width:5px; paint-order:stroke; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
+.sequence-repeat-count, .sequence-ledger-repeat-count {{ display:none; }}
+.sequence-group-repeats .sequence-repeat-count, .sequence-group-repeats .sequence-ledger-repeat-count {{ display:inline; }}
+.sequence-group-repeats .sequence-event-link[data-repeat-index]:not([data-repeat-index="0"]),
+.sequence-group-repeats .sequence-ledger li[data-repeat-index]:not([data-repeat-index="0"]) {{ display:none; }}
 .sequence-ledger {{ margin-top:10px; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
 .sequence-ledger > summary {{ padding:10px 12px; color:#455a64; cursor:pointer; font-size:.86em; font-weight:600; }}
 .sequence-ledger ol {{ margin:0; padding:0 18px 12px 44px; }}
@@ -5527,6 +5698,314 @@ document.querySelectorAll("[data-sequence-window]").forEach(function(link) {{
     }}
   }});
 }});
+function initializeAgentSequence(section) {{
+  var scroll = section.querySelector(".sequence-scroll");
+  var canvas = section.querySelector(".sequence-canvas");
+  var participantHeader = section.querySelector(".sequence-participant-header");
+  var diagram = section.querySelector(".agent-sequence-diagram");
+  if (!scroll || !canvas || !participantHeader || !diagram) return;
+
+  var participants = Array.from(section.querySelectorAll(".sequence-participant"));
+  var lifelines = Array.from(section.querySelectorAll(".sequence-lifeline"));
+  var eventLinks = Array.from(diagram.querySelectorAll(".sequence-event-link"));
+  var ledgerRows = Array.from(section.querySelectorAll(".sequence-ledger li[data-event-index]"));
+  var participantGap = Number(canvas.dataset.participantGap);
+  var sidePadding = Number(canvas.dataset.sidePadding);
+  var headerHeight = Number(canvas.dataset.headerHeight);
+  var eventHeight = Number(canvas.dataset.eventHeight);
+  var footerHeight = Number(canvas.dataset.footerHeight);
+  var minZoom = 0.1;
+  var maxZoom = 2;
+  var zoom = 1;
+  var baseWidth = 760;
+  var baseHeight = footerHeight;
+  var collapsedThreadIds = new Set();
+  var focusedThreadId = "";
+  var groupRepeats = true;
+  var parentByThreadId = new Map();
+  var participantByThreadId = new Map();
+  var lifelineByThreadId = new Map();
+  var ledgerByEventIndex = new Map();
+
+  participants.forEach(function(participant) {{
+    participantByThreadId.set(participant.dataset.threadId, participant);
+    parentByThreadId.set(
+      participant.dataset.threadId,
+      participant.dataset.parentThreadId || ""
+    );
+  }});
+  lifelines.forEach(function(lifeline) {{
+    lifelineByThreadId.set(lifeline.dataset.threadId, lifeline);
+  }});
+  ledgerRows.forEach(function(row) {{
+    ledgerByEventIndex.set(row.dataset.eventIndex, row);
+  }});
+  var events = eventLinks.map(function(element) {{
+    return {{
+      element: element,
+      group: element.querySelector(".sequence-event"),
+      line: element.querySelector(".sequence-line"),
+      dot: element.querySelector(".sequence-source-dot"),
+      label: element.querySelector(".sequence-event-label"),
+      band: element.querySelector(".sequence-event-band"),
+      sourceId: element.dataset.sourceThreadId,
+      targetId: element.dataset.targetThreadId,
+      category: element.dataset.eventCategory,
+      baseY: Number(element.dataset.baseY),
+      repeatCount: Number(element.dataset.repeatCount),
+      repeatIndex: Number(element.dataset.repeatIndex),
+      ledger: ledgerByEventIndex.get(element.dataset.eventIndex)
+    }};
+  }});
+
+  var zoomOutButton = section.querySelector("[data-sequence-zoom-out]");
+  var zoomInButton = section.querySelector("[data-sequence-zoom-in]");
+  var zoomValue = section.querySelector("[data-sequence-zoom-value]");
+  var fitButton = section.querySelector("[data-sequence-fit]");
+  var collapseAllButton = section.querySelector("[data-sequence-collapse-all]");
+  var expandAllButton = section.querySelector("[data-sequence-expand-all]");
+  var clearFocusButton = section.querySelector("[data-sequence-clear-focus]");
+  var groupRepeatsButton = section.querySelector("[data-sequence-group-repeats]");
+  var resetButton = section.querySelector("[data-sequence-reset]");
+  var filterInputs = Array.from(section.querySelectorAll("[data-sequence-event-filter]"));
+  var viewStatus = section.querySelector("[data-sequence-view-status]");
+  var emptyState = section.querySelector("[data-sequence-empty]");
+  var ledgerSummary = section.querySelector("[data-sequence-ledger-summary]");
+  var description = section.querySelector("[data-sequence-description]");
+
+  function updateZoomControls() {{
+    zoomValue.textContent = Math.round(zoom * 100) + "%";
+    zoomOutButton.disabled = zoom <= minZoom;
+    zoomInButton.disabled = zoom >= maxZoom;
+  }}
+
+  function applyDimensions() {{
+    var scaledWidth = Math.round(baseWidth * zoom);
+    var scaledHeaderHeight = Math.round(headerHeight * zoom);
+    var scaledHeight = Math.round(baseHeight * zoom);
+    canvas.style.width = scaledWidth + "px";
+    participantHeader.setAttribute("viewBox", "0 0 " + baseWidth + " " + headerHeight);
+    participantHeader.setAttribute("width", String(scaledWidth));
+    participantHeader.setAttribute("height", String(scaledHeaderHeight));
+    diagram.setAttribute("viewBox", "0 0 " + baseWidth + " " + baseHeight);
+    diagram.setAttribute("width", String(scaledWidth));
+    diagram.setAttribute("height", String(scaledHeight));
+    updateZoomControls();
+  }}
+
+  function setZoom(nextZoom) {{
+    zoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
+    applyDimensions();
+  }}
+
+  function fitSequence() {{
+    var availableWidth = Math.max(320, scroll.clientWidth - 2);
+    setZoom(Math.min(1, availableWidth / baseWidth));
+    scroll.scrollLeft = 0;
+  }}
+
+  function hiddenByCollapsedAncestor(threadId) {{
+    var parentId = parentByThreadId.get(threadId) || "";
+    var visited = new Set();
+    while (parentId && !visited.has(parentId)) {{
+      if (collapsedThreadIds.has(parentId)) return true;
+      visited.add(parentId);
+      parentId = parentByThreadId.get(parentId) || "";
+    }}
+    return false;
+  }}
+
+  function focusThreadIds() {{
+    if (!focusedThreadId) return null;
+    var ids = new Set([focusedThreadId]);
+    events.forEach(function(event) {{
+      if (event.sourceId === focusedThreadId) ids.add(event.targetId);
+      if (event.targetId === focusedThreadId) ids.add(event.sourceId);
+    }});
+    return ids;
+  }}
+
+  function updateParticipantControl(participant) {{
+    var threadId = participant.dataset.threadId;
+    var focusTarget = participant.querySelector(".sequence-focus-target");
+    var hierarchyToggle = participant.querySelector(".sequence-hierarchy-toggle");
+    focusTarget.setAttribute(
+      "aria-pressed",
+      threadId === focusedThreadId ? "true" : "false"
+    );
+    if (!hierarchyToggle) return;
+    var collapsed = collapsedThreadIds.has(threadId);
+    hierarchyToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    hierarchyToggle.setAttribute(
+      "aria-label",
+      (collapsed ? "Expand" : "Collapse") +
+        " descendants of " + participant.dataset.participantName
+    );
+    hierarchyToggle.querySelector("text").textContent = collapsed ? "+" : "−";
+  }}
+
+  function layoutSequence() {{
+    var focusIds = focusThreadIds();
+    var visibleParticipants = participants.filter(function(participant) {{
+      var threadId = participant.dataset.threadId;
+      if (focusIds && !focusIds.has(threadId)) return false;
+      if (threadId === focusedThreadId) return true;
+      return !hiddenByCollapsedAncestor(threadId);
+    }});
+    var visibleThreadIds = new Set(
+      visibleParticipants.map(function(participant) {{ return participant.dataset.threadId; }})
+    );
+    var xByThreadId = new Map();
+    visibleParticipants.forEach(function(participant, index) {{
+      var threadId = participant.dataset.threadId;
+      var x = sidePadding + index * participantGap;
+      xByThreadId.set(threadId, x);
+      participant.setAttribute("transform", "translate(" + x + " 0)");
+    }});
+    participants.forEach(function(participant) {{
+      var visible = visibleThreadIds.has(participant.dataset.threadId);
+      participant.classList.toggle("sequence-hidden", !visible);
+      updateParticipantControl(participant);
+    }});
+
+    baseWidth = Math.max(
+      760,
+      sidePadding * 2 + participantGap * Math.max(0, visibleParticipants.length - 1)
+    );
+    var enabledCategories = new Set(
+      filterInputs.filter(function(input) {{ return input.checked; }}).map(
+        function(input) {{ return input.dataset.sequenceEventFilter; }}
+      )
+    );
+    var visibleEvents = [];
+    events.forEach(function(event) {{
+      var visible =
+        enabledCategories.has(event.category) &&
+        visibleThreadIds.has(event.sourceId) &&
+        visibleThreadIds.has(event.targetId) &&
+        (!focusedThreadId ||
+          event.sourceId === focusedThreadId ||
+          event.targetId === focusedThreadId) &&
+        (!groupRepeats || event.repeatIndex === 0);
+      event.element.classList.toggle("sequence-hidden", !visible);
+      if (event.ledger) event.ledger.classList.toggle("sequence-hidden", !visible);
+      if (visible) visibleEvents.push(event);
+    }});
+
+    baseHeight = eventHeight * visibleEvents.length + footerHeight;
+    visibleEvents.forEach(function(event, index) {{
+      var y = index * eventHeight + 24;
+      var sourceX = xByThreadId.get(event.sourceId);
+      var targetX = xByThreadId.get(event.targetId);
+      event.group.setAttribute("transform", "translate(0 " + (y - event.baseY) + ")");
+      event.line.setAttribute("x1", String(sourceX));
+      event.line.setAttribute("x2", String(targetX));
+      event.dot.setAttribute("cx", String(sourceX));
+      event.label.setAttribute("x", String((sourceX + targetX) / 2));
+      event.band.setAttribute("width", String(baseWidth));
+    }});
+    lifelines.forEach(function(lifeline) {{
+      var threadId = lifeline.dataset.threadId;
+      var visible = visibleThreadIds.has(threadId);
+      lifeline.classList.toggle("sequence-hidden", !visible);
+      if (!visible) return;
+      var x = xByThreadId.get(threadId);
+      lifeline.setAttribute("x1", String(x));
+      lifeline.setAttribute("x2", String(x));
+      lifeline.setAttribute("y2", String(Math.max(14, baseHeight - 16)));
+    }});
+
+    section.classList.toggle("sequence-group-repeats", groupRepeats);
+    groupRepeatsButton.setAttribute("aria-pressed", groupRepeats ? "true" : "false");
+    clearFocusButton.disabled = !focusedThreadId;
+    emptyState.hidden = visibleEvents.length !== 0;
+    var statusText = visibleParticipants.length + " of " + participants.length +
+      " agents · " + visibleEvents.length + " of " + events.length + " events";
+    if (focusedThreadId && participantByThreadId.has(focusedThreadId)) {{
+      statusText = "Focus: " +
+        participantByThreadId.get(focusedThreadId).dataset.participantName + " · " +
+        statusText;
+    }}
+    viewStatus.textContent = statusText;
+    participantHeader.setAttribute("aria-label", statusText);
+    description.textContent = visibleEvents.length + " visible events across " +
+      visibleParticipants.length + " visible agent lifelines.";
+    ledgerSummary.textContent = visibleEvents.length === events.length
+      ? "Event ledger · " + events.length.toLocaleString() + " recorded events"
+      : "Event ledger · " + visibleEvents.length.toLocaleString() + " of " +
+        events.length.toLocaleString() + " visible events";
+    applyDimensions();
+  }}
+
+  function activateWithKeyboard(element, action) {{
+    element.addEventListener("keydown", function(event) {{
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      action();
+    }});
+  }}
+
+  participants.forEach(function(participant) {{
+    var threadId = participant.dataset.threadId;
+    var focusTarget = participant.querySelector(".sequence-focus-target");
+    var selectFocus = function() {{
+      focusedThreadId = focusedThreadId === threadId ? "" : threadId;
+      layoutSequence();
+      scroll.scrollLeft = 0;
+    }};
+    focusTarget.addEventListener("click", selectFocus);
+    activateWithKeyboard(focusTarget, selectFocus);
+    var hierarchyToggle = participant.querySelector(".sequence-hierarchy-toggle");
+    if (!hierarchyToggle) return;
+    var toggleHierarchy = function() {{
+      if (collapsedThreadIds.has(threadId)) collapsedThreadIds.delete(threadId);
+      else collapsedThreadIds.add(threadId);
+      layoutSequence();
+    }};
+    hierarchyToggle.addEventListener("click", toggleHierarchy);
+    activateWithKeyboard(hierarchyToggle, toggleHierarchy);
+  }});
+
+  zoomOutButton.addEventListener("click", function() {{ setZoom(zoom - 0.15); }});
+  zoomInButton.addEventListener("click", function() {{ setZoom(zoom + 0.15); }});
+  fitButton.addEventListener("click", fitSequence);
+  collapseAllButton.addEventListener("click", function() {{
+    participants.forEach(function(participant) {{
+      if (participant.querySelector(".sequence-hierarchy-toggle")) {{
+        collapsedThreadIds.add(participant.dataset.threadId);
+      }}
+    }});
+    layoutSequence();
+    scroll.scrollLeft = 0;
+  }});
+  expandAllButton.addEventListener("click", function() {{
+    collapsedThreadIds.clear();
+    layoutSequence();
+  }});
+  clearFocusButton.addEventListener("click", function() {{
+    focusedThreadId = "";
+    layoutSequence();
+  }});
+  groupRepeatsButton.addEventListener("click", function() {{
+    groupRepeats = !groupRepeats;
+    layoutSequence();
+  }});
+  resetButton.addEventListener("click", function() {{
+    collapsedThreadIds.clear();
+    focusedThreadId = "";
+    groupRepeats = true;
+    filterInputs.forEach(function(input) {{ input.checked = true; }});
+    zoom = 1;
+    layoutSequence();
+    scroll.scrollTo({{ left: 0, top: 0 }});
+  }});
+  filterInputs.forEach(function(input) {{
+    input.addEventListener("change", layoutSequence);
+  }});
+  layoutSequence();
+}}
+var sequenceSection = document.getElementById("agent-sequence");
+if (sequenceOnly && sequenceSection) initializeAgentSequence(sequenceSection);
 document.querySelectorAll(".agent-summary-row").forEach(function(row) {{
   var button = row.querySelector(".agent-row-toggle");
   var detail = document.getElementById(row.dataset.agentDetail);

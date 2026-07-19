@@ -3405,12 +3405,19 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert '<svg class="agent-sequence-diagram"' in html
     assert 'class="sequence-event sequence-event-delegation"' in html
     assert 'class="sequence-event sequence-event-interrupt"' in html
-    assert '<summary>Event ledger · 7 recorded events</summary>' in html
-    assert '<a href="#timeline">Timeline</a>' in html
     assert (
-        '<a href="#agent-sequence" target="_blank" rel="noopener">Sequence</a>'
+        '<summary data-sequence-ledger-summary>Event ledger · '
+        '7 recorded events</summary>'
         in html
     )
+    assert '<a href="#timeline">Timeline</a>' in html
+    assert (
+        '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
+        'data-sequence-window>Sequence window</a>'
+        in html
+    )
+    assert "Sequence tab" not in html
+    assert "#agent-sequence { display:none; scroll-margin-top:12px; }" in html
     assert html.index('<div id="timeline"') < html.index('<section id="agent-sequence"')
     timeline = html.split('<div id="timeline"', 1)[1].split(
         '<section id="agent-sequence"', 1
@@ -3498,7 +3505,7 @@ def test_native_codex_sequence_tooltips_only_truncated_participant_titles(tmp_pa
     assert module._sequence_compact_text(long_title, 24) in long_participant
     assert "<title>Process Backlog Items</title>" not in sequence
     assert "<title>worker</title>" not in sequence
-    assert ".sequence-participant:focus-visible rect {" in html
+    assert ".sequence-focus-target:focus-visible rect," in html
 
 
 def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
@@ -3513,10 +3520,12 @@ def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
     html = module.render_codex_rollout_html(run)
 
     assert (
-        '<a class="sequence-open-link sequence-open-window" '
-        'href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
-        'data-sequence-window>Open in window</a>'
+        '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
+        'data-sequence-window>Sequence window</a>'
     ) in html
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    assert "Open in new tab" not in sequence
+    assert "Open in window" not in sequence
     assert "body.sequence-only > :not(#agent-sequence) { display:none; }" in html
     assert "body.sequence-only #agent-sequence { display:flex;" in html
     assert ".sequence-only .sequence-scroll { flex:1 1 auto;" in html
@@ -3528,6 +3537,93 @@ def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
     assert 'document.querySelectorAll("[data-sequence-window]")' in html
     assert "window.open(" in html
     assert "popup=yes" in html
+
+
+def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    html = module.render_codex_rollout_html(run)
+
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    assert (
+        '<div class="sequence-controls" aria-label="Agent sequence view controls">'
+        in sequence
+    )
+    assert 'data-sequence-zoom-out aria-label="Zoom out"' in sequence
+    assert 'data-sequence-zoom-value aria-live="polite">100%</output>' in sequence
+    assert 'data-sequence-zoom-in aria-label="Zoom in"' in sequence
+    assert 'data-sequence-fit>Fit</button>' in sequence
+    assert 'data-sequence-collapse-all>Collapse all</button>' in sequence
+    assert 'data-sequence-expand-all>Expand all</button>' in sequence
+    assert 'data-sequence-clear-focus disabled>Clear focus</button>' in sequence
+    assert (
+        'data-sequence-group-repeats aria-pressed="true">Group repeats</button>'
+        in sequence
+    )
+    assert 'data-sequence-reset>Reset view</button>' in sequence
+    for category in ("delegation", "message", "followup", "interrupt", "complete"):
+        assert f'data-sequence-event-filter="{category}" checked' in sequence
+    assert 'data-thread-id="orchestrator"' in sequence
+    assert 'data-parent-thread-id=""' in sequence
+    assert 'class="sequence-focus-target" role="button" tabindex="0"' in sequence
+    assert 'class="sequence-hierarchy-toggle" role="button" tabindex="0"' in sequence
+    assert 'data-source-thread-id="coordinator"' in sequence
+    assert 'data-target-thread-id="orchestrator"' in sequence
+    assert 'data-event-category="delegation"' in sequence
+    assert "function initializeAgentSequence(section)" in html
+    assert "var collapsedThreadIds = new Set();" in html
+    assert 'var focusedThreadId = "";' in html
+    assert "var groupRepeats = true;" in html
+    assert "function fitSequence()" in html
+    assert "function layoutSequence()" in html
+    assert ".sequence-controls {" in html
+    assert ".sequence-hidden { display:none; }" in html
+    assert (
+        ".sequence-filter-fieldset legend { padding:0 4px; color:#546e7a;"
+        in html
+    )
+    assert ".sequence-view-status { margin-left:auto; color:#546e7a;" in html
+
+
+def test_native_codex_sequence_marks_consecutive_repetitive_messages(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+    repeated = [
+        module.AgentSequenceEvent(
+            event_timestamp=f"2026-07-14T04:00:0{second}Z",
+            kind="message",
+            source_thread_id="orchestrator",
+            target_thread_id="worker",
+            label="message · repeated status",
+            source_ordinal=second,
+        )
+        for second in (3, 4, 5)
+    ]
+    monkeypatch.setattr(module, "_codex_sequence_events", lambda _run: repeated)
+
+    html = module.render_codex_rollout_html(run)
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+
+    assert sequence.count('data-repeat-count="3"') == 6
+    assert sequence.count('data-repeat-index="0"') == 2
+    assert sequence.count('data-repeat-index="1"') == 2
+    assert sequence.count('data-repeat-index="2"') == 2
+    assert '<tspan class="sequence-repeat-count" dx="4">×3</tspan>' in sequence
+    assert 'data-event-category="message"' in sequence
 
 
 def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
@@ -3565,7 +3661,11 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
 
     assert rc == 0
     html = output.read_text(encoding="utf-8")
-    assert '<summary>Event ledger · 7 recorded events</summary>' in html
+    assert (
+        '<summary data-sequence-ledger-summary>Event ledger · '
+        '7 recorded events</summary>'
+        in html
+    )
     assert "List unmerged branches" in html
     assert "Process Backlog Items" in html
     assert "worker" in html
