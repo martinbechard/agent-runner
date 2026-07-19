@@ -35,7 +35,7 @@ installed command:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.3.0/agent_report-0.3.0-py3-none-any.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.4.0/agent_report-0.4.0-py3-none-any.whl
 agent-report <path> --output report.html
 ```
 
@@ -61,14 +61,22 @@ python tools/report/scripts/run-timeline.py \
 ```
 
 The HTML report is self-contained and opens directly from disk; it does not
-require a web server. The timeline remains the primary view, with **Sequence**
-opening the same report in a new tab at the sequence section below the timeline.
-The sequence reads downward through recorded delegation, spawn, message,
-follow-up, interrupt, and child-ending events. Its legend and agent lifelines
-remain visible while its event rows scroll. Select an arrow or event-ledger row
-to open the full, untruncated recorded label. Solid arrows show dispatch or
-control traffic, dashed return arrows show native subagent endings, and the
-ledger preserves the exact chronological rows in accessible text.
+require a web server. The timeline remains the primary view. **Sequence window**
+near the top opens the same report in a dedicated window, while the diagram stays
+out of the main report view. The sequence reads downward through recorded
+delegation, spawn, message, follow-up, interrupt, child-ending events, and
+available reasoning summaries. Its standalone controls provide zoom and fit,
+hierarchy collapse, agent focus, event filters, and reversible grouping of
+consecutive repeated messages.
+
+Reasoning summaries appear as optional thinking bubbles on their agent
+lifelines. Bubble text is compacted for oversight; hover shows the longer
+bounded, secret-redacted summary, and the **Thinking** filter hides or restores
+the bubbles while the remaining rows close up chronologically. Select an arrow
+or event-ledger row to open the full, untruncated recorded event label. Solid
+arrows show dispatch or control traffic, dashed return arrows show native
+subagent endings, and the ledger preserves the exact chronological event rows
+in accessible text.
 
 Codex stores some native inter-agent message arguments as ciphertext. The
 report does not decrypt or expose that payload. When the receiving task has a

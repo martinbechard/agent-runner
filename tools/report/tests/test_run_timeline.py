@@ -3144,6 +3144,23 @@ def _write_codex_sequence_graph(root: Path) -> None:
                 ],
             },
         },
+        {
+            "timestamp": "2026-07-14T04:00:02.950Z",
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": (
+                            "Compare the worker branch against every requested acceptance "
+                            "criterion before deciding whether to continue. "
+                            "password=PRIVATE-THOUGHT-SECRET"
+                        ),
+                    }
+                ],
+            },
+        },
     ]
     collaboration_calls = [
         (
@@ -3429,7 +3446,10 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert 'class="sequence-event-link" href="#sequence-event-' in html
     assert 'class="tool-call-overlay sequence-event-overlay"' in html
     sequence = html.split('<section id="agent-sequence"', 1)[1]
-    assert "<title>" not in sequence
+    participant_header = sequence.split(
+        '<svg class="sequence-participant-header"', 1
+    )[1].split("</svg>", 1)[0]
+    assert "<title>" not in participant_header
     assert "List unmerged branches" in sequence
     assert "Process Backlog Items" in sequence
     assert "message · recipient update" in sequence
@@ -3589,6 +3609,39 @@ def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
         in html
     )
     assert ".sequence-view-status { margin-left:auto; color:#546e7a;" in html
+
+
+def test_native_codex_sequence_renders_toggleable_thinking_bubbles(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    html = module.render_codex_rollout_html(run)
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    sanitized_thought = (
+        "Compare the worker branch against every requested acceptance criterion "
+        "before deciding whether to continue. password=[redacted]"
+    )
+
+    assert (
+        '<label><input type="checkbox" data-sequence-event-filter="thinking" '
+        'checked>Thinking</label>'
+        in sequence
+    )
+    assert 'class="sequence-thinking-bubble"' in sequence
+    assert 'data-thread-id="orchestrator"' in sequence
+    assert 'data-thought-index="0"' in sequence
+    assert f"<title>{sanitized_thought}</title>" in sequence
+    assert module._sequence_compact_text(sanitized_thought, 44) in sequence
+    assert 'data-sequence-thinking-count="1"' in sequence
+    assert "var thoughtNodes = Array.from(" in html
+    assert "var visibleThoughts = [];" in html
+    assert 'enabledCategories.has("thinking")' in html
+    assert ".sequence-thinking-bubble { cursor:help; }" in html
 
 
 def test_native_codex_sequence_marks_consecutive_repetitive_messages(
