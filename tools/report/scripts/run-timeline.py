@@ -25,6 +25,7 @@ The path can be:
 from __future__ import annotations
 
 import argparse
+from bisect import bisect_right
 import csv
 import hashlib
 import io
@@ -3738,47 +3739,34 @@ def _codex_sequence_thoughts(
     run: CodexRunMetrics,
     events: list[AgentSequenceEvent],
 ) -> list[AgentSequenceThought]:
-    """Return the latest sender thought preceding each recorded sequence event."""
+    """Return one substantial plaintext explanation per turn, in timeline order."""
 
-    thoughts_by_thread: dict[str, list[AgentSequenceThought]] = {}
+    event_keys = [_sequence_event_sort_key(event)[:2] for event in events]
+    turn_candidates: dict[tuple[str, str], AgentSequenceThought] = {}
     for thread in run.threads:
         for activity in thread.activities:
-            if activity.activity_type != "reasoning":
+            if activity.activity_type != "reasoning" or not activity.content:
                 continue
-            detail = " ".join((activity.content or activity.summary).split())
+            detail = " ".join(activity.content.split())
             if not detail:
                 continue
-            thoughts_by_thread.setdefault(thread.thread_id, []).append(
-                AgentSequenceThought(
-                    event_timestamp=activity.event_timestamp,
-                    thread_id=thread.thread_id,
-                    detail=detail,
-                    source_ordinal=activity.source_ordinal,
-                )
+            thought = AgentSequenceThought(
+                event_timestamp=activity.event_timestamp,
+                thread_id=thread.thread_id,
+                detail=detail,
+                source_ordinal=activity.source_ordinal,
             )
-    for thoughts in thoughts_by_thread.values():
-        thoughts.sort(key=_sequence_thought_sort_key)
+            slot = bisect_right(event_keys, _sequence_thought_sort_key(thought)[:2])
+            group_id = activity.turn_id or f"event-slot:{slot}"
+            key = (thread.thread_id, group_id)
+            current = turn_candidates.get(key)
+            if current is None or (len(detail), thought.source_ordinal) > (
+                len(current.detail),
+                current.source_ordinal,
+            ):
+                turn_candidates[key] = thought
 
-    selected: dict[tuple[str, str, int], AgentSequenceThought] = {}
-    for event in events:
-        event_time = _parse_iso_datetime(event.event_timestamp)
-        if event_time is None:
-            continue
-        event_ordinal = event.source_ordinal if event.source_ordinal > 0 else 2**63
-        for thought in reversed(thoughts_by_thread.get(event.source_thread_id, [])):
-            thought_time = _parse_iso_datetime(thought.event_timestamp)
-            if thought_time is None:
-                continue
-            if (thought_time, thought.source_ordinal) > (event_time, event_ordinal):
-                continue
-            key = (
-                thought.thread_id,
-                thought.event_timestamp,
-                thought.source_ordinal,
-            )
-            selected[key] = thought
-            break
-    return sorted(selected.values(), key=_sequence_thought_sort_key)
+    return sorted(turn_candidates.values(), key=_sequence_thought_sort_key)
 
 
 def _codex_sequence_events(run: CodexRunMetrics) -> list[AgentSequenceEvent]:
@@ -4406,8 +4394,9 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         '<div class="agent-note-popover" role="note">'
         "Rows are chronological recorded coordination events, not duration-scaled activity. "
         "Solid arrows are delegation or control messages; dashed return arrows mark native "
-        "subagent turn endings. Thinking bubbles use the same bounded, secret-redacted "
-        "reasoning summaries as the turn details."
+        "subagent turn endings. Conversation bubbles select explanatory plaintext "
+        "reasoning summaries and use the same bounded, secret-redacted text as the "
+        "turn details; opaque reasoning is omitted."
         "</div></details></div>"
         '<p class="execution-note">Read downward to follow who dispatched, resumed, interrupted, '
         "or completed work. Select an agent to focus it; use the +/− control beside a parent "
@@ -4459,27 +4448,28 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     event_height = 52
     footer_height = 30
     width = max(760, side_padding * 2 + participant_gap * (len(participants) - 1))
-    ordered_rows = sorted(
-        [
-            (*_sequence_event_sort_key(event)[:2], 1, "event", index)
-            for index, event in enumerate(events)
-        ]
-        + [
-            (*_sequence_thought_sort_key(thought)[:2], 0, "thought", index)
-            for index, thought in enumerate(thoughts)
-        ]
-    )
-    event_row_indexes = {
-        item_index: row_index
-        for row_index, (*_, item_type, item_index) in enumerate(ordered_rows)
-        if item_type == "event"
-    }
+    event_row_indexes = {index: index for index in range(len(events))}
+    event_keys = [_sequence_event_sort_key(event)[:2] for event in events]
     thought_row_indexes = {
-        item_index: row_index
-        for row_index, (*_, item_type, item_index) in enumerate(ordered_rows)
-        if item_type == "thought"
+        index: bisect_right(event_keys, _sequence_thought_sort_key(thought)[:2])
+        for index, thought in enumerate(thoughts)
     }
-    height = event_height * len(ordered_rows) + footer_height
+    thought_groups: dict[tuple[str, int], list[int]] = {}
+    for index, thought in enumerate(thoughts):
+        key = (thought.thread_id, thought_row_indexes[index])
+        thought_groups.setdefault(key, []).append(index)
+    thought_y_positions: dict[int, float] = {}
+    for (_, row_index), indexes in thought_groups.items():
+        for rank, thought_index in enumerate(indexes):
+            if row_index == 0 or row_index >= len(events):
+                y = max(14, row_index * event_height) + rank * 30
+            else:
+                y = row_index * event_height + (rank - (len(indexes) - 1) / 2) * 30
+            thought_y_positions[thought_index] = y
+    height = max(
+        event_height * len(events) + footer_height,
+        int(max(thought_y_positions.values(), default=0) + footer_height),
+    )
     x_by_thread_id = {
         thread.thread_id: side_padding + index * participant_gap
         for index, thread in enumerate(participants)
@@ -4794,24 +4784,24 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         )
     for index, thought in enumerate(thoughts):
         row_index = thought_row_indexes[index]
-        y = row_index * event_height + 24
+        y = thought_y_positions[index]
         x = x_by_thread_id[thought.thread_id]
         offset = _timestamp_offset_label(run, thought.event_timestamp)
         participant_name = name_by_thread_id[thought.thread_id]
         tooltip = _sequence_compact_text(thought.detail, 1_200)
         visible_text = _sequence_compact_text(thought.detail, 44)
+        bubble_on_right = x + 204 <= width
         thought_svg.append(
-            '<g class="sequence-thinking-bubble" role="listitem" '
+            '<g class="sequence-conversation-bubble" role="listitem" '
             'data-thought-index="{thought_index}" data-thread-id="{thread_id}" '
             'data-row-index="{row_index}" data-base-y="{y}" '
             'transform="translate({x} {y})" aria-label="{aria}">'
             '<title>{tooltip}</title>'
             '<text class="sequence-thinking-offset" x="0" y="-21" '
             'text-anchor="middle">{offset}</text>'
-            '<rect x="-96" y="-15" width="192" height="30" rx="15"></rect>'
-            '<circle class="sequence-thinking-tail-large" cx="0" cy="20" r="3"></circle>'
-            '<circle class="sequence-thinking-tail-small" cx="0" cy="27" r="1.5"></circle>'
-            '<text class="sequence-thinking-text" x="0" y="4" '
+            '<rect x="{rect_x}" y="-14" width="180" height="28" rx="8"></rect>'
+            '<path class="sequence-conversation-tail" d="{tail_path}"></path>'
+            '<text class="sequence-thinking-text" x="{text_x}" y="4" '
             'text-anchor="middle">{visible_text}</text></g>'.format(
                 thought_index=index,
                 thread_id=_escape_html(thought.thread_id),
@@ -4823,6 +4813,13 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 ),
                 tooltip=_escape_html(tooltip),
                 offset=_escape_html(offset),
+                rect_x=12 if bubble_on_right else -192,
+                tail_path=(
+                    "M 12 -5 L 0 0 L 12 5 Z"
+                    if bubble_on_right
+                    else "M -12 -5 L 0 0 L -12 5 Z"
+                ),
+                text_x=102 if bubble_on_right else -102,
                 visible_text=_escape_html(visible_text),
             )
         )
@@ -4833,7 +4830,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         '<span><i class="legend-line legend-followup"></i>follow-up</span>'
         '<span><i class="legend-line legend-interrupt"></i>interrupt</span>'
         '<span><i class="legend-line legend-complete"></i>turn end</span>'
-        '<span><i class="legend-thinking-bubble"></i>thinking</span>'
+        '<span><i class="legend-conversation-bubble"></i>thinking</span>'
         "</div>"
     )
     diagram = (
@@ -4853,8 +4850,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         f'<desc id="agent-sequence-description" data-sequence-description>'
         f'{len(events)} recorded events and {len(thoughts)} thinking summaries across '
         f"{len(participants)} agent lifelines.</desc>"
-        f"<defs>{marker_defs}</defs>{lifeline_svg}{''.join(event_svg)}"
-        f"{''.join(thought_svg)}</svg></div></div>"
+        f"<defs>{marker_defs}</defs>{lifeline_svg}{''.join(thought_svg)}"
+        f"{''.join(event_svg)}</svg></div></div>"
     )
     ledger = (
         '<details class="sequence-ledger"><summary data-sequence-ledger-summary>'
@@ -5657,7 +5654,8 @@ td {{ font-size:.85em; }}
 .legend-followup {{ color:var(--sequence-followup); }}
 .legend-interrupt {{ color:var(--sequence-interrupt); }}
 .legend-complete {{ color:var(--sequence-complete); border-top-style:dashed; }}
-.legend-thinking-bubble {{ display:inline-block; width:22px; height:12px; box-sizing:border-box; background:#f3e5f5; border:1px solid var(--sequence-thinking); border-radius:7px; }}
+.legend-conversation-bubble {{ position:relative; display:inline-block; width:22px; height:12px; box-sizing:border-box; background:#f3e5f5; border:1px solid var(--sequence-thinking); border-radius:4px; }}
+.legend-conversation-bubble::after {{ position:absolute; top:3px; left:-5px; width:0; height:0; border-top:3px solid transparent; border-right:5px solid var(--sequence-thinking); border-bottom:3px solid transparent; content:""; }}
 .sequence-scroll {{ position:relative; max-height:72vh; overflow:auto; margin:0 0 10px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }}
 .sequence-canvas {{ min-width:100%; background:#fff; }}
 .sequence-sticky-header {{ position:sticky; top:0; z-index:5; background:#fff; border-bottom:1px solid #d7e0e5; box-shadow:0 3px 8px rgba(38,50,56,.08); }}
@@ -5683,9 +5681,9 @@ td {{ font-size:.85em; }}
 .sequence-event-link:hover .sequence-line, .sequence-event-link:focus-visible .sequence-line {{ stroke-width:3; }}
 .sequence-offset {{ fill:#78909c; font-family:var(--font-code); font-size:9px; }}
 .sequence-event-label {{ fill:#263238; stroke:#fff; stroke-width:5px; paint-order:stroke; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
-.sequence-thinking-bubble {{ cursor:help; }}
-.sequence-thinking-bubble rect,
-.sequence-thinking-bubble circle {{ fill:#f3e5f5; stroke:var(--sequence-thinking); stroke-width:1; }}
+.sequence-conversation-bubble {{ cursor:help; }}
+.sequence-conversation-bubble rect,
+.sequence-conversation-tail {{ fill:#f3e5f5; stroke:var(--sequence-thinking); stroke-width:1; stroke-linejoin:round; }}
 .sequence-thinking-text {{ fill:#4a235a; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
 .sequence-thinking-offset {{ fill:#546e7a; font-family:var(--font-code); font-size:9px; }}
 .sequence-repeat-count, .sequence-ledger-repeat-count {{ display:none; }}
@@ -5847,7 +5845,7 @@ function initializeAgentSequence(section) {{
   var lifelines = Array.from(section.querySelectorAll(".sequence-lifeline"));
   var eventLinks = Array.from(diagram.querySelectorAll(".sequence-event-link"));
   var thoughtNodes = Array.from(
-    diagram.querySelectorAll(".sequence-thinking-bubble")
+    diagram.querySelectorAll(".sequence-conversation-bubble")
   );
   var ledgerRows = Array.from(section.querySelectorAll(".sequence-ledger li[data-event-index]"));
   var participantGap = Number(canvas.dataset.participantGap);
@@ -5902,6 +5900,9 @@ function initializeAgentSequence(section) {{
   var thoughts = thoughtNodes.map(function(element) {{
     return {{
       element: element,
+      rect: element.querySelector("rect"),
+      tail: element.querySelector(".sequence-conversation-tail"),
+      text: element.querySelector(".sequence-thinking-text"),
       threadId: element.dataset.threadId,
       rowIndex: Number(element.dataset.rowIndex),
       baseY: Number(element.dataset.baseY)
@@ -6050,23 +6051,14 @@ function initializeAgentSequence(section) {{
       if (visible) visibleThoughts.push(thought);
     }});
     var visibleRows = visibleEvents.map(function(event) {{
-      return {{ rowIndex: event.rowIndex, event: event, thought: null }};
-    }}).concat(visibleThoughts.map(function(thought) {{
-      return {{ rowIndex: thought.rowIndex, event: null, thought: thought }};
-    }}));
+      return {{ rowIndex: event.rowIndex, event: event }};
+    }});
     visibleRows.sort(function(left, right) {{ return left.rowIndex - right.rowIndex; }});
 
-    baseHeight = eventHeight * visibleRows.length + footerHeight;
+    var visibleRowCount = visibleRows.length || visibleThoughts.length;
+    baseHeight = eventHeight * visibleRowCount + footerHeight;
     visibleRows.forEach(function(entry, index) {{
       var y = index * eventHeight + 24;
-      if (entry.thought) {{
-        var thoughtX = xByThreadId.get(entry.thought.threadId);
-        entry.thought.element.setAttribute(
-          "transform",
-          "translate(" + thoughtX + " " + y + ")"
-        );
-        return;
-      }}
       var event = entry.event;
       var sourceX = xByThreadId.get(event.sourceId);
       var targetX = xByThreadId.get(event.targetId);
@@ -6077,6 +6069,46 @@ function initializeAgentSequence(section) {{
       event.label.setAttribute("x", String((sourceX + targetX) / 2));
       event.band.setAttribute("width", String(baseWidth));
     }});
+    var visibleThoughtGroups = new Map();
+    visibleThoughts.forEach(function(thought) {{
+      var groupKey = thought.threadId + "\u0000" + thought.rowIndex;
+      if (!visibleThoughtGroups.has(groupKey)) visibleThoughtGroups.set(groupKey, []);
+      visibleThoughtGroups.get(groupKey).push(thought);
+    }});
+    var maximumThoughtY = 0;
+    visibleThoughts.forEach(function(thought, index) {{
+      var thoughtX = xByThreadId.get(thought.threadId);
+      var precedingEventCount = visibleEvents.filter(function(event) {{
+        return event.rowIndex < thought.rowIndex;
+      }}).length;
+      var groupKey = thought.threadId + "\u0000" + thought.rowIndex;
+      var group = visibleThoughtGroups.get(groupKey);
+      var groupRank = group.indexOf(thought);
+      var y;
+      if (!visibleEvents.length) {{
+        y = index * eventHeight + 24;
+      }} else if (precedingEventCount === 0 || precedingEventCount >= visibleEvents.length) {{
+        y = Math.max(14, precedingEventCount * eventHeight) + groupRank * 30;
+      }} else {{
+        y = precedingEventCount * eventHeight
+          + (groupRank - (group.length - 1) / 2) * 30;
+      }}
+      maximumThoughtY = Math.max(maximumThoughtY, y);
+      var bubbleOnRight = thoughtX + 204 <= baseWidth;
+      thought.rect.setAttribute("x", bubbleOnRight ? "12" : "-192");
+      thought.tail.setAttribute(
+        "d",
+        bubbleOnRight
+          ? "M 12 -5 L 0 0 L 12 5 Z"
+          : "M -12 -5 L 0 0 L -12 5 Z"
+      );
+      thought.text.setAttribute("x", bubbleOnRight ? "102" : "-102");
+      thought.element.setAttribute(
+        "transform",
+        "translate(" + thoughtX + " " + y + ")"
+      );
+    }});
+    baseHeight = Math.max(baseHeight, maximumThoughtY + footerHeight);
     lifelines.forEach(function(lifeline) {{
       var threadId = lifeline.dataset.threadId;
       var visible = visibleThreadIds.has(threadId);

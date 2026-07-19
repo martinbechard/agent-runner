@@ -8,6 +8,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import os
+import re
 import sys
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -3161,6 +3162,24 @@ def _write_codex_sequence_graph(root: Path) -> None:
                 ],
             },
         },
+        {
+            "timestamp": "2026-07-14T04:00:02.975Z",
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [
+                    {"type": "summary_text", "text": "Send it now."}
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:03.200Z",
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "encrypted_content": "opaque-reasoning-payload",
+            },
+        },
     ]
     collaboration_calls = [
         (
@@ -3211,15 +3230,95 @@ def _write_codex_sequence_graph(root: Path) -> None:
         )
     orchestrator.append(
         {
-            "timestamp": "2026-07-14T04:00:08Z",
+            "timestamp": "2026-07-14T04:00:07Z",
             "type": "event_msg",
             "payload": {
                 "type": "task_complete",
                 "turn_id": "orchestrator-turn",
-                "completed_at": "2026-07-14T04:00:08Z",
-                "duration_ms": 7_000,
+                "completed_at": "2026-07-14T04:00:07Z",
+                "duration_ms": 6_000,
             },
         }
+    )
+    orchestrator.append(
+        {
+            "timestamp": "2026-07-14T04:00:07.250Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "orchestrator-turn-2",
+                "started_at": "2026-07-14T04:00:07.250Z",
+            },
+        }
+    )
+    orchestrator.append(
+        {
+            "timestamp": "2026-07-14T04:00:07.500Z",
+            "type": "response_item",
+            "payload": {
+                "type": "reasoning",
+                "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": (
+                            "Document why the completed coordination sequence matters "
+                            "to the overall timeline."
+                        ),
+                    }
+                ],
+            },
+        }
+    )
+    orchestrator.append(
+        {
+            "timestamp": "2026-07-14T04:00:08Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "orchestrator-turn-2",
+                "completed_at": "2026-07-14T04:00:08Z",
+                "duration_ms": 750,
+            },
+        }
+    )
+    orchestrator.extend(
+        [
+            {
+                "timestamp": "2026-07-14T04:00:08.250Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "orchestrator-turn-3",
+                    "started_at": "2026-07-14T04:00:08.250Z",
+                },
+            },
+            {
+                "timestamp": "2026-07-14T04:00:08.500Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "reasoning",
+                    "summary": [
+                        {
+                            "type": "summary_text",
+                            "text": (
+                                "Connect the next decision to the outcome already visible "
+                                "on the agent lifeline."
+                            ),
+                        }
+                    ],
+                },
+            },
+            {
+                "timestamp": "2026-07-14T04:00:09Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "orchestrator-turn-3",
+                    "completed_at": "2026-07-14T04:00:09Z",
+                    "duration_ms": 750,
+                },
+            },
+        ]
     )
     worker = [
         {
@@ -3611,7 +3710,9 @@ def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
     assert ".sequence-view-status { margin-left:auto; color:#546e7a;" in html
 
 
-def test_native_codex_sequence_renders_toggleable_thinking_bubbles(tmp_path):
+def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles(
+    tmp_path,
+):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
     run = module.build_codex_rollout_run(
@@ -3626,22 +3727,56 @@ def test_native_codex_sequence_renders_toggleable_thinking_bubbles(tmp_path):
         "Compare the worker branch against every requested acceptance criterion "
         "before deciding whether to continue. password=[redacted]"
     )
+    timeline_thought = (
+        "Document why the completed coordination sequence matters to the overall "
+        "timeline."
+    )
+    successive_thought = (
+        "Connect the next decision to the outcome already visible on the agent "
+        "lifeline."
+    )
 
     assert (
         '<label><input type="checkbox" data-sequence-event-filter="thinking" '
         'checked>Thinking</label>'
         in sequence
     )
-    assert 'class="sequence-thinking-bubble"' in sequence
+    assert sequence.count('class="sequence-conversation-bubble"') == 3
     assert 'data-thread-id="orchestrator"' in sequence
     assert 'data-thought-index="0"' in sequence
     assert f"<title>{sanitized_thought}</title>" in sequence
+    assert f"<title>{timeline_thought}</title>" in sequence
+    assert f"<title>{successive_thought}</title>" in sequence
     assert module._sequence_compact_text(sanitized_thought, 44) in sequence
-    assert 'data-sequence-thinking-count="1"' in sequence
+    assert module._sequence_compact_text(timeline_thought, 44) in sequence
+    assert "<title>Send it now.</title>" not in sequence
+    assert "<title>Encrypted reasoning" not in sequence
+    assert 'class="sequence-conversation-tail"' in sequence
+    assert "sequence-thinking-tail-large" not in sequence
+    assert "sequence-thinking-tail-small" not in sequence
+    assert 'data-sequence-thinking-count="3"' in sequence
     assert "var thoughtNodes = Array.from(" in html
     assert "var visibleThoughts = [];" in html
+    assert "var visibleThoughtGroups = new Map();" in html
     assert 'enabledCategories.has("thinking")' in html
-    assert ".sequence-thinking-bubble { cursor:help; }" in html
+    assert ".sequence-conversation-bubble { cursor:help; }" in html
+
+    event_row_indexes = [
+        int(value)
+        for value in re.findall(
+            r'class="sequence-event-link"[^>]*data-row-index="(\d+)"',
+            sequence,
+        )
+    ]
+    thought_positions = re.findall(
+        r'class="sequence-conversation-bubble"[^>]*data-row-index="(\d+)"'
+        r'[^>]*data-base-y="([^"]+)"',
+        sequence,
+    )
+    assert event_row_indexes == list(range(len(event_row_indexes)))
+    assert thought_positions[-2][0] == thought_positions[-1][0]
+    assert thought_positions[-2][1] != thought_positions[-1][1]
+    assert '<line class="sequence-line"' in sequence
 
 
 def test_native_codex_sequence_marks_consecutive_repetitive_messages(

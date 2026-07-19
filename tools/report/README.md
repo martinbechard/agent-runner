@@ -69,14 +69,19 @@ available reasoning summaries. Its standalone controls provide zoom and fit,
 hierarchy collapse, agent focus, event filters, and reversible grouping of
 consecutive repeated messages.
 
-Reasoning summaries appear as optional thinking bubbles on their agent
-lifelines. Bubble text is compacted for oversight; hover shows the longer
-bounded, secret-redacted summary, and the **Thinking** filter hides or restores
-the bubbles while the remaining rows close up chronologically. Select an arrow
-or event-ledger row to open the full, untruncated recorded event label. Solid
-arrows show dispatch or control traffic, dashed return arrows show native
-subagent endings, and the ledger preserves the exact chronological event rows
-in accessible text.
+Selected plaintext reasoning summaries appear as optional conversation bubbles
+on their agent lifelines. For each agent turn, the report prefers the more
+substantial available summary instead of merely taking the last fragment before
+an arrow. Successive turns remain visible in chronological order even when they
+fall between the same two communication events, so the lifeline tells the
+agent's unfolding story. Opaque or encrypted reasoning produces no bubble.
+Bubble text is compacted for oversight; hover shows the longer bounded,
+secret-redacted summary, and the **Thinking** filter hides or restores the
+bubbles without moving or restyling the event arrows. Select an arrow or
+event-ledger row to open the full, untruncated recorded event label. Solid
+arrows show dispatch or control traffic,
+dashed return arrows show native subagent endings, and the ledger preserves the
+exact chronological event rows in accessible text.
 
 Codex stores some native inter-agent message arguments as ciphertext. The
 report does not decrypt or expose that payload. When the receiving task has a
