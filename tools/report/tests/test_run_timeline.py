@@ -3116,6 +3116,20 @@ def _write_codex_sequence_graph(root: Path) -> None:
                 "started_at": "2026-07-14T04:00:01Z",
             },
         },
+        {
+            "timestamp": "2026-07-14T04:00:02.900Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "I am sending the worker the review request now.",
+                    }
+                ],
+            },
+        },
     ]
     collaboration_calls = [
         (
@@ -3414,6 +3428,21 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert "FULL-DELEGATION-TAIL" in selected_event
     assert ".sequence-event-full { max-height:7.5em;" in html
     assert "overflow:auto; white-space:pre-wrap;" in html
+    opaque_message = html.split('<section id="sequence-event-3"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    sender_text = "I am sending the worker the review request now."
+    recipient_text = "I received the review request and will inspect the branch."
+    assert "Sender's preceding recorded update" in opaque_message
+    assert "Sender updates are context, not recovered message plaintext." in opaque_message
+    assert 'class="sequence-context-arrow" role="img"' in opaque_message
+    assert (
+        'aria-label="Encrypted message from Process Backlog Items to worker"'
+        in opaque_message
+    )
+    assert opaque_message.index(sender_text) < opaque_message.index(
+        'class="sequence-context-arrow"'
+    ) < opaque_message.index(recipient_text)
 
 
 def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):

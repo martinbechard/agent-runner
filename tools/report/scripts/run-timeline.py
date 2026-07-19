@@ -4211,6 +4211,50 @@ def _sequence_recipient_update(
     return min(candidates, key=lambda item: (item[0], item[1]))[2]
 
 
+def _sequence_sender_update(
+    run: CodexRunMetrics,
+    event: AgentSequenceEvent,
+) -> AgentActivity | None:
+    """Return the source's preceding nearby plaintext update for an opaque message."""
+
+    if (
+        event.kind not in {"message", "followup"}
+        or "[encrypted message," not in event.label
+    ):
+        return None
+    event_time = _parse_iso_datetime(event.event_timestamp)
+    if event_time is None:
+        return None
+    source = next(
+        (
+            thread
+            for thread in run.threads
+            if thread.thread_id == event.source_thread_id
+        ),
+        None,
+    )
+    if source is None:
+        return None
+    candidates: list[tuple[datetime, int, AgentActivity]] = []
+    for activity in source.activities:
+        if activity.activity_type != "output" or not activity.content:
+            continue
+        activity_time = _parse_iso_datetime(activity.event_timestamp)
+        if activity_time is None or activity_time > event_time:
+            continue
+        if (
+            activity_time == event_time
+            and activity.source_ordinal >= event.source_ordinal
+        ):
+            continue
+        if event_time - activity_time > timedelta(minutes=15):
+            continue
+        candidates.append((activity_time, activity.source_ordinal, activity))
+    if not candidates:
+        return None
+    return max(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
 def _sequence_visible_event_label(
     event: AgentSequenceEvent,
     recipient_update: AgentActivity | None,
@@ -4336,6 +4380,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         marker_name, color = marker_colors[event.kind]
         line_length = abs(target_x - source_x)
         label_limit = max(14, min(48, line_length // 7))
+        sender_update = _sequence_sender_update(run, event)
         recipient_update = _sequence_recipient_update(run, event)
         display_label = _sequence_visible_event_label(event, recipient_update)
         visible_label = _sequence_compact_text(display_label, label_limit)
@@ -4394,6 +4439,36 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             if "[encrypted message," in event.label
             else ""
         )
+        sender_update_html = ""
+        if sender_update is not None:
+            sender_offset = _timestamp_offset_label(
+                run,
+                sender_update.event_timestamp,
+            )
+            sender_update_html = (
+                "<h3>Sender's preceding recorded update</h3>"
+                '<p class="execution-note">Sender updates are context, not recovered '
+                'message plaintext. This update was recorded at '
+                f"{_escape_html(sender_offset)}.</p>"
+                '<pre class="sequence-sender-update" tabindex="0">'
+                f"{_escape_html(sender_update.content)}</pre>"
+            )
+        context_arrow_html = ""
+        if sender_update is not None and recipient_update is not None:
+            context_arrow_html = (
+                '<div class="sequence-context-arrow" role="img" '
+                'aria-label="Encrypted message from {source} to {target}">'
+                '<span class="sequence-context-party">{source}</span>'
+                '<span class="sequence-context-direction" aria-hidden="true">'
+                '<span class="sequence-context-line"></span>'
+                '<span class="sequence-context-message">encrypted message</span>'
+                '<span class="sequence-context-arrowhead">→</span></span>'
+                '<span class="sequence-context-party sequence-context-target">{target}</span>'
+                "</div>"
+            ).format(
+                source=_escape_html(source_name),
+                target=_escape_html(target_name),
+            )
         recipient_update_html = ""
         if recipient_update is not None:
             update_offset = _timestamp_offset_label(
@@ -4405,7 +4480,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 '<p class="execution-note">Recipient updates are context, not recovered '
                 'message plaintext. This update was recorded at '
                 f"{_escape_html(update_offset)}.</p>"
-                '<pre class="sequence-recipient-update">'
+                '<pre class="sequence-recipient-update" tabindex="0">'
                 f"{_escape_html(recipient_update.content)}</pre>"
             )
         event_overlays.append(
@@ -4421,7 +4496,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             '<div class="metric"><div class="label">To</div><div class="value">{target}</div></div>'
             '</div><h3>Recorded event</h3>'
             '<pre class="sequence-event-full" tabindex="0">{detail}</pre>'
-            '{opaque_note}{recipient_update}</div></section>'.format(
+            '{opaque_note}{sender_update}{context_arrow}{recipient_update}'
+            '</div></section>'.format(
                 detail_id=detail_id,
                 offset=_escape_html(offset),
                 kind=_escape_html(event.kind),
@@ -4429,6 +4505,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 target=_escape_html(target_name),
                 detail=_escape_html(event.detail or event.label),
                 opaque_note=opaque_message_note,
+                sender_update=sender_update_html,
+                context_arrow=context_arrow_html,
                 recipient_update=recipient_update_html,
             )
         )
@@ -5260,12 +5338,19 @@ td {{ font-size:.85em; }}
 .sequence-ledger-link > * {{ margin-right:7px; }}
 .sequence-ledger time {{ color:#78909c; font-family:var(--font-code); }}
 .sequence-ledger li span:last-child {{ color:#607d8b; }}
-.sequence-event-panel {{ width:min(920px,94vw); }}
+.tool-call-panel.sequence-event-panel {{ width:min(920px,94vw); overflow:auto; }}
 .sequence-event-metrics {{ grid-template-columns:repeat(4,minmax(0,1fr)); }}
 .sequence-event-metrics .value {{ overflow-wrap:anywhere; font-size:.92em; }}
 .sequence-event-full {{ max-height:7.5em; margin:4px 0 12px; padding:10px 12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:#263238; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.9em; line-height:1.5; }}
 .sequence-event-full:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
-.sequence-recipient-update {{ max-height:38vh; margin:4px 0 0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:5px; font-family:var(--font-ui); font-size:.88em; line-height:1.5; }}
+.sequence-sender-update, .sequence-recipient-update {{ max-height:22vh; margin:4px 0 0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.88em; line-height:1.5; }}
+.sequence-sender-update:focus-visible, .sequence-recipient-update:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.sequence-context-arrow {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,1fr) minmax(0,1fr); align-items:center; gap:10px; margin:14px 0; color:#455a64; font-size:.78em; font-weight:600; }}
+.sequence-context-party {{ overflow-wrap:anywhere; }}
+.sequence-context-target {{ text-align:right; }}
+.sequence-context-direction {{ display:flex; min-width:0; align-items:center; gap:6px; color:#2563a6; white-space:nowrap; }}
+.sequence-context-line {{ min-width:18px; flex:1 1 auto; border-top:2px solid currentColor; }}
+.sequence-context-arrowhead {{ font-size:1.4em; line-height:1; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
 .model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
 .activity-name {{ font-family:var(--font-ui); font-size:.92em; font-weight:600; color:#455a64; }}
