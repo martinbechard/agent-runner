@@ -4172,16 +4172,26 @@ def _sequence_participant_name(
     return f"root {thread.thread_id[:8]}"
 
 
+def _sequence_context_action(event: AgentSequenceEvent) -> str:
+    """Return the nearby-context arrow label supported for one event."""
+
+    if event.kind == "spawn":
+        return "spawn"
+    if (
+        event.kind in {"message", "followup"}
+        and "[encrypted message," in event.label
+    ):
+        return "encrypted message"
+    return ""
+
+
 def _sequence_recipient_update(
     run: CodexRunMetrics,
     event: AgentSequenceEvent,
 ) -> AgentActivity | None:
-    """Return the target's next nearby plaintext update for an opaque message."""
+    """Return the target's next nearby plaintext update for a context event."""
 
-    if (
-        event.kind not in {"message", "followup"}
-        or "[encrypted message," not in event.label
-    ):
+    if not _sequence_context_action(event):
         return None
     event_time = _parse_iso_datetime(event.event_timestamp)
     if event_time is None:
@@ -4215,12 +4225,9 @@ def _sequence_sender_update(
     run: CodexRunMetrics,
     event: AgentSequenceEvent,
 ) -> AgentActivity | None:
-    """Return the source's preceding nearby plaintext update for an opaque message."""
+    """Return the source's preceding nearby plaintext update for a context event."""
 
-    if (
-        event.kind not in {"message", "followup"}
-        or "[encrypted message," not in event.label
-    ):
+    if not _sequence_context_action(event):
         return None
     event_time = _parse_iso_datetime(event.event_timestamp)
     if event_time is None:
@@ -4445,27 +4452,42 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 run,
                 sender_update.event_timestamp,
             )
-            sender_update_html = (
-                "<h3>Sender's preceding recorded update</h3>"
-                '<p class="execution-note">Sender updates are context, not recovered '
-                'message plaintext. This update was recorded at '
-                f"{_escape_html(sender_offset)}.</p>"
+            if event.kind == "spawn":
+                sender_update_html = (
+                    "<h3>Parent's preceding recorded update</h3>"
+                    '<p class="execution-note">This parent update was recorded at '
+                    f"{_escape_html(sender_offset)} before the spawn.</p>"
+                )
+            else:
+                sender_update_html = (
+                    "<h3>Sender's preceding recorded update</h3>"
+                    '<p class="execution-note">Sender updates are context, not recovered '
+                    'message plaintext. This update was recorded at '
+                    f"{_escape_html(sender_offset)}.</p>"
+                )
+            sender_update_html += (
                 '<pre class="sequence-sender-update" tabindex="0">'
                 f"{_escape_html(sender_update.content)}</pre>"
             )
         context_arrow_html = ""
         if sender_update is not None and recipient_update is not None:
+            context_action = _sequence_context_action(event)
+            context_action_name = (
+                "Spawn" if context_action == "spawn" else "Encrypted message"
+            )
             context_arrow_html = (
                 '<div class="sequence-context-arrow" role="img" '
-                'aria-label="Encrypted message from {source} to {target}">'
+                'aria-label="{action_name} from {source} to {target}">'
                 '<span class="sequence-context-party">{source}</span>'
                 '<span class="sequence-context-direction" aria-hidden="true">'
                 '<span class="sequence-context-line"></span>'
-                '<span class="sequence-context-message">encrypted message</span>'
+                '<span class="sequence-context-message">{action}</span>'
                 '<span class="sequence-context-arrowhead">→</span></span>'
                 '<span class="sequence-context-party sequence-context-target">{target}</span>'
                 "</div>"
             ).format(
+                action_name=context_action_name,
+                action=_escape_html(context_action),
                 source=_escape_html(source_name),
                 target=_escape_html(target_name),
             )
@@ -4475,11 +4497,20 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 run,
                 recipient_update.event_timestamp,
             )
-            recipient_update_html = (
-                "<h3>Recipient's next recorded update</h3>"
-                '<p class="execution-note">Recipient updates are context, not recovered '
-                'message plaintext. This update was recorded at '
-                f"{_escape_html(update_offset)}.</p>"
+            if event.kind == "spawn":
+                recipient_update_html = (
+                    "<h3>Spawned agent's next recorded update</h3>"
+                    '<p class="execution-note">This spawned-agent update was recorded at '
+                    f"{_escape_html(update_offset)} after the spawn.</p>"
+                )
+            else:
+                recipient_update_html = (
+                    "<h3>Recipient's next recorded update</h3>"
+                    '<p class="execution-note">Recipient updates are context, not recovered '
+                    'message plaintext. This update was recorded at '
+                    f"{_escape_html(update_offset)}.</p>"
+                )
+            recipient_update_html += (
                 '<pre class="sequence-recipient-update" tabindex="0">'
                 f"{_escape_html(recipient_update.content)}</pre>"
             )

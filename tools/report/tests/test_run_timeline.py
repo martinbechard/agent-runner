@@ -3117,6 +3117,20 @@ def _write_codex_sequence_graph(root: Path) -> None:
             },
         },
         {
+            "timestamp": "2026-07-14T04:00:01.900Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": "I am delegating the review to a worker now.",
+                    }
+                ],
+            },
+        },
+        {
             "timestamp": "2026-07-14T04:00:02.900Z",
             "type": "response_item",
             "payload": {
@@ -3443,6 +3457,17 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert opaque_message.index(sender_text) < opaque_message.index(
         'class="sequence-context-arrow"'
     ) < opaque_message.index(recipient_text)
+    spawn_event = html.split('<section id="sequence-event-2"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    parent_text = "I am delegating the review to a worker now."
+    assert "Parent's preceding recorded update" in spawn_event
+    assert "Spawned agent's next recorded update" in spawn_event
+    assert 'aria-label="Spawn from Process Backlog Items to worker"' in spawn_event
+    assert "encrypted message" not in spawn_event
+    assert spawn_event.index(parent_text) < spawn_event.index(
+        'class="sequence-context-arrow"'
+    ) < spawn_event.index(recipient_text)
 
 
 def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
