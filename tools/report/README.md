@@ -60,28 +60,27 @@ python tools/report/scripts/run-timeline.py \
   --output codex-run.html
 ```
 
-The HTML report is self-contained and opens directly from disk; it does not
-require a web server. The timeline remains the primary view. **Sequence window**
-near the top opens the same report in a dedicated window, while the diagram stays
-out of the main report view. The sequence reads downward through recorded
+The generated HTML files open directly from disk and do not require a web
+server. The timeline remains the primary view. **Sequence window** near the top
+opens the separately generated `*-sequence.html` companion, so the main report
+does not load or parse the large diagram payload. The sequence reads downward through recorded
 delegation, spawn, message, follow-up, interrupt, child-ending events, and
 available reasoning summaries. Its standalone controls provide zoom and fit,
 hierarchy collapse, agent focus, event filters, and reversible grouping of
 consecutive repeated messages.
 
-Selected plaintext reasoning summaries appear as optional conversation bubbles
-on their agent lifelines. For each agent turn, the report prefers the more
-substantial available summary instead of merely taking the last fragment before
-an arrow. Successive turns remain visible in chronological order even when they
-fall between the same two communication events, so the lifeline tells the
-agent's unfolding story. Opaque or encrypted reasoning produces no bubble.
-Bubble text is compacted for oversight; hover shows the longer bounded,
-secret-redacted summary, and the **Thinking** filter hides or restores the
-bubbles without moving or restyling the event arrows. Select an arrow or
+Each distinct plaintext reasoning fragment appears as an optional conversation
+bubble on its agent lifeline. Repeated text keeps only its latest occurrence;
+successive fragments remain visible in chronological order and are centered
+between the surrounding communication rows. Opaque or encrypted reasoning
+produces no bubble. Bubble text is compacted for oversight and stripped of
+Markdown emphasis; selecting a bubble opens its longer bounded, secret-redacted
+text immediately. The **Thinking** filter hides or restores bubbles without
+moving or restyling the event arrows. Select an arrow endpoint or
 event-ledger row to open the full, untruncated recorded event label. Solid
-arrows show dispatch or control traffic,
-dashed return arrows show native subagent endings, and the ledger preserves the
-exact chronological event rows in accessible text.
+arrows show dispatch or control traffic, dashed return arrows show native
+subagent endings, and the ledger preserves the exact chronological event rows
+in accessible text.
 
 Codex stores some native inter-agent message arguments as ciphertext. The
 report does not decrypt or expose that payload. When the receiving task has a

@@ -3154,9 +3154,16 @@ def _write_codex_sequence_graph(root: Path) -> None:
                     {
                         "type": "summary_text",
                         "text": (
-                            "Compare the worker branch against every requested acceptance "
+                            "**Compare the worker branch against every requested acceptance "
                             "criterion before deciding whether to continue. "
-                            "password=PRIVATE-THOUGHT-SECRET"
+                            "password=PRIVATE-THOUGHT-SECRET**"
+                        ),
+                    },
+                    {
+                        "type": "summary_text",
+                        "text": (
+                            "Trace the decision through the surrounding timeline before "
+                            "sending the next instruction."
                         ),
                     }
                 ],
@@ -3258,6 +3265,13 @@ def _write_codex_sequence_graph(root: Path) -> None:
             "payload": {
                 "type": "reasoning",
                 "summary": [
+                    {
+                        "type": "summary_text",
+                        "text": (
+                            "Trace the decision through the surrounding timeline before "
+                            "sending the next instruction."
+                        ),
+                    },
                     {
                         "type": "summary_text",
                         "text": (
@@ -3827,11 +3841,14 @@ def test_native_codex_sequence_tooltips_only_truncated_participant_titles(tmp_pa
     long_participant = sequence.split(
         '<g class="sequence-participant"', 1
     )[1].split("</g>", 1)[0]
-    assert f"<title>{long_title}</title>" in long_participant
+    assert "<title>" not in long_participant
+    assert f'data-participant-name="{long_title}"' in sequence
     assert 'tabindex="0"' in long_participant
     assert module._sequence_compact_text(long_title, 24) in long_participant
     assert "<title>Process Backlog Items</title>" not in sequence
     assert "<title>worker</title>" not in sequence
+    assert "data-sequence-inspect-detail" in sequence
+    assert "showInspectDetail(participant.dataset.participantName);" in html
     assert ".sequence-focus-target:focus-visible rect," in html
 
 
@@ -3864,6 +3881,33 @@ def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
     assert 'document.querySelectorAll("[data-sequence-window]")' in html
     assert "window.open(" in html
     assert "popup=yes" in html
+
+
+def test_codex_output_writer_splits_sequence_into_companion_file(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+    output = tmp_path / "process-backlog-items.html"
+
+    module._write_codex_outputs(run, output)
+
+    sequence_output = tmp_path / "process-backlog-items-sequence.html"
+    main_html = output.read_text(encoding="utf-8")
+    sequence_html = sequence_output.read_text(encoding="utf-8")
+    assert '<section id="agent-sequence"' not in main_html
+    assert (
+        'href="process-backlog-items-sequence.html?view=sequence#agent-sequence"'
+        in main_html
+    )
+    assert '<section id="agent-sequence"' in sequence_html
+    assert '<svg class="agent-sequence-diagram"' in sequence_html
+    assert '<div id="timeline"' not in sequence_html
+    assert 'class="agent-table"' not in sequence_html
+    assert '<div class="metrics">' not in sequence_html
 
 
 def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
@@ -3943,31 +3987,58 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
         "Connect the next decision to the outcome already visible on the agent "
         "lifeline."
     )
+    repeated_thought = (
+        "Trace the decision through the surrounding timeline before sending the "
+        "next instruction."
+    )
 
     assert (
         '<label><input type="checkbox" data-sequence-event-filter="thinking" '
         'checked>Thinking</label>'
         in sequence
     )
-    assert sequence.count('class="sequence-conversation-bubble"') == 3
+    assert sequence.count('class="sequence-conversation-bubble"') == 5
     assert 'data-thread-id="orchestrator"' in sequence
     assert 'data-thought-index="0"' in sequence
-    assert f"<title>{sanitized_thought}</title>" in sequence
-    assert f"<title>{timeline_thought}</title>" in sequence
-    assert f"<title>{successive_thought}</title>" in sequence
+    assert (
+        sequence.count(
+            f'<pre class="sequence-thought-full">{repeated_thought}</pre>'
+        )
+        == 1
+    )
+    assert f'<pre class="sequence-thought-full">{sanitized_thought}</pre>' in sequence
+    assert f'<pre class="sequence-thought-full">{timeline_thought}</pre>' in sequence
+    assert f'<pre class="sequence-thought-full">{successive_thought}</pre>' in sequence
     assert module._sequence_compact_text(sanitized_thought, 44) in sequence
     assert module._sequence_compact_text(timeline_thought, 44) in sequence
-    assert "<title>Send it now.</title>" not in sequence
+    assert "Send it now." in sequence
     assert "<title>Encrypted reasoning" not in sequence
+    first_bubble = sequence.split(
+        '<g class="sequence-conversation-bubble"', 1
+    )[1].split("</g>", 1)[0]
+    assert "<title>" not in first_bubble
+    sequence_document = sequence.split("<!-- agent-sequence:end -->", 1)[0]
+    assert "**" not in sequence_document
     assert 'class="sequence-conversation-tail"' in sequence
+    assert 'class="sequence-conversation-link" href="#sequence-thought-1"' in sequence
+    assert 'class="tool-call-overlay sequence-thought-overlay"' in sequence
     assert "sequence-thinking-tail-large" not in sequence
     assert "sequence-thinking-tail-small" not in sequence
-    assert 'data-sequence-thinking-count="3"' in sequence
+    assert 'data-sequence-thinking-count="5"' in sequence
     assert "var thoughtNodes = Array.from(" in html
     assert "var visibleThoughts = [];" in html
     assert "var visibleThoughtGroups = new Map();" in html
+    assert "thought.displaySlot = visibleEvents.filter" in html
     assert 'enabledCategories.has("thinking")' in html
-    assert ".sequence-conversation-bubble { cursor:help; }" in html
+    assert ".sequence-conversation-bubble { cursor:pointer; }" in html
+    assert ".sequence-event-link .sequence-event > * { pointer-events:none; }" in html
+    assert (
+        ".sequence-event-link .sequence-event > .sequence-event-hit { "
+        "pointer-events:all;"
+    ) in html
+    assert ".sequence-event-link:has(.sequence-event-hit:hover) .sequence-line," in html
+    assert 'class="sequence-event-hit"' in sequence
+    assert 'link.addEventListener("pointerenter", showThought);' in html
 
     event_row_indexes = [
         int(value)
@@ -4062,7 +4133,7 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path, monkeyp
     )
 
     assert rc == 0
-    html = output.read_text(encoding="utf-8")
+    html = (tmp_path / "sequence-report-sequence.html").read_text(encoding="utf-8")
     assert (
         '<summary data-sequence-ledger-summary>Event ledger · '
         '7 recorded events</summary>'

@@ -1640,12 +1640,12 @@ def _event_turn_id(payload: dict[str, object], active_turns: dict[str, AgentTurn
     return None
 
 
-def _response_item_text(payload: dict[str, object], field: str) -> str:
-    """Return the plaintext fragments recorded for one response item."""
+def _response_item_fragments(payload: dict[str, object], field: str) -> list[str]:
+    """Return each plaintext fragment recorded for one response item."""
 
     value = payload.get(field)
     if not isinstance(value, list):
-        return ""
+        return []
     fragments = []
     for item in value:
         if not isinstance(item, dict):
@@ -1653,6 +1653,13 @@ def _response_item_text(payload: dict[str, object], field: str) -> str:
         text = item.get("text")
         if isinstance(text, str) and text.strip():
             fragments.append(text)
+    return fragments
+
+
+def _response_item_text(payload: dict[str, object], field: str) -> str:
+    """Return the combined plaintext recorded for one response item."""
+
+    fragments = _response_item_fragments(payload, field)
     return "\n".join(fragments)
 
 
@@ -2249,29 +2256,43 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         model=model,
                     )
             elif item_type == "reasoning":
-                raw_text = _response_item_text(payload, "summary")
+                raw_fragments = _response_item_fragments(payload, "summary")
                 encrypted_content = payload.get("encrypted_content")
-                if raw_text:
-                    summary = f"Reasoning summary · {len(raw_text):,} characters"
-                elif isinstance(encrypted_content, str) and encrypted_content:
-                    summary = (
-                        f"Encrypted reasoning · {len(encrypted_content):,} characters; "
-                        "plaintext unavailable"
-                    )
+                if raw_fragments:
+                    for fragment in raw_fragments:
+                        _append_codex_activity(
+                            activities,
+                            thread_id=thread_id,
+                            turn_id=turn_id,
+                            activity_type="reasoning",
+                            timestamp=timestamp,
+                            path=path,
+                            ordinal=ordinal,
+                            summary=(
+                                f"Reasoning summary · {len(fragment):,} characters"
+                            ),
+                            raw_text=fragment,
+                            model=model,
+                        )
                 else:
-                    summary = "Reasoning event · no plaintext summary recorded"
-                _append_codex_activity(
-                    activities,
-                    thread_id=thread_id,
-                    turn_id=turn_id,
-                    activity_type="reasoning",
-                    timestamp=timestamp,
-                    path=path,
-                    ordinal=ordinal,
-                    summary=summary,
-                    raw_text=raw_text,
-                    model=model,
-                )
+                    if isinstance(encrypted_content, str) and encrypted_content:
+                        summary = (
+                            f"Encrypted reasoning · {len(encrypted_content):,} characters; "
+                            "plaintext unavailable"
+                        )
+                    else:
+                        summary = "Reasoning event · no plaintext summary recorded"
+                    _append_codex_activity(
+                        activities,
+                        thread_id=thread_id,
+                        turn_id=turn_id,
+                        activity_type="reasoning",
+                        timestamp=timestamp,
+                        path=path,
+                        ordinal=ordinal,
+                        summary=summary,
+                        model=model,
+                    )
             elif item_type in {"function_call", "custom_tool_call"}:
                 call_id = str(payload.get("call_id") or payload.get("id") or "")
                 if call_id:
@@ -3939,19 +3960,26 @@ def _sequence_thought_sort_key(
     return timestamp, thought.source_ordinal, thought.thread_id
 
 
+def _sequence_plain_text(value: str) -> str:
+    """Remove lightweight Markdown emphasis from one displayed thought."""
+
+    plain = re.sub(r"(?m)^\s{0,3}#{1,6}\s+", "", value)
+    plain = plain.replace("**", "").replace("__", "")
+    return " ".join(plain.split())
+
+
 def _codex_sequence_thoughts(
     run: CodexRunMetrics,
-    events: list[AgentSequenceEvent],
+    _events: list[AgentSequenceEvent],
 ) -> list[AgentSequenceThought]:
-    """Return one substantial plaintext explanation per turn, in timeline order."""
+    """Return distinct plaintext reasoning fragments in timeline order."""
 
-    event_keys = [_sequence_event_sort_key(event)[:2] for event in events]
-    turn_candidates: dict[tuple[str, str], AgentSequenceThought] = {}
+    latest_by_fragment: dict[tuple[str, str], AgentSequenceThought] = {}
     for thread in run.threads:
         for activity in thread.activities:
             if activity.activity_type != "reasoning" or not activity.content:
                 continue
-            detail = " ".join(activity.content.split())
+            detail = _sequence_plain_text(activity.content)
             if not detail:
                 continue
             thought = AgentSequenceThought(
@@ -3960,17 +3988,9 @@ def _codex_sequence_thoughts(
                 detail=detail,
                 source_ordinal=activity.source_ordinal,
             )
-            slot = bisect_right(event_keys, _sequence_thought_sort_key(thought)[:2])
-            group_id = activity.turn_id or f"event-slot:{slot}"
-            key = (thread.thread_id, group_id)
-            current = turn_candidates.get(key)
-            if current is None or (len(detail), thought.source_ordinal) > (
-                len(current.detail),
-                current.source_ordinal,
-            ):
-                turn_candidates[key] = thought
+            latest_by_fragment[(thread.thread_id, detail.casefold())] = thought
 
-    return sorted(turn_candidates.values(), key=_sequence_thought_sort_key)
+    return sorted(latest_by_fragment.values(), key=_sequence_thought_sort_key)
 
 
 def _codex_sequence_events(run: CodexRunMetrics) -> list[AgentSequenceEvent]:
@@ -4643,7 +4663,10 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         f'data-sequence-thinking-count="{len(thoughts)}" aria-live="polite">'
         f'{len(participants):,} agents · {len(events):,} events · '
         f'{len(thoughts):,} thoughts</output>'
-        '</div><p class="sequence-filter-empty" data-sequence-empty hidden>'
+        '</div><p class="sequence-inspect-detail" data-sequence-inspect-detail '
+        'aria-live="polite">Hover or focus an agent title for its full name; '
+        'select a thinking bubble for its full text.</p>'
+        '<p class="sequence-filter-empty" data-sequence-empty hidden>'
         'No events or thinking summaries match the current sequence view.</p>'
     )
     participant_gap = 220
@@ -4714,7 +4737,6 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         x = x_by_thread_id[thread.thread_id]
         full_name = name_by_thread_id[thread.thread_id]
         visible_name = _sequence_compact_text(full_name, 24)
-        name_is_truncated = visible_name != " ".join(full_name.split())
         agent_role = thread.agent_role or ("default" if thread.parent_thread_id else "main")
         identity = thread.thread_id
         if len(identity) > 15:
@@ -4736,7 +4758,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             'data-participant-name="{full_name}" data-sequence-x="{x}" '
             'transform="translate({x} 0)">'
             '<g class="sequence-focus-target" role="button" tabindex="0" '
-            'aria-pressed="false" aria-label="Focus on {aria}">{tooltip}'
+            'aria-pressed="false" aria-label="Focus on {aria}">'
             '<rect x="-88" y="10" width="176" height="54" rx="5"></rect>'
             '<text x="0" y="32" text-anchor="middle">'
             '<tspan class="sequence-participant-name" x="0">{name}</tspan>'
@@ -4748,11 +4770,6 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 full_name=_escape_html(full_name),
                 x=x,
                 aria=_escape_html(f"{full_name} · {detail}"),
-                tooltip=(
-                    f"<title>{_escape_html(full_name)}</title>"
-                    if name_is_truncated
-                    else ""
-                ),
                 name=_escape_html(visible_name),
                 detail=_escape_html(_sequence_compact_text(detail, 28)),
                 hierarchy_toggle=hierarchy_toggle,
@@ -4772,6 +4789,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     thought_svg = []
     ledger_rows = []
     event_overlays = []
+    thought_overlays = []
     return_kinds = {"complete", "aborted", "failed"}
     event_contexts = []
     for event in events:
@@ -4828,6 +4846,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             '<line class="sequence-line" x1="{source_x}" y1="{y}" x2="{target_x}" y2="{y}" '
             'stroke="{color}" marker-end="url(#sequence-arrow-{marker})"{dash}></line>'
             '<circle class="sequence-source-dot" cx="{source_x}" cy="{y}" r="3" fill="{color}"></circle>'
+            '<circle class="sequence-event-hit" cx="{target_x}" cy="{y}" r="12"></circle>'
             '<text class="sequence-event-label" x="{label_x}" y="{label_y}" '
             'text-anchor="middle">{label}{repeat_count_html}</text>'
             "</g></a>".format(
@@ -4992,30 +5011,32 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         x = x_by_thread_id[thought.thread_id]
         offset = _timestamp_offset_label(run, thought.event_timestamp)
         participant_name = name_by_thread_id[thought.thread_id]
-        tooltip = _sequence_compact_text(thought.detail, 1_200)
+        full_detail = _sequence_compact_text(thought.detail, 1_200)
         visible_text = _sequence_compact_text(thought.detail, 44)
         bubble_on_right = x + 204 <= width
+        detail_id = f"sequence-thought-{index + 1}"
         thought_svg.append(
-            '<g class="sequence-conversation-bubble" role="listitem" '
+            '<a class="sequence-conversation-link" href="#{detail_id}" tabindex="0" '
+            'role="listitem" aria-label="{aria}">'
+            '<g class="sequence-conversation-bubble" '
             'data-thought-index="{thought_index}" data-thread-id="{thread_id}" '
             'data-row-index="{row_index}" data-base-y="{y}" '
-            'transform="translate({x} {y})" aria-label="{aria}">'
-            '<title>{tooltip}</title>'
+            'transform="translate({x} {y})">'
             '<text class="sequence-thinking-offset" x="0" y="-21" '
             'text-anchor="middle">{offset}</text>'
             '<rect x="{rect_x}" y="-14" width="180" height="28" rx="8"></rect>'
             '<path class="sequence-conversation-tail" d="{tail_path}"></path>'
             '<text class="sequence-thinking-text" x="{text_x}" y="4" '
-            'text-anchor="middle">{visible_text}</text></g>'.format(
+            'text-anchor="middle">{visible_text}</text></g></a>'.format(
+                detail_id=detail_id,
                 thought_index=index,
                 thread_id=_escape_html(thought.thread_id),
                 row_index=row_index,
                 y=y,
                 x=x,
                 aria=_escape_html(
-                    f"{offset}: {participant_name} thinking: {tooltip}"
+                    f"{offset}: {participant_name} thinking: {full_detail}"
                 ),
-                tooltip=_escape_html(tooltip),
                 offset=_escape_html(offset),
                 rect_x=12 if bubble_on_right else -192,
                 tail_path=(
@@ -5025,6 +5046,25 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 ),
                 text_x=102 if bubble_on_right else -102,
                 visible_text=_escape_html(visible_text),
+            )
+        )
+        thought_overlays.append(
+            '<section id="{detail_id}" class="tool-call-overlay sequence-thought-overlay" '
+            'role="dialog" aria-modal="true" aria-labelledby="{detail_id}-title">'
+            '<div class="tool-call-panel sequence-event-panel">'
+            '<div class="tool-call-header"><h2 id="{detail_id}-title">Thinking</h2>'
+            '<a class="tool-call-close" href="#agent-sequence">Close</a></div>'
+            '<div class="metrics sequence-thought-metrics">'
+            '<div class="metric"><div class="label">Offset</div>'
+            '<div class="value">{offset}</div></div>'
+            '<div class="metric"><div class="label">Agent</div>'
+            '<div class="value">{participant}</div></div></div>'
+            '<pre class="sequence-thought-full">{detail}</pre>'
+            '</div></section>'.format(
+                detail_id=detail_id,
+                offset=_escape_html(offset),
+                participant=_escape_html(participant_name),
+                detail=_escape_html(full_detail),
             )
         )
     legend = (
@@ -5062,7 +5102,15 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         'Event ledger · '
         f"{len(events):,} recorded events</summary><ol>{''.join(ledger_rows)}</ol></details>"
     )
-    return heading + controls + diagram + ledger + "".join(event_overlays) + "</section>"
+    return (
+        heading
+        + controls
+        + diagram
+        + ledger
+        + "".join(event_overlays)
+        + "".join(thought_overlays)
+        + "</section>"
+    )
 
 
 def render_codex_rollout_html(
@@ -5728,6 +5776,11 @@ def render_codex_rollout_html(
     )
     model_usage_html = _render_model_usage_section(run)
     sequence_html = _render_codex_sequence_section(run)
+    sequence_document_html = (
+        f"<!-- agent-sequence:start -->{sequence_html}<!-- agent-sequence:end -->"
+        if sequence_html
+        else ""
+    )
     view_nav_html = (
         '<nav class="view-nav" aria-label="Report views"><span>Views</span>'
         '<a href="#timeline">Timeline</a>'
@@ -5847,6 +5900,7 @@ td {{ font-size:.85em; }}
 .sequence-filter-fieldset label {{ display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }}
 .sequence-filter-fieldset input {{ accent-color:#2563a6; }}
 .sequence-view-status {{ margin-left:auto; color:#546e7a; font-family:var(--font-code); }}
+.sequence-inspect-detail {{ box-sizing:border-box; min-height:2.8em; max-height:2.8em; margin:0 0 8px; overflow:auto; color:#455a64; font-size:.84em; line-height:1.4; }}
 .sequence-filter-empty {{ margin:0 0 8px; padding:8px 10px; color:#455a64; background:#fff8e1; border:1px solid #ffe082; border-radius:5px; font-size:.84em; }}
 .sequence-hidden {{ display:none; }}
 .sequence-empty {{ padding:18px; color:#607d8b; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
@@ -5880,15 +5934,17 @@ td {{ font-size:.85em; }}
 .sequence-lifeline {{ stroke:var(--sequence-rail); stroke-width:1; stroke-dasharray:4 5; }}
 .sequence-event-band {{ fill:transparent; }}
 .sequence-line {{ stroke-width:2; }}
-.sequence-event-link {{ cursor:pointer; }}
-.sequence-event-link:hover .sequence-event-band, .sequence-event-link:focus-visible .sequence-event-band {{ fill:#eef4f8; }}
-.sequence-event-link:hover .sequence-line, .sequence-event-link:focus-visible .sequence-line {{ stroke-width:3; }}
+.sequence-event-link .sequence-event > * {{ pointer-events:none; }}
+.sequence-event-link .sequence-event > .sequence-event-hit {{ pointer-events:all; fill:transparent; cursor:pointer; }}
+.sequence-event-link:has(.sequence-event-hit:hover) .sequence-line,
+.sequence-event-link:focus-visible .sequence-line {{ stroke-width:3; }}
 .sequence-offset {{ fill:#78909c; font-family:var(--font-code); font-size:9px; }}
 .sequence-event-label {{ fill:#263238; stroke:#fff; stroke-width:5px; paint-order:stroke; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
-.sequence-conversation-bubble {{ cursor:help; }}
+.sequence-conversation-bubble {{ cursor:pointer; }}
 .sequence-conversation-bubble rect,
 .sequence-conversation-tail {{ fill:#f3e5f5; stroke:var(--sequence-thinking); stroke-width:1; stroke-linejoin:round; }}
-.sequence-thinking-text {{ fill:#4a235a; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
+.sequence-conversation-link:focus-visible .sequence-conversation-bubble rect {{ stroke-width:2; }}
+.sequence-thinking-text {{ fill:#4a235a; font-family:var(--font-ui); font-size:10px; font-weight:400; }}
 .sequence-thinking-offset {{ fill:#546e7a; font-family:var(--font-code); font-size:9px; }}
 .sequence-repeat-count, .sequence-ledger-repeat-count {{ display:none; }}
 .sequence-group-repeats .sequence-repeat-count, .sequence-group-repeats .sequence-ledger-repeat-count {{ display:inline; }}
@@ -5908,6 +5964,8 @@ td {{ font-size:.85em; }}
 .sequence-event-metrics .value {{ overflow-wrap:anywhere; font-size:.92em; }}
 .sequence-event-full {{ max-height:7.5em; margin:4px 0 12px; padding:10px 12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:#263238; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.9em; line-height:1.5; }}
 .sequence-event-full:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.sequence-thought-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }}
+.sequence-thought-full {{ margin:12px 0 0; padding:12px; white-space:pre-wrap; overflow-wrap:anywhere; color:#263238; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.9em; font-weight:400; line-height:1.5; }}
 .sequence-sender-update, .sequence-recipient-update {{ max-height:22vh; margin:4px 0 0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.88em; line-height:1.5; }}
 .sequence-sender-update:focus-visible, .sequence-recipient-update:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .sequence-context-arrow {{ display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,1fr) minmax(0,1fr); align-items:center; gap:10px; margin:14px 0; color:#455a64; font-size:.78em; font-weight:600; }}
@@ -6010,7 +6068,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>{agent_time_heading}</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
-{sequence_html}
+{sequence_document_html}
 {pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
@@ -6051,6 +6109,9 @@ function initializeAgentSequence(section) {{
   var thoughtNodes = Array.from(
     diagram.querySelectorAll(".sequence-conversation-bubble")
   );
+  var thoughtLinks = thoughtNodes.map(function(node) {{
+    return node.closest(".sequence-conversation-link");
+  }});
   var ledgerRows = Array.from(section.querySelectorAll(".sequence-ledger li[data-event-index]"));
   var participantGap = Number(canvas.dataset.participantGap);
   var sidePadding = Number(canvas.dataset.sidePadding);
@@ -6089,6 +6150,7 @@ function initializeAgentSequence(section) {{
       group: element.querySelector(".sequence-event"),
       line: element.querySelector(".sequence-line"),
       dot: element.querySelector(".sequence-source-dot"),
+      hit: element.querySelector(".sequence-event-hit"),
       label: element.querySelector(".sequence-event-label"),
       band: element.querySelector(".sequence-event-band"),
       sourceId: element.dataset.sourceThreadId,
@@ -6127,6 +6189,11 @@ function initializeAgentSequence(section) {{
   var emptyState = section.querySelector("[data-sequence-empty]");
   var ledgerSummary = section.querySelector("[data-sequence-ledger-summary]");
   var description = section.querySelector("[data-sequence-description]");
+  var inspectDetail = section.querySelector("[data-sequence-inspect-detail]");
+  var inspectDefault = inspectDetail.textContent;
+
+  function showInspectDetail(value) {{ inspectDetail.textContent = value; }}
+  function clearInspectDetail() {{ inspectDetail.textContent = inspectDefault; }}
 
   function updateZoomControls() {{
     zoomValue.textContent = Math.round(zoom * 100) + "%";
@@ -6270,22 +6337,24 @@ function initializeAgentSequence(section) {{
       event.line.setAttribute("x1", String(sourceX));
       event.line.setAttribute("x2", String(targetX));
       event.dot.setAttribute("cx", String(sourceX));
+      event.hit.setAttribute("cx", String(targetX));
       event.label.setAttribute("x", String((sourceX + targetX) / 2));
       event.band.setAttribute("width", String(baseWidth));
     }});
     var visibleThoughtGroups = new Map();
     visibleThoughts.forEach(function(thought) {{
-      var groupKey = thought.threadId + "\u0000" + thought.rowIndex;
+      thought.displaySlot = visibleEvents.filter(function(event) {{
+        return event.rowIndex < thought.rowIndex;
+      }}).length;
+      var groupKey = thought.threadId + "\u0000" + thought.displaySlot;
       if (!visibleThoughtGroups.has(groupKey)) visibleThoughtGroups.set(groupKey, []);
       visibleThoughtGroups.get(groupKey).push(thought);
     }});
     var maximumThoughtY = 0;
     visibleThoughts.forEach(function(thought, index) {{
       var thoughtX = xByThreadId.get(thought.threadId);
-      var precedingEventCount = visibleEvents.filter(function(event) {{
-        return event.rowIndex < thought.rowIndex;
-      }}).length;
-      var groupKey = thought.threadId + "\u0000" + thought.rowIndex;
+      var precedingEventCount = thought.displaySlot;
+      var groupKey = thought.threadId + "\u0000" + thought.displaySlot;
       var group = visibleThoughtGroups.get(groupKey);
       var groupRank = group.indexOf(thought);
       var y;
@@ -6366,6 +6435,14 @@ function initializeAgentSequence(section) {{
     }};
     focusTarget.addEventListener("click", selectFocus);
     activateWithKeyboard(focusTarget, selectFocus);
+    focusTarget.addEventListener("pointerenter", function() {{
+      showInspectDetail(participant.dataset.participantName);
+    }});
+    focusTarget.addEventListener("pointerleave", clearInspectDetail);
+    focusTarget.addEventListener("focus", function() {{
+      showInspectDetail(participant.dataset.participantName);
+    }});
+    focusTarget.addEventListener("blur", clearInspectDetail);
     var hierarchyToggle = participant.querySelector(".sequence-hierarchy-toggle");
     if (!hierarchyToggle) return;
     var toggleHierarchy = function() {{
@@ -6375,6 +6452,17 @@ function initializeAgentSequence(section) {{
     }};
     hierarchyToggle.addEventListener("click", toggleHierarchy);
     activateWithKeyboard(hierarchyToggle, toggleHierarchy);
+  }});
+
+  thoughtLinks.forEach(function(link) {{
+    if (!link) return;
+    var showThought = function() {{
+      showInspectDetail(link.getAttribute("aria-label") || "Thinking detail");
+    }};
+    link.addEventListener("pointerenter", showThought);
+    link.addEventListener("pointerleave", clearInspectDetail);
+    link.addEventListener("focus", showThought);
+    link.addEventListener("blur", clearInspectDetail);
   }});
 
   zoomOutButton.addEventListener("click", function() {{ setZoom(zoom - 0.15); }});
@@ -10784,6 +10872,41 @@ def _child_output_path(parent_output: Path, slug: str) -> Path:
     return parent_output.with_name(f"{parent_output.stem}-{slug}{suffix}")
 
 
+def _split_codex_sequence_document(
+    full_html: str,
+    sequence_filename: str,
+) -> tuple[str, str] | None:
+    """Split one rendered report into lean main and sequence documents."""
+
+    start_marker = "<!-- agent-sequence:start -->"
+    end_marker = "<!-- agent-sequence:end -->"
+    start = full_html.find(start_marker)
+    end = full_html.find(end_marker, start + len(start_marker))
+    if start < 0 or end < 0:
+        return None
+    sequence_section = full_html[start + len(start_marker) : end]
+    main_html = full_html[:start] + full_html[end + len(end_marker) :]
+    main_html = main_html.replace(
+        'href="?view=sequence#agent-sequence"',
+        'href="{filename}?view=sequence#agent-sequence"'.format(
+            filename=_escape_html(sequence_filename)
+        ),
+        1,
+    )
+    head_end = full_html.find("</head>")
+    script_start = full_html.find("<script>\nvar sequenceOnly =")
+    if head_end < 0 or script_start < 0:
+        return None
+    head = full_html[: head_end + len("</head>")]
+    sequence_html = (
+        head
+        + '<body class="sequence-only">'
+        + sequence_section
+        + full_html[script_start:]
+    )
+    return main_html, sequence_html
+
+
 def _write_codex_outputs(
     run: CodexRunMetrics,
     html_output: Path,
@@ -10796,10 +10919,22 @@ def _write_codex_outputs(
     markdown_output: Path | None = None,
 ) -> None:
     html_output.parent.mkdir(parents=True, exist_ok=True)
-    html_output.write_text(
-        render_codex_rollout_html(run, formatter_config, nav_links=nav_links),
-        encoding="utf-8",
+    rendered_html = render_codex_rollout_html(
+        run,
+        formatter_config,
+        nav_links=nav_links,
     )
+    sequence_output = _child_output_path(html_output, "sequence")
+    split_documents = _split_codex_sequence_document(
+        rendered_html,
+        sequence_output.name,
+    )
+    if split_documents is None:
+        html_output.write_text(rendered_html, encoding="utf-8")
+    else:
+        main_html, sequence_html = split_documents
+        html_output.write_text(main_html, encoding="utf-8")
+        sequence_output.write_text(sequence_html, encoding="utf-8")
     companions = (
         (json_output, codex_run_to_json(run)),
         (turn_csv_output, render_codex_rollout_turn_csv(run)),
@@ -11523,6 +11658,9 @@ def main(argv: list[str] | None = None) -> int:
             markdown_output=markdown_output,
         )
         print(f"Codex rollout report written to {output}")
+        sequence_output = _child_output_path(output, "sequence")
+        if sequence_output.exists():
+            print(f"Codex sequence report written to {sequence_output}")
         return 0
 
     assert input_path is not None
