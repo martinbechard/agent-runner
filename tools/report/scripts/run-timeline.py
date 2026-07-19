@@ -69,6 +69,7 @@ CODEX_CREDIT_RATE_KEYS = (
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
 CODEX_ROLLOUT_PARSER_VERSION = "1.17.0"
+CODEX_DISCOVERY_INDEX_TABLE = "codex_rollout_discovery_v1"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -109,6 +110,10 @@ _UPDATE_PLAN_ITEM_PATTERN = re.compile(
 _CODEX_DELEGATION_BLOCK_PATTERN = re.compile(
     r"<codex_delegation\b[^>]*>(?P<body>.*?)</codex_delegation>",
     re.IGNORECASE | re.DOTALL,
+)
+_CODEX_DELEGATION_LINE_PATTERN = re.compile(
+    r"(?:<|\\u003c)codex_delegation",
+    re.IGNORECASE,
 )
 _CODEX_DELEGATION_SOURCE_PATTERN = re.compile(
     r"<source_thread_id>\s*(?P<source>[A-Za-z0-9][A-Za-z0-9._:/-]*)\s*"
@@ -742,19 +747,41 @@ def _spawn_agent_role(payload: dict[str, object]) -> str:
     return str(role or "")
 
 
+def _recorded_rollout_identity(
+    record: dict[str, object],
+) -> tuple[str, str, str, str] | None:
+    if record.get("type") != "session_meta":
+        return None
+    payload = record.get("payload")
+    if not isinstance(payload, dict):
+        return None
+    thread_id = str(payload.get("id") or payload.get("session_id") or "")
+    if not thread_id:
+        return None
+    parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
+    return thread_id, parent_thread_id, agent_path, agent_nickname
+
+
 def _rollout_identity(path: Path) -> tuple[str, str, str, str] | None:
-    records, _ = _parse_jsonl_append_safe(path)
-    for _, record in records:
-        if record.get("type") != "session_meta":
-            continue
-        payload = record.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        thread_id = str(payload.get("id") or payload.get("session_id") or "")
-        if not thread_id:
-            continue
-        parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
-        return thread_id, parent_thread_id, agent_path, agent_nickname
+    """Stream until one rollout identity is found instead of parsing the file."""
+
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                identity = _recorded_rollout_identity(record)
+                if identity is not None:
+                    return identity
+    except OSError:
+        return None
     return None
 
 
@@ -773,24 +800,6 @@ def _codex_delegation_values(content: str) -> list[tuple[str, str, str]]:
         detail = _tool_argument_content(input_text) if input_text else ""
         values.append((source_match.group("source"), preview, detail))
     return values
-
-
-def _codex_delegation_source_ids(path: Path) -> set[str]:
-    """Read only cross-thread source identifiers needed for linked discovery."""
-
-    sources: set[str] = set()
-    records, _ = _parse_jsonl_append_safe(path)
-    for _, record in records:
-        if record.get("type") != "response_item":
-            continue
-        payload = record.get("payload")
-        if not isinstance(payload, dict):
-            continue
-        if payload.get("type") != "message" or payload.get("role") != "user":
-            continue
-        content = _response_item_text(payload, "content")
-        sources.update(source for source, _, _ in _codex_delegation_values(content))
-    return sources
 
 
 def _metadata_value(payload: dict[str, object], context: dict[str, object], key: str) -> str:
@@ -2424,18 +2433,211 @@ def _candidate_rollouts(sessions_root: Path) -> list[Path]:
     return sorted(path.resolve() for path in sessions_root.rglob("*.jsonl") if path.is_file())
 
 
+@dataclass(frozen=True)
+class _RolloutFileFingerprint:
+    device: int
+    inode: int
+    size: int
+    modified_at_ns: int
+    changed_at_ns: int
+
+
+@dataclass(frozen=True)
+class _RolloutDiscoveryMetadata:
+    identity: tuple[str, str, str, str] | None
+    delegation_source_ids: frozenset[str]
+
+
+def _rollout_file_fingerprint(path: Path) -> _RolloutFileFingerprint:
+    stat = path.stat()
+    return _RolloutFileFingerprint(
+        device=int(stat.st_dev),
+        inode=int(stat.st_ino),
+        size=stat.st_size,
+        modified_at_ns=stat.st_mtime_ns,
+        changed_at_ns=stat.st_ctime_ns,
+    )
+
+
+def _scan_rollout_discovery_metadata(path: Path) -> _RolloutDiscoveryMetadata:
+    """Read one rollout once for identity and cross-thread source identifiers."""
+
+    identity: tuple[str, str, str, str] | None = None
+    delegation_source_ids: set[str] = set()
+    try:
+        with path.open(encoding="utf-8", errors="replace") as handle:
+            for line in handle:
+                stripped = line.strip()
+                if not stripped:
+                    continue
+                may_contain_delegation = (
+                    _CODEX_DELEGATION_LINE_PATTERN.search(stripped) is not None
+                )
+                if identity is not None and not may_contain_delegation:
+                    continue
+                try:
+                    record = json.loads(stripped)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(record, dict):
+                    continue
+                if identity is None:
+                    identity = _recorded_rollout_identity(record)
+                if not may_contain_delegation or record.get("type") != "response_item":
+                    continue
+                payload = record.get("payload")
+                if not isinstance(payload, dict):
+                    continue
+                if payload.get("type") != "message" or payload.get("role") != "user":
+                    continue
+                content = _response_item_text(payload, "content")
+                delegation_source_ids.update(
+                    source for source, _, _ in _codex_delegation_values(content)
+                )
+    except OSError:
+        pass
+    return _RolloutDiscoveryMetadata(
+        identity=identity,
+        delegation_source_ids=frozenset(delegation_source_ids),
+    )
+
+
+def _cached_rollout_discovery_metadata(
+    row: tuple[object, ...],
+) -> tuple[_RolloutFileFingerprint, _RolloutDiscoveryMetadata] | None:
+    try:
+        fingerprint = _RolloutFileFingerprint(
+            device=int(row[1]),
+            inode=int(row[2]),
+            size=int(row[3]),
+            modified_at_ns=int(row[4]),
+            changed_at_ns=int(row[5]),
+        )
+        thread_id = str(row[6] or "")
+        identity = (
+            (
+                thread_id,
+                str(row[7] or ""),
+                str(row[8] or ""),
+                str(row[9] or ""),
+            )
+            if thread_id
+            else None
+        )
+        raw_sources = json.loads(str(row[10] or "[]"))
+        if not isinstance(raw_sources, list) or not all(
+            isinstance(item, str) for item in raw_sources
+        ):
+            return None
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    return fingerprint, _RolloutDiscoveryMetadata(
+        identity=identity,
+        delegation_source_ids=frozenset(raw_sources),
+    )
+
+
+def _rollout_discovery_metadata(
+    candidate_paths: list[Path],
+    index_path: Path | None,
+) -> dict[Path, _RolloutDiscoveryMetadata]:
+    """Return metadata for candidates, reusing unchanged indexed observations."""
+
+    if index_path is None:
+        return {path: _scan_rollout_discovery_metadata(path) for path in candidate_paths}
+
+    connection: sqlite3.Connection | None = None
+    try:
+        index_path.parent.mkdir(parents=True, exist_ok=True)
+        connection = sqlite3.connect(index_path, timeout=5)
+        connection.execute("PRAGMA busy_timeout = 5000")
+        connection.execute(
+            f"CREATE TABLE IF NOT EXISTS {CODEX_DISCOVERY_INDEX_TABLE} ("
+            "path TEXT PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL, "
+            "size INTEGER NOT NULL, modified_at_ns INTEGER NOT NULL, "
+            "changed_at_ns INTEGER NOT NULL, thread_id TEXT NOT NULL, "
+            "parent_thread_id TEXT NOT NULL, agent_path TEXT NOT NULL, "
+            "agent_nickname TEXT NOT NULL, delegation_source_ids TEXT NOT NULL)"
+        )
+        candidate_keys = {str(path): path for path in candidate_paths}
+        cached: dict[Path, tuple[_RolloutFileFingerprint, _RolloutDiscoveryMetadata]] = {}
+        for row in connection.execute(
+            f"SELECT path, device, inode, size, modified_at_ns, changed_at_ns, "
+            "thread_id, parent_thread_id, agent_path, agent_nickname, "
+            f"delegation_source_ids FROM {CODEX_DISCOVERY_INDEX_TABLE}"
+        ):
+            candidate = candidate_keys.get(str(row[0]))
+            if candidate is None:
+                continue
+            parsed = _cached_rollout_discovery_metadata(row)
+            if parsed is not None:
+                cached[candidate] = parsed
+
+        result: dict[Path, _RolloutDiscoveryMetadata] = {}
+        updates: list[tuple[object, ...]] = []
+        for path in candidate_paths:
+            fingerprint_before = _rollout_file_fingerprint(path)
+            cached_entry = cached.get(path)
+            if cached_entry is not None and cached_entry[0] == fingerprint_before:
+                result[path] = cached_entry[1]
+                continue
+            metadata = _scan_rollout_discovery_metadata(path)
+            result[path] = metadata
+            fingerprint_after = _rollout_file_fingerprint(path)
+            if fingerprint_before != fingerprint_after:
+                continue
+            identity = metadata.identity or ("", "", "", "")
+            updates.append(
+                (
+                    str(path),
+                    fingerprint_after.device,
+                    fingerprint_after.inode,
+                    fingerprint_after.size,
+                    fingerprint_after.modified_at_ns,
+                    fingerprint_after.changed_at_ns,
+                    *identity,
+                    json.dumps(sorted(metadata.delegation_source_ids)),
+                )
+            )
+        if updates:
+            connection.executemany(
+                f"INSERT INTO {CODEX_DISCOVERY_INDEX_TABLE} "
+                "(path, device, inode, size, modified_at_ns, changed_at_ns, "
+                "thread_id, parent_thread_id, agent_path, agent_nickname, "
+                "delegation_source_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+                "ON CONFLICT(path) DO UPDATE SET "
+                "device=excluded.device, inode=excluded.inode, size=excluded.size, "
+                "modified_at_ns=excluded.modified_at_ns, "
+                "changed_at_ns=excluded.changed_at_ns, thread_id=excluded.thread_id, "
+                "parent_thread_id=excluded.parent_thread_id, "
+                "agent_path=excluded.agent_path, "
+                "agent_nickname=excluded.agent_nickname, "
+                "delegation_source_ids=excluded.delegation_source_ids",
+                updates,
+            )
+            connection.commit()
+        return result
+    except (OSError, sqlite3.Error):
+        return {path: _scan_rollout_discovery_metadata(path) for path in candidate_paths}
+    finally:
+        if connection is not None:
+            connection.close()
+
+
 def _discover_rollout_paths(
     root_thread_id: str,
     candidate_paths: list[Path],
     *,
     include_delegations: bool = False,
+    index_path: Path | None = None,
 ) -> tuple[list[Path], list[str]]:
     identities: dict[str, tuple[Path, str]] = {}
     children: dict[str, list[str]] = {}
     delegation_targets: dict[str, set[str]] = {}
     diagnostics: list[str] = []
-    for path in candidate_paths:
-        identity = _rollout_identity(path)
+    metadata_by_path = _rollout_discovery_metadata(candidate_paths, index_path)
+    for path, metadata in metadata_by_path.items():
+        identity = metadata.identity
         if identity is None:
             continue
         thread_id, parent_thread_id, _, _ = identity
@@ -2451,7 +2653,7 @@ def _discover_rollout_paths(
         raise ValueError(f"Codex root thread not found: {root_thread_id}")
     if include_delegations:
         for target_thread_id, (path, _) in identities.items():
-            for source_thread_id in _codex_delegation_source_ids(path):
+            for source_thread_id in metadata_by_path[path].delegation_source_ids:
                 if source_thread_id in identities:
                     delegation_targets.setdefault(source_thread_id, set()).add(
                         target_thread_id
@@ -3186,6 +3388,7 @@ def build_codex_rollout_run(
     candidate_paths: list[Path] | None = None,
     title: str = "",
     thread_titles: dict[str, str] | None = None,
+    discovery_index_path: Path | None = None,
 ) -> CodexRunMetrics:
     """Discover, parse, reconcile, and aggregate one native Codex subtree.
 
@@ -3218,6 +3421,7 @@ def build_codex_rollout_run(
         root_thread_id,
         candidates,
         include_delegations=include_delegations,
+        index_path=discovery_index_path,
     )
     threads = [parse_codex_rollout(path) for path in included_paths]
     resolved_thread_titles = _local_codex_thread_titles(
@@ -10571,6 +10775,10 @@ document.addEventListener('keydown', function(e) {{
 # ---------------------------------------------------------------------------
 
 
+def _default_codex_discovery_index_path() -> Path:
+    return Path.home() / ".codex" / "agent-report" / "rollout-discovery-v1.sqlite3"
+
+
 def _child_output_path(parent_output: Path, slug: str) -> Path:
     suffix = parent_output.suffix or ".html"
     return parent_output.with_name(f"{parent_output.stem}-{slug}{suffix}")
@@ -11291,6 +11499,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_delegations=args.include_delegations,
                 title=args.title or "",
                 thread_titles=thread_titles,
+                discovery_index_path=_default_codex_discovery_index_path(),
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)

@@ -3393,6 +3393,214 @@ def _write_codex_sequence_graph(root: Path) -> None:
         )
 
 
+def _append_codex_delegation_record(path: Path, source_thread_id: str) -> None:
+    record = {
+        "timestamp": "2026-07-14T04:00:09Z",
+        "type": "response_item",
+        "payload": {
+            "type": "message",
+            "role": "user",
+            "content": [
+                {
+                    "type": "input_text",
+                    "text": (
+                        "<codex_delegation>\n"
+                        f"  <source_thread_id>{source_thread_id}</source_thread_id>\n"
+                        "  <input>Open the linked task</input>\n"
+                        "</codex_delegation>"
+                    ),
+                }
+            ],
+        },
+    }
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(record) + "\n")
+
+
+def test_native_codex_discovery_index_reuses_unchanged_metadata(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    index_path = tmp_path / "rollout-discovery.sqlite3"
+    scanned_paths = []
+    original_scan = module._scan_rollout_discovery_metadata
+
+    def recording_scan(path):
+        scanned_paths.append(path)
+        return original_scan(path)
+
+    monkeypatch.setattr(module, "_scan_rollout_discovery_metadata", recording_scan)
+
+    first = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        discovery_index_path=index_path,
+    )
+    assert [thread.thread_id for thread in first.threads] == [
+        "coordinator",
+        "orchestrator",
+        "worker",
+    ]
+    assert sorted(scanned_paths) == sorted(tmp_path.glob("*.jsonl"))
+
+    scanned_paths.clear()
+    second = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        discovery_index_path=index_path,
+    )
+    assert [thread.thread_id for thread in second.threads] == [
+        "coordinator",
+        "orchestrator",
+        "worker",
+    ]
+    assert scanned_paths == []
+
+
+def test_native_codex_discovery_index_preserves_normalized_report(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    observed_at = datetime(2026, 7, 14, 4, 1, tzinfo=timezone.utc)
+
+    uncached = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        observed_at=observed_at,
+    )
+    indexed = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        observed_at=observed_at,
+        discovery_index_path=tmp_path / "rollout-discovery.sqlite3",
+    )
+
+    assert module.codex_run_to_json(indexed) == module.codex_run_to_json(uncached)
+
+
+def test_native_codex_discovery_index_invalidates_appended_and_truncated_log(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    index_path = tmp_path / "rollout-discovery.sqlite3"
+    unrelated_path = tmp_path / "unrelated.jsonl"
+    scanned_paths = []
+    original_scan = module._scan_rollout_discovery_metadata
+
+    def recording_scan(path):
+        scanned_paths.append(path)
+        return original_scan(path)
+
+    monkeypatch.setattr(module, "_scan_rollout_discovery_metadata", recording_scan)
+    module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        discovery_index_path=index_path,
+    )
+
+    scanned_paths.clear()
+    _append_codex_delegation_record(unrelated_path, "coordinator")
+    appended = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        discovery_index_path=index_path,
+    )
+    assert scanned_paths == [unrelated_path.resolve()]
+    assert "unrelated" in {thread.thread_id for thread in appended.threads}
+
+    scanned_paths.clear()
+    unrelated_path.write_text(
+        json.dumps(
+            {
+                "timestamp": "2026-07-14T04:00:00Z",
+                "type": "session_meta",
+                "payload": {"id": "unrelated", "source": "user"},
+            }
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    truncated = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        discovery_index_path=index_path,
+    )
+    assert scanned_paths == [unrelated_path.resolve()]
+    assert "unrelated" not in {thread.thread_id for thread in truncated.threads}
+
+
+def test_native_codex_discovery_index_invalidates_replaced_identity(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    original_path = _write_codex_catalog_rollout(
+        tmp_path,
+        thread_id="original",
+        timestamp="2026-07-14T04:00:00Z",
+        request="Original task",
+        workspace=str(tmp_path),
+    )
+    index_path = tmp_path / "rollout-discovery.sqlite3"
+    module.build_codex_rollout_run(
+        "original",
+        tmp_path,
+        discovery_index_path=index_path,
+    )
+    scanned_paths = []
+    original_scan = module._scan_rollout_discovery_metadata
+
+    def recording_scan(path):
+        scanned_paths.append(path)
+        return original_scan(path)
+
+    monkeypatch.setattr(module, "_scan_rollout_discovery_metadata", recording_scan)
+    replacement = {
+        "timestamp": "2026-07-14T04:00:00Z",
+        "type": "session_meta",
+        "payload": {"id": "replacement", "source": "user"},
+    }
+    original_path.write_text(json.dumps(replacement) + "\n", encoding="utf-8")
+
+    run = module.build_codex_rollout_run(
+        "replacement",
+        tmp_path,
+        discovery_index_path=index_path,
+    )
+    assert scanned_paths == [original_path.resolve()]
+    assert [thread.thread_id for thread in run.threads] == ["replacement"]
+
+
+def test_native_codex_discovery_index_failure_falls_back_to_streaming_scan(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    unavailable_index = tmp_path / "rollout-discovery.sqlite3"
+    unavailable_index.mkdir()
+
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        discovery_index_path=unavailable_index,
+    )
+
+    assert [thread.thread_id for thread in run.threads] == [
+        "coordinator",
+        "orchestrator",
+        "worker",
+    ]
+
+
 def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
@@ -3814,7 +4022,7 @@ def test_native_codex_sequence_marks_consecutive_repetitive_messages(
     assert 'data-event-category="message"' in sequence
 
 
-def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
+def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path, monkeypatch):
     module = _load_module()
     staging = tmp_path / "staging"
     active = tmp_path / "sessions"
@@ -3827,6 +4035,12 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
     for filename in ("orchestrator.jsonl", "worker.jsonl", "unrelated.jsonl"):
         (staging / filename).rename(archived / filename)
     output = tmp_path / "sequence-report.html"
+    discovery_index = tmp_path / "rollout-discovery.sqlite3"
+    monkeypatch.setattr(
+        module,
+        "_default_codex_discovery_index_path",
+        lambda: discovery_index,
+    )
 
     rc = module.main(
         [
@@ -3857,6 +4071,7 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
     assert "List unmerged branches" in html
     assert "Process Backlog Items" in html
     assert "worker" in html
+    assert discovery_index.is_file()
 
 
 def test_native_codex_prefers_complete_direct_cost_telemetry(tmp_path):

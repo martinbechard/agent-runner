@@ -108,6 +108,14 @@ python tools/report/scripts/run-timeline.py \
 When `--include-delegations` is used without explicit session roots, the tool
 scans both default Codex stores automatically.
 
+Single-report Codex discovery keeps a local metadata index at
+`~/.codex/agent-report/rollout-discovery-v1.sqlite3`. The index stores only
+rollout identity, hierarchy, file fingerprints, and delegation source IDs; it
+does not store transcript content. Unchanged logs are reused, while appended,
+truncated, or replaced logs are rescanned individually. If the index is
+unavailable, reporting falls back to an uncached streaming scan. Deleting the
+index is safe and causes the next report to rebuild it from the source logs.
+
 The sequence view reads task display names from Codex's local desktop catalogs
 when available, and the same names identify top-level rows in the timeline.
 A renamed or archived task may not remain in that catalog; use
