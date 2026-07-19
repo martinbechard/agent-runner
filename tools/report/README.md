@@ -14,6 +14,8 @@ Current contents:
     a `methodology-runner` workspace
   - reports a native Codex Desktop root rollout and its closed descendant set
     from a thread ID or rollout path
+  - renders an offline agent sequence view for recorded delegations,
+    inter-agent messages, lifecycle controls, and native subagent endings
   - reports a native Junie session from its session directory or
     `events.jsonl` path
   - emits privacy-safe JSON, turn CSV, work-unit CSV, Markdown, and HTML
@@ -56,6 +58,32 @@ python tools/report/scripts/run-timeline.py \
   --live \
   --output codex-run.html
 ```
+
+The HTML report is self-contained and opens directly from disk; it does not
+require a web server. Its **Agent sequence** view reads downward through
+recorded delegation, spawn, message, follow-up, interrupt, and child-ending
+events. Solid arrows show dispatch or control traffic, dashed return arrows
+show native subagent endings, and the event ledger below the SVG preserves the
+exact chronological rows in accessible text.
+
+Some coordinators dispatch work into separate root tasks with
+`<codex_delegation>` records. Add `--include-delegations` to follow those
+outbound links and include each linked task's native subagent hierarchy.
+Repeat `--sessions-root` when the connected graph spans the active and archived
+stores:
+
+```bash
+python tools/report/scripts/run-timeline.py \
+  --codex-thread <coordinator-thread-id> \
+  --sessions-root ~/.codex/sessions \
+  --sessions-root ~/.codex/archived_sessions \
+  --include-delegations \
+  --live \
+  --output codex-sequence.html
+```
+
+When `--include-delegations` is used without explicit session roots, the tool
+scans both default Codex stores automatically.
 
 Discover reportable root runs by inclusive UTC date range without first finding
 a thread ID. The Codex catalog scans both `~/.codex/sessions` and

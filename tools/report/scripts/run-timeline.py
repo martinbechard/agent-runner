@@ -66,7 +66,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.15.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.16.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -103,6 +103,19 @@ _REVIEW_FINDING_PATTERN = re.compile(
 _UPDATE_PLAN_ITEM_PATTERN = re.compile(
     r"\{\s*[\"']?step[\"']?\s*:\s*\"(?P<step>(?:\\.|[^\"\\])*)\"\s*,\s*"
     r"[\"']?status[\"']?\s*:\s*\"(?P<status>completed|in_progress|pending)\"\s*\}"
+)
+_CODEX_DELEGATION_BLOCK_PATTERN = re.compile(
+    r"<codex_delegation\b[^>]*>(?P<body>.*?)</codex_delegation>",
+    re.IGNORECASE | re.DOTALL,
+)
+_CODEX_DELEGATION_SOURCE_PATTERN = re.compile(
+    r"<source_thread_id>\s*(?P<source>[A-Za-z0-9][A-Za-z0-9._:/-]*)\s*"
+    r"</source_thread_id>",
+    re.IGNORECASE,
+)
+_CODEX_DELEGATION_INPUT_PATTERN = re.compile(
+    r"<input>\s*(?P<input>.*?)(?:\s*</input>|\s*$)",
+    re.IGNORECASE | re.DOTALL,
 )
 
 
@@ -406,6 +419,18 @@ class ToolInterval:
     result_summary: str = ""
     result_content: str = ""
     model: str = ""
+
+
+@dataclass(frozen=True)
+class AgentSequenceEvent:
+    """One privacy-safe coordination or lifecycle edge between report agents."""
+
+    event_timestamp: str
+    kind: str
+    source_thread_id: str
+    target_thread_id: str
+    label: str
+    source_ordinal: int = 0
 
 
 @dataclass
@@ -717,6 +742,40 @@ def _rollout_identity(path: Path) -> tuple[str, str, str, str] | None:
         parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
         return thread_id, parent_thread_id, agent_path, agent_nickname
     return None
+
+
+def _codex_delegation_values(content: str) -> list[tuple[str, str]]:
+    """Return recorded delegation sources and bounded, redacted input previews."""
+
+    values: list[tuple[str, str]] = []
+    for block_match in _CODEX_DELEGATION_BLOCK_PATTERN.finditer(content):
+        body = block_match.group("body")
+        source_match = _CODEX_DELEGATION_SOURCE_PATTERN.search(body)
+        if source_match is None:
+            continue
+        input_match = _CODEX_DELEGATION_INPUT_PATTERN.search(body)
+        input_text = input_match.group("input").strip() if input_match else ""
+        preview = _message_argument_preview(input_text) if input_text else ""
+        values.append((source_match.group("source"), preview))
+    return values
+
+
+def _codex_delegation_source_ids(path: Path) -> set[str]:
+    """Read only cross-thread source identifiers needed for linked discovery."""
+
+    sources: set[str] = set()
+    records, _ = _parse_jsonl_append_safe(path)
+    for _, record in records:
+        if record.get("type") != "response_item":
+            continue
+        payload = record.get("payload")
+        if not isinstance(payload, dict):
+            continue
+        if payload.get("type") != "message" or payload.get("role") != "user":
+            continue
+        content = _response_item_text(payload, "content")
+        sources.update(source for source, _ in _codex_delegation_values(content))
+    return sources
 
 
 def _metadata_value(payload: dict[str, object], context: dict[str, object], key: str) -> str:
@@ -2305,9 +2364,12 @@ def _candidate_rollouts(sessions_root: Path) -> list[Path]:
 def _discover_rollout_paths(
     root_thread_id: str,
     candidate_paths: list[Path],
+    *,
+    include_delegations: bool = False,
 ) -> tuple[list[Path], list[str]]:
     identities: dict[str, tuple[Path, str]] = {}
     children: dict[str, list[str]] = {}
+    delegation_targets: dict[str, set[str]] = {}
     diagnostics: list[str] = []
     for path in candidate_paths:
         identity = _rollout_identity(path)
@@ -2324,16 +2386,40 @@ def _discover_rollout_paths(
             children.setdefault(parent_thread_id, []).append(thread_id)
     if root_thread_id not in identities:
         raise ValueError(f"Codex root thread not found: {root_thread_id}")
+    if include_delegations:
+        for target_thread_id, (path, _) in identities.items():
+            for source_thread_id in _codex_delegation_source_ids(path):
+                if source_thread_id in identities:
+                    delegation_targets.setdefault(source_thread_id, set()).add(
+                        target_thread_id
+                    )
+
+    validated: set[str] = set()
+
+    def validate_hierarchy(thread_id: str, active: set[str]) -> None:
+        if thread_id in active:
+            raise ValueError(f"Cycle detected in Codex thread hierarchy at {thread_id}")
+        if thread_id in validated:
+            return
+        active.add(thread_id)
+        for child_thread_id in children.get(thread_id, []):
+            validate_hierarchy(child_thread_id, active)
+        active.remove(thread_id)
+        validated.add(thread_id)
+
     ordered_ids: list[str] = []
     queue = [root_thread_id]
     included: set[str] = set()
     while queue:
         thread_id = queue.pop(0)
         if thread_id in included:
-            raise ValueError(f"Cycle detected in Codex thread hierarchy at {thread_id}")
+            continue
+        validate_hierarchy(thread_id, set())
         included.add(thread_id)
         ordered_ids.append(thread_id)
         queue.extend(sorted(children.get(thread_id, [])))
+        if include_delegations:
+            queue.extend(sorted(delegation_targets.get(thread_id, set())))
     for thread_id in ordered_ids:
         parent_thread_id = identities[thread_id][1]
         if thread_id != root_thread_id and parent_thread_id not in included:
@@ -3028,10 +3114,11 @@ def _record_explicit_interrupt_provenance(threads: list[CodexThreadMetrics]) -> 
 
 def build_codex_rollout_run(
     root_thread_id: str,
-    sessions_root: Path,
+    sessions_root: Path | list[Path],
     *,
     seal: bool = False,
     allow_aborted: bool = False,
+    include_delegations: bool = False,
     observed_at: datetime | None = None,
     candidate_paths: list[Path] | None = None,
     title: str = "",
@@ -3041,17 +3128,44 @@ def build_codex_rollout_run(
     `sessions_root` bounds discovery. Sealing requires a stable candidate set
     and terminal included threads, then records source and pricing digests.
     """
-    sessions_root = sessions_root.resolve()
-    candidates = [path.resolve() for path in candidate_paths] if candidate_paths else _candidate_rollouts(sessions_root)
+    session_roots = (
+        [sessions_root.resolve()]
+        if isinstance(sessions_root, Path)
+        else [Path(root).resolve() for root in sessions_root]
+    )
+    if not session_roots:
+        raise ValueError("At least one Codex sessions root is required")
+    candidates = (
+        [path.resolve() for path in candidate_paths]
+        if candidate_paths
+        else sorted(
+            {
+                path
+                for session_root in session_roots
+                for path in _candidate_rollouts(session_root)
+            }
+        )
+    )
     if not candidates:
         raise ValueError(f"No Codex rollout files found under {sessions_root}")
     initial_files = set(candidates)
     initial_stats = {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in candidates}
-    included_paths, diagnostics = _discover_rollout_paths(root_thread_id, candidates)
+    included_paths, diagnostics = _discover_rollout_paths(
+        root_thread_id,
+        candidates,
+        include_delegations=include_delegations,
+    )
     threads = [parse_codex_rollout(path) for path in included_paths]
     _record_explicit_interrupt_provenance(threads)
     if seal:
-        final_candidates = set(candidate_paths or _candidate_rollouts(sessions_root))
+        final_candidates = set(
+            candidate_paths
+            or {
+                path
+                for session_root in session_roots
+                for path in _candidate_rollouts(session_root)
+            }
+        )
         if final_candidates != initial_files:
             raise ValueError("Cannot seal while the Codex rollout file set is changing")
         changed = [
@@ -3188,6 +3302,7 @@ def reprocess_sealed_codex_run(manifest_path: Path) -> CodexRunMetrics:
         ),
         observed_at=observed_at,
         candidate_paths=paths,
+        include_delegations=True,
         title=str(data.get("run_label") or ""),
     )
 
@@ -3433,6 +3548,183 @@ def _agent_inventory_threads(
     for thread in run.threads:
         visit(thread, 0)
     return ordered
+
+
+def _native_root_thread_id(
+    thread_id: str,
+    threads_by_id: dict[str, CodexThreadMetrics],
+) -> str:
+    """Return the native rollout root that owns one included thread."""
+
+    current_id = thread_id
+    seen: set[str] = set()
+    while current_id not in seen:
+        seen.add(current_id)
+        current = threads_by_id.get(current_id)
+        if current is None or current.parent_thread_id not in threads_by_id:
+            return current_id
+        current_id = current.parent_thread_id
+    return thread_id
+
+
+def _resolve_sequence_target(
+    target: str,
+    source: CodexThreadMetrics,
+    threads_by_id: dict[str, CodexThreadMetrics],
+) -> CodexThreadMetrics | None:
+    """Resolve canonical and relative collaboration targets within one report."""
+
+    normalized = target.strip().rstrip("/")
+    if not normalized:
+        return None
+    direct = threads_by_id.get(normalized)
+    if direct is not None:
+        return direct
+    source_root_id = _native_root_thread_id(source.thread_id, threads_by_id)
+    if normalized in {"root", "/root"}:
+        return threads_by_id.get(source_root_id)
+    target_name = normalized.rsplit("/", 1)[-1]
+    candidates: list[CodexThreadMetrics] = []
+    for thread in threads_by_id.values():
+        agent_path = thread.agent_path.rstrip("/")
+        names = {
+            value
+            for value in (
+                agent_path,
+                agent_path.rsplit("/", 1)[-1] if agent_path else "",
+                thread.thread_name,
+                _agent_assignment(thread),
+            )
+            if value
+        }
+        if normalized in names or target_name in names:
+            candidates.append(thread)
+    same_root = [
+        thread
+        for thread in candidates
+        if _native_root_thread_id(thread.thread_id, threads_by_id) == source_root_id
+    ]
+    candidates = same_root or candidates
+    if len(candidates) == 1:
+        return candidates[0]
+    related = [
+        thread
+        for thread in candidates
+        if thread.parent_thread_id == source.thread_id
+        or source.parent_thread_id == thread.thread_id
+    ]
+    return related[0] if len(related) == 1 else None
+
+
+def _sequence_tool_arguments(tool: ToolInterval) -> dict[str, object]:
+    """Return the first usable sanitized argument object for a tool interval."""
+
+    for value in (tool.argument_summary, tool.argument_content):
+        if not value or value == "—":
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _sequence_event_sort_key(event: AgentSequenceEvent) -> tuple[datetime, int, str]:
+    timestamp = _parse_iso_datetime(event.event_timestamp)
+    if timestamp is None:
+        timestamp = datetime.min.replace(tzinfo=timezone.utc)
+    return timestamp, event.source_ordinal, event.kind
+
+
+def _codex_sequence_events(run: CodexRunMetrics) -> list[AgentSequenceEvent]:
+    """Normalize recorded coordination and native child endings for the diagram."""
+
+    threads_by_id = {thread.thread_id: thread for thread in run.threads}
+    events: list[AgentSequenceEvent] = []
+    for target in run.threads:
+        for activity in target.activities:
+            if activity.activity_type != "input" or not activity.content:
+                continue
+            for source_thread_id, preview in _codex_delegation_values(activity.content):
+                if source_thread_id not in threads_by_id or source_thread_id == target.thread_id:
+                    continue
+                label = "delegate" + (f" · {preview}" if preview else "")
+                events.append(
+                    AgentSequenceEvent(
+                        event_timestamp=activity.event_timestamp,
+                        kind="delegation",
+                        source_thread_id=source_thread_id,
+                        target_thread_id=target.thread_id,
+                        label=label,
+                        source_ordinal=activity.source_ordinal,
+                    )
+                )
+    for child in run.threads:
+        if child.parent_thread_id not in threads_by_id:
+            continue
+        events.append(
+            AgentSequenceEvent(
+                event_timestamp=child.started_at,
+                kind="spawn",
+                source_thread_id=child.parent_thread_id,
+                target_thread_id=child.thread_id,
+                label=f"spawn · {_agent_assignment(child)}",
+            )
+        )
+    tool_kinds = {
+        "send_message": ("message", "message"),
+        "followup_task": ("followup", "follow up"),
+        "interrupt_agent": ("interrupt", "interrupt"),
+    }
+    for source in run.threads:
+        for tool in source.tool_intervals:
+            kind_and_label = tool_kinds.get(tool.tool_name)
+            if kind_and_label is None:
+                continue
+            arguments = _sequence_tool_arguments(tool)
+            target_value = arguments.get("target")
+            target = _resolve_sequence_target(
+                str(target_value) if isinstance(target_value, str) else "",
+                source,
+                threads_by_id,
+            )
+            if target is None or target.thread_id == source.thread_id:
+                continue
+            kind, action = kind_and_label
+            message = arguments.get("message")
+            label = action
+            if isinstance(message, str) and message.strip():
+                label += f" · {message.strip()}"
+            events.append(
+                AgentSequenceEvent(
+                    event_timestamp=tool.started_at,
+                    kind=kind,
+                    source_thread_id=source.thread_id,
+                    target_thread_id=target.thread_id,
+                    label=label,
+                    source_ordinal=tool.source_start_ordinal,
+                )
+            )
+    for child in run.threads:
+        if child.parent_thread_id not in threads_by_id:
+            continue
+        for turn in child.turns:
+            if turn.outcome == "active" or not turn.completed_at:
+                continue
+            kind = turn.outcome if turn.outcome in {"aborted", "failed"} else "complete"
+            events.append(
+                AgentSequenceEvent(
+                    event_timestamp=turn.completed_at,
+                    kind=kind,
+                    source_thread_id=child.thread_id,
+                    target_thread_id=child.parent_thread_id,
+                    label=f"turn {turn.outcome}",
+                    source_ordinal=turn.source_ordinal,
+                )
+            )
+    return sorted(events, key=_sequence_event_sort_key)
 
 
 def _usage_bounded_by(usage: UsageTotals, limit: UsageTotals) -> UsageTotals:
@@ -3759,6 +4051,217 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         )
         lines.append(f"| {' | '.join(values)} |")
     return "\n".join(lines) + "\n"
+
+
+def _sequence_compact_text(value: str, limit: int) -> str:
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: max(1, limit - 1)].rstrip() + "…"
+
+
+def _sequence_participant_name(
+    run: CodexRunMetrics,
+    thread: CodexThreadMetrics,
+) -> str:
+    """Return a compact human-facing lifeline name without losing identity."""
+
+    if thread.parent_thread_id:
+        return _agent_assignment(thread)
+    if thread.thread_id == run.root_thread_id and run.run_label:
+        match = re.fullmatch(r'"(?P<title>.*)" Agent Report', run.run_label)
+        return match.group("title") if match else run.run_label
+    if thread.task_title:
+        return thread.task_title
+    for activity in thread.activities:
+        if activity.activity_type != "input":
+            continue
+        delegations = _codex_delegation_values(activity.content)
+        if not delegations:
+            continue
+        preview = re.sub(r"\s+\[[0-9,]+ chars\]$", "", delegations[0][1])
+        if preview:
+            return preview
+    derived = _derived_task_title(thread.activities)
+    if derived and not derived.startswith("<codex_delegation>"):
+        return derived
+    return f"root {thread.thread_id[:8]}"
+
+
+def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
+    """Render one offline SVG sequence view plus an exact text event ledger."""
+
+    if run.runtime.casefold() != "codex":
+        return ""
+    inventory = _agent_inventory_threads(run)
+    participants = [thread for thread, _ in inventory]
+    events = _codex_sequence_events(run)
+    heading = (
+        '<section id="agent-sequence" aria-labelledby="agent-sequence-title">'
+        '<div class="agents-heading"><h2 id="agent-sequence-title">Agent sequence</h2>'
+        '<details class="agent-info"><summary aria-label="About Agent sequence">ⓘ</summary>'
+        '<div class="agent-note-popover" role="note">'
+        "Rows are chronological recorded coordination events, not duration-scaled activity. "
+        "Solid arrows are delegation or control messages; dashed return arrows mark native "
+        "subagent turn endings. Message text uses the report's bounded redaction rules."
+        "</div></details></div>"
+        '<p class="execution-note">Read downward to follow who dispatched, resumed, interrupted, '
+        "or completed work. Lifelines are ordered by the recorded thread hierarchy.</p>"
+    )
+    if not participants or not events:
+        return (
+            heading
+            + '<div class="sequence-empty">No inter-agent coordination or child-ending events '
+            "were recorded in this report scope.</div></section>"
+        )
+    participant_gap = 220
+    side_padding = 110
+    header_height = 96
+    event_height = 52
+    footer_height = 30
+    width = max(760, side_padding * 2 + participant_gap * (len(participants) - 1))
+    height = header_height + event_height * len(events) + footer_height
+    x_by_thread_id = {
+        thread.thread_id: side_padding + index * participant_gap
+        for index, thread in enumerate(participants)
+    }
+    name_by_thread_id = {
+        thread.thread_id: _sequence_participant_name(run, thread)
+        for thread in participants
+    }
+    marker_colors = {
+        "delegation": ("teal", "#00695c"),
+        "spawn": ("blue", "#2563a6"),
+        "message": ("blue", "#2563a6"),
+        "followup": ("purple", "#6d4c8e"),
+        "interrupt": ("red", "#b3261e"),
+        "complete": ("green", "#24733b"),
+        "aborted": ("red", "#b3261e"),
+        "failed": ("red", "#b3261e"),
+    }
+    marker_defs = "".join(
+        '<marker id="sequence-arrow-{name}" viewBox="0 0 10 10" refX="9" refY="5" '
+        'markerWidth="7" markerHeight="7" orient="auto-start-reverse">'
+        '<path d="M 0 0 L 10 5 L 0 10 z" fill="{color}"></path></marker>'.format(
+            name=name,
+            color=color,
+        )
+        for name, color in {
+            marker_name: marker_color
+            for marker_name, marker_color in marker_colors.values()
+        }.items()
+    )
+    participant_svg = []
+    for thread, depth in inventory:
+        x = x_by_thread_id[thread.thread_id]
+        full_name = name_by_thread_id[thread.thread_id]
+        visible_name = _sequence_compact_text(full_name, 24)
+        agent_role = thread.agent_role or ("default" if thread.parent_thread_id else "main")
+        identity = thread.thread_id
+        if len(identity) > 15:
+            identity = f"{identity[:8]}…{identity[-4:]}"
+        detail = f"{agent_role} · {identity}"
+        if thread.agent_nickname:
+            detail = f"{thread.agent_nickname} · {detail}"
+        participant_svg.append(
+            '<g class="sequence-participant" data-depth="{depth}">'
+            '<title>{title}</title>'
+            '<rect x="{box_x}" y="14" width="176" height="54" rx="5"></rect>'
+            '<text x="{x}" y="36" text-anchor="middle">'
+            '<tspan class="sequence-participant-name" x="{x}">{name}</tspan>'
+            '<tspan class="sequence-participant-detail" x="{x}" dy="18">{detail}</tspan>'
+            "</text>"
+            '<line class="sequence-lifeline" x1="{x}" y1="68" x2="{x}" y2="{end_y}"></line>'
+            "</g>".format(
+                depth=depth,
+                title=_escape_html(f"{full_name} · {detail}"),
+                box_x=x - 88,
+                x=x,
+                name=_escape_html(visible_name),
+                detail=_escape_html(_sequence_compact_text(detail, 28)),
+                end_y=height - 16,
+            )
+        )
+    event_svg = []
+    ledger_rows = []
+    return_kinds = {"complete", "aborted", "failed"}
+    for index, event in enumerate(events):
+        y = header_height + index * event_height + 24
+        source_x = x_by_thread_id[event.source_thread_id]
+        target_x = x_by_thread_id[event.target_thread_id]
+        marker_name, color = marker_colors[event.kind]
+        line_length = abs(target_x - source_x)
+        label_limit = max(14, min(48, line_length // 7))
+        visible_label = _sequence_compact_text(event.label, label_limit)
+        source_name = name_by_thread_id[event.source_thread_id]
+        target_name = name_by_thread_id[event.target_thread_id]
+        offset = _timestamp_offset_label(run, event.event_timestamp)
+        event_description = (
+            f"{offset}: {source_name} to {target_name} · {event.label}"
+        )
+        dash = ' stroke-dasharray="6 4"' if event.kind in return_kinds else ""
+        event_svg.append(
+            '<g class="sequence-event sequence-event-{kind}" tabindex="0" role="listitem" '
+            'aria-label="{aria}">'
+            '<title>{title}</title>'
+            '<rect class="sequence-event-band" x="0" y="{band_y}" width="{width}" height="44"></rect>'
+            '<text class="sequence-offset" x="12" y="{text_y}">{offset}</text>'
+            '<line class="sequence-line" x1="{source_x}" y1="{y}" x2="{target_x}" y2="{y}" '
+            'stroke="{color}" marker-end="url(#sequence-arrow-{marker})"{dash}></line>'
+            '<circle class="sequence-source-dot" cx="{source_x}" cy="{y}" r="3" fill="{color}"></circle>'
+            '<text class="sequence-event-label" x="{label_x}" y="{label_y}" '
+            'text-anchor="middle">{label}</text>'
+            "</g>".format(
+                kind=event.kind,
+                aria=_escape_html(event_description),
+                title=_escape_html(event_description),
+                band_y=y - 20,
+                width=width,
+                text_y=y + 4,
+                offset=_escape_html(offset),
+                source_x=source_x,
+                target_x=target_x,
+                y=y,
+                color=color,
+                marker=marker_name,
+                dash=dash,
+                label_x=(source_x + target_x) / 2,
+                label_y=y - 8,
+                label=_escape_html(visible_label),
+            )
+        )
+        ledger_rows.append(
+            '<li><time>{offset}</time><strong>{source}</strong><span aria-hidden="true">→</span>'
+            '<strong>{target}</strong><span>{label}</span></li>'.format(
+                offset=_escape_html(offset),
+                source=_escape_html(source_name),
+                target=_escape_html(target_name),
+                label=_escape_html(event.label),
+            )
+        )
+    legend = (
+        '<div class="sequence-legend" aria-label="Sequence event legend">'
+        '<span><i class="legend-line legend-delegation"></i>delegation</span>'
+        '<span><i class="legend-line legend-message"></i>message / spawn</span>'
+        '<span><i class="legend-line legend-followup"></i>follow-up</span>'
+        '<span><i class="legend-line legend-interrupt"></i>interrupt</span>'
+        '<span><i class="legend-line legend-complete"></i>turn end</span>'
+        "</div>"
+    )
+    diagram = (
+        '<div class="sequence-scroll" tabindex="0" aria-label="Scrollable agent sequence diagram">'
+        '<svg class="agent-sequence-diagram" role="list" '
+        'aria-labelledby="agent-sequence-title agent-sequence-description" '
+        f'viewBox="0 0 {width} {height}" width="{width}" height="{height}">'
+        f'<desc id="agent-sequence-description">{len(events)} recorded events across '
+        f"{len(participants)} agent lifelines.</desc>"
+        f"<defs>{marker_defs}</defs>{''.join(participant_svg)}{''.join(event_svg)}</svg></div>"
+    )
+    ledger = (
+        '<details class="sequence-ledger"><summary>Event ledger · '
+        f"{len(events):,} recorded events</summary><ol>{''.join(ledger_rows)}</ol></details>"
+    )
+    return heading + legend + diagram + ledger + "</section>"
 
 
 def render_codex_rollout_html(
@@ -4423,10 +4926,17 @@ def render_codex_rollout_html(
         else ""
     )
     model_usage_html = _render_model_usage_section(run)
+    sequence_html = _render_codex_sequence_section(run)
+    view_nav_html = (
+        '<nav class="view-nav" aria-label="Report views"><span>Views</span>'
+        '<a href="#agent-sequence">Sequence</a><a href="#timeline">Timeline</a></nav>'
+        if sequence_html
+        else ""
+    )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{_escape_html(report_title)}</title>
 <style>
-:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-cache-write:#2ecc71; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; }}
+:root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-cache-write:#2ecc71; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; --sequence-rail:#b0bec5; --sequence-delegation:#00695c; --sequence-message:#2563a6; --sequence-followup:#6d4c8e; --sequence-interrupt:#b3261e; --sequence-complete:#24733b; }}
 body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
@@ -4434,6 +4944,11 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .report-nav {{ margin:0 0 14px; }}
 .report-nav a {{ color:#2563a6; font-weight:600; text-decoration:none; }}
 .report-nav a:hover {{ text-decoration:underline; }}
+.view-nav {{ display:flex; align-items:center; gap:6px; margin:12px 0 18px; }}
+.view-nav span {{ margin-right:2px; color:#607d8b; font-size:.78em; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }}
+.view-nav a {{ padding:5px 10px; color:#2563a6; background:#fff; border:1px solid #cfd8dc; border-radius:999px; font-size:.86em; font-weight:600; text-decoration:none; }}
+.view-nav a:hover {{ border-color:#2563a6; }}
+.view-nav a:focus-visible, .sequence-scroll:focus-visible, .sequence-event:focus {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .visually-hidden {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
@@ -4506,6 +5021,36 @@ td {{ font-size:.85em; }}
 .agent-info > summary::-webkit-details-marker {{ display:none; }}
 .agent-note-popover {{ position:absolute; z-index:20; top:calc(100% + 8px); right:0; box-sizing:border-box; width:min(620px,calc(100vw - 4em)); padding:12px 14px; color:#455a64; background:#fff; border:1px solid #cfd8dc; border-radius:6px; box-shadow:0 8px 24px rgba(38,50,56,.18); font-size:.88em; font-weight:400; line-height:1.45; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
+#agent-sequence {{ scroll-margin-top:12px; }}
+.sequence-empty {{ padding:18px; color:#607d8b; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
+.sequence-legend {{ display:flex; flex-wrap:wrap; gap:8px 16px; margin:10px 0; color:#546e7a; font-size:.78em; }}
+.sequence-legend span {{ display:inline-flex; align-items:center; gap:6px; }}
+.legend-line {{ display:inline-block; width:24px; height:0; border-top:2px solid currentColor; }}
+.legend-delegation {{ color:var(--sequence-delegation); }}
+.legend-message {{ color:var(--sequence-message); }}
+.legend-followup {{ color:var(--sequence-followup); }}
+.legend-interrupt {{ color:var(--sequence-interrupt); }}
+.legend-complete {{ color:var(--sequence-complete); border-top-style:dashed; }}
+.sequence-scroll {{ overflow-x:auto; margin:0 0 10px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }}
+.agent-sequence-diagram {{ display:block; background:#fff; }}
+.sequence-participant rect {{ fill:#f5f7f8; stroke:#90a4ae; stroke-width:1; }}
+.sequence-participant[data-depth="0"] rect {{ fill:#eef4f8; stroke:#607d8b; }}
+.sequence-participant text {{ fill:#263238; font-family:var(--font-ui); }}
+.sequence-participant-name {{ font-size:12px; font-weight:700; }}
+.sequence-participant-detail {{ fill:#607d8b; font-family:var(--font-code); font-size:9px; }}
+.sequence-lifeline {{ stroke:var(--sequence-rail); stroke-width:1; stroke-dasharray:4 5; }}
+.sequence-event-band {{ fill:transparent; }}
+.sequence-line {{ stroke-width:2; }}
+.sequence-event:focus .sequence-line {{ stroke-width:3; }}
+.sequence-offset {{ fill:#78909c; font-family:var(--font-code); font-size:9px; }}
+.sequence-event-label {{ fill:#263238; stroke:#fff; stroke-width:5px; paint-order:stroke; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
+.sequence-ledger {{ margin-top:10px; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
+.sequence-ledger > summary {{ padding:10px 12px; color:#455a64; cursor:pointer; font-size:.86em; font-weight:600; }}
+.sequence-ledger ol {{ margin:0; padding:0 18px 12px 44px; }}
+.sequence-ledger li {{ padding:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }}
+.sequence-ledger li > * {{ margin-right:7px; }}
+.sequence-ledger time {{ color:#78909c; font-family:var(--font-code); }}
+.sequence-ledger li span:last-child {{ color:#607d8b; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
 .model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
 .activity-name {{ font-family:var(--font-ui); font-size:.92em; font-weight:600; color:#455a64; }}
@@ -4575,6 +5120,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {nav_html}
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
+{view_nav_html}
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{_format_compact_count(run.usage_totals.processed_tokens)}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
@@ -4596,6 +5142,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-fresh">Fresh input {run.usage_totals.direct_input_tokens:,}</span> · <span class="composition-cached">Cache read {run.usage_totals.cached_input_tokens:,}</span>{cache_write_legend} · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 {model_usage_html}
+{sequence_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>{agent_time_heading}</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
@@ -9427,7 +9974,20 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--sessions-root",
-        help="Bounded Codex sessions root. Defaults to ~/.codex/sessions.",
+        action="append",
+        default=[],
+        help=(
+            "Bounded Codex sessions root; repeat to combine active and archived "
+            "stores. Defaults to ~/.codex/sessions."
+        ),
+    )
+    parser.add_argument(
+        "--include-delegations",
+        action="store_true",
+        help=(
+            "Follow outbound <codex_delegation> thread links and include each linked "
+            "thread's native subagent hierarchy."
+        ),
     )
     state_group = parser.add_mutually_exclusive_group()
     state_group.add_argument("--live", action="store_true", help="Render an append-safe live snapshot.")
@@ -9459,6 +10019,8 @@ def main(argv: list[str] | None = None) -> int:
         parser.error("catalog modes cannot be combined with a path or --codex-thread")
     if args.generate_batch and not catalog_mode:
         parser.error("--generate-batch requires --codex-catalog or --junie-catalog")
+    if args.include_delegations and catalog_mode:
+        parser.error("--include-delegations requires a single Codex report")
     if not catalog_mode and any(
         (
             args.catalog_root,
@@ -9595,28 +10157,55 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     native_rollout_path = input_path if input_path and _is_native_codex_rollout(input_path) else None
+    if args.include_delegations and not (args.codex_thread or native_rollout_path):
+        parser.error("--include-delegations requires --codex-thread or a Codex rollout path")
     if args.codex_thread or native_rollout_path is not None:
         if args.codex_thread:
             root_thread_id = args.codex_thread
-            sessions_root = Path(args.sessions_root).expanduser().resolve() if args.sessions_root else (Path.home() / ".codex" / "sessions")
+            if args.sessions_root:
+                session_roots = [
+                    Path(value).expanduser().resolve()
+                    for value in args.sessions_root
+                ]
+            elif args.include_delegations:
+                session_roots = [
+                    Path.home() / ".codex" / "sessions",
+                    Path.home() / ".codex" / "archived_sessions",
+                ]
+            else:
+                session_roots = [Path.home() / ".codex" / "sessions"]
         else:
             identity = _rollout_identity(native_rollout_path)
             if identity is None:
                 print(f"No Codex thread identity found in {native_rollout_path}", file=sys.stderr)
                 return 1
             root_thread_id = identity[0]
-            sessions_root = (
-                Path(args.sessions_root).expanduser().resolve()
-                if args.sessions_root
-                else _sessions_root_for_rollout(native_rollout_path)
-            )
+            if args.sessions_root:
+                session_roots = [
+                    Path(value).expanduser().resolve()
+                    for value in args.sessions_root
+                ]
+            else:
+                primary_root = _sessions_root_for_rollout(native_rollout_path)
+                session_roots = [primary_root]
+                if args.include_delegations and primary_root.name in {
+                    "sessions",
+                    "archived_sessions",
+                }:
+                    sibling_name = (
+                        "archived_sessions"
+                        if primary_root.name == "sessions"
+                        else "sessions"
+                    )
+                    session_roots.append(primary_root.parent / sibling_name)
         output = Path(args.output).resolve() if args.output else (Path.cwd() / f"{root_thread_id}-timeline.html")
         try:
             run = build_codex_rollout_run(
                 root_thread_id,
-                sessions_root,
+                session_roots,
                 seal=args.seal,
                 allow_aborted=args.seal_aborted,
+                include_delegations=args.include_delegations,
                 title=args.title or "",
             )
         except ValueError as exc:

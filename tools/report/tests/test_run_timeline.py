@@ -588,7 +588,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.15.0"
+    assert run.parser_version == "1.16.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1719,7 +1719,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.15.0"
+    assert run.parser_version == "1.16.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -3002,6 +3002,331 @@ def test_native_codex_hierarchy_rejects_cycles(tmp_path):
         assert "Cycle detected" in str(exc)
     else:
         raise AssertionError("expected cycle rejection")
+
+
+def _write_codex_sequence_graph(root: Path) -> None:
+    """Write linked root threads plus one native child for sequence-view tests."""
+
+    coordinator = [
+        {
+            "timestamp": "2026-07-14T04:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "coordinator", "source": "user"},
+        },
+        {
+            "timestamp": "2026-07-14T04:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "coordinator-turn",
+                "started_at": "2026-07-14T04:00:00Z",
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:07Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_text",
+                        "text": (
+                            "<codex_delegation>\n"
+                            "  <source_thread_id>orchestrator</source_thread_id>\n"
+                            "  <input>Return final status</input>\n"
+                            "</codex_delegation>"
+                        ),
+                    }
+                ],
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:10Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "coordinator-turn",
+                "completed_at": "2026-07-14T04:00:10Z",
+                "duration_ms": 10_000,
+            },
+        },
+    ]
+    delegation = (
+        "<codex_delegation>\n"
+        "  <source_thread_id>coordinator</source_thread_id>\n"
+        "  <input>Start backlog item API_TOKEN=PRIVATE</input>\n"
+        "</codex_delegation>"
+    )
+    orchestrator = [
+        {
+            "timestamp": "2026-07-14T04:00:01Z",
+            "type": "session_meta",
+            "payload": {"id": "orchestrator", "source": "user"},
+        },
+        {
+            "timestamp": "2026-07-14T04:00:01Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": delegation}],
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:01Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "orchestrator-turn",
+                "started_at": "2026-07-14T04:00:01Z",
+            },
+        },
+    ]
+    collaboration_calls = [
+        (
+            "2026-07-14T04:00:03Z",
+            "2026-07-14T04:00:03.100Z",
+            "send-call",
+            "send_message",
+            {"target": "/root/worker", "message": "Review API_TOKEN=PRIVATE"},
+        ),
+        (
+            "2026-07-14T04:00:04Z",
+            "2026-07-14T04:00:04.100Z",
+            "followup-call",
+            "followup_task",
+            {"target": "worker", "message": "Continue"},
+        ),
+        (
+            "2026-07-14T04:00:05Z",
+            "2026-07-14T04:00:05.100Z",
+            "interrupt-call",
+            "interrupt_agent",
+            {"target": "/root/worker"},
+        ),
+    ]
+    for started_at, completed_at, call_id, tool_name, arguments in collaboration_calls:
+        orchestrator.extend(
+            [
+                {
+                    "timestamp": started_at,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call",
+                        "name": tool_name,
+                        "arguments": json.dumps(arguments),
+                        "call_id": call_id,
+                    },
+                },
+                {
+                    "timestamp": completed_at,
+                    "type": "response_item",
+                    "payload": {
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": json.dumps({"delivered": True}),
+                    },
+                },
+            ]
+        )
+    orchestrator.append(
+        {
+            "timestamp": "2026-07-14T04:00:08Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "orchestrator-turn",
+                "completed_at": "2026-07-14T04:00:08Z",
+                "duration_ms": 7_000,
+            },
+        }
+    )
+    worker = [
+        {
+            "timestamp": "2026-07-14T04:00:02Z",
+            "type": "session_meta",
+            "payload": {
+                "id": "worker",
+                "source": {
+                    "subagent": {
+                        "thread_spawn": {
+                            "parent_thread_id": "orchestrator",
+                            "agent_path": "/root/worker",
+                            "agent_nickname": "Ada",
+                        }
+                    }
+                },
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:02.100Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "worker-turn",
+                "started_at": "2026-07-14T04:00:02.100Z",
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:05.500Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "turn_aborted",
+                "turn_id": "worker-turn",
+                "completed_at": "2026-07-14T04:00:05.500Z",
+                "duration_ms": 3_400,
+                "reason": "interrupted",
+            },
+        },
+    ]
+    unrelated = [
+        {
+            "timestamp": "2026-07-14T04:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "unrelated", "source": "user"},
+        }
+    ]
+    for filename, records in (
+        ("coordinator.jsonl", coordinator),
+        ("orchestrator.jsonl", orchestrator),
+        ("worker.jsonl", worker),
+        ("unrelated.jsonl", unrelated),
+    ):
+        (root / filename).write_text(
+            "\n".join(json.dumps(record) for record in records) + "\n",
+            encoding="utf-8",
+        )
+
+
+def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+
+    hierarchy_only = module.build_codex_rollout_run("coordinator", tmp_path)
+    linked = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    assert [thread.thread_id for thread in hierarchy_only.threads] == ["coordinator"]
+    assert [thread.thread_id for thread in linked.threads] == [
+        "coordinator",
+        "orchestrator",
+        "worker",
+    ]
+
+    events = module._codex_sequence_events(linked)
+    assert [event.kind for event in events] == [
+        "delegation",
+        "spawn",
+        "message",
+        "followup",
+        "interrupt",
+        "aborted",
+        "delegation",
+    ]
+    assert [(event.source_thread_id, event.target_thread_id) for event in events] == [
+        ("coordinator", "orchestrator"),
+        ("orchestrator", "worker"),
+        ("orchestrator", "worker"),
+        ("orchestrator", "worker"),
+        ("orchestrator", "worker"),
+        ("worker", "orchestrator"),
+        ("orchestrator", "coordinator"),
+    ]
+
+
+def test_native_codex_sealed_linked_delegations_reprocess(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        seal=True,
+        allow_aborted=True,
+        include_delegations=True,
+    )
+    manifest = tmp_path / "sealed.json"
+    manifest.write_text(module.codex_run_to_json(run), encoding="utf-8")
+
+    reproduced = module.reprocess_sealed_codex_run(manifest)
+
+    assert [thread.thread_id for thread in reproduced.threads] == [
+        "coordinator",
+        "orchestrator",
+        "worker",
+    ]
+    assert [event.kind for event in module._codex_sequence_events(reproduced)] == [
+        "delegation",
+        "spawn",
+        "message",
+        "followup",
+        "interrupt",
+        "aborted",
+        "delegation",
+    ]
+
+
+def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    html = module.render_codex_rollout_html(run)
+
+    assert '<section id="agent-sequence"' in html
+    assert '<svg class="agent-sequence-diagram"' in html
+    assert 'class="sequence-event sequence-event-delegation"' in html
+    assert 'class="sequence-event sequence-event-interrupt"' in html
+    assert '<summary>Event ledger · 7 recorded events</summary>' in html
+    assert '<a href="#agent-sequence">Sequence</a>' in html
+    assert '<a href="#timeline">Timeline</a>' in html
+    assert "<script src=" not in html
+    assert 'rel="stylesheet"' not in html
+    assert "Start backlog item API_TOKEN=[redacted]" in html
+    assert "API_TOKEN=PRIVATE" not in html
+
+
+def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
+    module = _load_module()
+    staging = tmp_path / "staging"
+    active = tmp_path / "sessions"
+    archived = tmp_path / "archived_sessions"
+    staging.mkdir()
+    active.mkdir()
+    archived.mkdir()
+    _write_codex_sequence_graph(staging)
+    (staging / "coordinator.jsonl").rename(active / "coordinator.jsonl")
+    for filename in ("orchestrator.jsonl", "worker.jsonl", "unrelated.jsonl"):
+        (staging / filename).rename(archived / filename)
+    output = tmp_path / "sequence-report.html"
+
+    rc = module.main(
+        [
+            "--codex-thread",
+            "coordinator",
+            "--sessions-root",
+            str(active),
+            "--sessions-root",
+            str(archived),
+            "--include-delegations",
+            "--live",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    html = output.read_text(encoding="utf-8")
+    assert '<summary>Event ledger · 7 recorded events</summary>' in html
+    assert "orchestrator" in html
+    assert "worker" in html
 
 
 def test_native_codex_prefers_complete_direct_cost_telemetry(tmp_path):
