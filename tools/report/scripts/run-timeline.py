@@ -30,6 +30,7 @@ import hashlib
 import io
 import json
 import re
+import sqlite3
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -66,7 +67,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.16.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.17.0"
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -344,6 +345,7 @@ class ResponseUsage:
     source_path: str
     source_ordinal: int
     model: str = ""
+    effort: str = ""
     recorded_cost_usd: float | None = None
     derivation_method: str = "cumulative-delta"
     attribution_confidence: str = "exact"
@@ -1697,6 +1699,50 @@ def _report_title(task_title: str) -> str:
     return f'"{normalized}" Agent Report'
 
 
+def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
+    """Read Codex's local task titles without requiring the Codex service."""
+
+    if not thread_ids:
+        return {}
+    placeholders = ",".join("?" for _ in thread_ids)
+    ordered_ids = sorted(thread_ids)
+    sources = (
+        (
+            Path.home() / ".codex" / "sqlite" / "codex-dev.db",
+            (
+                "SELECT thread_id, display_title FROM local_thread_catalog "
+                f"WHERE missing_candidate = 0 AND thread_id IN ({placeholders}) "
+                "ORDER BY observation_sequence DESC"
+            ),
+        ),
+        (
+            Path.home() / ".codex" / "state_5.sqlite",
+            f"SELECT id, title FROM threads WHERE id IN ({placeholders})",
+        ),
+    )
+    titles: dict[str, str] = {}
+    for database, query in sources:
+        if not database.is_file():
+            continue
+        try:
+            connection = sqlite3.connect(
+                f"{database.resolve().as_uri()}?mode=ro",
+                uri=True,
+                timeout=0.2,
+            )
+            try:
+                rows = connection.execute(query, ordered_ids).fetchall()
+            finally:
+                connection.close()
+        except (OSError, sqlite3.Error):
+            continue
+        for thread_id, raw_title in rows:
+            title = re.sub(r"\s+", " ", str(raw_title or "")).strip()
+            if title:
+                titles.setdefault(str(thread_id), title)
+    return titles
+
+
 def _append_codex_activity(
     activities: list[AgentActivity],
     *,
@@ -1775,6 +1821,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     agent_role = ""
     agent_nickname = ""
     model = ""
+    current_effort = ""
     efforts: list[str] = []
     plan_type = ""
     timestamps: list[str] = []
@@ -1858,6 +1905,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
             effort = str(payload.get("effort") or "").strip()
             if effort and effort not in efforts:
                 efforts.append(effort)
+            if effort:
+                current_effort = effort
             continue
 
         if record_type == "event_msg":
@@ -1922,6 +1971,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         source_path=str(path),
                         source_ordinal=ordinal,
                         model=model,
+                        effort=current_effort,
                         attribution_confidence=confidence,
                     )
                     responses.append(response)
@@ -3122,6 +3172,7 @@ def build_codex_rollout_run(
     observed_at: datetime | None = None,
     candidate_paths: list[Path] | None = None,
     title: str = "",
+    thread_titles: dict[str, str] | None = None,
 ) -> CodexRunMetrics:
     """Discover, parse, reconcile, and aggregate one native Codex subtree.
 
@@ -3156,6 +3207,19 @@ def build_codex_rollout_run(
         include_delegations=include_delegations,
     )
     threads = [parse_codex_rollout(path) for path in included_paths]
+    resolved_thread_titles = _local_codex_thread_titles(
+        {thread.thread_id for thread in threads}
+    )
+    resolved_thread_titles.update(
+        {
+            str(thread_id).strip(): re.sub(r"\s+", " ", str(value)).strip()
+            for thread_id, value in (thread_titles or {}).items()
+            if str(thread_id).strip() and str(value).strip()
+        }
+    )
+    for thread in threads:
+        if thread.thread_id in resolved_thread_titles:
+            thread.task_title = resolved_thread_titles[thread.thread_id]
     _record_explicit_interrupt_provenance(threads)
     if seal:
         final_candidates = set(
@@ -3304,6 +3368,13 @@ def reprocess_sealed_codex_run(manifest_path: Path) -> CodexRunMetrics:
         candidate_paths=paths,
         include_delegations=True,
         title=str(data.get("run_label") or ""),
+        thread_titles={
+            str(thread.get("thread_id") or ""): str(thread.get("task_title") or "")
+            for thread in data.get("threads", [])
+            if isinstance(thread, dict)
+            and thread.get("thread_id")
+            and thread.get("task_title")
+        },
     )
 
 
@@ -3506,7 +3577,11 @@ def _agent_assignment(thread: CodexThreadMetrics) -> str:
 
 
 def _agent_assignment_label(thread: CodexThreadMetrics) -> str:
-    assignment = thread.thread_name
+    assignment = (
+        thread.task_title
+        if not thread.parent_thread_id and thread.task_title
+        else thread.thread_name
+    )
     if not assignment and thread.agent_path:
         assignment = thread.agent_path.rstrip("/").rsplit("/", 1)[-1]
     if not assignment:
@@ -3755,10 +3830,10 @@ def _reports_cache_write_tokens(run: CodexRunMetrics) -> bool:
 
 def _model_usage_by_agent(
     run: CodexRunMetrics,
-) -> dict[str, dict[str, UsageTotals]]:
-    """Return reconciled model usage keyed by contributing agent thread."""
+) -> dict[tuple[str, str], dict[str, UsageTotals]]:
+    """Return reconciled model-and-effort usage by contributing agent thread."""
 
-    model_usage: dict[str, dict[str, UsageTotals]] = {}
+    model_usage: dict[tuple[str, str], dict[str, UsageTotals]] = {}
     for thread in run.threads:
         remaining = thread.token_totals
         fallback_model = (
@@ -3771,13 +3846,23 @@ def _model_usage_by_agent(
             if _usage_is_zero(allocated):
                 continue
             model = response.model or fallback_model
-            agents = model_usage.setdefault(model, {})
+            effort = response.effort or (
+                thread.effort
+                if thread.effort and not thread.effort.startswith("mixed (")
+                else ""
+            )
+            agents = model_usage.setdefault((model, effort), {})
             agents[thread.thread_id] = (
                 agents.get(thread.thread_id, UsageTotals()) + allocated
             )
             remaining = remaining.subtract(allocated)
         if not _usage_is_zero(remaining):
-            agents = model_usage.setdefault(fallback_model, {})
+            fallback_effort = (
+                thread.effort
+                if thread.effort and not thread.effort.startswith("mixed (")
+                else ""
+            )
+            agents = model_usage.setdefault((fallback_model, fallback_effort), {})
             agents[thread.thread_id] = (
                 agents.get(thread.thread_id, UsageTotals()) + remaining
             )
@@ -3795,16 +3880,22 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
         thread.thread_id: index for index, (thread, _) in enumerate(inventory)
     }
     run_total = run.usage_totals.processed_tokens or 1
-    groups: list[tuple[str, UsageTotals, dict[str, UsageTotals]]] = []
-    for model, agents in model_usage.items():
+    groups: list[tuple[str, str, UsageTotals, dict[str, UsageTotals]]] = []
+    for (model, effort), agents in model_usage.items():
         total = UsageTotals()
         for usage in agents.values():
             total = total + usage
-        groups.append((model, total, agents))
-    groups.sort(key=lambda item: (-item[1].processed_tokens, item[0].casefold()))
+        groups.append((model, effort, total, agents))
+    groups.sort(
+        key=lambda item: (
+            -item[2].processed_tokens,
+            item[0].casefold(),
+            item[1].casefold(),
+        )
+    )
 
     rendered_groups = []
-    for model, total, agents in groups:
+    for model, effort, total, agents in groups:
         agent_rows = []
         for thread_id, usage in sorted(
             agents.items(),
@@ -3836,22 +3927,9 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
                 f'<td>{model_share:.1f}%</td>'
                 "</tr>"
             )
-        efforts = sorted(
-            {
-                threads[thread_id].effort
-                for thread_id in agents
-                if threads[thread_id].effort
-            },
-            key=str.casefold,
-        )
-        effort_label = (
-            efforts[0]
-            if len(efforts) == 1
-            else f"mixed ({', '.join(efforts)})" if efforts else ""
-        )
         effort_html = (
-            f' · <span class="model-effort">effort {_escape_html(effort_label)}</span>'
-            if effort_label
+            f' · <span class="model-effort">effort {_escape_html(effort)}</span>'
+            if effort
             else ""
         )
         agent_label = "agent" if len(agents) == 1 else "agents"
@@ -3888,8 +3966,9 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
     return (
         '<section id="model-usage">'
         '<div class="agents-heading"><h2>Usage by model</h2></div>'
-        '<p class="execution-note">Expand a model to see the agents that contributed '
-        f'to its total. {usage_note}</p>'
+        '<p class="execution-note">Each model and effort combination is a separate '
+        'group. Expand a group to see the agents that contributed to its total. '
+        f'{usage_note}</p>'
         f'<div class="model-usage-groups">{"".join(rendered_groups)}</div>'
         "</section>"
     )
@@ -4088,6 +4167,58 @@ def _sequence_participant_name(
     return f"root {thread.thread_id[:8]}"
 
 
+def _sequence_recipient_update(
+    run: CodexRunMetrics,
+    event: AgentSequenceEvent,
+) -> AgentActivity | None:
+    """Return the target's next nearby plaintext update for an opaque message."""
+
+    if (
+        event.kind not in {"message", "followup"}
+        or "[encrypted message," not in event.label
+    ):
+        return None
+    event_time = _parse_iso_datetime(event.event_timestamp)
+    if event_time is None:
+        return None
+    target = next(
+        (
+            thread
+            for thread in run.threads
+            if thread.thread_id == event.target_thread_id
+        ),
+        None,
+    )
+    if target is None:
+        return None
+    candidates: list[tuple[datetime, int, AgentActivity]] = []
+    for activity in target.activities:
+        if activity.activity_type != "output" or not activity.content:
+            continue
+        activity_time = _parse_iso_datetime(activity.event_timestamp)
+        if activity_time is None or activity_time < event_time:
+            continue
+        if activity_time - event_time > timedelta(minutes=15):
+            continue
+        candidates.append((activity_time, activity.source_ordinal, activity))
+    if not candidates:
+        return None
+    return min(candidates, key=lambda item: (item[0], item[1]))[2]
+
+
+def _sequence_visible_event_label(
+    event: AgentSequenceEvent,
+    recipient_update: AgentActivity | None,
+) -> str:
+    """Keep opaque traffic understandable without claiming ciphertext recovery."""
+
+    if "[encrypted message," not in event.label:
+        return event.label
+    action = "follow up" if event.kind == "followup" else "message"
+    suffix = "recipient update" if recipient_update else "encrypted"
+    return f"{action} · {suffix}"
+
+
 def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     """Render one offline SVG sequence view plus an exact text event ledger."""
 
@@ -4099,6 +4230,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     heading = (
         '<section id="agent-sequence" aria-labelledby="agent-sequence-title">'
         '<div class="agents-heading"><h2 id="agent-sequence-title">Agent sequence</h2>'
+        '<a class="sequence-open-link" href="#agent-sequence" target="_blank" '
+        'rel="noopener">Open in new tab</a>'
         '<details class="agent-info"><summary aria-label="About Agent sequence">ⓘ</summary>'
         '<div class="agent-note-popover" role="note">'
         "Rows are chronological recorded coordination events, not duration-scaled activity. "
@@ -4116,11 +4249,11 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         )
     participant_gap = 220
     side_padding = 110
-    header_height = 96
+    participant_header_height = 82
     event_height = 52
     footer_height = 30
     width = max(760, side_padding * 2 + participant_gap * (len(participants) - 1))
-    height = header_height + event_height * len(events) + footer_height
+    height = event_height * len(events) + footer_height
     x_by_thread_id = {
         thread.thread_id: side_padding + index * participant_gap
         for index, thread in enumerate(participants)
@@ -4164,46 +4297,55 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         if thread.agent_nickname:
             detail = f"{thread.agent_nickname} · {detail}"
         participant_svg.append(
-            '<g class="sequence-participant" data-depth="{depth}">'
-            '<title>{title}</title>'
-            '<rect x="{box_x}" y="14" width="176" height="54" rx="5"></rect>'
-            '<text x="{x}" y="36" text-anchor="middle">'
+            '<g class="sequence-participant" data-depth="{depth}" aria-label="{aria}">'
+            '<rect x="{box_x}" y="10" width="176" height="54" rx="5"></rect>'
+            '<text x="{x}" y="32" text-anchor="middle">'
             '<tspan class="sequence-participant-name" x="{x}">{name}</tspan>'
             '<tspan class="sequence-participant-detail" x="{x}" dy="18">{detail}</tspan>'
             "</text>"
-            '<line class="sequence-lifeline" x1="{x}" y1="68" x2="{x}" y2="{end_y}"></line>'
             "</g>".format(
                 depth=depth,
-                title=_escape_html(f"{full_name} · {detail}"),
+                aria=_escape_html(f"{full_name} · {detail}"),
                 box_x=x - 88,
                 x=x,
                 name=_escape_html(visible_name),
                 detail=_escape_html(_sequence_compact_text(detail, 28)),
-                end_y=height - 16,
             )
         )
+    lifeline_svg = "".join(
+        '<line class="sequence-lifeline" x1="{x}" y1="0" x2="{x}" '
+        'y2="{end_y}"></line>'.format(
+            x=x_by_thread_id[thread.thread_id],
+            end_y=height - 16,
+        )
+        for thread in participants
+    )
     event_svg = []
     ledger_rows = []
+    event_overlays = []
     return_kinds = {"complete", "aborted", "failed"}
     for index, event in enumerate(events):
-        y = header_height + index * event_height + 24
+        y = index * event_height + 24
         source_x = x_by_thread_id[event.source_thread_id]
         target_x = x_by_thread_id[event.target_thread_id]
         marker_name, color = marker_colors[event.kind]
         line_length = abs(target_x - source_x)
         label_limit = max(14, min(48, line_length // 7))
-        visible_label = _sequence_compact_text(event.label, label_limit)
+        recipient_update = _sequence_recipient_update(run, event)
+        display_label = _sequence_visible_event_label(event, recipient_update)
+        visible_label = _sequence_compact_text(display_label, label_limit)
         source_name = name_by_thread_id[event.source_thread_id]
         target_name = name_by_thread_id[event.target_thread_id]
         offset = _timestamp_offset_label(run, event.event_timestamp)
         event_description = (
             f"{offset}: {source_name} to {target_name} · {event.label}"
         )
+        detail_id = f"sequence-event-{index + 1}"
         dash = ' stroke-dasharray="6 4"' if event.kind in return_kinds else ""
         event_svg.append(
-            '<g class="sequence-event sequence-event-{kind}" tabindex="0" role="listitem" '
-            'aria-label="{aria}">'
-            '<title>{title}</title>'
+            '<a class="sequence-event-link" href="#{detail_id}" tabindex="0" '
+            'role="listitem" aria-label="{aria}">'
+            '<g class="sequence-event sequence-event-{kind}">'
             '<rect class="sequence-event-band" x="0" y="{band_y}" width="{width}" height="44"></rect>'
             '<text class="sequence-offset" x="12" y="{text_y}">{offset}</text>'
             '<line class="sequence-line" x1="{source_x}" y1="{y}" x2="{target_x}" y2="{y}" '
@@ -4211,10 +4353,10 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             '<circle class="sequence-source-dot" cx="{source_x}" cy="{y}" r="3" fill="{color}"></circle>'
             '<text class="sequence-event-label" x="{label_x}" y="{label_y}" '
             'text-anchor="middle">{label}</text>'
-            "</g>".format(
+            "</g></a>".format(
+                detail_id=detail_id,
                 kind=event.kind,
                 aria=_escape_html(event_description),
-                title=_escape_html(event_description),
                 band_y=y - 20,
                 width=width,
                 text_y=y + 4,
@@ -4231,12 +4373,57 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             )
         )
         ledger_rows.append(
-            '<li><time>{offset}</time><strong>{source}</strong><span aria-hidden="true">→</span>'
-            '<strong>{target}</strong><span>{label}</span></li>'.format(
+            '<li><a class="sequence-ledger-link" href="#{detail_id}">'
+            '<time>{offset}</time><strong>{source}</strong><span aria-hidden="true">→</span>'
+            '<strong>{target}</strong><span>{label}</span></a></li>'.format(
+                detail_id=detail_id,
                 offset=_escape_html(offset),
                 source=_escape_html(source_name),
                 target=_escape_html(target_name),
                 label=_escape_html(event.label),
+            )
+        )
+        opaque_message_note = (
+            '<p class="execution-note">The original message is encrypted in the '
+            'offline rollout, so its plaintext is unavailable to this report.</p>'
+            if "[encrypted message," in event.label
+            else ""
+        )
+        recipient_update_html = ""
+        if recipient_update is not None:
+            update_offset = _timestamp_offset_label(
+                run,
+                recipient_update.event_timestamp,
+            )
+            recipient_update_html = (
+                "<h3>Recipient's next recorded update</h3>"
+                '<p class="execution-note">Recipient updates are context, not recovered '
+                'message plaintext. This update was recorded at '
+                f"{_escape_html(update_offset)}.</p>"
+                '<pre class="sequence-recipient-update">'
+                f"{_escape_html(recipient_update.content)}</pre>"
+            )
+        event_overlays.append(
+            '<section id="{detail_id}" class="tool-call-overlay sequence-event-overlay" '
+            'role="dialog" aria-modal="true" aria-labelledby="{detail_id}-title">'
+            '<div class="tool-call-panel sequence-event-panel">'
+            '<div class="tool-call-header"><h2 id="{detail_id}-title">Sequence event</h2>'
+            '<a class="tool-call-close" href="#agent-sequence">Close</a></div>'
+            '<div class="metrics sequence-event-metrics">'
+            '<div class="metric"><div class="label">Offset</div><div class="value">{offset}</div></div>'
+            '<div class="metric"><div class="label">Type</div><div class="value">{kind}</div></div>'
+            '<div class="metric"><div class="label">From</div><div class="value">{source}</div></div>'
+            '<div class="metric"><div class="label">To</div><div class="value">{target}</div></div>'
+            '</div><h3>Recorded event</h3><p class="sequence-event-full">{label}</p>'
+            '{opaque_note}{recipient_update}</div></section>'.format(
+                detail_id=detail_id,
+                offset=_escape_html(offset),
+                kind=_escape_html(event.kind),
+                source=_escape_html(source_name),
+                target=_escape_html(target_name),
+                label=_escape_html(event.label),
+                opaque_note=opaque_message_note,
+                recipient_update=recipient_update_html,
             )
         )
     legend = (
@@ -4250,18 +4437,24 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     )
     diagram = (
         '<div class="sequence-scroll" tabindex="0" aria-label="Scrollable agent sequence diagram">'
+        f'<div class="sequence-canvas" style="width:{width}px">'
+        '<div class="sequence-sticky-header">'
+        f'{legend}<svg class="sequence-participant-header" role="img" '
+        f'aria-label="{len(participants)} agent lifelines" viewBox="0 0 {width} '
+        f'{participant_header_height}" width="{width}" height="{participant_header_height}">'
+        f"{''.join(participant_svg)}</svg></div>"
         '<svg class="agent-sequence-diagram" role="list" '
         'aria-labelledby="agent-sequence-title agent-sequence-description" '
         f'viewBox="0 0 {width} {height}" width="{width}" height="{height}">'
         f'<desc id="agent-sequence-description">{len(events)} recorded events across '
         f"{len(participants)} agent lifelines.</desc>"
-        f"<defs>{marker_defs}</defs>{''.join(participant_svg)}{''.join(event_svg)}</svg></div>"
+        f"<defs>{marker_defs}</defs>{lifeline_svg}{''.join(event_svg)}</svg></div></div>"
     )
     ledger = (
         '<details class="sequence-ledger"><summary>Event ledger · '
         f"{len(events):,} recorded events</summary><ol>{''.join(ledger_rows)}</ol></details>"
     )
-    return heading + legend + diagram + ledger + "</section>"
+    return heading + diagram + ledger + "".join(event_overlays) + "</section>"
 
 
 def render_codex_rollout_html(
@@ -4929,7 +5122,8 @@ def render_codex_rollout_html(
     sequence_html = _render_codex_sequence_section(run)
     view_nav_html = (
         '<nav class="view-nav" aria-label="Report views"><span>Views</span>'
-        '<a href="#agent-sequence">Sequence</a><a href="#timeline">Timeline</a></nav>'
+        '<a href="#timeline">Timeline</a>'
+        '<a href="#agent-sequence" target="_blank" rel="noopener">Sequence</a></nav>'
         if sequence_html
         else ""
     )
@@ -4948,7 +5142,7 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .view-nav span {{ margin-right:2px; color:#607d8b; font-size:.78em; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }}
 .view-nav a {{ padding:5px 10px; color:#2563a6; background:#fff; border:1px solid #cfd8dc; border-radius:999px; font-size:.86em; font-weight:600; text-decoration:none; }}
 .view-nav a:hover {{ border-color:#2563a6; }}
-.view-nav a:focus-visible, .sequence-scroll:focus-visible, .sequence-event:focus {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.view-nav a:focus-visible, .sequence-open-link:focus-visible, .sequence-scroll:focus-visible, .sequence-event-link:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .visually-hidden {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
@@ -5022,8 +5216,10 @@ td {{ font-size:.85em; }}
 .agent-note-popover {{ position:absolute; z-index:20; top:calc(100% + 8px); right:0; box-sizing:border-box; width:min(620px,calc(100vw - 4em)); padding:12px 14px; color:#455a64; background:#fff; border:1px solid #cfd8dc; border-radius:6px; box-shadow:0 8px 24px rgba(38,50,56,.18); font-size:.88em; font-weight:400; line-height:1.45; }}
 .execution-note {{ color:#607d8b; font-size:.88em; }}
 #agent-sequence {{ scroll-margin-top:12px; }}
+.sequence-open-link {{ margin-left:12px; color:#2563a6; font-size:.82em; font-weight:600; text-decoration:none; }}
+.sequence-open-link:hover {{ text-decoration:underline; }}
 .sequence-empty {{ padding:18px; color:#607d8b; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
-.sequence-legend {{ display:flex; flex-wrap:wrap; gap:8px 16px; margin:10px 0; color:#546e7a; font-size:.78em; }}
+.sequence-legend {{ position:sticky; left:0; display:flex; width:max-content; flex-wrap:wrap; gap:8px 16px; box-sizing:border-box; margin:0; padding:8px 12px 2px; color:#546e7a; background:#fff; font-size:.78em; }}
 .sequence-legend span {{ display:inline-flex; align-items:center; gap:6px; }}
 .legend-line {{ display:inline-block; width:24px; height:0; border-top:2px solid currentColor; }}
 .legend-delegation {{ color:var(--sequence-delegation); }}
@@ -5031,7 +5227,10 @@ td {{ font-size:.85em; }}
 .legend-followup {{ color:var(--sequence-followup); }}
 .legend-interrupt {{ color:var(--sequence-interrupt); }}
 .legend-complete {{ color:var(--sequence-complete); border-top-style:dashed; }}
-.sequence-scroll {{ overflow-x:auto; margin:0 0 10px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }}
+.sequence-scroll {{ position:relative; max-height:72vh; overflow:auto; margin:0 0 10px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }}
+.sequence-canvas {{ min-width:100%; background:#fff; }}
+.sequence-sticky-header {{ position:sticky; top:0; z-index:5; background:#fff; border-bottom:1px solid #d7e0e5; box-shadow:0 3px 8px rgba(38,50,56,.08); }}
+.sequence-participant-header {{ display:block; background:#fff; }}
 .agent-sequence-diagram {{ display:block; background:#fff; }}
 .sequence-participant rect {{ fill:#f5f7f8; stroke:#90a4ae; stroke-width:1; }}
 .sequence-participant[data-depth="0"] rect {{ fill:#eef4f8; stroke:#607d8b; }}
@@ -5041,16 +5240,25 @@ td {{ font-size:.85em; }}
 .sequence-lifeline {{ stroke:var(--sequence-rail); stroke-width:1; stroke-dasharray:4 5; }}
 .sequence-event-band {{ fill:transparent; }}
 .sequence-line {{ stroke-width:2; }}
-.sequence-event:focus .sequence-line {{ stroke-width:3; }}
+.sequence-event-link {{ cursor:pointer; }}
+.sequence-event-link:hover .sequence-event-band, .sequence-event-link:focus-visible .sequence-event-band {{ fill:#eef4f8; }}
+.sequence-event-link:hover .sequence-line, .sequence-event-link:focus-visible .sequence-line {{ stroke-width:3; }}
 .sequence-offset {{ fill:#78909c; font-family:var(--font-code); font-size:9px; }}
 .sequence-event-label {{ fill:#263238; stroke:#fff; stroke-width:5px; paint-order:stroke; font-family:var(--font-ui); font-size:10px; font-weight:600; }}
 .sequence-ledger {{ margin-top:10px; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
 .sequence-ledger > summary {{ padding:10px 12px; color:#455a64; cursor:pointer; font-size:.86em; font-weight:600; }}
 .sequence-ledger ol {{ margin:0; padding:0 18px 12px 44px; }}
 .sequence-ledger li {{ padding:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }}
-.sequence-ledger li > * {{ margin-right:7px; }}
+.sequence-ledger-link {{ color:inherit; text-decoration:none; }}
+.sequence-ledger-link:hover, .sequence-ledger-link:focus-visible {{ color:#2563a6; text-decoration:underline; }}
+.sequence-ledger-link > * {{ margin-right:7px; }}
 .sequence-ledger time {{ color:#78909c; font-family:var(--font-code); }}
 .sequence-ledger li span:last-child {{ color:#607d8b; }}
+.sequence-event-panel {{ width:min(920px,94vw); }}
+.sequence-event-metrics {{ grid-template-columns:repeat(4,minmax(0,1fr)); }}
+.sequence-event-metrics .value {{ overflow-wrap:anywhere; font-size:.92em; }}
+.sequence-event-full {{ margin:4px 0 12px; line-height:1.5; overflow-wrap:anywhere; }}
+.sequence-recipient-update {{ max-height:38vh; margin:4px 0 0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:5px; font-family:var(--font-ui); font-size:.88em; line-height:1.5; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
 .model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
 .activity-name {{ font-family:var(--font-ui); font-size:.92em; font-weight:600; color:#455a64; }}
@@ -5142,10 +5350,10 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-fresh">Fresh input {run.usage_totals.direct_input_tokens:,}</span> · <span class="composition-cached">Cache read {run.usage_totals.cached_input_tokens:,}</span>{cache_write_legend} · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 {model_usage_html}
-{sequence_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>{agent_time_heading}</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
+{sequence_html}
 {pricing_overlay}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
@@ -9973,6 +10181,17 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--thread-title",
+        action="append",
+        default=[],
+        metavar="THREAD_ID=TITLE",
+        help=(
+            "Override one task display name used by timeline and sequence views; "
+            "repeat for linked or archived tasks whose Codex sidebar title is "
+            "unavailable locally."
+        ),
+    )
+    parser.add_argument(
         "--sessions-root",
         action="append",
         default=[],
@@ -10052,6 +10271,7 @@ def main(argv: list[str] | None = None) -> int:
                 args.work_unit_csv_output,
                 args.markdown_output,
                 args.title,
+                args.thread_title,
                 args.sessions_root,
             )
         ):
@@ -10157,8 +10377,16 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     native_rollout_path = input_path if input_path and _is_native_codex_rollout(input_path) else None
+    thread_titles: dict[str, str] = {}
+    for value in args.thread_title:
+        thread_id, separator, display_title = value.partition("=")
+        if not separator or not thread_id.strip() or not display_title.strip():
+            parser.error("--thread-title must use THREAD_ID=TITLE with both values present")
+        thread_titles[thread_id.strip()] = display_title.strip()
     if args.include_delegations and not (args.codex_thread or native_rollout_path):
         parser.error("--include-delegations requires --codex-thread or a Codex rollout path")
+    if thread_titles and not (args.codex_thread or native_rollout_path):
+        parser.error("--thread-title requires --codex-thread or a Codex rollout path")
     if args.codex_thread or native_rollout_path is not None:
         if args.codex_thread:
             root_thread_id = args.codex_thread
@@ -10207,6 +10435,7 @@ def main(argv: list[str] | None = None) -> int:
                 allow_aborted=args.seal_aborted,
                 include_delegations=args.include_delegations,
                 title=args.title or "",
+                thread_titles=thread_titles,
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)

@@ -588,7 +588,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.16.0"
+    assert run.parser_version == "1.17.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1449,6 +1449,36 @@ def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path)
     ) in model_usage
 
 
+def test_model_usage_separates_the_same_model_by_effort_level(tmp_path):
+    module = _load_module()
+    session = _write_junie_session(tmp_path)
+    run = module.load_report_document(session).codex_run
+
+    assert run is not None
+    main = next(thread for thread in run.threads if thread.agent_path == "/main")
+    reviewer = next(
+        thread for thread in run.threads if thread.agent_path.endswith("/reviewer")
+    )
+    reviewer.model = main.model
+    reviewer.responses[0].model = main.model
+    main.effort = "max"
+    main.responses[0].effort = "max"
+    reviewer.effort = "medium"
+    reviewer.responses[0].effort = "medium"
+
+    html = module.render_codex_rollout_html(run)
+    model_usage = html.split('<section id="model-usage"', 1)[1].split(
+        '<div id="timeline"', 1
+    )[0]
+
+    assert model_usage.count('class="model-usage-group"') == 2
+    assert model_usage.count(f'<code class="model-name">{main.model}</code>') == 2
+    assert '<span class="model-effort">effort max</span>' in model_usage
+    assert '<span class="model-effort">effort medium</span>' in model_usage
+    assert "effort mixed" not in model_usage
+    assert "Each model and effort combination is a separate group." in model_usage
+
+
 def test_tool_formatter_config_rejects_unsafe_regex():
     module = _load_module()
 
@@ -1719,7 +1749,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.16.0"
+    assert run.parser_version == "1.17.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -2493,6 +2523,7 @@ def test_native_codex_unsupported_subscription_model_has_no_monetary_estimate(tm
     assert run.cost.status == "subscription-no-charge-data"
     assert run.cost.total_cost is None
     assert run.threads[0].effort == "high"
+    assert run.threads[0].responses[0].effort == "high"
 
     html = module.render_codex_rollout_html(run)
     agent_table = html.split('<table class="agent-table">', 1)[1].split(
@@ -3089,7 +3120,7 @@ def _write_codex_sequence_graph(root: Path) -> None:
             "2026-07-14T04:00:03.100Z",
             "send-call",
             "send_message",
-            {"target": "/root/worker", "message": "Review API_TOKEN=PRIVATE"},
+            {"target": "/root/worker", "message": "gAAAAA" + "A" * 80},
         ),
         (
             "2026-07-14T04:00:04Z",
@@ -3166,6 +3197,22 @@ def _write_codex_sequence_graph(root: Path) -> None:
                 "type": "task_started",
                 "turn_id": "worker-turn",
                 "started_at": "2026-07-14T04:00:02.100Z",
+            },
+        },
+        {
+            "timestamp": "2026-07-14T04:00:03.500Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "output_text",
+                        "text": (
+                            "I received the review request and will inspect the branch."
+                        ),
+                    }
+                ],
             },
         },
         {
@@ -3269,6 +3316,45 @@ def test_native_codex_sealed_linked_delegations_reprocess(tmp_path):
     ]
 
 
+def test_native_codex_sequence_uses_local_catalog_display_titles(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    sessions = tmp_path / "sessions"
+    sessions.mkdir()
+    _write_codex_sequence_graph(sessions)
+    desktop_database = tmp_path / ".codex" / "sqlite" / "codex-dev.db"
+    desktop_database.parent.mkdir(parents=True)
+    connection = module.sqlite3.connect(desktop_database)
+    try:
+        connection.execute(
+            "CREATE TABLE local_thread_catalog ("
+            "thread_id TEXT, display_title TEXT, missing_candidate INTEGER, "
+            "observation_sequence INTEGER)"
+        )
+        connection.execute(
+            "INSERT INTO local_thread_catalog VALUES (?, ?, 0, 1)",
+            ("orchestrator", "Process Backlog Items"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    monkeypatch.setattr(module.Path, "home", classmethod(lambda cls: tmp_path))
+
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        sessions,
+        include_delegations=True,
+    )
+
+    orchestrator = next(
+        thread for thread in run.threads if thread.thread_id == "orchestrator"
+    )
+    assert orchestrator.task_title == "Process Backlog Items"
+    assert "Process Backlog Items" in module.render_codex_rollout_html(run)
+
+
 def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
@@ -3276,6 +3362,10 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
         "coordinator",
         tmp_path,
         include_delegations=True,
+        thread_titles={
+            "coordinator": "List unmerged branches",
+            "orchestrator": "Process Backlog Items",
+        },
     )
 
     html = module.render_codex_rollout_html(run)
@@ -3285,8 +3375,31 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert 'class="sequence-event sequence-event-delegation"' in html
     assert 'class="sequence-event sequence-event-interrupt"' in html
     assert '<summary>Event ledger · 7 recorded events</summary>' in html
-    assert '<a href="#agent-sequence">Sequence</a>' in html
     assert '<a href="#timeline">Timeline</a>' in html
+    assert (
+        '<a href="#agent-sequence" target="_blank" rel="noopener">Sequence</a>'
+        in html
+    )
+    assert html.index('<div id="timeline"') < html.index('<section id="agent-sequence"')
+    timeline = html.split('<div id="timeline"', 1)[1].split(
+        '<section id="agent-sequence"', 1
+    )[0]
+    assert "Thread: List unmerged branches · Agent: main" in timeline
+    assert "Thread: Process Backlog Items · Agent: main" in timeline
+    assert 'class="sequence-sticky-header"' in html
+    assert ".sequence-sticky-header { position:sticky; top:0;" in html
+    assert 'class="sequence-event-link" href="#sequence-event-' in html
+    assert 'class="tool-call-overlay sequence-event-overlay"' in html
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    assert "<title>" not in sequence
+    assert "List unmerged branches" in sequence
+    assert "Process Backlog Items" in sequence
+    assert "message · recipient update" in sequence
+    assert "Recorded event" in sequence
+    assert "message · [encrypted message, 86 chars]" in sequence
+    assert "Recipient's next recorded update" in sequence
+    assert "I received the review request and will inspect the branch." in sequence
+    assert "Recipient updates are context, not recovered message plaintext." in sequence
     assert "<script src=" not in html
     assert 'rel="stylesheet"' not in html
     assert "Start backlog item API_TOKEN=[redacted]" in html
@@ -3316,6 +3429,10 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
             "--sessions-root",
             str(archived),
             "--include-delegations",
+            "--thread-title",
+            "coordinator=List unmerged branches",
+            "--thread-title",
+            "orchestrator=Process Backlog Items",
             "--live",
             "--output",
             str(output),
@@ -3325,7 +3442,8 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
     assert rc == 0
     html = output.read_text(encoding="utf-8")
     assert '<summary>Event ledger · 7 recorded events</summary>' in html
-    assert "orchestrator" in html
+    assert "List unmerged branches" in html
+    assert "Process Backlog Items" in html
     assert "worker" in html
 
 

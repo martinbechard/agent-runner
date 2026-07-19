@@ -15,7 +15,8 @@ Current contents:
   - reports a native Codex Desktop root rollout and its closed descendant set
     from a thread ID or rollout path
   - renders an offline agent sequence view for recorded delegations,
-    inter-agent messages, lifecycle controls, and native subagent endings
+    inter-agent messages, lifecycle controls, and native subagent endings;
+    model usage keeps different reasoning-effort levels in separate groups
   - reports a native Junie session from its session directory or
     `events.jsonl` path
   - emits privacy-safe JSON, turn CSV, work-unit CSV, Markdown, and HTML
@@ -60,11 +61,20 @@ python tools/report/scripts/run-timeline.py \
 ```
 
 The HTML report is self-contained and opens directly from disk; it does not
-require a web server. Its **Agent sequence** view reads downward through
-recorded delegation, spawn, message, follow-up, interrupt, and child-ending
-events. Solid arrows show dispatch or control traffic, dashed return arrows
-show native subagent endings, and the event ledger below the SVG preserves the
-exact chronological rows in accessible text.
+require a web server. The timeline remains the primary view, with **Sequence**
+opening the same report in a new tab at the sequence section below the timeline.
+The sequence reads downward through recorded delegation, spawn, message,
+follow-up, interrupt, and child-ending events. Its legend and agent lifelines
+remain visible while its event rows scroll. Select an arrow or event-ledger row
+to open the full, untruncated recorded label. Solid arrows show dispatch or
+control traffic, dashed return arrows show native subagent endings, and the
+ledger preserves the exact chronological rows in accessible text.
+
+Codex stores some native inter-agent message arguments as ciphertext. The
+report does not decrypt or expose that payload. When the receiving task has a
+nearby plaintext update, the arrow indicates that context is available and the
+event panel labels it as the recipient's next update rather than as recovered
+message text.
 
 Some coordinators dispatch work into separate root tasks with
 `<codex_delegation>` records. Add `--include-delegations` to follow those
@@ -84,6 +94,21 @@ python tools/report/scripts/run-timeline.py \
 
 When `--include-delegations` is used without explicit session roots, the tool
 scans both default Codex stores automatically.
+
+The sequence view reads task display names from Codex's local desktop catalogs
+when available, and the same names identify top-level rows in the timeline.
+A renamed or archived task may not remain in that catalog; use
+repeatable `--thread-title THREAD_ID=TITLE` overrides to make those lifelines
+match the Codex sidebar exactly:
+
+```bash
+agent-report \
+  --codex-thread <coordinator-thread-id> \
+  --include-delegations \
+  --thread-title '<linked-thread-id>=Process Backlog Items' \
+  --live \
+  --output codex-sequence.html
+```
 
 Discover reportable root runs by inclusive UTC date range without first finding
 a thread ID. The Codex catalog scans both `~/.codex/sessions` and
