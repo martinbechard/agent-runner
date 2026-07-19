@@ -3470,6 +3470,37 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     ) < spawn_event.index(recipient_text)
 
 
+def test_native_codex_sequence_tooltips_only_truncated_participant_titles(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    long_title = (
+        "There's been work done on various feature branches never committed to main. "
+        "List those branches"
+    )
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+        thread_titles={
+            "coordinator": long_title,
+            "orchestrator": "Process Backlog Items",
+        },
+    )
+
+    html = module.render_codex_rollout_html(run)
+
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    long_participant = sequence.split(
+        '<g class="sequence-participant"', 1
+    )[1].split("</g>", 1)[0]
+    assert f"<title>{long_title}</title>" in long_participant
+    assert 'tabindex="0"' in long_participant
+    assert module._sequence_compact_text(long_title, 24) in long_participant
+    assert "<title>Process Backlog Items</title>" not in sequence
+    assert "<title>worker</title>" not in sequence
+    assert ".sequence-participant:focus-visible rect {" in html
+
+
 def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
     module = _load_module()
     staging = tmp_path / "staging"

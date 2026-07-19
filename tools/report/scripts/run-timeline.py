@@ -4345,6 +4345,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         x = x_by_thread_id[thread.thread_id]
         full_name = name_by_thread_id[thread.thread_id]
         visible_name = _sequence_compact_text(full_name, 24)
+        name_is_truncated = visible_name != " ".join(full_name.split())
         agent_role = thread.agent_role or ("default" if thread.parent_thread_id else "main")
         identity = thread.thread_id
         if len(identity) > 15:
@@ -4353,7 +4354,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         if thread.agent_nickname:
             detail = f"{thread.agent_nickname} · {detail}"
         participant_svg.append(
-            '<g class="sequence-participant" data-depth="{depth}" aria-label="{aria}">'
+            '<g class="sequence-participant" data-depth="{depth}"{focusable} '
+            'aria-label="{aria}">{tooltip}'
             '<rect x="{box_x}" y="10" width="176" height="54" rx="5"></rect>'
             '<text x="{x}" y="32" text-anchor="middle">'
             '<tspan class="sequence-participant-name" x="{x}">{name}</tspan>'
@@ -4361,7 +4363,13 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             "</text>"
             "</g>".format(
                 depth=depth,
+                focusable=' tabindex="0"' if name_is_truncated else "",
                 aria=_escape_html(f"{full_name} · {detail}"),
+                tooltip=(
+                    f"<title>{_escape_html(full_name)}</title>"
+                    if name_is_truncated
+                    else ""
+                ),
                 box_x=x - 88,
                 x=x,
                 name=_escape_html(visible_name),
@@ -5349,6 +5357,9 @@ td {{ font-size:.85em; }}
 .agent-sequence-diagram {{ display:block; background:#fff; }}
 .sequence-participant rect {{ fill:#f5f7f8; stroke:#90a4ae; stroke-width:1; }}
 .sequence-participant[data-depth="0"] rect {{ fill:#eef4f8; stroke:#607d8b; }}
+.sequence-participant[tabindex] {{ cursor:help; }}
+.sequence-participant:focus-visible {{ outline:none; }}
+.sequence-participant:focus-visible rect {{ stroke:#2563a6; stroke-width:2; }}
 .sequence-participant text {{ fill:#263238; font-family:var(--font-ui); }}
 .sequence-participant-name {{ font-size:12px; font-weight:700; }}
 .sequence-participant-detail {{ fill:#607d8b; font-family:var(--font-code); font-size:9px; }}
