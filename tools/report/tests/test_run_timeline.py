@@ -3086,7 +3086,10 @@ def _write_codex_sequence_graph(root: Path) -> None:
     delegation = (
         "<codex_delegation>\n"
         "  <source_thread_id>coordinator</source_thread_id>\n"
-        "  <input>Start backlog item API_TOKEN=PRIVATE</input>\n"
+        "  <input>Start backlog item API_TOKEN=PRIVATE.\n"
+        "Keep the complete recorded instruction available when the compact arrow "
+        "label is truncated.\n"
+        "FULL-DELEGATION-TAIL</input>\n"
         "</codex_delegation>"
     )
     orchestrator = [
@@ -3404,6 +3407,13 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert 'rel="stylesheet"' not in html
     assert "Start backlog item API_TOKEN=[redacted]" in html
     assert "API_TOKEN=PRIVATE" not in html
+    selected_event = html.split('<section id="sequence-event-1"', 1)[1].split(
+        "</section>", 1
+    )[0]
+    assert '<pre class="sequence-event-full" tabindex="0">' in selected_event
+    assert "FULL-DELEGATION-TAIL" in selected_event
+    assert ".sequence-event-full { max-height:7.5em;" in html
+    assert "overflow:auto; white-space:pre-wrap;" in html
 
 
 def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):

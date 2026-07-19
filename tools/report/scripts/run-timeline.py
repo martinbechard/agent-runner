@@ -432,6 +432,7 @@ class AgentSequenceEvent:
     source_thread_id: str
     target_thread_id: str
     label: str
+    detail: str = ""
     source_ordinal: int = 0
 
 
@@ -746,10 +747,10 @@ def _rollout_identity(path: Path) -> tuple[str, str, str, str] | None:
     return None
 
 
-def _codex_delegation_values(content: str) -> list[tuple[str, str]]:
-    """Return recorded delegation sources and bounded, redacted input previews."""
+def _codex_delegation_values(content: str) -> list[tuple[str, str, str]]:
+    """Return delegation sources plus preview and full bounded, redacted input."""
 
-    values: list[tuple[str, str]] = []
+    values: list[tuple[str, str, str]] = []
     for block_match in _CODEX_DELEGATION_BLOCK_PATTERN.finditer(content):
         body = block_match.group("body")
         source_match = _CODEX_DELEGATION_SOURCE_PATTERN.search(body)
@@ -758,7 +759,8 @@ def _codex_delegation_values(content: str) -> list[tuple[str, str]]:
         input_match = _CODEX_DELEGATION_INPUT_PATTERN.search(body)
         input_text = input_match.group("input").strip() if input_match else ""
         preview = _message_argument_preview(input_text) if input_text else ""
-        values.append((source_match.group("source"), preview))
+        detail = _tool_argument_content(input_text) if input_text else ""
+        values.append((source_match.group("source"), preview, detail))
     return values
 
 
@@ -776,7 +778,7 @@ def _codex_delegation_source_ids(path: Path) -> set[str]:
         if payload.get("type") != "message" or payload.get("role") != "user":
             continue
         content = _response_item_text(payload, "content")
-        sources.update(source for source, _ in _codex_delegation_values(content))
+        sources.update(source for source, _, _ in _codex_delegation_values(content))
     return sources
 
 
@@ -3722,7 +3724,9 @@ def _codex_sequence_events(run: CodexRunMetrics) -> list[AgentSequenceEvent]:
         for activity in target.activities:
             if activity.activity_type != "input" or not activity.content:
                 continue
-            for source_thread_id, preview in _codex_delegation_values(activity.content):
+            for source_thread_id, preview, detail in _codex_delegation_values(
+                activity.content
+            ):
                 if source_thread_id not in threads_by_id or source_thread_id == target.thread_id:
                     continue
                 label = "delegate" + (f" · {preview}" if preview else "")
@@ -3733,6 +3737,7 @@ def _codex_sequence_events(run: CodexRunMetrics) -> list[AgentSequenceEvent]:
                         source_thread_id=source_thread_id,
                         target_thread_id=target.thread_id,
                         label=label,
+                        detail="delegate" + (f" · {detail}" if detail else ""),
                         source_ordinal=activity.source_ordinal,
                     )
                 )
@@ -4414,14 +4419,15 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             '<div class="metric"><div class="label">Type</div><div class="value">{kind}</div></div>'
             '<div class="metric"><div class="label">From</div><div class="value">{source}</div></div>'
             '<div class="metric"><div class="label">To</div><div class="value">{target}</div></div>'
-            '</div><h3>Recorded event</h3><p class="sequence-event-full">{label}</p>'
+            '</div><h3>Recorded event</h3>'
+            '<pre class="sequence-event-full" tabindex="0">{detail}</pre>'
             '{opaque_note}{recipient_update}</div></section>'.format(
                 detail_id=detail_id,
                 offset=_escape_html(offset),
                 kind=_escape_html(event.kind),
                 source=_escape_html(source_name),
                 target=_escape_html(target_name),
-                label=_escape_html(event.label),
+                detail=_escape_html(event.detail or event.label),
                 opaque_note=opaque_message_note,
                 recipient_update=recipient_update_html,
             )
@@ -5257,7 +5263,8 @@ td {{ font-size:.85em; }}
 .sequence-event-panel {{ width:min(920px,94vw); }}
 .sequence-event-metrics {{ grid-template-columns:repeat(4,minmax(0,1fr)); }}
 .sequence-event-metrics .value {{ overflow-wrap:anywhere; font-size:.92em; }}
-.sequence-event-full {{ margin:4px 0 12px; line-height:1.5; overflow-wrap:anywhere; }}
+.sequence-event-full {{ max-height:7.5em; margin:4px 0 12px; padding:10px 12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:#263238; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.9em; line-height:1.5; }}
+.sequence-event-full:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .sequence-recipient-update {{ max-height:38vh; margin:4px 0 0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:5px; font-family:var(--font-ui); font-size:.88em; line-height:1.5; }}
 .tool-name {{ font-family:var(--font-code); font-size:.9em; font-weight:400; }}
 .model-name {{ font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }}
