@@ -3501,6 +3501,35 @@ def test_native_codex_sequence_tooltips_only_truncated_participant_titles(tmp_pa
     assert ".sequence-participant:focus-visible rect {" in html
 
 
+def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    html = module.render_codex_rollout_html(run)
+
+    assert (
+        '<a class="sequence-open-link sequence-open-window" '
+        'href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
+        'data-sequence-window>Open in window</a>'
+    ) in html
+    assert "body.sequence-only > :not(#agent-sequence) { display:none; }" in html
+    assert "body.sequence-only #agent-sequence { display:flex;" in html
+    assert ".sequence-only .sequence-scroll { flex:1 1 auto;" in html
+    assert (
+        'new URLSearchParams(window.location.search).get("view") === "sequence"'
+        in html
+    )
+    assert 'document.body.classList.add("sequence-only");' in html
+    assert 'document.querySelectorAll("[data-sequence-window]")' in html
+    assert "window.open(" in html
+    assert "popup=yes" in html
+
+
 def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path):
     module = _load_module()
     staging = tmp_path / "staging"

@@ -4288,6 +4288,9 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         '<div class="agents-heading"><h2 id="agent-sequence-title">Agent sequence</h2>'
         '<a class="sequence-open-link" href="#agent-sequence" target="_blank" '
         'rel="noopener">Open in new tab</a>'
+        '<a class="sequence-open-link sequence-open-window" '
+        'href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
+        'data-sequence-window>Open in window</a>'
         '<details class="agent-info"><summary aria-label="About Agent sequence">ⓘ</summary>'
         '<div class="agent-note-popover" role="note">'
         "Rows are chronological recorded coordination events, not duration-scaled activity. "
@@ -5255,6 +5258,15 @@ def render_codex_rollout_html(
 <style>
 :root {{ --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-cache-write:#2ecc71; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; --sequence-rail:#b0bec5; --sequence-delegation:#00695c; --sequence-message:#2563a6; --sequence-followup:#6d4c8e; --sequence-interrupt:#b3261e; --sequence-complete:#24733b; }}
 body {{ font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }}
+body.sequence-only {{ margin:16px; overflow:hidden; }}
+body.sequence-only > :not(#agent-sequence) {{ display:none; }}
+body.sequence-only #agent-sequence {{ display:flex; height:calc(100vh - 32px); min-height:0; flex-direction:column; }}
+body.sequence-only #agent-sequence > .agents-heading {{ flex:0 0 auto; margin-top:0; }}
+body.sequence-only #agent-sequence > .execution-note,
+body.sequence-only #agent-sequence > .sequence-ledger {{ flex:0 0 auto; }}
+body.sequence-only .sequence-scroll {{ flex:1 1 auto; min-height:0; max-height:none; }}
+body.sequence-only .sequence-ledger[open] {{ max-height:35vh; overflow:auto; }}
+body.sequence-only .sequence-open-link {{ display:none; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
@@ -5492,6 +5504,29 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
 <script>
+var sequenceOnly =
+  new URLSearchParams(window.location.search).get("view") === "sequence";
+if (sequenceOnly) {{
+  document.body.classList.add("sequence-only");
+  document.title = "Agent sequence · " + document.title;
+}}
+document.querySelectorAll("[data-sequence-window]").forEach(function(link) {{
+  link.addEventListener("click", function(event) {{
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var width = Math.max(720, Math.floor(window.screen.availWidth * 0.92));
+    var height = Math.max(600, Math.floor(window.screen.availHeight * 0.92));
+    var popup = window.open(
+      link.href,
+      "_blank",
+      "popup=yes,width=" + width + ",height=" + height +
+        ",resizable=yes,scrollbars=yes"
+    );
+    if (popup) {{
+      event.preventDefault();
+      popup.opener = null;
+    }}
+  }});
+}});
 document.querySelectorAll(".agent-summary-row").forEach(function(row) {{
   var button = row.querySelector(".agent-row-toggle");
   var detail = document.getElementById(row.dataset.agentDetail);
