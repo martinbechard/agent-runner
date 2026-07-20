@@ -6111,6 +6111,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {''.join(turn_detail_overlays)}
 <script>
 var sequenceOnly =
+  document.body.classList.contains("sequence-only") ||
   new URLSearchParams(window.location.search).get("view") === "sequence";
 if (sequenceOnly) {{
   document.body.classList.add("sequence-only");
@@ -6163,6 +6164,7 @@ function initializeAgentSequence(section) {{
   var collapsedThreadIds = new Set();
   var focusedThreadId = "";
   var groupRepeats = true;
+  var firstVisibleActivity = null;
   var parentByThreadId = new Map();
   var participantByThreadId = new Map();
   var lifelineByThreadId = new Map();
@@ -6264,6 +6266,18 @@ function initializeAgentSequence(section) {{
     var availableWidth = Math.max(320, scroll.clientWidth - 2);
     setZoom(Math.min(1, availableWidth / baseWidth));
     scroll.scrollLeft = 0;
+  }}
+
+  function revealFirstActivity() {{
+    if (!firstVisibleActivity) return;
+    var activityRect = firstVisibleActivity.getBoundingClientRect();
+    var scrollRect = scroll.getBoundingClientRect();
+    var activityCenter = (activityRect.left + activityRect.right) / 2;
+    var scrollCenter = (scrollRect.left + scrollRect.right) / 2;
+    var centeredLeft = scroll.scrollLeft + activityCenter - scrollCenter;
+    var maxLeft = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+    scroll.scrollLeft = Math.max(0, Math.min(maxLeft, Math.round(centeredLeft)));
+    scroll.scrollTop = 0;
   }}
 
   function hiddenByCollapsedAncestor(threadId) {{
@@ -6369,6 +6383,14 @@ function initializeAgentSequence(section) {{
     visibleTimelineRows.sort(function(left, right) {{
       return left.sequenceOrder - right.sequenceOrder;
     }});
+
+    firstVisibleActivity = null;
+    if (visibleTimelineRows.length) {{
+      var firstEntry = visibleTimelineRows[0];
+      firstVisibleActivity = firstEntry.event
+        ? firstEntry.event.element
+        : firstEntry.thought.element;
+    }}
 
     baseHeight = eventHeight * visibleTimelineRows.length + footerHeight;
     visibleTimelineRows.forEach(function(entry, index) {{
@@ -6513,12 +6535,13 @@ function initializeAgentSequence(section) {{
     filterInputs.forEach(function(input) {{ input.checked = true; }});
     zoom = 1;
     layoutSequence();
-    scroll.scrollTo({{ left: 0, top: 0 }});
+    revealFirstActivity();
   }});
   filterInputs.forEach(function(input) {{
     input.addEventListener("change", layoutSequence);
   }});
   layoutSequence();
+  requestAnimationFrame(revealFirstActivity);
 }}
 var sequenceSection = document.getElementById("agent-sequence");
 if (sequenceOnly && sequenceSection) initializeAgentSequence(sequenceSection);

@@ -3904,6 +3904,7 @@ def test_codex_output_writer_splits_sequence_into_companion_file(tmp_path):
         in main_html
     )
     assert '<section id="agent-sequence"' in sequence_html
+    assert 'document.body.classList.contains("sequence-only")' in sequence_html
     assert '<svg class="agent-sequence-diagram"' in sequence_html
     assert '<div id="timeline"' not in sequence_html
     assert 'class="agent-table"' not in sequence_html
@@ -3952,6 +3953,10 @@ def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
     assert 'var focusedThreadId = "";' in html
     assert "var groupRepeats = true;" in html
     assert "function fitSequence()" in html
+    assert "function revealFirstActivity()" in html
+    assert "firstVisibleActivity.getBoundingClientRect()" in html
+    assert "scroll.scrollLeft + activityCenter - scrollCenter" in html
+    assert "layoutSequence();\n  requestAnimationFrame(revealFirstActivity);" in html
     assert "function layoutSequence()" in html
     assert ".sequence-controls {" in html
     assert ".sequence-hidden { display:none; }" in html
