@@ -1,0 +1,10 @@
+<!-- Copyright (c) 2026 Martin.Bechard@DevConsult.ca -->
+<!-- AI attribution: Generated with AI assistance. -->
+<!-- Responsibility: Provide the source artwork for the Agent Report desktop icon. -->
+<!-- Design: docs/design/components/CD-001-codex-rollout-metrics.md -->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="26" fill="#e8edf2"/>
+  <path d="M24 34h80M24 64h24m32 0h24M24 94h80" fill="none" stroke="#17324a" stroke-linecap="round" stroke-width="10"/>
+  <circle cx="64" cy="64" r="13" fill="#c77a19"/>
+  <circle cx="64" cy="64" r="5" fill="#fff7e8"/>
+</svg>

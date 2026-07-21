@@ -589,7 +589,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.17.0"
+    assert run.parser_version == "1.18.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1750,7 +1750,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.17.0"
+    assert run.parser_version == "1.18.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -3433,19 +3433,15 @@ def _append_codex_delegation_record(path: Path, source_thread_id: str) -> None:
 
 def test_native_codex_discovery_index_reuses_unchanged_metadata(
     tmp_path,
-    monkeypatch,
 ):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
     index_path = tmp_path / "rollout-discovery.sqlite3"
-    scanned_paths = []
-    original_scan = module._scan_rollout_discovery_metadata
+    candidates = sorted(path.resolve() for path in tmp_path.glob("*.jsonl"))
 
-    def recording_scan(path):
-        scanned_paths.append(path)
-        return original_scan(path)
-
-    monkeypatch.setattr(module, "_scan_rollout_discovery_metadata", recording_scan)
+    first_discovery = module._native_rollout_discovery(candidates, index_path)
+    assert first_discovery.stats["scanned_files"] == len(candidates)
+    assert first_discovery.stats["cached_files"] == 0
 
     first = module.build_codex_rollout_run(
         "coordinator",
@@ -3458,9 +3454,9 @@ def test_native_codex_discovery_index_reuses_unchanged_metadata(
         "orchestrator",
         "worker",
     ]
-    assert sorted(scanned_paths) == sorted(tmp_path.glob("*.jsonl"))
-
-    scanned_paths.clear()
+    warm_discovery = module._native_rollout_discovery(candidates, index_path)
+    assert warm_discovery.stats["scanned_files"] == 0
+    assert warm_discovery.stats["cached_files"] == len(candidates)
     second = module.build_codex_rollout_run(
         "coordinator",
         tmp_path,
@@ -3472,7 +3468,6 @@ def test_native_codex_discovery_index_reuses_unchanged_metadata(
         "orchestrator",
         "worker",
     ]
-    assert scanned_paths == []
 
 
 def test_native_codex_discovery_index_preserves_normalized_report(tmp_path):
@@ -3499,39 +3494,26 @@ def test_native_codex_discovery_index_preserves_normalized_report(tmp_path):
 
 def test_native_codex_discovery_index_invalidates_appended_and_truncated_log(
     tmp_path,
-    monkeypatch,
 ):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
     index_path = tmp_path / "rollout-discovery.sqlite3"
     unrelated_path = tmp_path / "unrelated.jsonl"
-    scanned_paths = []
-    original_scan = module._scan_rollout_discovery_metadata
+    candidates = sorted(path.resolve() for path in tmp_path.glob("*.jsonl"))
+    module._native_rollout_discovery(candidates, index_path)
 
-    def recording_scan(path):
-        scanned_paths.append(path)
-        return original_scan(path)
-
-    monkeypatch.setattr(module, "_scan_rollout_discovery_metadata", recording_scan)
-    module.build_codex_rollout_run(
-        "coordinator",
-        tmp_path,
-        include_delegations=True,
-        discovery_index_path=index_path,
-    )
-
-    scanned_paths.clear()
     _append_codex_delegation_record(unrelated_path, "coordinator")
+    appended_discovery = module._native_rollout_discovery(candidates, index_path)
+    assert appended_discovery.stats["scanned_files"] == 1
+    assert appended_discovery.stats["cached_files"] == len(candidates) - 1
     appended = module.build_codex_rollout_run(
         "coordinator",
         tmp_path,
         include_delegations=True,
         discovery_index_path=index_path,
     )
-    assert scanned_paths == [unrelated_path.resolve()]
     assert "unrelated" in {thread.thread_id for thread in appended.threads}
 
-    scanned_paths.clear()
     unrelated_path.write_text(
         json.dumps(
             {
@@ -3543,19 +3525,20 @@ def test_native_codex_discovery_index_invalidates_appended_and_truncated_log(
         + "\n",
         encoding="utf-8",
     )
+    truncated_discovery = module._native_rollout_discovery(candidates, index_path)
+    assert truncated_discovery.stats["scanned_files"] == 1
+    assert truncated_discovery.stats["cached_files"] == len(candidates) - 1
     truncated = module.build_codex_rollout_run(
         "coordinator",
         tmp_path,
         include_delegations=True,
         discovery_index_path=index_path,
     )
-    assert scanned_paths == [unrelated_path.resolve()]
     assert "unrelated" not in {thread.thread_id for thread in truncated.threads}
 
 
 def test_native_codex_discovery_index_invalidates_replaced_identity(
     tmp_path,
-    monkeypatch,
 ):
     module = _load_module()
     original_path = _write_codex_catalog_rollout(
@@ -3571,48 +3554,65 @@ def test_native_codex_discovery_index_invalidates_replaced_identity(
         tmp_path,
         discovery_index_path=index_path,
     )
-    scanned_paths = []
-    original_scan = module._scan_rollout_discovery_metadata
-
-    def recording_scan(path):
-        scanned_paths.append(path)
-        return original_scan(path)
-
-    monkeypatch.setattr(module, "_scan_rollout_discovery_metadata", recording_scan)
     replacement = {
         "timestamp": "2026-07-14T04:00:00Z",
         "type": "session_meta",
         "payload": {"id": "replacement", "source": "user"},
     }
     original_path.write_text(json.dumps(replacement) + "\n", encoding="utf-8")
+    discovery = module._native_rollout_discovery([original_path.resolve()], index_path)
+    assert discovery.stats["scanned_files"] == 1
+    assert discovery.stats["cached_files"] == 0
 
     run = module.build_codex_rollout_run(
         "replacement",
         tmp_path,
         discovery_index_path=index_path,
     )
-    assert scanned_paths == [original_path.resolve()]
     assert [thread.thread_id for thread in run.threads] == ["replacement"]
 
 
-def test_native_codex_discovery_index_failure_falls_back_to_streaming_scan(tmp_path):
+def test_native_codex_discovery_index_failure_is_explicit(tmp_path):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
     unavailable_index = tmp_path / "rollout-discovery.sqlite3"
     unavailable_index.mkdir()
 
-    run = module.build_codex_rollout_run(
-        "coordinator",
-        tmp_path,
-        include_delegations=True,
-        discovery_index_path=unavailable_index,
-    )
+    with pytest.raises(RuntimeError, match="discovery index"):
+        module.build_codex_rollout_run(
+            "coordinator",
+            tmp_path,
+            include_delegations=True,
+            discovery_index_path=unavailable_index,
+        )
 
-    assert [thread.thread_id for thread in run.threads] == [
-        "coordinator",
-        "orchestrator",
-        "worker",
-    ]
+
+def test_native_codex_discovery_rejects_missing_engine(tmp_path, monkeypatch):
+    module = _load_module()
+    rollout = _write_codex_catalog_rollout(
+        tmp_path,
+        thread_id="root",
+        timestamp="2026-07-14T04:00:00Z",
+        request="Root task",
+        workspace=str(tmp_path),
+    )
+    missing_engine = tmp_path / "missing-agent-report-engine"
+    monkeypatch.setattr(module, "_native_discovery_engine_path", lambda: missing_engine)
+
+    with pytest.raises(RuntimeError, match="Unable to start required native discovery engine"):
+        module._native_rollout_discovery([rollout.resolve()], None)
+
+
+def test_native_codex_discovery_rejects_missing_configured_engine(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    configured = tmp_path / "missing-agent-report-engine"
+    monkeypatch.setenv("AGENT_REPORT_ENGINE", str(configured))
+
+    with pytest.raises(RuntimeError, match="Configured native discovery engine"):
+        module._native_discovery_engine_path()
 
 
 def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):

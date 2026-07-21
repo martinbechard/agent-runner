@@ -1,0 +1,20 @@
+[package]
+name = "agent-report-core"
+version = "0.6.0"
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+aho-corasick.workspace = true
+crossbeam-channel.workspace = true
+html-escape.workspace = true
+regex.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+walkdir.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

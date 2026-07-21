@@ -1,0 +1,110 @@
+<!-- Copyright (c) 2026 Martin.Bechard@DevConsult.ca -->
+<!-- AI attribution: Generated with AI assistance. -->
+<!-- Responsibility: Host the Agent Report desktop run-index interface. -->
+<!-- Design: docs/design/components/CD-001-codex-rollout-metrics.md -->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light" />
+    <title>Agent Report — Run Index</title>
+  </head>
+  <body>
+    <div id="app-shell">
+      <header class="masthead">
+        <div class="brand-lockup">
+          <span class="brand-mark" aria-hidden="true"><i></i><b></b><i></i></span>
+          <div>
+            <p class="eyebrow">Local execution archive</p>
+            <h1>Run index</h1>
+          </div>
+        </div>
+        <div id="signal-rail" class="signal-rail" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <p class="masthead-note">Search on device. Open only what matters.</p>
+      </header>
+
+      <main class="workspace">
+        <aside class="control-deck" aria-label="Search controls">
+          <section>
+            <div class="section-heading">
+              <p class="step">01 / Scope</p>
+              <button id="add-root" class="text-action" type="button">Add folder</button>
+            </div>
+            <h2>Log stores</h2>
+            <div id="root-list" class="root-list" aria-live="polite"></div>
+          </section>
+
+          <section>
+            <p class="step">02 / Find</p>
+            <label class="field-label" for="query">Title, thread, workspace, path</label>
+            <input id="query" type="search" autocomplete="off" placeholder="Search local run metadata" />
+            <label class="check-row">
+              <input id="include-descendants" type="checkbox" />
+              <span>Show descendant agent logs</span>
+            </label>
+            <button id="search" class="primary-action" type="button">
+              <span>Search logs</span><kbd>↵</kbd>
+            </button>
+          </section>
+
+          <section class="export-block">
+            <p class="step">03 / Take away</p>
+            <button id="export-catalog" class="secondary-action" type="button" disabled>
+              Export this index
+            </button>
+            <p class="microcopy">Exports only normalized run metadata. Full reports are generated one at a time.</p>
+          </section>
+        </aside>
+
+        <section class="results-deck" aria-labelledby="results-title">
+          <div class="results-heading">
+            <div>
+              <p id="result-count" class="step">No observation yet</p>
+              <h2 id="results-title">Recorded runs</h2>
+            </div>
+            <div id="stats" class="stats" aria-live="polite"></div>
+          </div>
+
+          <div id="progress-panel" class="progress-panel" hidden>
+            <div class="progress-copy">
+              <span id="progress-label">Preparing native index…</span>
+              <output id="progress-value">0 / 0</output>
+            </div>
+            <div class="progress-track"><i id="progress-bar"></i></div>
+            <p id="progress-path" class="progress-path"></p>
+          </div>
+
+          <div class="run-browser">
+            <div id="results-viewport" class="results-viewport" tabindex="0" aria-label="Discovered runs">
+              <div id="results-canvas" class="results-canvas"></div>
+              <div id="empty-state" class="empty-state">
+                <span class="empty-glyph" aria-hidden="true">⌁</span>
+                <h3>Build the local index</h3>
+                <p>Select the stores you care about, then search. The first pass reads each log once; later searches reuse stable metadata.</p>
+              </div>
+            </div>
+
+            <aside id="detail-panel" class="detail-panel" aria-live="polite">
+              <p class="step">Selection</p>
+              <h3 id="detail-title">No run selected</h3>
+              <dl id="detail-fields"></dl>
+              <button id="generate-report" class="primary-action" type="button" disabled>
+                Generate full report
+              </button>
+              <p class="microcopy">The report opens separately as an offline HTML artifact; this index stays lightweight.</p>
+            </aside>
+          </div>
+
+          <footer class="status-line">
+            <span id="status-dot" aria-hidden="true"></span>
+            <p id="status" role="status">Waiting for a search.</p>
+          </footer>
+        </section>
+      </main>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

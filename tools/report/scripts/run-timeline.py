@@ -30,8 +30,11 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
+import shutil
 import sqlite3
+import subprocess
 import sys
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -68,8 +71,8 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.17.0"
-CODEX_DISCOVERY_INDEX_TABLE = "codex_rollout_discovery_v1"
+CODEX_ROLLOUT_PARSER_VERSION = "1.18.0"
+NATIVE_DISCOVERY_PROTOCOL_VERSION = 1
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
@@ -2455,106 +2458,147 @@ def _candidate_rollouts(sessions_root: Path) -> list[Path]:
 
 
 @dataclass(frozen=True)
-class _RolloutFileFingerprint:
-    device: int
-    inode: int
-    size: int
-    modified_at_ns: int
-    changed_at_ns: int
-
-
-@dataclass(frozen=True)
 class _RolloutDiscoveryMetadata:
     identity: tuple[str, str, str, str] | None
     delegation_source_ids: frozenset[str]
 
 
-def _rollout_file_fingerprint(path: Path) -> _RolloutFileFingerprint:
-    stat = path.stat()
-    return _RolloutFileFingerprint(
-        device=int(stat.st_dev),
-        inode=int(stat.st_ino),
-        size=stat.st_size,
-        modified_at_ns=stat.st_mtime_ns,
-        changed_at_ns=stat.st_ctime_ns,
-    )
+@dataclass(frozen=True)
+class _NativeRolloutDiscovery:
+    metadata: dict[Path, _RolloutDiscoveryMetadata]
+    stats: dict[str, int]
 
 
-def _scan_rollout_discovery_metadata(path: Path) -> _RolloutDiscoveryMetadata:
-    """Read one rollout once for identity and cross-thread source identifiers."""
+def _native_discovery_engine_path() -> Path:
+    """Resolve the one required native engine without selecting another implementation."""
 
-    identity: tuple[str, str, str, str] | None = None
-    delegation_source_ids: set[str] = set()
-    try:
-        with path.open(encoding="utf-8", errors="replace") as handle:
-            for line in handle:
-                stripped = line.strip()
-                if not stripped:
-                    continue
-                may_contain_delegation = (
-                    _CODEX_DELEGATION_LINE_PATTERN.search(stripped) is not None
-                )
-                if identity is not None and not may_contain_delegation:
-                    continue
-                try:
-                    record = json.loads(stripped)
-                except json.JSONDecodeError:
-                    continue
-                if not isinstance(record, dict):
-                    continue
-                if identity is None:
-                    identity = _recorded_rollout_identity(record)
-                if not may_contain_delegation or record.get("type") != "response_item":
-                    continue
-                payload = record.get("payload")
-                if not isinstance(payload, dict):
-                    continue
-                if payload.get("type") != "message" or payload.get("role") != "user":
-                    continue
-                content = _response_item_text(payload, "content")
-                delegation_source_ids.update(
-                    source for source, _, _ in _codex_delegation_values(content)
-                )
-    except OSError:
-        pass
-    return _RolloutDiscoveryMetadata(
-        identity=identity,
-        delegation_source_ids=frozenset(delegation_source_ids),
-    )
-
-
-def _cached_rollout_discovery_metadata(
-    row: tuple[object, ...],
-) -> tuple[_RolloutFileFingerprint, _RolloutDiscoveryMetadata] | None:
-    try:
-        fingerprint = _RolloutFileFingerprint(
-            device=int(row[1]),
-            inode=int(row[2]),
-            size=int(row[3]),
-            modified_at_ns=int(row[4]),
-            changed_at_ns=int(row[5]),
+    executable_name = "agent-report-engine.exe" if sys.platform == "win32" else "agent-report-engine"
+    configured = os.environ.get("AGENT_REPORT_ENGINE", "").strip()
+    if configured:
+        configured_path = Path(configured)
+        if configured_path.is_file():
+            return configured_path
+        raise RuntimeError(
+            "Configured native discovery engine does not exist: "
+            f"{configured_path}"
         )
-        thread_id = str(row[6] or "")
-        identity = (
-            (
-                thread_id,
-                str(row[7] or ""),
-                str(row[8] or ""),
-                str(row[9] or ""),
+    candidates = [
+        REPO_ROOT / "tools" / "report" / "target" / "release" / executable_name,
+        REPO_ROOT / "tools" / "report" / "target" / "debug" / executable_name,
+        Path(sys.executable).resolve().parent / executable_name,
+    ]
+    on_path = shutil.which(executable_name)
+    if on_path:
+        candidates.append(Path(on_path))
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    locations = ", ".join(str(candidate) for candidate in candidates) or executable_name
+    raise RuntimeError(
+        "Required native discovery engine was not found. Build or install "
+        f"agent-report-engine, or set AGENT_REPORT_ENGINE. Checked: {locations}"
+    )
+
+
+def _native_rollout_discovery(
+    candidate_paths: list[Path],
+    index_path: Path | None,
+) -> _NativeRolloutDiscovery:
+    """Run the versioned native discovery protocol and validate its bounded response."""
+
+    engine_path = _native_discovery_engine_path()
+    request = {
+        "version": NATIVE_DISCOVERY_PROTOCOL_VERSION,
+        "paths": [str(path) for path in candidate_paths],
+        "index_path": str(index_path) if index_path is not None else None,
+        "workers": None,
+    }
+    try:
+        completed = subprocess.run(
+            [str(engine_path), "index"],
+            input=json.dumps(request),
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+    except OSError as error:
+        raise RuntimeError(
+            f"Unable to start required native discovery engine {engine_path}: {error}"
+        ) from error
+    if completed.returncode != 0:
+        diagnostic = completed.stderr.strip() or f"exit status {completed.returncode}"
+        raise RuntimeError(f"Required native discovery engine failed: {diagnostic}")
+    try:
+        response = json.loads(completed.stdout)
+    except json.JSONDecodeError as error:
+        raise RuntimeError(
+            "Required native discovery engine returned invalid JSON: "
+            f"{error}"
+        ) from error
+    if not isinstance(response, dict):
+        raise RuntimeError("Required native discovery engine returned a non-object response")
+    if response.get("version") != NATIVE_DISCOVERY_PROTOCOL_VERSION:
+        raise RuntimeError(
+            "Required native discovery engine returned unsupported protocol version "
+            f"{response.get('version')!r}"
+        )
+    entries = response.get("entries")
+    if not isinstance(entries, list) or len(entries) != len(candidate_paths):
+        raise RuntimeError(
+            "Required native discovery engine returned an incomplete candidate set"
+        )
+    metadata: dict[Path, _RolloutDiscoveryMetadata] = {}
+    for expected_path, entry in zip(candidate_paths, entries, strict=True):
+        if not isinstance(entry, dict) or entry.get("path") != str(expected_path):
+            raise RuntimeError(
+                "Required native discovery engine changed candidate ordering or paths"
             )
-            if thread_id
-            else None
-        )
-        raw_sources = json.loads(str(row[10] or "[]"))
+        raw_identity = entry.get("identity")
+        identity = None
+        if raw_identity is not None:
+            if not isinstance(raw_identity, dict):
+                raise RuntimeError("Required native discovery engine returned invalid identity")
+            identity_values = tuple(
+                raw_identity.get(key)
+                for key in (
+                    "thread_id",
+                    "parent_thread_id",
+                    "agent_path",
+                    "agent_nickname",
+                )
+            )
+            if not all(isinstance(value, str) for value in identity_values):
+                raise RuntimeError("Required native discovery engine returned invalid identity")
+            identity = identity_values
+        raw_sources = entry.get("delegation_source_ids")
         if not isinstance(raw_sources, list) or not all(
-            isinstance(item, str) for item in raw_sources
+            isinstance(source, str) for source in raw_sources
         ):
-            return None
-    except (TypeError, ValueError, json.JSONDecodeError):
-        return None
-    return fingerprint, _RolloutDiscoveryMetadata(
-        identity=identity,
-        delegation_source_ids=frozenset(raw_sources),
+            raise RuntimeError(
+                "Required native discovery engine returned invalid delegation sources"
+            )
+        metadata[expected_path] = _RolloutDiscoveryMetadata(
+            identity=identity,
+            delegation_source_ids=frozenset(raw_sources),
+        )
+    raw_stats = response.get("stats")
+    required_stats = (
+        "candidate_files",
+        "scanned_files",
+        "cached_files",
+        "unstable_files",
+        "unreadable_files",
+        "elapsed_ms",
+        "workers",
+    )
+    if not isinstance(raw_stats, dict) or not all(
+        type(raw_stats.get(key)) is int and raw_stats[key] >= 0
+        for key in required_stats
+    ):
+        raise RuntimeError("Required native discovery engine returned invalid statistics")
+    return _NativeRolloutDiscovery(
+        metadata=metadata,
+        stats={key: raw_stats[key] for key in required_stats},
     )
 
 
@@ -2562,87 +2606,9 @@ def _rollout_discovery_metadata(
     candidate_paths: list[Path],
     index_path: Path | None,
 ) -> dict[Path, _RolloutDiscoveryMetadata]:
-    """Return metadata for candidates, reusing unchanged indexed observations."""
+    """Return metadata from the required native discovery and index engine."""
 
-    if index_path is None:
-        return {path: _scan_rollout_discovery_metadata(path) for path in candidate_paths}
-
-    connection: sqlite3.Connection | None = None
-    try:
-        index_path.parent.mkdir(parents=True, exist_ok=True)
-        connection = sqlite3.connect(index_path, timeout=5)
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute(
-            f"CREATE TABLE IF NOT EXISTS {CODEX_DISCOVERY_INDEX_TABLE} ("
-            "path TEXT PRIMARY KEY, device INTEGER NOT NULL, inode INTEGER NOT NULL, "
-            "size INTEGER NOT NULL, modified_at_ns INTEGER NOT NULL, "
-            "changed_at_ns INTEGER NOT NULL, thread_id TEXT NOT NULL, "
-            "parent_thread_id TEXT NOT NULL, agent_path TEXT NOT NULL, "
-            "agent_nickname TEXT NOT NULL, delegation_source_ids TEXT NOT NULL)"
-        )
-        candidate_keys = {str(path): path for path in candidate_paths}
-        cached: dict[Path, tuple[_RolloutFileFingerprint, _RolloutDiscoveryMetadata]] = {}
-        for row in connection.execute(
-            f"SELECT path, device, inode, size, modified_at_ns, changed_at_ns, "
-            "thread_id, parent_thread_id, agent_path, agent_nickname, "
-            f"delegation_source_ids FROM {CODEX_DISCOVERY_INDEX_TABLE}"
-        ):
-            candidate = candidate_keys.get(str(row[0]))
-            if candidate is None:
-                continue
-            parsed = _cached_rollout_discovery_metadata(row)
-            if parsed is not None:
-                cached[candidate] = parsed
-
-        result: dict[Path, _RolloutDiscoveryMetadata] = {}
-        updates: list[tuple[object, ...]] = []
-        for path in candidate_paths:
-            fingerprint_before = _rollout_file_fingerprint(path)
-            cached_entry = cached.get(path)
-            if cached_entry is not None and cached_entry[0] == fingerprint_before:
-                result[path] = cached_entry[1]
-                continue
-            metadata = _scan_rollout_discovery_metadata(path)
-            result[path] = metadata
-            fingerprint_after = _rollout_file_fingerprint(path)
-            if fingerprint_before != fingerprint_after:
-                continue
-            identity = metadata.identity or ("", "", "", "")
-            updates.append(
-                (
-                    str(path),
-                    fingerprint_after.device,
-                    fingerprint_after.inode,
-                    fingerprint_after.size,
-                    fingerprint_after.modified_at_ns,
-                    fingerprint_after.changed_at_ns,
-                    *identity,
-                    json.dumps(sorted(metadata.delegation_source_ids)),
-                )
-            )
-        if updates:
-            connection.executemany(
-                f"INSERT INTO {CODEX_DISCOVERY_INDEX_TABLE} "
-                "(path, device, inode, size, modified_at_ns, changed_at_ns, "
-                "thread_id, parent_thread_id, agent_path, agent_nickname, "
-                "delegation_source_ids) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
-                "ON CONFLICT(path) DO UPDATE SET "
-                "device=excluded.device, inode=excluded.inode, size=excluded.size, "
-                "modified_at_ns=excluded.modified_at_ns, "
-                "changed_at_ns=excluded.changed_at_ns, thread_id=excluded.thread_id, "
-                "parent_thread_id=excluded.parent_thread_id, "
-                "agent_path=excluded.agent_path, "
-                "agent_nickname=excluded.agent_nickname, "
-                "delegation_source_ids=excluded.delegation_source_ids",
-                updates,
-            )
-            connection.commit()
-        return result
-    except (OSError, sqlite3.Error):
-        return {path: _scan_rollout_discovery_metadata(path) for path in candidate_paths}
-    finally:
-        if connection is not None:
-            connection.close()
+    return _native_rollout_discovery(candidate_paths, index_path).metadata
 
 
 def _discover_rollout_paths(
@@ -10904,7 +10870,7 @@ document.addEventListener('keydown', function(e) {{
 
 
 def _default_codex_discovery_index_path() -> Path:
-    return Path.home() / ".codex" / "agent-report" / "rollout-discovery-v1.sqlite3"
+    return Path.home() / ".codex" / "agent-report" / "rollout-discovery-v2.sqlite3"
 
 
 def _child_output_path(parent_output: Path, slug: str) -> Path:

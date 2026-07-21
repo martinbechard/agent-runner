@@ -1,0 +1,213 @@
+// Copyright (c) 2026 Martin.Bechard@DevConsult.ca
+// AI attribution: Generated with AI assistance.
+// Responsibility: Validate the desktop application's native command results at the webview boundary.
+// Design: docs/design/components/CD-001-codex-rollout-metrics.md
+
+/** Native defaults for the local Codex stores and incremental index. */
+export interface DesktopDefaults {
+  readonly roots: readonly string[];
+  readonly indexPath: string | null;
+}
+
+/** User-selected search scope sent to the native command boundary. */
+export interface SearchRequest {
+  readonly roots: readonly string[];
+  readonly indexPath: string | null;
+  readonly query: string;
+  readonly includeDescendants: boolean;
+  readonly workers: number | null;
+}
+
+/** Privacy-bounded metadata for one discovered Codex rollout. */
+export interface CatalogEntry {
+  readonly threadId: string;
+  readonly parentThreadId: string;
+  readonly taskTitle: string;
+  readonly startedAt: string;
+  readonly workspace: string;
+  readonly sourcePath: string;
+  readonly agentPath: string;
+  readonly agentNickname: string;
+  readonly delegationCount: number;
+  readonly diagnostic: string | null;
+}
+
+/** Reconciled native scan, cache, and worker counts. */
+export interface DiscoveryStats {
+  readonly candidate_files: number;
+  readonly scanned_files: number;
+  readonly cached_files: number;
+  readonly unstable_files: number;
+  readonly unreadable_files: number;
+  readonly elapsed_ms: number;
+  readonly workers: number;
+}
+
+/** Filtered catalog entries plus the statistics for their discovery pass. */
+export interface SearchResponse {
+  readonly entries: readonly CatalogEntry[];
+  readonly stats: DiscoveryStats;
+}
+
+/** Bounded progress update emitted while native workers scan or reuse a file. */
+export interface DiscoveryProgress {
+  readonly completed_files: number;
+  readonly candidate_files: number;
+  readonly path: string;
+  readonly source: "cache" | "scan";
+}
+
+/** Result returned after the native layer writes a catalog export. */
+export interface ExportResult {
+  readonly outputPath: string;
+  readonly entryCount: number;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isString(value: unknown): value is string {
+  return typeof value === "string";
+}
+
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function requireRecord(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new Error(`${label} is not an object`);
+  }
+  return value;
+}
+
+function requireString(record: Record<string, unknown>, key: string, label: string): string {
+  const value = record[key];
+  if (!isString(value)) {
+    throw new Error(`${label}.${key} is not a string`);
+  }
+  return value;
+}
+
+function requireNumber(record: Record<string, unknown>, key: string, label: string): number {
+  const value = record[key];
+  if (!isNonNegativeInteger(value)) {
+    throw new Error(`${label}.${key} is not a non-negative integer`);
+  }
+  return value;
+}
+
+/**
+ * Narrow unknown native defaults before any filesystem paths reach application state.
+ *
+ * @throws {Error} When a root or index path has an unsupported shape.
+ */
+export function parseDesktopDefaults(value: unknown): DesktopDefaults {
+  const record = requireRecord(value, "desktop defaults");
+  const roots = record.roots;
+  const indexPath = record.indexPath;
+  if (!Array.isArray(roots) || !roots.every(isString)) {
+    throw new Error("desktop defaults.roots is not a string array");
+  }
+  if (indexPath !== null && !isString(indexPath)) {
+    throw new Error("desktop defaults.indexPath is not a string or null");
+  }
+  return { roots, indexPath };
+}
+
+function parseCatalogEntry(value: unknown, index: number): CatalogEntry {
+  const label = `search response.entries[${index}]`;
+  const record = requireRecord(value, label);
+  const diagnostic = record.diagnostic;
+  if (diagnostic !== null && !isString(diagnostic)) {
+    throw new Error(`${label}.diagnostic is not a string or null`);
+  }
+  return {
+    threadId: requireString(record, "threadId", label),
+    parentThreadId: requireString(record, "parentThreadId", label),
+    taskTitle: requireString(record, "taskTitle", label),
+    startedAt: requireString(record, "startedAt", label),
+    workspace: requireString(record, "workspace", label),
+    sourcePath: requireString(record, "sourcePath", label),
+    agentPath: requireString(record, "agentPath", label),
+    agentNickname: requireString(record, "agentNickname", label),
+    delegationCount: requireNumber(record, "delegationCount", label),
+    diagnostic,
+  };
+}
+
+function parseStats(value: unknown): DiscoveryStats {
+  const record = requireRecord(value, "search response.stats");
+  return {
+    candidate_files: requireNumber(record, "candidate_files", "search response.stats"),
+    scanned_files: requireNumber(record, "scanned_files", "search response.stats"),
+    cached_files: requireNumber(record, "cached_files", "search response.stats"),
+    unstable_files: requireNumber(record, "unstable_files", "search response.stats"),
+    unreadable_files: requireNumber(record, "unreadable_files", "search response.stats"),
+    elapsed_ms: requireNumber(record, "elapsed_ms", "search response.stats"),
+    workers: requireNumber(record, "workers", "search response.stats"),
+  };
+}
+
+/**
+ * Narrow one unknown search response into the catalog contract.
+ *
+ * @throws {Error} When entries, diagnostics, or statistics violate the native protocol.
+ */
+export function parseSearchResponse(value: unknown): SearchResponse {
+  const record = requireRecord(value, "search response");
+  if (!Array.isArray(record.entries)) {
+    throw new Error("search response.entries is not an array");
+  }
+  return {
+    entries: record.entries.map(parseCatalogEntry),
+    stats: parseStats(record.stats),
+  };
+}
+
+/**
+ * Narrow one unknown progress payload, including its exhaustive cache-or-scan source.
+ *
+ * @throws {Error} When counts, path, or source are invalid.
+ */
+export function parseDiscoveryProgress(value: unknown): DiscoveryProgress {
+  const record = requireRecord(value, "discovery progress");
+  const source = record.source;
+  if (source !== "cache" && source !== "scan") {
+    throw new Error("discovery progress.source is not cache or scan");
+  }
+  return {
+    completed_files: requireNumber(record, "completed_files", "discovery progress"),
+    candidate_files: requireNumber(record, "candidate_files", "discovery progress"),
+    path: requireString(record, "path", "discovery progress"),
+    source,
+  };
+}
+
+/**
+ * Narrow the bounded result of a native catalog export.
+ *
+ * @throws {Error} When the output path or entry count is invalid.
+ */
+export function parseExportResult(value: unknown): ExportResult {
+  const record = requireRecord(value, "export result");
+  return {
+    outputPath: requireString(record, "outputPath", "export result"),
+    entryCount: requireNumber(record, "entryCount", "export result"),
+  };
+}
+
+/** Build a portable HTML filename from a display title without path traversal characters. */
+export function buildReportFilename(taskTitle: string, threadId: string): string {
+  const source = taskTitle.trim() || threadId.trim() || "agent-report";
+  const safeStem = source
+    .normalize("NFKC")
+    .replace(/[<>:"/\\|?*\u0000-\u001F\u007F]+/g, "-")
+    .replace(/\s+/g, " ")
+    .replace(/-+/g, "-")
+    .replace(/^[ .-]+|[ .-]+$/g, "")
+    .slice(0, 96)
+    .replace(/[ .-]+$/g, "");
+  return `${safeStem || "agent-report"}.html`;
+}

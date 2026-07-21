@@ -293,6 +293,20 @@
 - **Filename pattern:** `test_<module>.py`; fixtures stay in descriptive subfolders such as `fixtures/`.
 - **Mirrors:** `tools/report/scripts/`
 
+### tools/report/rust/
+- **Purpose:** Rust workspace members shared by the report command and desktop application, including native log discovery, indexing, parsing, normalized report models, and command-line adapters.
+- **Signals:** Cargo crates, shared report engine, SQLite discovery index, native report CLI, Rust integration and parity tests.
+- **Filename pattern:** standard Cargo crate layout with `kebab-case` crate directories and `snake_case.rs` Rust modules.
+- **Tests location:** colocated Rust unit tests or crate-local `tests/` integration tests following Cargo conventions.
+- **Example:** `tools/report/rust/agent-report-core/src/lib.rs`
+
+### tools/report/desktop/
+- **Purpose:** Tauri desktop application for discovering local agent logs, browsing normalized report data, and exporting offline report artifacts through the shared Rust engine.
+- **Signals:** Tauri configuration, web frontend source, desktop commands, local report catalog, native log search and export UI.
+- **Filename pattern:** standard Tauri layout: frontend files under `src/`, native application glue under `src-tauri/`, and fixed package/configuration filenames at the application root.
+- **Tests location:** frontend tests beside or under `tests/` according to the selected frontend tooling; Rust command tests follow Cargo conventions under `src-tauri/`.
+- **Example:** `tools/report/desktop/src-tauri/src/lib.rs`
+
 ### .codex/agents/
 - **Purpose:** Repository-local Codex custom agent definitions. Use this path for TOML agent files that define reusable Codex agents for this repository and are meant to be registered into the user's Codex agent directory.
 - **Signals:** Codex custom agent, `name =`, `description =`, `developer_instructions =`, `.toml` agent definition, reusable repo-local agent role, file meant to be linked or copied into `~/.codex/agents/`.

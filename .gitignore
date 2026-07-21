@@ -8,6 +8,14 @@ __pycache__/
 dist/
 build/
 
+# Rust build artifacts
+target/
+
+# Desktop frontend build artifacts
+node_modules/
+.vite/
+tools/report/desktop/src-tauri/gen/
+
 # Pytest
 .pytest_cache/
 

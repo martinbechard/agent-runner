@@ -4,6 +4,14 @@
 
 Current contents:
 
+- `rust/agent-report-core/`
+  - streams Codex rollout identity, title, workspace, and delegation metadata
+    through bounded native workers
+  - owns stable fingerprint checks and the incremental SQLite discovery index
+  - is linked directly by the desktop application
+- `rust/agent-report-cli/`
+  - exposes the native core through the versioned `agent-report-engine index`
+    JSON standard-I/O protocol used by the Python renderer
 - `tool-formatters.json`
   - defines first-match formatting rules for recurring native Codex tool
     argument patterns
@@ -23,6 +31,30 @@ Current contents:
     companions, with reproducible source and pricing digests for sealed runs
 - `tests/`
   - regression tests and fixtures for the report script
+- `desktop/`
+  - provides the Tauri run index, native progress, virtualized local search,
+    privacy-bounded catalog export, and selected full-report generation
+
+The two products share one discovery engine:
+
+```mermaid
+flowchart LR
+  A[Local Codex JSONL stores] --> B[Rust discovery and SQLite index]
+  B --> C[agent-report-engine protocol]
+  C --> D[Python normalization and offline report renderer]
+  B --> E[Tauri local run index]
+  E --> D
+```
+
+Build the required native engine before running the report directly from a
+source checkout:
+
+```bash
+cargo build \
+  --manifest-path tools/report/Cargo.toml \
+  --release \
+  -p agent-report-engine
+```
 
 Run the timeline tool directly from the checkout:
 
@@ -31,13 +63,24 @@ python tools/report/scripts/run-timeline.py <path> [--output report.html]
 ```
 
 Install the wheel attached to the GitHub release and run the same tool as an
-installed command:
+installed command. Release wheels are platform-specific because they include
+the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.5.0/agent_report-0.5.0-py3-none-any.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.0/agent_report-0.6.0-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
+
+Build a platform wheel locally with:
+
+```bash
+cd tools/report
+python -m build --wheel
+```
+
+The wheel build fails if Rust cannot build `agent-report-engine`; it never
+emits a Python-only package with different discovery behavior.
 
 Report a live Codex Desktop hierarchy with lifecycle rows for input ingestion,
 model usage, available reasoning summaries, tool execution, and output
@@ -108,12 +151,46 @@ When `--include-delegations` is used without explicit session roots, the tool
 scans both default Codex stores automatically.
 
 Single-report Codex discovery keeps a local metadata index at
-`~/.codex/agent-report/rollout-discovery-v1.sqlite3`. The index stores only
-rollout identity, hierarchy, file fingerprints, and delegation source IDs; it
-does not store transcript content. Unchanged logs are reused, while appended,
-truncated, or replaced logs are rescanned individually. If the index is
-unavailable, reporting falls back to an uncached streaming scan. Deleting the
-index is safe and causes the next report to rebuild it from the source logs.
+`~/.codex/agent-report/rollout-discovery-v2.sqlite3`. The native index stores
+only rollout identity, hierarchy, stable file fingerprints, bounded title and
+workspace metadata, and delegation source IDs; it does not store transcript
+content. A bounded producer-consumer pipeline streams changed files in
+parallel, restores input order, and writes stable changes through one SQLite
+transaction. Unchanged logs are reused, while appended, truncated, replaced,
+or live-changing logs are handled individually. An unavailable engine or
+index is an explicit error: there is no Python discovery fallback. Deleting
+the index is safe and causes the next report to rebuild it from the source
+logs.
+
+Set `AGENT_REPORT_ENGINE` only when selecting a development or separately
+installed native executable. Installed wheels configure their bundled engine
+automatically.
+
+## Desktop run index
+
+The desktop application searches selected Codex stores locally and keeps the
+large generated report out of its webview. It virtualizes run rows, shows
+native scan/cache progress, filters on bounded metadata, and exports a compact
+offline index whose source paths open the corresponding local rollout files.
+Selecting a root enables full report generation through the installed
+`agent-report` renderer.
+
+```bash
+cd tools/report/desktop
+pnpm install
+pnpm tauri dev
+```
+
+Build the native application bundle with:
+
+```bash
+pnpm tauri build
+```
+
+The app uses the shared Rust crate directly. For full report generation,
+install the v0.6.0 `agent-report` wheel or set `AGENT_REPORT_COMMAND` to the
+installed report command. Catalog search and catalog HTML export do not need
+Python.
 
 The sequence view reads task display names from Codex's local desktop catalogs
 when available, and the same names identify top-level rows in the timeline.

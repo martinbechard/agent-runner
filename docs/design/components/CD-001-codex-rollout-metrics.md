@@ -24,6 +24,10 @@ This section defines the outcome and boundary of native Codex and Junie executio
   - **SYNOPSIS:** Generate separate Codex and Junie HTML catalogs over caller-bounded log stores, filter root runs by inclusive UTC date range, bounded title, or workspace/source path, and optionally generate every selected report as a linked batch.
   - **BECAUSE:** Operators should not need to know a thread ID or manually search active and archived log directories before using the reporter.
 
+- **GOAL: GOAL-6** Share one native discovery engine across command-line and desktop products
+  - **SYNOPSIS:** Use a Rust core for concurrent Codex rollout discovery, incremental SQLite indexing, and local run catalog queries; expose it through a required command-line adapter for the Python renderer and as a direct library dependency of a Tauri desktop application.
+  - **BECAUSE:** Initial discovery is the dominant cold-start cost, and separate Python and desktop implementations would create performance, invalidation, and parsing drift.
+
 - **REQUIREMENT: REQ-1** Support live and sealed reports
   - **SYNOPSIS:** A live report records an observation timestamp and incomplete work; a sealed report fixes the discovered thread set, terminal states, source digests, metrics, and report artifacts for an archived run.
   - **BECAUSE:** Operators need progress visibility during long runs and reproducible evidence after a run finishes.
@@ -35,6 +39,10 @@ This section defines the outcome and boundary of native Codex and Junie executio
 - **RULE: RULE-1** Do not present estimated API-equivalent cost as an actual Codex charge
   - **SYNOPSIS:** Monetary output must distinguish direct recorded cost, model-price estimate, subscription usage with no monetary telemetry, and unavailable cost.
   - **BECAUSE:** Codex Desktop rollout telemetry records token usage, plan type, and rate-limit state but may not record an actual dollar charge or a public price for the active model.
+
+- **RULE: RULE-1A** Require the native Codex discovery engine
+  - **SYNOPSIS:** Codex rollout discovery and incremental index operations fail with an actionable error when the Rust engine cannot start, cannot open its requested index, or returns an incompatible protocol response; the reporter does not fall back to a second Python scanner.
+  - **BECAUSE:** This is an unreleased product, so one mandatory implementation is safer and easier to validate than preserving an unneeded compatibility path with different performance and failure behavior.
 
 ## 2. Technical Directives
 
@@ -277,6 +285,17 @@ flowchart LR
   - **READS:** `~/.codex/sessions`, `~/.codex/archived_sessions`, `~/.junie/sessions`, or repeated caller-supplied `--catalog-root` paths.
   - **PRODUCES:** A filtered local HTML catalog plus optional child reports under `reports/`, with catalog-to-report and report-to-catalog links.
 
+- **MODULE: MODULE-9** Native rollout discovery core
+  - **SYNOPSIS:** Stream candidate JSONL files through a bounded producer-consumer pipeline, extract rollout identity and cross-thread delegation sources, reuse stable metadata from SQLite, and commit changed stable observations through one writer transaction.
+  - **READS:** Caller-selected rollout paths plus their device, inode, size, modification time, and change time fingerprints.
+  - **PRODUCES:** Input-order-preserving discovery entries and explicit scanned, cached, unstable, and elapsed-time statistics.
+  - **VALIDATES:** Protocol version, path ownership, cache schema, before/after fingerprint stability, malformed and partial JSONL, and UTF-8 replacement behavior.
+
+- **MODULE: MODULE-10** Desktop run browser
+  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog with progress updates, exports catalog HTML with clickable source locations, and invokes full report generation for a selected root.
+  - **USES:** `MODULE-9` as a direct Rust dependency; the webview receives normalized metadata and progress rather than raw transcript content.
+  - **PRODUCES:** A responsive local run list and user-selected offline output artifacts.
+
 - **PROCESS: PROCESS-1** Discover and parse a run
   - **SYNOPSIS:** Resolve the selected root, index candidate rollout files, traverse descendants, parse each file once, and record all parse gaps.
   - **VALIDATES:** The root exists and every included thread is connected to it.
@@ -309,6 +328,11 @@ flowchart LR
   - **SYNOPSIS:** Index the selected runtime's bounded log stores, discard Codex descendants from the operator-facing list, apply inclusive UTC date and text filters, write the catalog, and when `--generate-batch` is present generate each selected run through the existing native parser.
   - **PRODUCES:** One catalog in list-only mode or one catalog plus a linked `reports/` directory in batch mode.
 
+- **PROCESS: PROCESS-7** Build or refresh the native discovery index
+  - **SYNOPSIS:** Enumerate caller-bounded candidates, fingerprint them, dispatch only missing or changed files to bounded streaming workers, preserve input order, skip caching files that changed during their scan, and persist stable updates in one SQLite transaction.
+  - **PRODUCES:** Complete metadata for the requested candidate set plus cache and scan statistics suitable for command-line tests and desktop progress.
+  - **BECAUSE:** Parallel reads improve cold-start throughput while a single cache writer avoids SQLite contention and unstable live files remain correct on the next observation.
+
 - **COMMAND: CMD-1** Extend the timeline reporter CLI
   - **SYNOPSIS:** Add a native rollout input form such as `--codex-thread THREAD_ID` with optional `--sessions-root`, `--live`, `--seal`, and machine-output flags while preserving existing path-based prompt-runner and methodology-runner behavior.
   - **PRODUCES:** The same HTML report entry point plus optional JSON, CSV, and Markdown companions.
@@ -317,11 +341,19 @@ flowchart LR
   - **SYNOPSIS:** Use mutually exclusive `--codex-catalog` and `--junie-catalog` modes with optional `--from-date`, `--to-date`, `--title-contains`, `--workspace-contains`, repeated `--catalog-root`, and `--generate-batch` flags.
   - **PRODUCES:** A runtime-specific HTML catalog and, only when requested, linked per-run HTML reports.
 
+- **COMMAND: CMD-3** Run the native discovery protocol
+  - **SYNOPSIS:** `agent-report-engine index` accepts a versioned JSON request on standard input and writes one versioned JSON response on standard output; operational diagnostics use standard error and a nonzero exit status.
+  - **PRODUCES:** Discovery metadata and statistics without transcript bodies.
+
+- **COMMAND: CMD-4** Browse and export reports from the desktop application
+  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with ordered progress events, then export a native catalog or generate the existing full offline report for a selected root.
+  - **PRODUCES:** User-selected HTML artifacts without loading a multi-hundred-megabyte report into the catalog webview.
+
 - **FILE: FILE-1** Component design authority
   - **SYNOPSIS:** `docs/design/components/CD-001-codex-rollout-metrics.md` defines the ingestion and aggregation contract.
 
-- **FILE: FILE-2** Existing reporter implementation
-  - **SYNOPSIS:** `tools/report/scripts/run-timeline.py` remains the reporting implementation and CLI entry point.
+- **FILE: FILE-2** Report renderer and orchestration implementation
+  - **SYNOPSIS:** `tools/report/scripts/run-timeline.py` remains the normalization, accounting, rendering, and public report CLI implementation while delegating all Codex discovery/index work to the required native engine.
 
 - **FILE: FILE-3** Reporter regression suite
   - **SYNOPSIS:** `tools/report/tests/test_run_timeline.py` and sanitized fixtures verify existing and native-rollout inputs.
@@ -331,6 +363,12 @@ flowchart LR
 
 - **FILE: FILE-5** Prior reporting plan
   - **SYNOPSIS:** `docs/superpowers/plans/2026-04-11-codex-timeline-reporting.md` records the earlier prompt-runner Codex integration and remains historical context rather than the authority for native Desktop rollout hierarchy.
+
+- **FILE: FILE-6** Native report workspace
+  - **SYNOPSIS:** `tools/report/Cargo.toml` owns the shared Rust workspace; `tools/report/rust/agent-report-core/` owns discovery and indexing, and `tools/report/rust/agent-report-cli/` owns the JSON command adapter.
+
+- **FILE: FILE-7** Desktop report application
+  - **SYNOPSIS:** `tools/report/desktop/` owns the strict TypeScript/Vite frontend and its Tauri native application glue.
 
 ## 5. Constraints
 
@@ -343,6 +381,10 @@ These constraints prevent inaccurate accounting and unsafe report artifacts.
 - **RULE: RULE-12** Never double-count hierarchy or category subsets
   - **SYNOPSIS:** Include each thread once, cached input only inside input, reasoning only inside output, each response delta once, and each work unit once per requested aggregation.
   - **BECAUSE:** Hierarchical and subset counters are the primary sources of convincing but incorrect totals.
+
+- **RULE: RULE-12A** Keep raw rollout content inside native processing boundaries
+  - **SYNOPSIS:** Discovery responses, desktop events, and catalog models contain paths, fingerprints, identity, bounded titles, workspace metadata, and delegation identifiers but never return whole rollout lines or transcript bodies to the webview.
+  - **BECAUSE:** The desktop catalog needs operational metadata, not project content, and the repository prohibits unnecessary disclosure of private or company information.
 
 - **RULE: RULE-13** Keep raw logs outside reports by default
   - **SYNOPSIS:** Store source paths and digests rather than embedding rollout JSONL; redact or hash optional labels when privacy mode is selected.
@@ -506,9 +548,29 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **SYNOPSIS:** Place root and descendant Codex rollouts across active and archived stores plus a Junie session under bounded test roots, then select them by date and text criteria with and without `--generate-batch`.
   - **VALIDATES:** Codex descendants do not appear as separate catalog rows, out-of-range and text-mismatched roots are excluded, Junie sessions are discoverable, list-only mode writes no child directory, and batch mode produces working links in both directions.
 
+- **TASK: TEST-23** Preserve native discovery semantics
+  - **SYNOPSIS:** Scan fixtures with nested spawn metadata, escaped and mixed-case delegation markers, malformed lines, partial trailing JSON, and non-UTF-8 bytes.
+  - **VALIDATES:** Rust discovery matches the established identity and delegation-source contract without loading an entire rollout into memory.
+
+- **TASK: TEST-24** Reuse and invalidate native index entries
+  - **SYNOPSIS:** Index a stable candidate set twice, then append, truncate, and replace individual files.
+  - **VALIDATES:** The second observation is cached, only changed files are rescanned, replaced identities replace stale metadata, and an index-open failure is returned instead of falling back.
+
+- **TASK: TEST-25** Bound native discovery concurrency
+  - **SYNOPSIS:** Discover more files than the worker and result-channel capacities with a configured worker count.
+  - **VALIDATES:** Every input produces one ordered result, the operation completes without an unbounded queue, and statistics reconcile to the candidate count.
+
+- **TASK: TEST-26** Enforce the Python/native protocol boundary
+  - **SYNOPSIS:** Run the Python reporter with a valid engine, a missing engine, a nonzero engine, malformed output, and an unsupported response version.
+  - **VALIDATES:** Valid output preserves the normalized report while every engine contract failure is explicit and no Python discovery scanner runs.
+
+- **TASK: TEST-27** Operate the desktop catalog and export boundary
+  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and search filtering, and verify HTML export escaping.
+  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, raw transcripts do not cross into the webview, and exported catalog links identify the selected source files.
+
 ## 8. Proposed Modifications
 
-This section records the implementation surfaces implied by the design without claiming they are already applied.
+This section records the implementation surfaces implied by the design and their current delivery status.
 
 - **MODIFICATION: MOD-1** Add native rollout parsing to the report tool
   - **SYNOPSIS:** Introduce backend detection, session discovery, normalized rollout parsing, and hierarchy aggregation behind the existing report CLI.
@@ -529,3 +591,11 @@ This section records the implementation surfaces implied by the design without c
 - **MODIFICATION: MOD-5** Add sanitized native-rollout fixtures
   - **SYNOPSIS:** Cover hierarchy, cumulative token semantics, duplicate events, compaction, interruption, active logs, reused threads, pricing gaps, concurrency, and privacy.
   - **STATUS:** proposed
+
+- **MODIFICATION: MOD-6** Replace rollout discovery with the shared Rust engine
+  - **SYNOPSIS:** Stream rollout metadata through bounded producer/consumer workers, persist stable fingerprints and normalized metadata in SQLite, and expose one versioned JSON protocol to Python without a fallback scanner.
+  - **STATUS:** implemented in 0.6.0
+
+- **MODIFICATION: MOD-7** Add the Tauri run-index application
+  - **SYNOPSIS:** Reuse the Rust discovery core for local search, progress, virtualized results, privacy-bounded catalog export, and one-run-at-a-time HTML report generation.
+  - **STATUS:** implemented in 0.6.0

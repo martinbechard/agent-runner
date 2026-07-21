@@ -8,11 +8,20 @@
 from __future__ import annotations
 
 import importlib.util
+import os
 import sys
 import sysconfig
 from functools import cache
 from pathlib import Path
 from types import ModuleType
+
+
+def _configure_bundled_engine() -> None:
+    """Point the reporter at the platform engine carried by the installed wheel."""
+
+    executable_name = "agent-report-engine.exe" if sys.platform == "win32" else "agent-report-engine"
+    engine_path = Path(__file__).resolve().parent / "native" / executable_name
+    os.environ.setdefault("AGENT_REPORT_ENGINE", str(engine_path))
 
 
 @cache
@@ -49,4 +58,5 @@ def main(argv: list[str] | None = None) -> int:
     Raises:
         RuntimeError: The installed wheel does not contain its report script.
     """
+    _configure_bundled_engine()
     return _load_report_module().main(argv)
