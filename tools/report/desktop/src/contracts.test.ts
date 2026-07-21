@@ -5,7 +5,12 @@
 
 import { describe, expect, it } from "vitest";
 
-import { buildReportFilename, parseDiscoveryProgress, parseSearchResponse } from "./contracts";
+import {
+  buildReportFilename,
+  parseDiscoveryProgress,
+  parseSearchResponse,
+  rememberedOutputPath,
+} from "./contracts";
 
 describe("native command contracts", () => {
   it("accepts a complete privacy-bounded search response", () => {
@@ -74,5 +79,16 @@ describe("native command contracts", () => {
     expect(filename).toMatch(/\.html$/);
     expect(filename).not.toMatch(/[<>:"/\\|?*]/);
     expect(filename.length).toBeLessThanOrEqual(101);
+  });
+
+  it("reuses the last export folder for the next suggested filename", () => {
+    expect(rememberedOutputPath("/tmp/old report.html", "agent-report-index.html")).toBe(
+      "/tmp/agent-report-index.html",
+    );
+    expect(rememberedOutputPath("C:\\Reports\\old-report.html", "new-report.html")).toBe(
+      "C:\\Reports\\new-report.html",
+    );
+    expect(rememberedOutputPath(null, "new-report.html")).toBe("new-report.html");
+    expect(rememberedOutputPath("old-report.html", "new-report.html")).toBe("new-report.html");
   });
 });

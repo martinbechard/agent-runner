@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.0/agent_report-0.6.0-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.1/agent_report-0.6.1-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -169,11 +169,13 @@ automatically.
 ## Desktop run index
 
 The desktop application searches selected Codex stores locally and keeps the
-large generated report out of its webview. It virtualizes run rows, shows
-native scan/cache progress, filters on bounded metadata, and exports a compact
-offline index whose source paths open the corresponding local rollout files.
-Selecting a root enables full report generation through the installed
-`agent-report` renderer.
+large generated report out of its index webview. It virtualizes run rows,
+shows native scan/cache progress, filters on bounded metadata, and exports a
+compact offline index whose source paths open the corresponding local rollout
+files. Every successful export opens in its own app window. The app remembers
+the last export folder across launches and offers **Open last export** without
+rescanning the logs. Selecting a root enables full report generation through
+the installed `agent-report` renderer.
 
 ```bash
 cd tools/report/desktop
@@ -188,7 +190,7 @@ pnpm tauri build
 ```
 
 The app uses the shared Rust crate directly. For full report generation,
-install the v0.6.0 `agent-report` wheel or set `AGENT_REPORT_COMMAND` to the
+install the v0.6.1 `agent-report` wheel or set `AGENT_REPORT_COMMAND` to the
 installed report command. Catalog search and catalog HTML export do not need
 Python.
 

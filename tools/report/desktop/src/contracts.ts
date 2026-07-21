@@ -211,3 +211,22 @@ export function buildReportFilename(taskTitle: string, threadId: string): string
     .replace(/[ .-]+$/g, "");
   return `${safeStem || "agent-report"}.html`;
 }
+
+/** Reuse the folder of the last export while allowing the next filename to change. */
+export function rememberedOutputPath(
+  lastExportPath: string | null,
+  fallbackFilename: string,
+): string {
+  const normalizedPath = lastExportPath?.trim();
+  if (!normalizedPath) {
+    return fallbackFilename;
+  }
+  const separatorIndex = Math.max(
+    normalizedPath.lastIndexOf("/"),
+    normalizedPath.lastIndexOf("\\"),
+  );
+  if (separatorIndex < 0) {
+    return fallbackFilename;
+  }
+  return `${normalizedPath.slice(0, separatorIndex + 1)}${fallbackFilename}`;
+}

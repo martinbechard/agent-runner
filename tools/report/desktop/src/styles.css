@@ -115,6 +115,8 @@ input[type="search"] { width: 100%; padding: 11px 12px; color: var(--ink); backg
 button:disabled { cursor: not-allowed; opacity: 0.45; }
 kbd { color: #d8e4ea; font: 0.75rem var(--mono); }
 .microcopy { margin: 10px 0 0; color: var(--ink-muted); font-size: 0.7rem; line-height: 1.45; }
+.export-actions { display: grid; gap: 8px; }
+.export-path { overflow: hidden; font-family: var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 
 .results-deck { min-width: 0; min-height: 0; display: grid; grid-template-rows: auto auto minmax(0, 1fr) auto; padding: 26px 30px 18px; background: var(--fog); }
 .results-heading { display: flex; justify-content: space-between; align-items: end; gap: 20px; }

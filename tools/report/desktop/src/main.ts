@@ -9,6 +9,7 @@ import { open, save } from "@tauri-apps/plugin-dialog";
 import {
   type CatalogEntry,
   type DiscoveryProgress,
+  type ExportResult,
   type SearchRequest,
   type SearchResponse,
   buildReportFilename,
@@ -16,6 +17,7 @@ import {
   parseDiscoveryProgress,
   parseExportResult,
   parseSearchResponse,
+  rememberedOutputPath,
 } from "./contracts";
 import "./styles.css";
 
@@ -27,11 +29,13 @@ type ViewState =
 
 const ROW_HEIGHT = 118;
 const OVERSCAN = 5;
+const LAST_EXPORT_STORAGE_KEY = "agent-report:last-export-path:v1";
 
 const roots = new Set<string>();
 let indexPath: string | null = null;
 let entries: readonly CatalogEntry[] = [];
 let selectedThreadId: string | null = null;
+let lastExportPath: string | null = null;
 let state: ViewState = { kind: "idle" };
 
 function element<T extends HTMLElement>(id: string): T {
@@ -48,6 +52,8 @@ const queryInput = element<HTMLInputElement>("query");
 const includeDescendantsInput = element<HTMLInputElement>("include-descendants");
 const searchButton = element<HTMLButtonElement>("search");
 const exportButton = element<HTMLButtonElement>("export-catalog");
+const openLastExportButton = element<HTMLButtonElement>("open-last-export");
+const lastExportLabel = element<HTMLParagraphElement>("last-export-path");
 const generateButton = element<HTMLButtonElement>("generate-report");
 const resultCount = element<HTMLParagraphElement>("result-count");
 const statsPanel = element<HTMLDivElement>("stats");
@@ -291,6 +297,71 @@ function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+function renderLastExport(): void {
+  openLastExportButton.disabled = lastExportPath === null;
+  lastExportLabel.textContent =
+    lastExportPath === null ? "No previous export on this device." : `Last export: ${lastExportPath}`;
+  lastExportLabel.title = lastExportPath ?? "";
+}
+
+function restoreLastExport(): void {
+  try {
+    const storedPath = window.localStorage.getItem(LAST_EXPORT_STORAGE_KEY)?.trim();
+    lastExportPath = storedPath ? storedPath : null;
+  } catch {
+    lastExportPath = null;
+  }
+  renderLastExport();
+}
+
+function rememberExport(outputPath: string): boolean {
+  lastExportPath = outputPath;
+  renderLastExport();
+  try {
+    window.localStorage.setItem(LAST_EXPORT_STORAGE_KEY, outputPath);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function openReportWindow(outputPath: string): Promise<void> {
+  await invoke<void>("open_report_window", { outputPath });
+}
+
+async function presentSuccessfulExport(result: ExportResult, summary: string): Promise<void> {
+  const remembered = rememberExport(result.outputPath);
+  try {
+    await openReportWindow(result.outputPath);
+    statusDot.className = "ready";
+    status.textContent = `${summary} Opened it in a new window.${
+      remembered ? "" : " The export location could not be remembered."
+    }`;
+  } catch (error: unknown) {
+    statusDot.className = "error";
+    status.textContent = `${summary} The file was saved, but its window could not be opened: ${errorMessage(error)}`;
+  }
+}
+
+async function openLastExport(): Promise<void> {
+  if (lastExportPath === null) {
+    return;
+  }
+  const outputPath = lastExportPath;
+  openLastExportButton.disabled = true;
+  status.textContent = `Opening ${outputPath}…`;
+  try {
+    await openReportWindow(outputPath);
+    statusDot.className = "ready";
+    status.textContent = `Opened ${outputPath} in a new window.`;
+  } catch (error: unknown) {
+    statusDot.className = "error";
+    status.textContent = `Unable to open the last export: ${errorMessage(error)}`;
+  } finally {
+    openLastExportButton.disabled = false;
+  }
+}
+
 async function addRoot(): Promise<void> {
   try {
     const selected = await open({ directory: true, multiple: true, title: "Choose Codex log folders" });
@@ -309,7 +380,7 @@ async function addRoot(): Promise<void> {
 async function exportCatalog(): Promise<void> {
   const outputPath = await save({
     title: "Export run index",
-    defaultPath: "agent-report-index.html",
+    defaultPath: rememberedOutputPath(lastExportPath, "agent-report-index.html"),
     filters: [{ name: "HTML report", extensions: ["html"] }],
   });
   if (outputPath === null) {
@@ -322,7 +393,10 @@ async function exportCatalog(): Promise<void> {
       }),
     );
     setState({ kind: "ready", response: state.kind === "ready" ? state.response : { entries, stats: emptyStats() } });
-    status.textContent = `Exported ${result.entryCount.toLocaleString()} runs to ${result.outputPath}.`;
+    await presentSuccessfulExport(
+      result,
+      `Exported ${result.entryCount.toLocaleString()} runs to ${result.outputPath}.`,
+    );
   } catch (error: unknown) {
     setState({ kind: "error", message: errorMessage(error) });
   }
@@ -347,7 +421,10 @@ async function generateReport(): Promise<void> {
   }
   const outputPath = await save({
     title: "Generate full agent report",
-    defaultPath: buildReportFilename(selected.taskTitle, selected.threadId),
+    defaultPath: rememberedOutputPath(
+      lastExportPath,
+      buildReportFilename(selected.taskTitle, selected.threadId),
+    ),
     filters: [{ name: "HTML report", extensions: ["html"] }],
   });
   if (outputPath === null) {
@@ -366,7 +443,7 @@ async function generateReport(): Promise<void> {
         },
       }),
     );
-    status.textContent = `Generated full report at ${result.outputPath}.`;
+    await presentSuccessfulExport(result, `Generated full report at ${result.outputPath}.`);
   } catch (error: unknown) {
     setState({ kind: "error", message: errorMessage(error) });
   } finally {
@@ -375,6 +452,7 @@ async function generateReport(): Promise<void> {
 }
 
 async function initialize(): Promise<void> {
+  restoreLastExport();
   try {
     const defaults = parseDesktopDefaults(await invoke<unknown>("desktop_defaults"));
     for (const root of defaults.roots) {
@@ -392,6 +470,7 @@ async function initialize(): Promise<void> {
 addRootButton.addEventListener("click", () => void addRoot());
 searchButton.addEventListener("click", () => void runSearch());
 exportButton.addEventListener("click", () => void exportCatalog());
+openLastExportButton.addEventListener("click", () => void openLastExport());
 generateButton.addEventListener("click", () => void generateReport());
 queryInput.addEventListener("keydown", (event: KeyboardEvent) => {
   if (event.key === "Enter") {

@@ -346,8 +346,8 @@ flowchart LR
   - **PRODUCES:** Discovery metadata and statistics without transcript bodies.
 
 - **COMMAND: CMD-4** Browse and export reports from the desktop application
-  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with ordered progress events, then export a native catalog or generate the existing full offline report for a selected root.
-  - **PRODUCES:** User-selected HTML artifacts without loading a multi-hundred-megabyte report into the catalog webview.
+  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with ordered progress events, then export a native catalog or generate the existing full offline report for a selected root. Remember the last export folder and open each successful local HTML artifact in a separate app window.
+  - **PRODUCES:** User-selected HTML artifacts and reopenable report windows without loading a multi-hundred-megabyte report into the catalog webview.
 
 - **FILE: FILE-1** Component design authority
   - **SYNOPSIS:** `docs/design/components/CD-001-codex-rollout-metrics.md` defines the ingestion and aggregation contract.
@@ -565,8 +565,8 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** Valid output preserves the normalized report while every engine contract failure is explicit and no Python discovery scanner runs.
 
 - **TASK: TEST-27** Operate the desktop catalog and export boundary
-  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and search filtering, and verify HTML export escaping.
-  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, raw transcripts do not cross into the webview, and exported catalog links identify the selected source files.
+  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and search filtering, verify HTML export escaping, and validate remembered output folders plus local report-window paths.
+  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, and only existing local HTML artifacts can be opened as report windows.
 
 ## 8. Proposed Modifications
 
@@ -599,3 +599,7 @@ This section records the implementation surfaces implied by the design and their
 - **MODIFICATION: MOD-7** Add the Tauri run-index application
   - **SYNOPSIS:** Reuse the Rust discovery core for local search, progress, virtualized results, privacy-bounded catalog export, and one-run-at-a-time HTML report generation.
   - **STATUS:** implemented in 0.6.0
+
+- **MODIFICATION: MOD-8** Open and remember desktop exports
+  - **SYNOPSIS:** Open successful catalog and full-report exports in separate native windows, retain the last output folder across launches, and allow reopening the last local HTML artifact without rescanning.
+  - **STATUS:** implemented in 0.6.1

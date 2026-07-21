@@ -52,10 +52,16 @@
 
           <section class="export-block">
             <p class="step">03 / Take away</p>
-            <button id="export-catalog" class="secondary-action" type="button" disabled>
-              Export this index
-            </button>
-            <p class="microcopy">Exports only normalized run metadata. Full reports are generated one at a time.</p>
+            <div class="export-actions">
+              <button id="export-catalog" class="secondary-action" type="button" disabled>
+                Export this index
+              </button>
+              <button id="open-last-export" class="secondary-action" type="button" disabled>
+                Open last export
+              </button>
+            </div>
+            <p id="last-export-path" class="microcopy export-path">No previous export on this device.</p>
+            <p class="microcopy">Successful exports open in a separate app window. Full reports are generated one at a time.</p>
           </section>
         </aside>
 

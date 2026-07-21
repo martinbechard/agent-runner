@@ -5,7 +5,9 @@
 
 use std::fs;
 
-use agent_report_desktop::{SearchRequest, render_catalog_html, search_catalog_sync};
+use agent_report_desktop::{
+    SearchRequest, render_catalog_html, report_window_url, search_catalog_sync,
+};
 use tempfile::TempDir;
 
 #[test]
@@ -83,4 +85,23 @@ fn escapes_catalog_html_at_the_native_boundary() {
     assert!(html.contains("&lt;script&gt;alert(1)&lt;/script&gt;"));
     assert!(html.contains("/work/&lt;unsafe&gt;"));
     assert!(html.contains("href=\"file://"));
+}
+
+#[test]
+fn accepts_only_existing_local_html_for_report_windows() {
+    let directory = TempDir::new().expect("create temporary directory");
+    let report = directory.path().join("report with spaces.html");
+    let text = directory.path().join("not-a-report.txt");
+    fs::write(&report, "<!doctype html><title>Report</title>").expect("write report");
+    fs::write(&text, "not html").expect("write text file");
+
+    let url = report_window_url(&report).expect("build report file URL");
+
+    assert_eq!(url.scheme(), "file");
+    assert_eq!(
+        url.to_file_path().expect("convert URL back to path"),
+        report.canonicalize().expect("canonical report path")
+    );
+    assert!(report_window_url(&text).is_err());
+    assert!(report_window_url(&directory.path().join("missing.html")).is_err());
 }

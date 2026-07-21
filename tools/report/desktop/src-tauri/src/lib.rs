@@ -9,6 +9,7 @@ use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use agent_report_core::{
     DiscoveryProgress, DiscoveryRequest, DiscoveryResponse, DiscoveryStats, PROTOCOL_VERSION,
@@ -17,7 +18,10 @@ use agent_report_core::{
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 use url::Url;
+
+static REPORT_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 
 /// Search controls accepted from the desktop webview.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -367,6 +371,55 @@ fn ensure_output_parent(path: &Path) -> Result<(), String> {
     fs::create_dir_all(parent).map_err(|error| format!("unable to create output folder: {error}"))
 }
 
+/// Resolve and validate an existing local HTML artifact before a report webview loads it.
+pub fn report_window_url(path: &Path) -> Result<Url, String> {
+    let canonical = path
+        .canonicalize()
+        .map_err(|error| format!("unable to resolve report {}: {error}", path.display()))?;
+    if !canonical.is_file() {
+        return Err(format!("report is not a file: {}", canonical.display()));
+    }
+    let is_html = canonical
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| {
+            extension.eq_ignore_ascii_case("html") || extension.eq_ignore_ascii_case("htm")
+        });
+    if !is_html {
+        return Err(format!(
+            "report must be an HTML file: {}",
+            canonical.display()
+        ));
+    }
+    Url::from_file_path(&canonical).map_err(|_| {
+        format!(
+            "unable to convert report path to a local URL: {}",
+            canonical.display()
+        )
+    })
+}
+
+#[tauri::command]
+async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), String> {
+    let url = report_window_url(&output_path)?;
+    let title = output_path
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.is_empty())
+        .unwrap_or("Report");
+    let label = format!(
+        "report-{}",
+        REPORT_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed)
+    );
+    WebviewWindowBuilder::new(&app, label, WebviewUrl::CustomProtocol(url))
+        .title(format!("Agent Report — {title}"))
+        .inner_size(1280.0, 800.0)
+        .min_inner_size(720.0, 480.0)
+        .build()
+        .map_err(|error| format!("unable to open report window: {error}"))?;
+    Ok(())
+}
+
 /// Build and run the desktop application with a deliberately narrow command surface.
 pub fn run() {
     tauri::Builder::default()
@@ -376,6 +429,7 @@ pub fn run() {
             search_rollouts,
             export_catalog,
             generate_report,
+            open_report_window,
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent report desktop application");
