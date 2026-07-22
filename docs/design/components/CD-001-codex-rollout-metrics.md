@@ -292,9 +292,9 @@ flowchart LR
   - **VALIDATES:** Protocol version, path ownership, cache schema, before/after fingerprint stability, malformed and partial JSONL, and UTF-8 replacement behavior.
 
 - **MODULE: MODULE-10** Desktop run browser
-  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC date range and metadata with progress updates, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root, and opens only its matching local sequence companion in a child report window.
+  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC date range and metadata with progress updates, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root, opens only its matching local sequence companion in a child report window, and persists bounded local troubleshooting diagnostics.
   - **USES:** `MODULE-9` as a direct Rust dependency; the webview receives normalized metadata and progress rather than raw transcript content.
-  - **PRODUCES:** A responsive local run list and user-selected offline output artifacts without requiring a separately installed Python interpreter or report command at runtime.
+  - **PRODUCES:** A responsive local run list, user-selected offline output artifacts, and current plus previous JSONL diagnostic logs without requiring a separately installed Python interpreter or report command at runtime.
 
 - **PROCESS: PROCESS-1** Discover and parse a run
   - **SYNOPSIS:** Resolve the selected root, index candidate rollout files, traverse descendants, parse each file once, and record all parse gaps.
@@ -350,8 +350,8 @@ flowchart LR
   - **PRODUCES:** Discovery metadata and statistics without transcript bodies.
 
 - **COMMAND: CMD-4** Browse and export reports from the desktop application
-  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with optional open-ended or inclusive UTC From and To dates plus ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder, open each successful local HTML artifact in a separate app window, and admit the report's `window.open` request only for its existing same-folder `-sequence` companion.
-  - **PRODUCES:** User-selected HTML artifacts and reopenable report windows without loading a multi-hundred-megabyte report into the catalog webview.
+  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with optional open-ended or inclusive UTC From and To dates plus ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder, open each successful local HTML artifact in a separate app window, admit the report's `window.open` request only for its existing same-folder `-sequence` companion, and open the current diagnostic log on request.
+  - **PRODUCES:** User-selected HTML artifacts, reopenable report windows, and a bounded local troubleshooting trail without loading a multi-hundred-megabyte report into the catalog webview.
 
 - **FILE: FILE-1** Component design authority
   - **SYNOPSIS:** `docs/design/components/CD-001-codex-rollout-metrics.md` defines the ingestion and aggregation contract.
@@ -569,12 +569,12 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** Valid output preserves the normalized report while every engine contract failure is explicit and no Python discovery scanner runs.
 
 - **TASK: TEST-27** Operate the desktop catalog and export boundary
-  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and metadata plus inclusive UTC date filtering, verify HTML export escaping, and validate remembered output folders plus local report-window paths and sequence popups.
-  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed dates are rejected, offset timestamps use their UTC date, encoded path dates reduce candidate parsing without losing boundary runs, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, and only the matching local sequence companion can be opened from a report window.
+  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and metadata plus inclusive UTC date filtering, verify HTML export escaping, and validate remembered output folders, local report-window paths, sequence popups, and diagnostic-log persistence.
+  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed dates are rejected, offset timestamps use their UTC date, encoded path dates reduce candidate parsing without losing boundary runs, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, only the matching local sequence companion can be opened from a report window, and structured diagnostics rotate at the configured size boundary.
 
 - **TASK: TEST-28** Run a self-contained desktop report export
   - **SYNOPSIS:** Build the target-specific renderer sidecar and Tauri application, then generate a report from a sanitized Codex fixture with no external report command configured.
-  - **VALIDATES:** The sidecar starts from the application bundle, locates its frozen report resources and native engine, writes the main and sequence HTML artifacts, and reports renderer failures without suggesting a separate runtime installation.
+  - **VALIDATES:** The sidecar starts from the application bundle, locates its frozen report resources and native engine, writes the main and sequence HTML artifacts, reports renderer failures without suggesting a separate runtime installation, and persists failure details after the app exits.
 
 ## 8. Proposed Modifications
 
@@ -623,3 +623,11 @@ This section records the implementation surfaces implied by the design and their
 - **MODIFICATION: MOD-11** Bound report titles and open sequence companions
   - **SYNOPSIS:** Compact long prompt-derived page headings, disclose full assignment labels on demand, and register a narrowly scoped Tauri new-window handler for the generated local sequence companion.
   - **STATUS:** implemented
+
+- **MODIFICATION: MOD-12** Persist desktop troubleshooting diagnostics
+  - **SYNOPSIS:** Record bounded native failures, renderer diagnostics, frontend exceptions, and panics in the Tauri app-log directory; retain one rotated file and expose the current log from the interface.
+  - **STATUS:** implemented in 0.6.3
+
+- **MODIFICATION: MOD-13** Keep the ad-hoc PyInstaller sidecar loadable on macOS
+  - **SYNOPSIS:** Disable hardened runtime for the current ad-hoc app bundle so Tauri does not impose library validation on the one-file sidecar's extracted Python framework; treat Developer ID and notarized distribution as a separate signing-profile concern.
+  - **STATUS:** implemented in 0.6.3

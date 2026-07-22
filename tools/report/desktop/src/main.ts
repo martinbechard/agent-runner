@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 // AI attribution: Generated with AI assistance.
-// Responsibility: Drive local run search, virtualized browsing, and report export interactions.
+// Responsibility: Drive local run search, virtualized browsing, report export, and diagnostic interactions.
 // Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
 import { Channel, invoke } from "@tauri-apps/api/core";
@@ -57,6 +57,8 @@ const searchButton = element<HTMLButtonElement>("search");
 const exportButton = element<HTMLButtonElement>("export-catalog");
 const openLastExportButton = element<HTMLButtonElement>("open-last-export");
 const lastExportLabel = element<HTMLParagraphElement>("last-export-path");
+const openDiagnosticLogButton = element<HTMLButtonElement>("open-diagnostic-log");
+const diagnosticLogLabel = element<HTMLParagraphElement>("diagnostic-log-path");
 const generateButton = element<HTMLButtonElement>("generate-report");
 const resultCount = element<HTMLParagraphElement>("result-count");
 const statsPanel = element<HTMLDivElement>("stats");
@@ -289,7 +291,10 @@ async function runSearch(): Promise<void> {
       state = { kind: "searching", progress };
       renderProgress(progress);
     } catch (error: unknown) {
-      setState({ kind: "error", message: errorMessage(error) });
+      setState({
+        kind: "error",
+        message: reportClientError("search_progress", error),
+      });
     }
   };
   try {
@@ -302,12 +307,18 @@ async function runSearch(): Promise<void> {
     setState({ kind: "ready", response });
     renderResponse(response);
   } catch (error: unknown) {
-    setState({ kind: "error", message: errorMessage(error) });
+    setState({ kind: "error", message: reportClientError("search_rollouts", error) });
   }
 }
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function reportClientError(context: string, error: unknown): string {
+  const message = errorMessage(error);
+  void invoke<void>("record_client_error", { context, message }).catch(() => undefined);
+  return message;
 }
 
 function renderLastExport(): void {
@@ -321,7 +332,8 @@ function restoreLastExport(): void {
   try {
     const storedPath = window.localStorage.getItem(LAST_EXPORT_STORAGE_KEY)?.trim();
     lastExportPath = storedPath ? storedPath : null;
-  } catch {
+  } catch (error: unknown) {
+    reportClientError("restore_last_export", error);
     lastExportPath = null;
   }
   renderLastExport();
@@ -333,8 +345,26 @@ function rememberExport(outputPath: string): boolean {
   try {
     window.localStorage.setItem(LAST_EXPORT_STORAGE_KEY, outputPath);
     return true;
-  } catch {
+  } catch (error: unknown) {
+    reportClientError("remember_export", error);
     return false;
+  }
+}
+
+async function openDiagnosticLog(): Promise<void> {
+  openDiagnosticLogButton.disabled = true;
+  try {
+    await invoke<void>("open_diagnostic_log");
+    statusDot.className = "ready";
+    status.textContent = "Opened the local diagnostic log.";
+  } catch (error: unknown) {
+    statusDot.className = "error";
+    status.textContent = `Unable to open the diagnostic log: ${reportClientError(
+      "open_diagnostic_log",
+      error,
+    )}`;
+  } finally {
+    openDiagnosticLogButton.disabled = false;
   }
 }
 
@@ -352,7 +382,7 @@ async function presentSuccessfulExport(result: ExportResult, summary: string): P
     }`;
   } catch (error: unknown) {
     statusDot.className = "error";
-    status.textContent = `${summary} The file was saved, but its window could not be opened: ${errorMessage(error)}`;
+    status.textContent = `${summary} The file was saved, but its window could not be opened: ${reportClientError("open_export", error)}`;
   }
 }
 
@@ -369,7 +399,7 @@ async function openLastExport(): Promise<void> {
     status.textContent = `Opened ${outputPath} in a new window.`;
   } catch (error: unknown) {
     statusDot.className = "error";
-    status.textContent = `Unable to open the last export: ${errorMessage(error)}`;
+    status.textContent = `Unable to open the last export: ${reportClientError("open_last_export", error)}`;
   } finally {
     openLastExportButton.disabled = false;
   }
@@ -386,7 +416,7 @@ async function addRoot(): Promise<void> {
       renderRoots();
     }
   } catch (error: unknown) {
-    setState({ kind: "error", message: errorMessage(error) });
+    setState({ kind: "error", message: reportClientError("select_log_folders", error) });
   }
 }
 
@@ -411,7 +441,7 @@ async function exportCatalog(): Promise<void> {
       `Exported ${result.entryCount.toLocaleString()} runs to ${result.outputPath}.`,
     );
   } catch (error: unknown) {
-    setState({ kind: "error", message: errorMessage(error) });
+    setState({ kind: "error", message: reportClientError("export_catalog", error) });
   }
 }
 
@@ -458,7 +488,7 @@ async function generateReport(): Promise<void> {
     );
     await presentSuccessfulExport(result, `Generated full report at ${result.outputPath}.`);
   } catch (error: unknown) {
-    setState({ kind: "error", message: errorMessage(error) });
+    setState({ kind: "error", message: reportClientError("generate_report", error) });
   } finally {
     generateButton.disabled = false;
   }
@@ -472,11 +502,14 @@ async function initialize(): Promise<void> {
       roots.add(root);
     }
     indexPath = defaults.indexPath;
+    diagnosticLogLabel.textContent = defaults.diagnosticLogPath;
+    diagnosticLogLabel.title = defaults.diagnosticLogPath;
+    openDiagnosticLogButton.disabled = false;
     renderRoots();
     setState({ kind: "idle" });
   } catch (error: unknown) {
     renderRoots();
-    setState({ kind: "error", message: errorMessage(error) });
+    setState({ kind: "error", message: reportClientError("initialize", error) });
   }
 }
 
@@ -484,6 +517,7 @@ addRootButton.addEventListener("click", () => void addRoot());
 searchButton.addEventListener("click", () => void runSearch());
 exportButton.addEventListener("click", () => void exportCatalog());
 openLastExportButton.addEventListener("click", () => void openLastExport());
+openDiagnosticLogButton.addEventListener("click", () => void openDiagnosticLog());
 generateButton.addEventListener("click", () => void generateReport());
 for (const input of [queryInput, fromDateInput, toDateInput]) {
   input.addEventListener("keydown", (event: KeyboardEvent) => {
@@ -501,5 +535,11 @@ for (const input of [fromDateInput, toDateInput]) {
 }
 resultsViewport.addEventListener("scroll", renderVirtualRows, { passive: true });
 window.addEventListener("resize", renderVirtualRows, { passive: true });
+window.addEventListener("error", (event: ErrorEvent) => {
+  reportClientError("window_error", event.error ?? event.message);
+});
+window.addEventListener("unhandledrejection", (event: PromiseRejectionEvent) => {
+  reportClientError("unhandled_rejection", event.reason);
+});
 
 void initialize();

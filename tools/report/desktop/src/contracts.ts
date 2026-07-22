@@ -3,10 +3,11 @@
 // Responsibility: Validate the desktop application's native command results at the webview boundary.
 // Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
-/** Native defaults for the local Codex stores and incremental index. */
+/** Native startup paths for local Codex stores, the incremental index, and diagnostics. */
 export interface DesktopDefaults {
   readonly roots: readonly string[];
   readonly indexPath: string | null;
+  readonly diagnosticLogPath: string;
 }
 
 /** User-selected search scope sent to the native command boundary. */
@@ -111,19 +112,23 @@ function requireNumber(record: Record<string, unknown>, key: string, label: stri
 /**
  * Narrow unknown native defaults before any filesystem paths reach application state.
  *
- * @throws {Error} When a root or index path has an unsupported shape.
+ * @throws {Error} When a root, index path, or diagnostic log path has an unsupported shape.
  */
 export function parseDesktopDefaults(value: unknown): DesktopDefaults {
   const record = requireRecord(value, "desktop defaults");
   const roots = record.roots;
   const indexPath = record.indexPath;
+  const diagnosticLogPath = record.diagnosticLogPath;
   if (!Array.isArray(roots) || !roots.every(isString)) {
     throw new Error("desktop defaults.roots is not a string array");
   }
   if (indexPath !== null && !isString(indexPath)) {
     throw new Error("desktop defaults.indexPath is not a string or null");
   }
-  return { roots, indexPath };
+  if (!isString(diagnosticLogPath) || diagnosticLogPath === "") {
+    throw new Error("desktop defaults.diagnosticLogPath is not a non-empty string");
+  }
+  return { roots, indexPath, diagnosticLogPath };
 }
 
 function parseCatalogEntry(value: unknown, index: number): CatalogEntry {

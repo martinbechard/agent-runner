@@ -8,12 +8,26 @@ import { describe, expect, it } from "vitest";
 import {
   buildReportFilename,
   dateRangeError,
+  parseDesktopDefaults,
   parseDiscoveryProgress,
   parseSearchResponse,
   rememberedOutputPath,
 } from "./contracts";
 
 describe("native command contracts", () => {
+  it("requires the native diagnostic log path in desktop defaults", () => {
+    const defaults = parseDesktopDefaults({
+      roots: ["/logs"],
+      indexPath: "/cache/index.sqlite3",
+      diagnosticLogPath: "/logs/agent-report.log",
+    });
+
+    expect(defaults.diagnosticLogPath).toBe("/logs/agent-report.log");
+    expect(() => parseDesktopDefaults({ roots: [], indexPath: null })).toThrow(
+      "diagnosticLogPath",
+    );
+  });
+
   it("accepts a complete privacy-bounded search response", () => {
     const response = parseSearchResponse({
       entries: [

@@ -3,7 +3,8 @@
   "bundle": {
     "externalBin": ["binaries/agent-report"],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "hardenedRuntime": false
     }
   }
 }

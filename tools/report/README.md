@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.2/agent_report-0.6.2-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.3/agent_report-0.6.3-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -181,7 +181,14 @@ UTC date range and prefilter date-encoded rollout paths before the native index
 opens them. Every successful export opens in its own app window. The app
 remembers the last export folder across launches and offers **Open last
 export** without rescanning the logs. Selecting a root enables full report
-generation through the renderer bundled into the desktop application.
+generation through the renderer bundled into the desktop application. Native
+command failures, renderer standard error, frontend exceptions, and panics are
+written as bounded JSON Lines entries in the local Tauri app-log directory.
+The **Open diagnostic log** control opens the current file directly. On macOS
+it is `~/Library/Logs/ca.devconsult.agent-report/agent-report.log`; one rotated
+`agent-report.previous.log` is retained beside it. The current file rotates
+when it reaches 5 MiB, individual messages are bounded, and rollout transcript
+bodies are not intentionally recorded.
 
 ```bash
 cd tools/report
@@ -208,6 +215,12 @@ Set `AGENT_REPORT_PYTHON` only to choose a different Python 3.11+ build
 interpreter with PyInstaller 6.21.0. `AGENT_REPORT_COMMAND` remains an explicit
 development override for the renderer process; normal app operation does not
 use it.
+
+The current ad-hoc macOS bundle disables hardened runtime. Tauri otherwise
+re-signs the PyInstaller one-file sidecar with library validation, which blocks
+the Python framework that the sidecar extracts at runtime. A future Developer
+ID and notarized release must replace this ad-hoc profile with a separately
+tested signing and entitlement strategy.
 
 The sequence view reads task display names from Codex's local desktop catalogs
 when available, and the same names identify top-level rows in the timeline.
