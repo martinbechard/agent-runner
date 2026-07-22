@@ -14,8 +14,18 @@ export interface SearchRequest {
   readonly roots: readonly string[];
   readonly indexPath: string | null;
   readonly query: string;
+  readonly fromDate: string;
+  readonly toDate: string;
   readonly includeDescendants: boolean;
   readonly workers: number | null;
+}
+
+/** Return the user-facing error for a reversed optional ISO date range. */
+export function dateRangeError(fromDate: string, toDate: string): string | null {
+  if (fromDate !== "" && toDate !== "" && fromDate > toDate) {
+    return "From date must not be after To date.";
+  }
+  return null;
 }
 
 /** Privacy-bounded metadata for one discovered Codex rollout. */

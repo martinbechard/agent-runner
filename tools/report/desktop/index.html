@@ -41,6 +41,17 @@
             <p class="step">02 / Find</p>
             <label class="field-label" for="query">Title, thread, workspace, path</label>
             <input id="query" type="search" autocomplete="off" placeholder="Search local run metadata" />
+            <div class="date-range" role="group" aria-label="Inclusive UTC date range">
+              <label for="from-date">
+                <span>From (UTC)</span>
+                <input id="from-date" type="date" />
+              </label>
+              <label for="to-date">
+                <span>To (UTC)</span>
+                <input id="to-date" type="date" />
+              </label>
+            </div>
+            <p class="microcopy date-range-help">Optional. Both dates are inclusive.</p>
             <label class="check-row">
               <input id="include-descendants" type="checkbox" />
               <span>Show descendant agent logs</span>

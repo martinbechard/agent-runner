@@ -1949,6 +1949,42 @@ def test_native_codex_report_uses_first_genuine_request_as_title():
     assert "Codex Rollout Metrics" not in markdown
 
 
+def test_native_codex_html_compacts_long_page_title_and_discloses_table_titles():
+    module = _load_module()
+    long_title = (
+        "Investigate every recorded agent interaction across the complete execution "
+        "archive and explain every relevant implementation decision before producing "
+        "the final verified report"
+    )
+    run = module.build_codex_rollout_run(
+        "root-thread",
+        CODEX_ROLLOUT_FIXTURES,
+        title=long_title,
+    )
+    root = next(thread for thread in run.threads if thread.thread_id == run.root_thread_id)
+    root.task_title = long_title
+
+    html = module.render_codex_rollout_html(run)
+    full_report_title = f'"{long_title}" Agent Report'
+    compact_report_title = module._compact_report_title(full_report_title)
+    compact_agent_label = module._compact_agent_assignment_label(root)
+    agent_table = html.split('<table class="agent-table">', 1)[1].split(
+        "</table>", 1
+    )[0]
+
+    assert compact_report_title != full_report_title
+    assert f"<title>{compact_report_title}</title>" in html
+    assert (
+        f'<h1 title="&quot;{long_title}&quot; Agent Report">'
+        f"{compact_report_title}</h1>"
+    ) in html
+    assert '<details class="clamped-disclosure agent-title-disclosure">' in agent_table
+    assert f'<span class="clamped-preview"><strong>{compact_agent_label}</strong></span>' in agent_table
+    assert '<span class="clamped-toggle clamped-more">more</span>' in agent_table
+    assert f'<div class="clamped-full"><strong>Thread: {long_title} · Agent: main</strong>' in agent_table
+    assert full_report_title not in compact_report_title
+
+
 @pytest.mark.parametrize(
     ("task_title", "expected"),
     [

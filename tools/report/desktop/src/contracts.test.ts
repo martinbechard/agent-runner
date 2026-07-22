@@ -7,6 +7,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildReportFilename,
+  dateRangeError,
   parseDiscoveryProgress,
   parseSearchResponse,
   rememberedOutputPath,
@@ -90,5 +91,15 @@ describe("native command contracts", () => {
     );
     expect(rememberedOutputPath(null, "new-report.html")).toBe("new-report.html");
     expect(rememberedOutputPath("old-report.html", "new-report.html")).toBe("new-report.html");
+  });
+
+  it("accepts open and inclusive ranges while rejecting reversed dates", () => {
+    expect(dateRangeError("", "")).toBeNull();
+    expect(dateRangeError("2026-07-21", "")).toBeNull();
+    expect(dateRangeError("", "2026-07-21")).toBeNull();
+    expect(dateRangeError("2026-07-21", "2026-07-21")).toBeNull();
+    expect(dateRangeError("2026-07-22", "2026-07-21")).toBe(
+      "From date must not be after To date.",
+    );
   });
 });

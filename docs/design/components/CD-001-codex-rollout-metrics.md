@@ -85,7 +85,7 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
   - **BECAUSE:** Later comparison requires proof of which telemetry produced the archived metrics.
 
 - **RULE: RULE-19** Prefer an explicit task title and otherwise derive one from genuine user input
-  - **SYNOPSIS:** Use a caller-supplied or stored task title when available. Otherwise derive a bounded title from the first genuine recorded user request after excluding injected plugin catalogs, repository instructions, environment blocks, and ambient browser context. Compose the result as `"<task title>" Agent Report` for both the HTML document title and visible page heading, with a generic metrics title only as the fallback.
+  - **SYNOPSIS:** Use a caller-supplied or stored task title when available. Otherwise derive a bounded title from the first genuine recorded user request after excluding injected plugin catalogs, repository instructions, environment blocks, and ambient browser context. Preserve the canonical `"<task title>" Agent Report` value, bound long document and visible headings while retaining the full heading as hover text, and put long table labels behind the shared **more** disclosure.
   - **BECAUSE:** Host-provided context is useful runtime input but does not identify the work the report is about.
 
 - **RULE: RULE-20** Keep the HTML report frame compact
@@ -292,7 +292,7 @@ flowchart LR
   - **VALIDATES:** Protocol version, path ownership, cache schema, before/after fingerprint stability, malformed and partial JSONL, and UTF-8 replacement behavior.
 
 - **MODULE: MODULE-10** Desktop run browser
-  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog with progress updates, exports catalog HTML with clickable source locations, and invokes a bundled full-report sidecar for a selected root.
+  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC date range and metadata with progress updates, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root, and opens only its matching local sequence companion in a child report window.
   - **USES:** `MODULE-9` as a direct Rust dependency; the webview receives normalized metadata and progress rather than raw transcript content.
   - **PRODUCES:** A responsive local run list and user-selected offline output artifacts without requiring a separately installed Python interpreter or report command at runtime.
 
@@ -350,7 +350,7 @@ flowchart LR
   - **PRODUCES:** Discovery metadata and statistics without transcript bodies.
 
 - **COMMAND: CMD-4** Browse and export reports from the desktop application
-  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder and open each successful local HTML artifact in a separate app window.
+  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with optional open-ended or inclusive UTC From and To dates plus ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder, open each successful local HTML artifact in a separate app window, and admit the report's `window.open` request only for its existing same-folder `-sequence` companion.
   - **PRODUCES:** User-selected HTML artifacts and reopenable report windows without loading a multi-hundred-megabyte report into the catalog webview.
 
 - **FILE: FILE-1** Component design authority
@@ -534,7 +534,7 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 
 - **TASK: TEST-18** Select a semantic report title
   - **SYNOPSIS:** Provide injected plugin, repository, environment, and browser context before a genuine user request, then repeat the case with an explicit stored title.
-  - **VALIDATES:** The first genuine request supplies the quoted task name in `"<task title>" Agent Report` for both the HTML document title and visible heading when no explicit title exists, while the explicit title takes precedence and the generic metrics title remains only a fallback.
+  - **VALIDATES:** The first genuine request supplies the quoted task name in `"<task title>" Agent Report` when no explicit title exists, the explicit title takes precedence, long visible headings are bounded with the full value available as hover text, long assignment labels use a **more** disclosure, and the generic metrics title remains only a fallback.
 
 - **TASK: TEST-19** Render the compact report frame
   - **SYNOPSIS:** Render a priced report with a fixed observation timestamp.
@@ -569,8 +569,8 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** Valid output preserves the normalized report while every engine contract failure is explicit and no Python discovery scanner runs.
 
 - **TASK: TEST-27** Operate the desktop catalog and export boundary
-  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and search filtering, verify HTML export escaping, and validate remembered output folders plus local report-window paths.
-  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, and only existing local HTML artifacts can be opened as report windows.
+  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and metadata plus inclusive UTC date filtering, verify HTML export escaping, and validate remembered output folders plus local report-window paths and sequence popups.
+  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed dates are rejected, offset timestamps use their UTC date, encoded path dates reduce candidate parsing without losing boundary runs, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, and only the matching local sequence companion can be opened from a report window.
 
 - **TASK: TEST-28** Run a self-contained desktop report export
   - **SYNOPSIS:** Build the target-specific renderer sidecar and Tauri application, then generate a report from a sanitized Codex fixture with no external report command configured.
@@ -615,3 +615,11 @@ This section records the implementation surfaces implied by the design and their
 - **MODIFICATION: MOD-9** Bundle the full renderer with the desktop application
   - **SYNOPSIS:** Freeze the Python report implementation, static data, and native engine into a Tauri sidecar and use it as the default full-report process while retaining an explicit development override.
   - **STATUS:** implemented in 0.6.2
+
+- **MODIFICATION: MOD-10** Filter desktop runs by date range
+  - **SYNOPSIS:** Add optional From and To controls to the desktop search, validate inclusive UTC boundaries at the native command boundary, and prefilter confidently date-encoded rollout paths before indexing.
+  - **STATUS:** implemented
+
+- **MODIFICATION: MOD-11** Bound report titles and open sequence companions
+  - **SYNOPSIS:** Compact long prompt-derived page headings, disclose full assignment labels on demand, and register a narrowly scoped Tauri new-window handler for the generated local sequence companion.
+  - **STATUS:** implemented

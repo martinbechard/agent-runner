@@ -106,11 +106,15 @@ python tools/report/scripts/run-timeline.py \
 The generated HTML files open directly from disk and do not require a web
 server. The timeline remains the primary view. **Sequence window** near the top
 opens the separately generated `*-sequence.html` companion, so the main report
-does not load or parse the large diagram payload. The sequence reads downward through recorded
+does not load or parse the large diagram payload. In the desktop application,
+that link is admitted as a separate native window only when it targets the
+matching local sequence companion. The sequence reads downward through recorded
 delegation, spawn, message, follow-up, interrupt, child-ending events, and
 available reasoning summaries. Its standalone controls provide zoom and fit,
 hierarchy collapse, agent focus, event filters, and reversible grouping of
-consecutive repeated messages.
+consecutive repeated messages. Long prompt-derived report headings are bounded
+for display, while long task labels in report tables retain their full text
+behind the shared **more** disclosure.
 
 Each distinct plaintext reasoning fragment appears as an optional conversation
 bubble on its agent lifeline. Repeated text keeps only its latest occurrence;
@@ -172,10 +176,12 @@ The desktop application searches selected Codex stores locally and keeps the
 large generated report out of its index webview. It virtualizes run rows,
 shows native scan/cache progress, filters on bounded metadata, and exports a
 compact offline index whose source paths open the corresponding local rollout
-files. Every successful export opens in its own app window. The app remembers
-the last export folder across launches and offers **Open last export** without
-rescanning the logs. Selecting a root enables full report generation through
-the renderer bundled into the desktop application.
+files. Optional **From** and **To** controls apply an open-ended or inclusive
+UTC date range and prefilter date-encoded rollout paths before the native index
+opens them. Every successful export opens in its own app window. The app
+remembers the last export folder across launches and offers **Open last
+export** without rescanning the logs. Selecting a root enables full report
+generation through the renderer bundled into the desktop application.
 
 ```bash
 cd tools/report

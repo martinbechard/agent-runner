@@ -1731,6 +1731,33 @@ def _report_title(task_title: str) -> str:
     return f'"{normalized}" Agent Report'
 
 
+def _compact_display_text(value: str, limit: int) -> str:
+    """Return one whitespace-normalized label bounded at a useful word edge."""
+
+    compact = " ".join(value.split())
+    if len(compact) <= limit:
+        return compact
+    boundary = compact.rfind(" ", 0, max(1, limit))
+    if boundary < max(1, limit // 2):
+        boundary = max(1, limit - 1)
+    return compact[:boundary].rstrip(" ,:;-.") + "…"
+
+
+def _compact_report_title(report_title: str, limit: int = 96) -> str:
+    """Bound a visible report heading while retaining its canonical suffix."""
+
+    normalized = " ".join(report_title.split())
+    match = re.fullmatch(r'"(?P<title>.*)" Agent Report', normalized)
+    if not match:
+        return _compact_display_text(normalized, limit)
+    suffix_chars = len('"" Agent Report')
+    compact_title = _compact_display_text(
+        match.group("title"),
+        max(1, limit - suffix_chars),
+    )
+    return f'"{compact_title}" Agent Report'
+
+
 def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
     """Read Codex's local task titles without requiring the Codex service."""
 
@@ -3797,6 +3824,24 @@ def _agent_assignment_label(thread: CodexThreadMetrics) -> str:
     return label
 
 
+def _compact_agent_assignment_label(
+    thread: CodexThreadMetrics,
+    assignment_limit: int = 72,
+) -> str:
+    """Bound only the assignment portion while preserving the agent identity."""
+
+    label = _agent_assignment_label(thread)
+    prefix = "Thread: "
+    separator = " · Agent: "
+    if not label.startswith(prefix) or separator not in label:
+        return _compact_display_text(label, assignment_limit)
+    assignment, agent = label[len(prefix) :].split(separator, 1)
+    return (
+        f"{prefix}{_compact_display_text(assignment, assignment_limit)}"
+        f"{separator}{agent}"
+    )
+
+
 def _agent_inventory_threads(
     run: CodexRunMetrics,
 ) -> list[tuple[CodexThreadMetrics, int]]:
@@ -4166,7 +4211,7 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
             )
             agent_rows.append(
                 '<tr class="model-usage-agent-row">'
-                f'<td>{_escape_html(_agent_assignment_label(thread))}</td>'
+                f'<td>{_clamped_agent_title_html(thread)}</td>'
                 f'<td>{usage.direct_input_tokens:,}</td>'
                 f'<td>{usage.cached_input_tokens:,}</td>'
                 f'{cache_write_cell}'
@@ -4249,6 +4294,25 @@ def _clamped_inventory_html(
         '<button type="button" class="clamped-toggle clamped-less">less</button>'
         "</div>"
         "</details>"
+    )
+
+
+def _clamped_agent_title_html(thread: CodexThreadMetrics) -> str:
+    """Render a long table assignment behind the shared more/less disclosure."""
+
+    full_label = _agent_assignment_label(thread)
+    compact_label = _compact_agent_assignment_label(thread)
+    if compact_label == full_label:
+        return f"<strong>{_escape_html(full_label)}</strong>"
+    return (
+        '<details class="clamped-disclosure agent-title-disclosure">'
+        '<summary><span class="clamped-preview"><strong>'
+        f"{_escape_html(compact_label)}</strong></span>"
+        '<span class="clamped-toggle clamped-more">more</span></summary>'
+        '<div class="clamped-full"><strong>'
+        f"{_escape_html(full_label)}</strong>"
+        '<button type="button" class="clamped-toggle clamped-less">less</button>'
+        "</div></details>"
     )
 
 
@@ -5252,6 +5316,7 @@ def render_codex_rollout_html(
             f'<code class="model-name">{_escape_html(thread.model or "—")}</code>'
             f"{effort_html}</span>"
         )
+        agent_title_html = _clamped_agent_title_html(thread)
         agent_rows.append((
             thread.thread_id,
             f'<tr class="agent-summary-row" data-agent-detail="{agent_detail_id}">'
@@ -5259,11 +5324,11 @@ def render_codex_rollout_html(
             f'<span class="visually-hidden">{hierarchy_label}</span>'
             '<div class="agent-assignment-line">'
             '<button type="button" class="agent-row-toggle" aria-expanded="false" '
-            f'aria-controls="{agent_detail_id}" aria-label="Toggle details for {_escape_html(_agent_assignment_label(thread))}">'
+            f'aria-controls="{agent_detail_id}" aria-label="Toggle details for {_escape_html_attribute(_agent_assignment_label(thread))}">'
             '<span class="agent-row-toggle-icon" aria-hidden="true"></span></button>'
             '<div class="agent-assignment">'
             '<div class="agent-assignment-heading">'
-            f"<strong>{_escape_html(_agent_assignment_label(thread))}</strong>"
+            f"{agent_title_html}"
             f'<span class="state state-{_escape_html(thread.terminal_state)}">{_escape_html(thread.terminal_state)}</span>'
             f"{model_metadata}</div></div></div></td>"
             f'<td class="agent-skills-cell">{skills_used_html}</td>'
@@ -5767,14 +5832,20 @@ def render_codex_rollout_html(
         if is_junie_ide
         else "Bars share a common run-wide time axis and show each agent and task span's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
     )
-    report_title = (
+    full_report_title = (
         run.run_label
         if run.runtime.casefold() == "codex" and run.run_label
         else AGENT_EXECUTION_METRICS_TITLE
     )
+    report_title = _compact_report_title(full_report_title)
+    report_title_attribute = (
+        f' title="{_escape_html_attribute(full_report_title)}"'
+        if report_title != full_report_title
+        else ""
+    )
     run_label_html = (
         f'<p class="run-label">{_escape_html(run.run_label)}</p>'
-        if run.run_label and run.run_label != report_title
+        if run.run_label and run.run_label != full_report_title
         else ""
     )
     model_usage_html = _render_model_usage_section(run)
@@ -5865,6 +5936,8 @@ td {{ font-size:.85em; }}
 .clamped-disclosure[open] > summary {{ display:none; }}
 .clamped-full {{ margin-top:0; }}
 .clamped-less {{ display:block; margin-top:3px; }}
+.agent-title-disclosure {{ min-width:0; max-width:100%; }}
+.agent-title-disclosure .clamped-preview {{ -webkit-line-clamp:3; }}
 .agent-assignment-line {{ display:flex; align-items:flex-start; gap:8px; }}
 .agent-assignment-heading {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
 .agent-assignment-heading .state {{ flex:0 0 auto; }}
@@ -6042,7 +6115,7 @@ td {{ font-size:.85em; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
-<h1>{_escape_html(report_title)}</h1>
+<h1{report_title_attribute}>{_escape_html(report_title)}</h1>
 {nav_html}
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
@@ -10077,6 +10150,12 @@ def _infer_turn_durations(detail: CallDetail, total_duration_seconds: float) -> 
 
 def _escape_html(text: str) -> str:
     return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
+def _escape_html_attribute(text: str) -> str:
+    """Escape text for a double-quoted HTML attribute."""
+
+    return _escape_html(text).replace('"', "&quot;").replace("'", "&#x27;")
 
 
 def _truncate(text: str, limit: int = POPUP_TRUNCATE_CHARS) -> str:

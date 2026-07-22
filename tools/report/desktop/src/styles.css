@@ -103,7 +103,13 @@ input:focus-visible,
 .root-chip button { width: 22px; height: 22px; padding: 0; color: #617887; border: 0; background: transparent; cursor: pointer; font-size: 1.1rem; }
 
 .field-label { display: block; margin: 18px 0 7px; color: var(--ink-muted); font-size: 0.74rem; font-weight: 700; }
-input[type="search"] { width: 100%; padding: 11px 12px; color: var(--ink); background: var(--paper); border: 1px solid #9eb0bd; border-radius: 2px; }
+input[type="search"],
+input[type="date"] { width: 100%; padding: 11px 12px; color: var(--ink); background: var(--paper); border: 1px solid #9eb0bd; border-radius: 2px; }
+.date-range { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 9px; margin-top: 13px; }
+.date-range label { min-width: 0; }
+.date-range span { display: block; margin-bottom: 6px; color: var(--ink-muted); font-size: 0.68rem; font-weight: 700; }
+.date-range input { min-width: 0; padding: 9px 7px; font-size: 0.72rem; }
+.date-range-help { margin-top: 6px; }
 .check-row { display: flex; align-items: center; gap: 9px; margin: 13px 0 19px; color: #435867; font-size: 0.78rem; cursor: pointer; }
 .check-row input { accent-color: var(--signal); }
 

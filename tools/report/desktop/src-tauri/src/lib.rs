@@ -16,14 +16,76 @@ use agent_report_core::{
     DiscoveryProgress, DiscoveryRequest, DiscoveryResponse, DiscoveryStats, PROTOCOL_VERSION,
     collect_rollout_paths, index_rollouts,
 };
+use chrono::{DateTime, NaiveDate, Utc};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
+use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use url::Url;
 
 static REPORT_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+#[derive(Clone, Copy, Debug)]
+struct CatalogDateRange {
+    from: Option<NaiveDate>,
+    to: Option<NaiveDate>,
+}
+
+impl CatalogDateRange {
+    fn parse(from_date: &str, to_date: &str) -> Result<Self, String> {
+        let range = Self {
+            from: parse_catalog_date(from_date, "From")?,
+            to: parse_catalog_date(to_date, "To")?,
+        };
+        if range.from.zip(range.to).is_some_and(|(from, to)| from > to) {
+            return Err("From date must not be after To date".to_owned());
+        }
+        Ok(range)
+    }
+
+    fn includes_candidate(&self, path: &Path) -> bool {
+        let Some(path_date) = encoded_rollout_date(path) else {
+            return true;
+        };
+        let earliest_path_date = self.from.and_then(|date| date.pred_opt()).or(self.from);
+        if earliest_path_date.is_some_and(|from| path_date < from) {
+            return false;
+        }
+        !self.to.is_some_and(|to| path_date > to)
+    }
+
+    fn includes_timestamp(&self, timestamp: &str) -> bool {
+        if self.from.is_none() && self.to.is_none() {
+            return true;
+        }
+        let Ok(timestamp) = DateTime::parse_from_rfc3339(timestamp) else {
+            return false;
+        };
+        let date = timestamp.with_timezone(&Utc).date_naive();
+        !self.from.is_some_and(|from| date < from) && !self.to.is_some_and(|to| date > to)
+    }
+}
+
+fn parse_catalog_date(value: &str, label: &str) -> Result<Option<NaiveDate>, String> {
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    NaiveDate::parse_from_str(value, "%Y-%m-%d")
+        .map(Some)
+        .map_err(|_| format!("Invalid {label} date '{value}'; expected YYYY-MM-DD"))
+}
+
+fn encoded_rollout_date(path: &Path) -> Option<NaiveDate> {
+    let filename = path.file_name()?.to_str()?;
+    let start = filename.find("rollout-")? + "rollout-".len();
+    let date = filename.get(start..start + 10)?;
+    (filename.get(start + 10..start + 11) == Some("T"))
+        .then(|| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
+        .flatten()
+}
 
 /// Search controls accepted from the desktop webview.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -35,6 +97,12 @@ pub struct SearchRequest {
     pub index_path: Option<PathBuf>,
     /// Case-insensitive query over normalized metadata.
     pub query: String,
+    /// Optional inclusive UTC start date in YYYY-MM-DD format.
+    #[serde(default)]
+    pub from_date: String,
+    /// Optional inclusive UTC end date in YYYY-MM-DD format.
+    #[serde(default)]
+    pub to_date: String,
     /// Whether descendant agent rollouts should appear as rows.
     pub include_descendants: bool,
     /// Optional bounded native worker count.
@@ -136,7 +204,12 @@ where
     if request.roots.is_empty() {
         return Err("Select at least one Codex log folder".to_owned());
     }
-    let paths = collect_rollout_paths(&request.roots).map_err(|error| error.to_string())?;
+    let date_range = CatalogDateRange::parse(&request.from_date, &request.to_date)?;
+    let paths = collect_rollout_paths(&request.roots)
+        .map_err(|error| error.to_string())?
+        .into_iter()
+        .filter(|path| date_range.includes_candidate(path))
+        .collect();
     let response = index_rollouts(
         DiscoveryRequest {
             version: PROTOCOL_VERSION,
@@ -150,6 +223,7 @@ where
     Ok(filter_catalog(
         response,
         &request.query,
+        &date_range,
         request.include_descendants,
     ))
 }
@@ -157,6 +231,7 @@ where
 fn filter_catalog(
     response: DiscoveryResponse,
     query: &str,
+    date_range: &CatalogDateRange,
     include_descendants: bool,
 ) -> SearchResponse {
     let normalized_query = query.trim().to_lowercase();
@@ -166,6 +241,9 @@ fn filter_catalog(
         .filter_map(|entry| {
             let identity = entry.identity?;
             if !include_descendants && !identity.parent_thread_id.is_empty() {
+                return None;
+            }
+            if !date_range.includes_timestamp(&entry.started_at) {
                 return None;
             }
             let catalog_entry = CatalogEntry {
@@ -445,9 +523,40 @@ pub fn report_window_url(path: &Path) -> Result<Url, String> {
     })
 }
 
+/// Return whether a report popup is its existing, same-folder sequence companion.
+pub fn report_popup_is_allowed(opener_path: &Path, popup_url: &Url) -> bool {
+    let Some(stem) = opener_path.file_stem().and_then(|stem| stem.to_str()) else {
+        return false;
+    };
+    let Some(extension) = opener_path
+        .extension()
+        .and_then(|extension| extension.to_str())
+    else {
+        return false;
+    };
+    let Some(parent) = opener_path.parent() else {
+        return false;
+    };
+    let expected = parent.join(format!("{stem}-sequence.{extension}"));
+    let Ok(candidate) = popup_url.to_file_path() else {
+        return false;
+    };
+    expected
+        .canonicalize()
+        .ok()
+        .zip(candidate.canonicalize().ok())
+        .is_some_and(|(expected, candidate)| expected == candidate)
+}
+
 #[tauri::command]
 async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), String> {
     let url = report_window_url(&output_path)?;
+    let report_path = url.to_file_path().map_err(|_| {
+        format!(
+            "unable to recover the local report path from URL: {}",
+            url.as_str()
+        )
+    })?;
     let title = output_path
         .file_stem()
         .and_then(|stem| stem.to_str())
@@ -461,6 +570,13 @@ async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), 
         .title(format!("Agent Report — {title}"))
         .inner_size(1280.0, 800.0)
         .min_inner_size(720.0, 480.0)
+        .on_new_window(move |popup_url, _features| {
+            if report_popup_is_allowed(&report_path, &popup_url) {
+                NewWindowResponse::Allow
+            } else {
+                NewWindowResponse::Deny
+            }
+        })
         .build()
         .map_err(|error| format!("unable to open report window: {error}"))?;
     Ok(())

@@ -29,6 +29,7 @@ name = "agent-report-desktop"
 version = "0.6.2"
 dependencies = [
  "agent-report-core",
+ "chrono",
  "html-escape",
  "serde",
  "serde_json",

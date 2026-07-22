@@ -13,6 +13,7 @@ import {
   type SearchRequest,
   type SearchResponse,
   buildReportFilename,
+  dateRangeError,
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseExportResult,
@@ -49,6 +50,8 @@ function element<T extends HTMLElement>(id: string): T {
 const addRootButton = element<HTMLButtonElement>("add-root");
 const rootList = element<HTMLDivElement>("root-list");
 const queryInput = element<HTMLInputElement>("query");
+const fromDateInput = element<HTMLInputElement>("from-date");
+const toDateInput = element<HTMLInputElement>("to-date");
 const includeDescendantsInput = element<HTMLInputElement>("include-descendants");
 const searchButton = element<HTMLButtonElement>("search");
 const exportButton = element<HTMLButtonElement>("export-catalog");
@@ -76,6 +79,8 @@ function currentRequest(): SearchRequest {
     roots: [...roots],
     indexPath,
     query: queryInput.value.trim(),
+    fromDate: fromDateInput.value,
+    toDate: toDateInput.value,
     includeDescendants: includeDescendantsInput.checked,
     workers: null,
   };
@@ -263,6 +268,14 @@ function addDetail(label: string, value: string, tooltip = false): void {
 async function runSearch(): Promise<void> {
   if (roots.size === 0) {
     setState({ kind: "error", message: "Add at least one log folder before searching." });
+    return;
+  }
+  const rangeError = dateRangeError(fromDateInput.value, toDateInput.value);
+  fromDateInput.setCustomValidity(rangeError ?? "");
+  toDateInput.setCustomValidity(rangeError ?? "");
+  if (rangeError !== null) {
+    fromDateInput.reportValidity();
+    setState({ kind: "error", message: rangeError });
     return;
   }
   progressBar.style.width = "0%";
@@ -472,11 +485,20 @@ searchButton.addEventListener("click", () => void runSearch());
 exportButton.addEventListener("click", () => void exportCatalog());
 openLastExportButton.addEventListener("click", () => void openLastExport());
 generateButton.addEventListener("click", () => void generateReport());
-queryInput.addEventListener("keydown", (event: KeyboardEvent) => {
-  if (event.key === "Enter") {
-    void runSearch();
-  }
-});
+for (const input of [queryInput, fromDateInput, toDateInput]) {
+  input.addEventListener("keydown", (event: KeyboardEvent) => {
+    if (event.key === "Enter") {
+      void runSearch();
+    }
+  });
+}
+for (const input of [fromDateInput, toDateInput]) {
+  input.addEventListener("input", () => {
+    const rangeError = dateRangeError(fromDateInput.value, toDateInput.value);
+    fromDateInput.setCustomValidity(rangeError ?? "");
+    toDateInput.setCustomValidity(rangeError ?? "");
+  });
+}
 resultsViewport.addEventListener("scroll", renderVirtualRows, { passive: true });
 window.addEventListener("resize", renderVirtualRows, { passive: true });
 

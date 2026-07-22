@@ -13,6 +13,7 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 aho-corasick = "1.1.4"
+chrono = { version = "0.4.45", default-features = false, features = ["std"] }
 crossbeam-channel = "0.5.15"
 html-escape = "0.2.13"
 regex = "1.11.2"
