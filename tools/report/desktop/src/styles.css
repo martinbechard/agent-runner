@@ -165,6 +165,7 @@ kbd { color: #d8e4ea; font: 0.75rem var(--mono); }
 .detail-panel dl { display: grid; grid-template-columns: 68px minmax(0, 1fr); gap: 9px 10px; margin: 0 0 24px; }
 .detail-panel dt { color: #8fa6b4; font-size: 0.66rem; font-weight: 700; text-transform: uppercase; }
 .detail-panel dd { margin: 0; overflow: hidden; color: #d7e2e8; font: 0.68rem/1.4 var(--mono); text-overflow: ellipsis; white-space: nowrap; }
+.detail-report-link { max-width: 100%; padding: 0; overflow: hidden; color: var(--amber-light); font: inherit; text-align: left; text-overflow: ellipsis; white-space: nowrap; background: transparent; border: 0; border-bottom: 1px solid currentColor; cursor: pointer; }
 .detail-panel .primary-action { background: #244961; box-shadow: inset 4px 0 var(--amber-light); }
 .detail-panel .microcopy { color: #8fa6b4; }
 

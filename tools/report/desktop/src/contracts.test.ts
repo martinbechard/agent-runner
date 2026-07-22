@@ -8,9 +8,11 @@ import { describe, expect, it } from "vitest";
 import {
   buildReportFilename,
   dateRangeError,
+  parseReportHistory,
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseSearchResponse,
+  rememberReportForSource,
   rememberedOutputPath,
 } from "./contracts";
 
@@ -105,6 +107,41 @@ describe("native command contracts", () => {
     );
     expect(rememberedOutputPath(null, "new-report.html")).toBe("new-report.html");
     expect(rememberedOutputPath("old-report.html", "new-report.html")).toBe("new-report.html");
+  });
+
+  it("remembers a distinct last report for each source log", () => {
+    const first = rememberReportForSource({}, "/logs/first.jsonl", "/reports/first.html");
+    const second = rememberReportForSource(
+      first,
+      "/logs/second.jsonl",
+      "/reports/second.html",
+    );
+    const replaced = rememberReportForSource(
+      second,
+      "/logs/first.jsonl",
+      "/reports/first-latest.html",
+    );
+
+    expect(replaced).toEqual({
+      "/logs/first.jsonl": "/reports/first-latest.html",
+      "/logs/second.jsonl": "/reports/second.html",
+    });
+    expect(first).toEqual({ "/logs/first.jsonl": "/reports/first.html" });
+  });
+
+  it("restores only valid source-to-report history entries", () => {
+    expect(
+      parseReportHistory(
+        JSON.stringify({
+          "/logs/root.jsonl": "/reports/root.html",
+          "": "/reports/missing-source.html",
+          "/logs/missing-report.jsonl": "",
+          "/logs/not-a-path.jsonl": 42,
+        }),
+      ),
+    ).toEqual({ "/logs/root.jsonl": "/reports/root.html" });
+    expect(parseReportHistory("not-json")).toEqual({});
+    expect(parseReportHistory(null)).toEqual({});
   });
 
   it("accepts open and inclusive ranges while rejecting reversed dates", () => {

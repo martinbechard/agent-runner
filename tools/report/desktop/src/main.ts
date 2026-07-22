@@ -10,6 +10,7 @@ import {
   type CatalogEntry,
   type DiscoveryProgress,
   type ExportResult,
+  type ReportHistory,
   type SearchRequest,
   type SearchResponse,
   buildReportFilename,
@@ -17,7 +18,9 @@ import {
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseExportResult,
+  parseReportHistory,
   parseSearchResponse,
+  rememberReportForSource,
   rememberedOutputPath,
 } from "./contracts";
 import "./styles.css";
@@ -31,12 +34,14 @@ type ViewState =
 const ROW_HEIGHT = 118;
 const OVERSCAN = 5;
 const LAST_EXPORT_STORAGE_KEY = "agent-report:last-export-path:v1";
+const REPORT_HISTORY_STORAGE_KEY = "agent-report:last-report-by-source:v1";
 
 const roots = new Set<string>();
 let indexPath: string | null = null;
 let entries: readonly CatalogEntry[] = [];
 let selectedThreadId: string | null = null;
 let lastExportPath: string | null = null;
+let reportHistory: ReportHistory = {};
 let state: ViewState = { kind: "idle" };
 
 function element<T extends HTMLElement>(id: string): T {
@@ -248,6 +253,10 @@ function renderSelection(): void {
   addDetail("Thread", selected.threadId, true);
   addDetail("Workspace", selected.workspace || "Unavailable", true);
   addDetail("Source", selected.sourcePath, true);
+  const reportPath = reportHistory[selected.sourcePath];
+  if (reportPath !== undefined) {
+    addReportDetail(reportPath);
+  }
   if (selected.agentNickname) {
     addDetail("Agent", selected.agentNickname);
   }
@@ -264,6 +273,23 @@ function addDetail(label: string, value: string, tooltip = false): void {
   if (tooltip) {
     description.title = value;
   }
+  detailFields.append(term, description);
+}
+
+function addReportDetail(outputPath: string): void {
+  const term = document.createElement("dt");
+  term.textContent = "Last report";
+  const description = document.createElement("dd");
+  const reportLink = document.createElement("button");
+  reportLink.type = "button";
+  reportLink.className = "detail-report-link";
+  reportLink.textContent = outputPath;
+  reportLink.title = outputPath;
+  reportLink.setAttribute("aria-label", `Open last report: ${outputPath}`);
+  reportLink.addEventListener("click", () => {
+    void openRememberedReport(outputPath, reportLink);
+  });
+  description.append(reportLink);
   detailFields.append(term, description);
 }
 
@@ -351,6 +377,32 @@ function rememberExport(outputPath: string): boolean {
   }
 }
 
+function restoreReportHistory(): void {
+  try {
+    reportHistory = parseReportHistory(
+      window.localStorage.getItem(REPORT_HISTORY_STORAGE_KEY),
+    );
+  } catch (error: unknown) {
+    reportClientError("restore_report_history", error);
+    reportHistory = {};
+  }
+}
+
+function rememberGeneratedReport(sourcePath: string, outputPath: string): boolean {
+  reportHistory = rememberReportForSource(reportHistory, sourcePath, outputPath);
+  renderSelection();
+  try {
+    window.localStorage.setItem(
+      REPORT_HISTORY_STORAGE_KEY,
+      JSON.stringify(reportHistory),
+    );
+    return true;
+  } catch (error: unknown) {
+    reportClientError("remember_generated_report", error);
+    return false;
+  }
+}
+
 async function openDiagnosticLog(): Promise<void> {
   openDiagnosticLogButton.disabled = true;
   try {
@@ -372,7 +424,10 @@ async function openReportWindow(outputPath: string): Promise<void> {
   await invoke<void>("open_report_window", { outputPath });
 }
 
-async function presentSuccessfulExport(result: ExportResult, summary: string): Promise<void> {
+async function presentSuccessfulCatalogExport(
+  result: ExportResult,
+  summary: string,
+): Promise<void> {
   const remembered = rememberExport(result.outputPath);
   try {
     await openReportWindow(result.outputPath);
@@ -402,6 +457,24 @@ async function openLastExport(): Promise<void> {
     status.textContent = `Unable to open the last export: ${reportClientError("open_last_export", error)}`;
   } finally {
     openLastExportButton.disabled = false;
+  }
+}
+
+async function openRememberedReport(
+  outputPath: string,
+  reportLink: HTMLButtonElement,
+): Promise<void> {
+  reportLink.disabled = true;
+  status.textContent = `Opening ${outputPath}…`;
+  try {
+    await openReportWindow(outputPath);
+    statusDot.className = "ready";
+    status.textContent = `Opened ${outputPath} in a new window.`;
+  } catch (error: unknown) {
+    statusDot.className = "error";
+    status.textContent = `Unable to open this run's last report: ${reportClientError("open_remembered_report", error)}`;
+  } finally {
+    reportLink.disabled = false;
   }
 }
 
@@ -436,7 +509,7 @@ async function exportCatalog(): Promise<void> {
       }),
     );
     setState({ kind: "ready", response: state.kind === "ready" ? state.response : { entries, stats: emptyStats() } });
-    await presentSuccessfulExport(
+    await presentSuccessfulCatalogExport(
       result,
       `Exported ${result.entryCount.toLocaleString()} runs to ${result.outputPath}.`,
     );
@@ -465,7 +538,7 @@ async function generateReport(): Promise<void> {
   const outputPath = await save({
     title: "Generate full agent report",
     defaultPath: rememberedOutputPath(
-      lastExportPath,
+      reportHistory[selected.sourcePath] ?? lastExportPath,
       buildReportFilename(selected.taskTitle, selected.threadId),
     ),
     filters: [{ name: "HTML report", extensions: ["html"] }],
@@ -486,7 +559,18 @@ async function generateReport(): Promise<void> {
         },
       }),
     );
-    await presentSuccessfulExport(result, `Generated full report at ${result.outputPath}.`);
+    const remembered = rememberGeneratedReport(selected.sourcePath, result.outputPath);
+    const summary = `Generated full report at ${result.outputPath}.`;
+    try {
+      await openReportWindow(result.outputPath);
+      statusDot.className = "ready";
+      status.textContent = `${summary} Opened it in a new window.${
+        remembered ? "" : " The per-log report location could not be remembered."
+      }`;
+    } catch (error: unknown) {
+      statusDot.className = "error";
+      status.textContent = `${summary} The file was saved, but its window could not be opened: ${reportClientError("open_generated_report", error)}`;
+    }
   } catch (error: unknown) {
     setState({ kind: "error", message: reportClientError("generate_report", error) });
   } finally {
@@ -496,6 +580,7 @@ async function generateReport(): Promise<void> {
 
 async function initialize(): Promise<void> {
   restoreLastExport();
+  restoreReportHistory();
   try {
     const defaults = parseDesktopDefaults(await invoke<unknown>("desktop_defaults"));
     for (const root of defaults.roots) {

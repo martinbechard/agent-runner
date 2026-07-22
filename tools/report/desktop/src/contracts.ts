@@ -74,6 +74,9 @@ export interface ExportResult {
   readonly entryCount: number;
 }
 
+/** Latest generated full-report path indexed by the exact source JSONL path. */
+export type ReportHistory = Readonly<Record<string, string>>;
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -244,4 +247,47 @@ export function rememberedOutputPath(
     return fallbackFilename;
   }
   return `${normalizedPath.slice(0, separatorIndex + 1)}${fallbackFilename}`;
+}
+
+/**
+ * Restore per-source report history from local storage without trusting its JSON shape.
+ *
+ * Malformed JSON and entries with empty or non-string paths are ignored so corrupt local
+ * preferences cannot prevent the desktop application from starting.
+ */
+export function parseReportHistory(serializedHistory: string | null): ReportHistory {
+  if (serializedHistory === null) {
+    return {};
+  }
+  try {
+    const value: unknown = JSON.parse(serializedHistory);
+    if (!isRecord(value)) {
+      return {};
+    }
+    const history: Record<string, string> = {};
+    for (const [sourcePath, reportPath] of Object.entries(value)) {
+      if (sourcePath.trim() !== "" && isString(reportPath) && reportPath.trim() !== "") {
+        history[sourcePath] = reportPath;
+      }
+    }
+    return history;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Return a new history mapping with one source log associated with its latest full report.
+ *
+ * Empty paths are ignored and the supplied mapping is never mutated.
+ */
+export function rememberReportForSource(
+  history: ReportHistory,
+  sourcePath: string,
+  reportPath: string,
+): ReportHistory {
+  if (sourcePath.trim() === "" || reportPath.trim() === "") {
+    return history;
+  }
+  return { ...history, [sourcePath]: reportPath };
 }
