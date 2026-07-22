@@ -589,7 +589,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.18.0"
+    assert run.parser_version == "1.19.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1750,7 +1750,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.18.0"
+    assert run.parser_version == "1.19.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -1999,6 +1999,19 @@ def test_report_title_uses_canonical_agent_report_form(task_title, expected):
     module = _load_module()
 
     assert module._report_title(task_title) == expected
+
+
+def test_catalog_title_unwraps_delegation_envelope():
+    module = _load_module()
+
+    title = module._catalog_task_title(
+        "<codex_delegation>"
+        "<source_thread_id>parent-thread</source_thread_id>"
+        "<input>Fix delegated report traversal.</input>"
+        "</codex_delegation>"
+    )
+
+    assert title == "Fix delegated report traversal"
 
 
 def test_native_codex_report_skips_host_context_when_deriving_title(tmp_path):
@@ -3688,6 +3701,202 @@ def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):
         ("worker", "orchestrator"),
         ("orchestrator", "coordinator"),
     ]
+
+
+def test_delegated_subagent_report_keeps_one_parent_context_without_parent_tree(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    parent = tmp_path / "parent.jsonl"
+    child = tmp_path / "child.jsonl"
+    grandchild = tmp_path / "grandchild.jsonl"
+    sibling = tmp_path / "sibling.jsonl"
+    parent.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:00:00Z",
+                        "type": "session_meta",
+                        "payload": {"id": "parent", "source": "user"},
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:00:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": "Coordinate the backlog.",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:00:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": (
+                                        "<codex_delegation>"
+                                        "<source_thread_id>child</source_thread_id>"
+                                        "<input>Child status response</input>"
+                                        "</codex_delegation>"
+                                    ),
+                                }
+                            ],
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    child.write_text(
+        "\n".join(
+            [
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:01:00Z",
+                        "type": "session_meta",
+                        "payload": {
+                            "id": "child",
+                            "source": "vscode",
+                            "thread_source": "subagent",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:01:00Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": "<recommended_plugins></recommended_plugins>",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:01:01Z",
+                        "type": "response_item",
+                        "payload": {
+                            "type": "message",
+                            "role": "user",
+                            "content": [
+                                {
+                                    "type": "input_text",
+                                    "text": (
+                                        "<codex_delegation>"
+                                        "<source_thread_id>parent</source_thread_id>"
+                                        "<input>Fix delegated report traversal.</input>"
+                                        "</codex_delegation>"
+                                    ),
+                                }
+                            ],
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:01:02Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_started",
+                            "turn_id": "child-turn",
+                            "started_at": "2026-07-22T01:01:02Z",
+                        },
+                    }
+                ),
+                json.dumps(
+                    {
+                        "timestamp": "2026-07-22T01:01:03Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "task_complete",
+                            "turn_id": "child-turn",
+                            "completed_at": "2026-07-22T01:01:03Z",
+                            "duration_ms": 1_000,
+                        },
+                    }
+                ),
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    _write_codex_catalog_rollout(
+        tmp_path,
+        thread_id="grandchild",
+        timestamp="2026-07-22T01:01:04Z",
+        request="Verify the child fix",
+        workspace=str(tmp_path),
+        parent_thread_id="child",
+    )
+    _write_codex_catalog_rollout(
+        tmp_path,
+        thread_id="sibling",
+        timestamp="2026-07-22T01:01:05Z",
+        request="Unrelated active sibling",
+        workspace=str(tmp_path),
+        parent_thread_id="parent",
+    )
+    state_database = tmp_path / ".codex" / "state_5.sqlite"
+    state_database.parent.mkdir(parents=True)
+    connection = module.sqlite3.connect(state_database)
+    try:
+        connection.execute("CREATE TABLE threads (id TEXT, title TEXT)")
+        connection.execute(
+            "INSERT INTO threads VALUES (?, ?)",
+            (
+                "child",
+                "<codex_delegation>"
+                "<source_thread_id>parent</source_thread_id>"
+                "<input>Fix delegated report traversal.</input>"
+                "</codex_delegation>",
+            ),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    monkeypatch.setattr(module.Path, "home", classmethod(lambda cls: tmp_path))
+
+    run = module.build_codex_rollout_run(
+        "child",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    assert [thread.thread_id for thread in run.threads] == ["child", "grandchild"]
+    assert run.state == "complete"
+    assert run.run_label == '"Fix delegated report traversal" Agent Report'
+    assert run.parent_context.thread_id == "parent"
+    assert run.parent_context.task_title == "Coordinate the backlog"
+    assert run.parent_context.source_path == str(parent.resolve())
+    html = module.render_codex_rollout_html(run)
+    assert 'class="parent-context"' in html
+    assert "Parent task" in html
+    assert "View parent report" in html
+    assert "agent-report://view-parent-report?" in html
+    assert "sibling" not in {thread.thread_id for thread in run.threads}
 
 
 def test_native_codex_sealed_linked_delegations_reprocess(tmp_path):

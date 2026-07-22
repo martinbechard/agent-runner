@@ -127,6 +127,49 @@ fn derives_root_title_from_delegation_input_instead_of_xml_tags() {
         response.entries[0].task_title,
         "Build the shared native report engine"
     );
+    assert_eq!(
+        response.entries[0]
+            .identity
+            .as_ref()
+            .expect("rollout identity")
+            .parent_thread_id,
+        ""
+    );
+}
+
+#[test]
+fn infers_parent_from_initial_delegation_without_spawn_metadata() {
+    let directory = TempDir::new().expect("create temporary directory");
+    let path = directory.path().join("delegated-subagent.jsonl");
+    write_lines(
+        &path,
+        &[
+            json!({
+                "timestamp": "2026-07-21T12:00:00Z",
+                "type": "session_meta",
+                "payload": {
+                    "id": "delegated-subagent",
+                    "cwd": "/workspace/example",
+                    "source": "vscode",
+                    "thread_source": "subagent"
+                }
+            }),
+            user_record("<recommended_plugins></recommended_plugins>"),
+            user_record(
+                "<codex_delegation><source_thread_id>coordinator</source_thread_id>\
+                 <input>Build the shared native report engine.</input></codex_delegation>",
+            ),
+        ],
+    );
+
+    let response =
+        index_rollouts(request(vec![path], None, 1), |_| {}).expect("discover delegated subagent");
+
+    let entry = &response.entries[0];
+    let identity = entry.identity.as_ref().expect("rollout identity");
+    assert_eq!(identity.parent_thread_id, "coordinator");
+    assert_eq!(entry.task_title, "Build the shared native report engine");
+    assert_eq!(entry.delegation_source_ids, vec!["coordinator"]);
 }
 
 #[test]

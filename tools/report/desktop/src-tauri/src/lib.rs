@@ -24,7 +24,7 @@ use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::webview::NewWindowResponse;
-use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
+use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
 use url::Url;
 
@@ -679,6 +679,49 @@ pub fn report_popup_is_allowed(opener_path: &Path, popup_url: &Url) -> bool {
         .is_some_and(|(expected, candidate)| expected == candidate)
 }
 
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ParentReportRequest {
+    thread_id: String,
+    task_title: String,
+    source_path: String,
+}
+
+fn parent_report_request(url: &Url) -> Option<ParentReportRequest> {
+    if url.scheme() != "agent-report"
+        || url.host_str() != Some("view-parent-report")
+        || !matches!(url.path(), "" | "/")
+    {
+        return None;
+    }
+    let mut thread_id = String::new();
+    let mut task_title = String::new();
+    let mut source_path = String::new();
+    for (key, value) in url.query_pairs() {
+        match key.as_ref() {
+            "thread_id" => thread_id = value.into_owned(),
+            "title" => task_title = value.into_owned(),
+            "source_path" => source_path = value.into_owned(),
+            _ => {}
+        }
+    }
+    if thread_id.is_empty()
+        || thread_id.len() > 160
+        || !thread_id
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || ".-_:/".contains(character))
+        || task_title.chars().count() > 1_024
+        || source_path.chars().count() > 8_192
+    {
+        return None;
+    }
+    Some(ParentReportRequest {
+        thread_id,
+        task_title,
+        source_path,
+    })
+}
+
 #[tauri::command]
 async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), String> {
     let result = (|| {
@@ -698,10 +741,25 @@ async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), 
             "report-{}",
             REPORT_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
+        let navigation_app = app.clone();
         WebviewWindowBuilder::new(&app, label, WebviewUrl::CustomProtocol(url))
             .title(format!("Agent Report — {title}"))
             .inner_size(1280.0, 800.0)
             .min_inner_size(720.0, 480.0)
+            .on_navigation(move |navigation_url| {
+                let Some(request) = parent_report_request(navigation_url) else {
+                    return true;
+                };
+                if let Err(error) = navigation_app.emit("view-parent-report", request) {
+                    let _ = record_diagnostic(
+                        &navigation_app,
+                        "error",
+                        "view_parent_report",
+                        &format!("unable to forward parent report request: {error}"),
+                    );
+                }
+                false
+            })
             .on_new_window(move |popup_url, _features| {
                 if report_popup_is_allowed(&report_path, &popup_url) {
                     NewWindowResponse::Allow
@@ -787,7 +845,7 @@ mod tests {
 
     use super::{
         DIAGNOSTIC_LOG_MAX_BYTES, GenerateReportRequest, append_diagnostic_entry,
-        full_report_arguments, renderer_override,
+        full_report_arguments, parent_report_request, renderer_override,
     };
 
     #[test]
@@ -864,6 +922,35 @@ mod tests {
                 OsString::from("/tmp/archive"),
                 OsString::from("--include-delegations"),
             ]
+        );
+    }
+
+    #[test]
+    fn recognizes_only_bounded_parent_report_navigation_requests() {
+        let request = parent_report_request(
+            &url::Url::parse(
+                "agent-report://view-parent-report?thread_id=parent-thread&title=Parent%20task\
+                 &source_path=%2Flogs%2Fparent.jsonl",
+            )
+            .expect("parse parent report URL"),
+        )
+        .expect("recognize parent report request");
+
+        assert_eq!(request.thread_id, "parent-thread");
+        assert_eq!(request.task_title, "Parent task");
+        assert_eq!(request.source_path, "/logs/parent.jsonl");
+        assert!(
+            parent_report_request(
+                &url::Url::parse("file:///tmp/report.html").expect("parse file URL")
+            )
+            .is_none()
+        );
+        assert!(
+            parent_report_request(
+                &url::Url::parse("agent-report://view-parent-report?thread_id=")
+                    .expect("parse empty request URL")
+            )
+            .is_none()
         );
     }
 }

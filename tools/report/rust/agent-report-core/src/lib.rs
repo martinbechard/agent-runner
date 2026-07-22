@@ -26,7 +26,7 @@ use walkdir::WalkDir;
 /// JSON protocol version shared by the native CLI and Python client.
 pub const PROTOCOL_VERSION: u32 = 1;
 const INDEX_TABLE: &str = "codex_rollout_discovery_v2";
-const DISCOVERY_PARSER_VERSION: i64 = 3;
+const DISCOVERY_PARSER_VERSION: i64 = 4;
 const MAX_WORKERS: usize = 64;
 
 /// One request to discover metadata for an ordered list of rollout files.
@@ -435,6 +435,7 @@ fn scan_rollout(path: &Path) -> io::Result<DiscoveryEntry> {
     let mut workspace = String::new();
     let mut task_title = String::new();
     let mut title_scan_complete = false;
+    let mut infer_parent_from_delegation = false;
 
     loop {
         buffer.clear();
@@ -462,15 +463,29 @@ fn scan_rollout(path: &Path) -> io::Result<DiscoveryEntry> {
                 .and_then(Value::as_object)
                 .map(|payload| value_text(payload.get("cwd")))
                 .unwrap_or_default();
+            infer_parent_from_delegation = record
+                .get("payload")
+                .and_then(Value::as_object)
+                .is_some_and(|payload| {
+                    payload.get("thread_source").and_then(Value::as_str) == Some("subagent")
+                        || payload.get("source").and_then(Value::as_str) == Some("subagent")
+                });
             title_scan_complete = !found.parent_thread_id.is_empty();
             identity = Some(found);
         }
-        if !title_scan_complete
-            && let Some(content) = user_message_text(&record)
-            && let Some(title) = derive_task_title(&content)
-        {
-            task_title = title;
-            title_scan_complete = true;
+        if !title_scan_complete && let Some(content) = user_message_text(&record) {
+            if let Some(title) = derive_task_title(&content) {
+                if let Some(found) = identity.as_mut()
+                    && infer_parent_from_delegation
+                    && found.parent_thread_id.is_empty()
+                    && let Some(source) = initial_delegation_source(&content)
+                    && source != found.thread_id
+                {
+                    found.parent_thread_id = source;
+                }
+                task_title = title;
+                title_scan_complete = true;
+            }
         }
         if may_contain_delegation && let Some(content) = user_message_text(&record) {
             for captures in delegation_block_pattern().captures_iter(&content) {
@@ -625,6 +640,31 @@ fn derive_task_title(content: &str) -> Option<String> {
     let mut result = first.to_uppercase().collect::<String>();
     result.push_str(&title[first.len_utf8()..]);
     Some(result)
+}
+
+fn initial_delegation_source(content: &str) -> Option<String> {
+    let mut request = content.trim().to_owned();
+    const REQUEST_MARKER: &str = "## My request for Codex:";
+    if let Some((_, suffix)) = request.split_once(REQUEST_MARKER) {
+        request = suffix.trim().to_owned();
+    }
+    for _ in 0..3 {
+        let decoded = decode_html_entities(&request).into_owned();
+        if decoded != request {
+            request = decoded;
+            continue;
+        }
+        break;
+    }
+    let block = delegation_block_pattern().captures(&request)?;
+    if block.get(0)?.as_str().trim() != request {
+        return None;
+    }
+    let body = block.name("body")?.as_str();
+    delegation_source_pattern()
+        .captures(body)
+        .and_then(|captures| captures.name("source"))
+        .map(|source| source.as_str().to_owned())
 }
 
 fn value_text(value: Option<&Value>) -> String {

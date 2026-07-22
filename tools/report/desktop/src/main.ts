@@ -4,6 +4,7 @@
 // Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
 import { Channel, invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 
 import {
@@ -34,6 +35,14 @@ type ViewState =
   | { readonly kind: "generating"; readonly response: SearchResponse }
   | { readonly kind: "ready"; readonly response: SearchResponse }
   | { readonly kind: "error"; readonly message: string };
+
+type ReportTarget = Pick<CatalogEntry, "threadId" | "taskTitle" | "sourcePath">;
+
+interface ParentReportRequest {
+  readonly threadId: string;
+  readonly taskTitle: string;
+  readonly sourcePath: string;
+}
 
 const ROW_HEIGHT = 118;
 const OVERSCAN = 5;
@@ -132,8 +141,7 @@ function setState(nextState: ViewState): void {
   searchButton.disabled = busy;
   addRootButton.disabled = busy;
   generateButton.disabled =
-    busy ||
-    !entries.some((entry) => entry.threadId === selectedThreadId && entry.parentThreadId === "");
+    busy || !entries.some((entry) => entry.threadId === selectedThreadId);
   progressPanel.hidden = !busy;
   progressPanel.setAttribute("aria-busy", String(busy));
   signalRail.classList.toggle("is-live", busy);
@@ -264,7 +272,7 @@ function renderSelection(): void {
   const selected = entries.find((entry) => entry.threadId === selectedThreadId) ?? null;
   detailFields.replaceChildren();
   const busy = state.kind === "searching" || state.kind === "generating";
-  generateButton.disabled = busy || selected === null || selected.parentThreadId !== "";
+  generateButton.disabled = busy || selected === null;
   if (selected === null) {
     detailTitle.textContent = "No run selected";
     return;
@@ -558,7 +566,14 @@ function emptyStats(): SearchResponse["stats"] {
 
 async function generateReport(): Promise<void> {
   const selected = entries.find((entry) => entry.threadId === selectedThreadId);
-  if (selected === undefined || selected.parentThreadId !== "") {
+  if (selected === undefined) {
+    return;
+  }
+  await generateReportFor(selected);
+}
+
+async function generateReportFor(selected: ReportTarget): Promise<void> {
+  if (state.kind === "searching" || state.kind === "generating") {
     return;
   }
   const outputPath = await save({
@@ -606,9 +621,29 @@ async function generateReport(): Promise<void> {
   }
 }
 
+async function generateParentReport(request: ParentReportRequest): Promise<void> {
+  const threadId = request.threadId.trim();
+  if (threadId === "") {
+    return;
+  }
+  const catalogEntry = entries.find((entry) => entry.threadId === threadId);
+  await generateReportFor({
+    threadId,
+    taskTitle: catalogEntry?.taskTitle || request.taskTitle || "Parent task",
+    sourcePath: catalogEntry?.sourcePath || request.sourcePath,
+  });
+}
+
 async function initialize(): Promise<void> {
   restoreLastExport();
   restoreReportHistory();
+  try {
+    await listen<ParentReportRequest>("view-parent-report", (event) => {
+      void generateParentReport(event.payload);
+    });
+  } catch (error: unknown) {
+    reportClientError("listen_view_parent_report", error);
+  }
   try {
     const defaults = parseDesktopDefaults(await invoke<unknown>("desktop_defaults"));
     for (const root of defaults.roots) {

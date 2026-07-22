@@ -71,7 +71,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.18.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.19.0"
 NATIVE_DISCOVERY_PROTOCOL_VERSION = 1
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
@@ -621,6 +621,15 @@ class PhaseLaneMetrics:
 
 
 @dataclass
+class CodexParentContext:
+    """One non-aggregated parent reference for a delegated report root."""
+
+    thread_id: str
+    task_title: str
+    source_path: str
+
+
+@dataclass
 class CodexRunMetrics:
     """A normalized native-agent run with auditable execution aggregates."""
 
@@ -650,6 +659,7 @@ class CodexRunMetrics:
     pricing_digest: str = ""
     runtime: str = "Codex"
     run_label: str = ""
+    parent_context: CodexParentContext | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -1672,7 +1682,21 @@ def _genuine_user_request(content: str) -> str:
     normalized = content.strip()
     request_marker = "## My request for Codex:"
     if request_marker in normalized:
-        return normalized.partition(request_marker)[2].strip()
+        normalized = normalized.partition(request_marker)[2].strip()
+    for _ in range(3):
+        decoded = _decode_html_entities(normalized)
+        if decoded != normalized:
+            normalized = decoded.strip()
+            continue
+        delegation = _CODEX_DELEGATION_BLOCK_PATTERN.fullmatch(normalized)
+        if delegation is not None:
+            delegation_input = _CODEX_DELEGATION_INPUT_PATTERN.search(
+                delegation.group("body")
+            )
+            if delegation_input is not None:
+                normalized = delegation_input.group("input").strip()
+                continue
+        break
     host_prefixes = (
         "<recommended_plugins>",
         "# AGENTS.md instructions for ",
@@ -1681,7 +1705,70 @@ def _genuine_user_request(content: str) -> str:
     )
     if normalized.startswith(host_prefixes):
         return ""
+    if normalized.casefold().startswith("<codex_delegation"):
+        return ""
     return normalized
+
+
+def _initial_delegation_source(content: str) -> str:
+    """Return the sender of a task-defining delegation envelope, when present."""
+
+    normalized = content.strip()
+    request_marker = "## My request for Codex:"
+    if request_marker in normalized:
+        normalized = normalized.partition(request_marker)[2].strip()
+    for _ in range(3):
+        decoded = _decode_html_entities(normalized)
+        if decoded == normalized:
+            break
+        normalized = decoded.strip()
+    delegation = _CODEX_DELEGATION_BLOCK_PATTERN.fullmatch(normalized)
+    if delegation is None or not _genuine_user_request(normalized):
+        return ""
+    source = _CODEX_DELEGATION_SOURCE_PATTERN.search(delegation.group("body"))
+    return source.group("source") if source is not None else ""
+
+
+def _decode_html_entities(value: str) -> str:
+    """Decode the bounded entity forms used by serialized Codex envelopes."""
+
+    entity_pattern = re.compile(
+        r"&(?P<entity>lt|gt|amp|quot|apos|#\d+|#x[0-9a-f]+);",
+        re.IGNORECASE,
+    )
+    named = {"lt": "<", "gt": ">", "amp": "&", "quot": '"', "apos": "'"}
+
+    def replace(match: re.Match[str]) -> str:
+        entity = match.group("entity")
+        lowered = entity.casefold()
+        if lowered in named:
+            return named[lowered]
+        try:
+            codepoint = int(entity[2:], 16) if lowered.startswith("#x") else int(entity[1:])
+            return chr(codepoint) if 0 <= codepoint <= 0x10FFFF else match.group(0)
+        except (ValueError, OverflowError):
+            return match.group(0)
+
+    return entity_pattern.sub(replace, value)
+
+
+def _url_query(values: dict[str, str]) -> str:
+    """Encode a small UTF-8 query without adding a frozen-runtime dependency."""
+
+    def encode(value: str) -> str:
+        return "".join(
+            chr(byte)
+            if (
+                ord("a") <= byte <= ord("z")
+                or ord("A") <= byte <= ord("Z")
+                or ord("0") <= byte <= ord("9")
+                or byte in b"-._~"
+            )
+            else f"%{byte:02X}"
+            for byte in value.encode("utf-8")
+        )
+
+    return "&".join(f"{encode(key)}={encode(value)}" for key, value in values.items())
 
 
 def _derived_task_title(activities: list[AgentActivity]) -> str:
@@ -1758,6 +1845,15 @@ def _compact_report_title(report_title: str, limit: int = 96) -> str:
     return f'"{compact_title}" Agent Report'
 
 
+def _normalized_codex_thread_title(value: object) -> str:
+    """Normalize a local Codex title and unwrap saved delegation envelopes."""
+
+    title = re.sub(r"\s+", " ", str(value or "")).strip()
+    if _CODEX_DELEGATION_LINE_PATTERN.search(title):
+        return _catalog_task_title(title)
+    return title
+
+
 def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
     """Read Codex's local task titles without requiring the Codex service."""
 
@@ -1796,7 +1892,7 @@ def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
         except (OSError, sqlite3.Error):
             continue
         for thread_id, raw_title in rows:
-            title = re.sub(r"\s+", " ", str(raw_title or "")).strip()
+            title = _normalized_codex_thread_title(raw_title)
             if title:
                 titles.setdefault(str(thread_id), title)
     return titles
@@ -1900,6 +1996,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     recorded_cost_usd: float | None = None
     saw_usage = False
     spawn_boundary_seen = False
+    task_request_seen = False
+    infer_parent_from_delegation = False
     unknown_event_counts: dict[str, int] = {}
 
     for ordinal, record in records:
@@ -1926,7 +2024,12 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                     ),
                     "",
                 )
+                task_request_seen = bool(task_title)
                 parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
+                infer_parent_from_delegation = (
+                    payload.get("thread_source") == "subagent"
+                    or payload.get("source") == "subagent"
+                )
                 thread_name = (
                     agent_path.rstrip("/").rsplit("/", 1)[-1]
                     if agent_path
@@ -2230,6 +2333,18 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 role = str(payload.get("role") or "")
                 raw_text = _response_item_text(payload, "content")
                 if raw_text and role == "user":
+                    request = _genuine_user_request(raw_text)
+                    if request and not task_request_seen:
+                        task_request_seen = True
+                        inferred_parent = _initial_delegation_source(raw_text)
+                        if (
+                            infer_parent_from_delegation
+                            and not parent_thread_id
+                            and inferred_parent
+                            and inferred_parent != thread_id
+                        ):
+                            parent_thread_id = inferred_parent
+                            thread_name = ""
                     _append_codex_activity(
                         activities,
                         thread_id=thread_id,
@@ -2488,6 +2603,14 @@ def _candidate_rollouts(sessions_root: Path) -> list[Path]:
 class _RolloutDiscoveryMetadata:
     identity: tuple[str, str, str, str] | None
     delegation_source_ids: frozenset[str]
+    task_title: str
+
+
+@dataclass(frozen=True)
+class _RolloutParentContext:
+    thread_id: str
+    source_path: Path
+    task_title: str
 
 
 @dataclass(frozen=True)
@@ -2604,9 +2727,13 @@ def _native_rollout_discovery(
             raise RuntimeError(
                 "Required native discovery engine returned invalid delegation sources"
             )
+        task_title = entry.get("task_title")
+        if not isinstance(task_title, str):
+            raise RuntimeError("Required native discovery engine returned invalid task title")
         metadata[expected_path] = _RolloutDiscoveryMetadata(
             identity=identity,
             delegation_source_ids=frozenset(raw_sources),
+            task_title=task_title,
         )
     raw_stats = response.get("stats")
     required_stats = (
@@ -2644,7 +2771,7 @@ def _discover_rollout_paths(
     *,
     include_delegations: bool = False,
     index_path: Path | None = None,
-) -> tuple[list[Path], list[str]]:
+) -> tuple[list[Path], list[str], _RolloutParentContext | None]:
     identities: dict[str, tuple[Path, str]] = {}
     children: dict[str, list[str]] = {}
     delegation_targets: dict[str, set[str]] = {}
@@ -2668,7 +2795,12 @@ def _discover_rollout_paths(
     if include_delegations:
         for target_thread_id, (path, _) in identities.items():
             for source_thread_id in metadata_by_path[path].delegation_source_ids:
-                if source_thread_id in identities:
+                source_identity = identities.get(source_thread_id)
+                if (
+                    source_identity is not None
+                    and source_thread_id != target_thread_id
+                    and source_identity[1] != target_thread_id
+                ):
                     delegation_targets.setdefault(source_thread_id, set()).add(
                         target_thread_id
                     )
@@ -2703,7 +2835,20 @@ def _discover_rollout_paths(
         parent_thread_id = identities[thread_id][1]
         if thread_id != root_thread_id and parent_thread_id not in included:
             diagnostics.append(f"missing included parent {parent_thread_id} for {thread_id}")
-    return [identities[thread_id][0] for thread_id in ordered_ids], diagnostics
+    parent_context = None
+    parent_thread_id = identities[root_thread_id][1]
+    if parent_thread_id and parent_thread_id in identities:
+        parent_path = identities[parent_thread_id][0]
+        parent_context = _RolloutParentContext(
+            thread_id=parent_thread_id,
+            source_path=parent_path,
+            task_title=metadata_by_path[parent_path].task_title,
+        )
+    return (
+        [identities[thread_id][0] for thread_id in ordered_ids],
+        diagnostics,
+        parent_context,
+    )
 
 
 def _pricing_metadata() -> tuple[str, str]:
@@ -3431,21 +3576,22 @@ def build_codex_rollout_run(
         raise ValueError(f"No Codex rollout files found under {sessions_root}")
     initial_files = set(candidates)
     initial_stats = {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in candidates}
-    included_paths, diagnostics = _discover_rollout_paths(
+    included_paths, diagnostics, discovered_parent = _discover_rollout_paths(
         root_thread_id,
         candidates,
         include_delegations=include_delegations,
         index_path=discovery_index_path,
     )
     threads = [parse_codex_rollout(path) for path in included_paths]
-    resolved_thread_titles = _local_codex_thread_titles(
-        {thread.thread_id for thread in threads}
-    )
+    title_thread_ids = {thread.thread_id for thread in threads}
+    if discovered_parent is not None:
+        title_thread_ids.add(discovered_parent.thread_id)
+    resolved_thread_titles = _local_codex_thread_titles(title_thread_ids)
     resolved_thread_titles.update(
         {
-            str(thread_id).strip(): re.sub(r"\s+", " ", str(value)).strip()
+            str(thread_id).strip(): _normalized_codex_thread_title(value)
             for thread_id, value in (thread_titles or {}).items()
-            if str(thread_id).strip() and str(value).strip()
+            if str(thread_id).strip() and _normalized_codex_thread_title(value)
         }
     )
     for thread in threads:
@@ -3516,6 +3662,25 @@ def build_codex_rollout_run(
     root_thread = next(
         thread for thread in threads if thread.thread_id == root_thread_id
     )
+    parent_context = None
+    if discovered_parent is not None:
+        parent_title = (
+            resolved_thread_titles.get(discovered_parent.thread_id)
+            or discovered_parent.task_title
+        )
+        if not parent_title:
+            parent_entry = _read_codex_catalog_entry(
+                discovered_parent.source_path,
+                "codex",
+            )
+            if parent_entry is not None:
+                parent_title = parent_entry.task_title
+        parent_title = _catalog_task_title(parent_title) or parent_title
+        parent_context = CodexParentContext(
+            thread_id=discovered_parent.thread_id,
+            task_title=parent_title,
+            source_path=str(discovered_parent.source_path.resolve()),
+        )
     run_label = _report_title(
         title or root_thread.task_title or _derived_task_title(root_thread.activities)
     )
@@ -3543,6 +3708,7 @@ def build_codex_rollout_run(
         pricing_version=pricing_version,
         pricing_digest=pricing_digest if seal else "",
         run_label=run_label,
+        parent_context=parent_context,
     )
 
 
@@ -5864,6 +6030,29 @@ def render_codex_rollout_html(
         if sequence_html
         else ""
     )
+    parent_context_html = ""
+    if run.parent_context is not None:
+        parent_title = run.parent_context.task_title or run.parent_context.thread_id
+        visible_parent_title = _compact_display_text(parent_title, 120)
+        parent_report_url = "agent-report://view-parent-report?" + _url_query(
+            {
+                "thread_id": run.parent_context.thread_id,
+                "title": parent_title,
+                "source_path": run.parent_context.source_path,
+            }
+        )
+        parent_context_html = (
+            '<aside class="parent-context" aria-label="Parent task">'
+            '<div class="parent-context-copy">'
+            '<span class="parent-context-label">Parent task</span>'
+            f'<strong title="{_escape_html_attribute(parent_title)}">'
+            f'{_escape_html(visible_parent_title)}</strong>'
+            f'<code>{_escape_html(run.parent_context.thread_id)}</code>'
+            "</div>"
+            '<a class="parent-report-button" role="button" '
+            f'href="{_escape_html_attribute(parent_report_url)}">View parent report</a>'
+            "</aside>"
+        )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{_escape_html(report_title)}</title>
 <style>
@@ -5889,6 +6078,14 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .view-nav a {{ padding:5px 10px; color:#2563a6; background:#fff; border:1px solid #cfd8dc; border-radius:999px; font-size:.86em; font-weight:600; text-decoration:none; }}
 .view-nav a:hover {{ border-color:#2563a6; }}
 .view-nav a:focus-visible, .sequence-scroll:focus-visible, .sequence-event-link:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.parent-context {{ display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 18px; padding:12px 14px; background:#eef4f8; border:1px solid #b8cad5; border-radius:7px; }}
+.parent-context-copy {{ display:grid; min-width:0; gap:3px; }}
+.parent-context-label {{ color:#546e7a; font-size:.72em; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }}
+.parent-context strong {{ overflow-wrap:anywhere; }}
+.parent-context code {{ color:#607d8b; }}
+.parent-report-button {{ flex:0 0 auto; padding:7px 11px; color:#fff; background:#2563a6; border:1px solid #2563a6; border-radius:5px; font-size:.86em; font-weight:700; text-decoration:none; }}
+.parent-report-button:hover {{ background:#174f85; border-color:#174f85; }}
+.parent-report-button:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .visually-hidden {{ position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }}
 .metrics {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }}
 .metric {{ background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }}
@@ -6121,6 +6318,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 {view_nav_html}
+{parent_context_html}
 <div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{_format_compact_count(run.usage_totals.processed_tokens)}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
@@ -11064,6 +11262,7 @@ def _read_codex_catalog_entry(
     started_at: datetime | None = None
     task_title = ""
     workspace = ""
+    infer_parent_from_delegation = False
     try:
         with path.open(encoding="utf-8", errors="replace") as handle:
             for record_count, line in enumerate(handle, start=1):
@@ -11084,6 +11283,10 @@ def _read_codex_catalog_entry(
                 if record.get("type") == "session_meta" and not thread_id:
                     thread_id = str(payload.get("id") or payload.get("session_id") or "")
                     parent_thread_id, _, _ = _spawn_metadata(payload)
+                    infer_parent_from_delegation = (
+                        payload.get("thread_source") == "subagent"
+                        or payload.get("source") == "subagent"
+                    )
                     recorded_title = next(
                         (
                             str(payload[key]).strip()
@@ -11097,7 +11300,7 @@ def _read_codex_catalog_entry(
                         _catalog_task_title(recorded_title) if recorded_title else ""
                     )
                     workspace = str(payload.get("cwd") or payload.get("workspace") or "")
-                    if parent_thread_id or task_title or not include_title:
+                    if task_title or not include_title:
                         break
                     continue
                 if (
@@ -11107,10 +11310,13 @@ def _read_codex_catalog_entry(
                     and payload.get("type") == "message"
                     and payload.get("role") == "user"
                 ):
-                    task_title = _catalog_task_title(
-                        _response_item_text(payload, "content")
-                    )
+                    raw_request = _response_item_text(payload, "content")
+                    task_title = _catalog_task_title(raw_request)
                     if task_title:
+                        if infer_parent_from_delegation and not parent_thread_id:
+                            inferred_parent = _initial_delegation_source(raw_request)
+                            if inferred_parent and inferred_parent != thread_id:
+                                parent_thread_id = inferred_parent
                         break
                 if thread_id and record_count >= 200:
                     break
