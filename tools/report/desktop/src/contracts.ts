@@ -68,6 +68,39 @@ export interface DiscoveryProgress {
   readonly source: "cache" | "scan";
 }
 
+/** User-visible copy and completion bounds for the shared progress panel. */
+export interface ProgressPresentation {
+  readonly label: string;
+  readonly value: string;
+  readonly path: string;
+  readonly completed: number | null;
+  readonly total: number | null;
+}
+
+/** Present native discovery events as determinate progress. */
+export function discoveryProgressPresentation(
+  progress: DiscoveryProgress,
+): ProgressPresentation {
+  return {
+    label: progress.source === "cache" ? "Reusing stable metadata" : "Reading changed rollout",
+    value: `${progress.completed_files} / ${progress.candidate_files}`,
+    path: progress.path,
+    completed: progress.completed_files,
+    total: progress.candidate_files,
+  };
+}
+
+/** Present full-report rendering as indeterminate progress until the renderer exits. */
+export function reportGenerationProgress(outputPath: string): ProgressPresentation {
+  return {
+    label: "Preparing full report",
+    value: "Working",
+    path: outputPath,
+    completed: null,
+    total: null,
+  };
+}
+
 /** Result returned after the native layer writes a catalog export. */
 export interface ExportResult {
   readonly outputPath: string;

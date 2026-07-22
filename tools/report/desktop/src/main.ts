@@ -10,11 +10,13 @@ import {
   type CatalogEntry,
   type DiscoveryProgress,
   type ExportResult,
+  type ProgressPresentation,
   type ReportHistory,
   type SearchRequest,
   type SearchResponse,
   buildReportFilename,
   dateRangeError,
+  discoveryProgressPresentation,
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseExportResult,
@@ -22,12 +24,14 @@ import {
   parseSearchResponse,
   rememberReportForSource,
   rememberedOutputPath,
+  reportGenerationProgress,
 } from "./contracts";
 import "./styles.css";
 
 type ViewState =
   | { readonly kind: "idle" }
   | { readonly kind: "searching"; readonly progress: DiscoveryProgress | null }
+  | { readonly kind: "generating"; readonly response: SearchResponse }
   | { readonly kind: "ready"; readonly response: SearchResponse }
   | { readonly kind: "error"; readonly message: string };
 
@@ -124,16 +128,22 @@ function renderRoots(): void {
 
 function setState(nextState: ViewState): void {
   state = nextState;
-  const searching = state.kind === "searching";
-  searchButton.disabled = searching;
-  addRootButton.disabled = searching;
-  progressPanel.hidden = !searching;
-  signalRail.classList.toggle("is-live", searching);
-  statusDot.className = state.kind;
+  const busy = state.kind === "searching" || state.kind === "generating";
+  searchButton.disabled = busy;
+  addRootButton.disabled = busy;
+  generateButton.disabled =
+    busy ||
+    !entries.some((entry) => entry.threadId === selectedThreadId && entry.parentThreadId === "");
+  progressPanel.hidden = !busy;
+  progressPanel.setAttribute("aria-busy", String(busy));
+  signalRail.classList.toggle("is-live", busy);
+  statusDot.className = busy ? "searching" : state.kind;
   if (state.kind === "idle") {
     status.textContent = "Waiting for a search.";
   } else if (state.kind === "searching") {
     status.textContent = "Native workers are reading changed logs and reusing stable index rows.";
+  } else if (state.kind === "generating") {
+    status.textContent = "Preparing the full offline report. This can take several minutes.";
   } else if (state.kind === "ready") {
     status.textContent = `Index ready in ${formatDuration(state.response.stats.elapsed_ms)}.`;
   } else {
@@ -141,14 +151,25 @@ function setState(nextState: ViewState): void {
   }
 }
 
-function renderProgress(progress: DiscoveryProgress): void {
-  const total = Math.max(1, progress.candidate_files);
-  const ratio = Math.min(1, progress.completed_files / total);
-  progressLabel.textContent = progress.source === "cache" ? "Reusing stable metadata" : "Reading changed rollout";
-  progressValue.value = `${progress.completed_files} / ${progress.candidate_files}`;
-  progressBar.style.width = `${(ratio * 100).toFixed(1)}%`;
+function renderProgress(progress: ProgressPresentation): void {
+  const indeterminate = progress.completed === null || progress.total === null;
+  progressPanel.classList.toggle("is-indeterminate", indeterminate);
+  progressLabel.textContent = progress.label;
+  progressValue.value = progress.value;
   progressPath.textContent = progress.path;
   progressPath.title = progress.path;
+  progressPanel.setAttribute("aria-valuetext", `${progress.label}: ${progress.value}`);
+  if (indeterminate) {
+    progressBar.style.width = "32%";
+    progressPanel.removeAttribute("aria-valuenow");
+    progressPanel.removeAttribute("aria-valuemax");
+    return;
+  }
+  const total = Math.max(1, progress.total);
+  const completed = Math.min(progress.completed, total);
+  progressBar.style.width = `${((completed / total) * 100).toFixed(1)}%`;
+  progressPanel.setAttribute("aria-valuenow", String(progress.completed));
+  progressPanel.setAttribute("aria-valuemax", String(progress.total));
 }
 
 function formatDuration(milliseconds: number): string {
@@ -242,7 +263,8 @@ function renderVirtualRows(): void {
 function renderSelection(): void {
   const selected = entries.find((entry) => entry.threadId === selectedThreadId) ?? null;
   detailFields.replaceChildren();
-  generateButton.disabled = selected === null || selected.parentThreadId !== "";
+  const busy = state.kind === "searching" || state.kind === "generating";
+  generateButton.disabled = busy || selected === null || selected.parentThreadId !== "";
   if (selected === null) {
     detailTitle.textContent = "No run selected";
     return;
@@ -306,16 +328,20 @@ async function runSearch(): Promise<void> {
     setState({ kind: "error", message: rangeError });
     return;
   }
-  progressBar.style.width = "0%";
-  progressValue.value = "0 / 0";
-  progressPath.textContent = "";
+  renderProgress({
+    label: "Preparing native index",
+    value: "Starting",
+    path: "",
+    completed: null,
+    total: null,
+  });
   setState({ kind: "searching", progress: null });
   const onEvent = new Channel<unknown>();
   onEvent.onmessage = (message: unknown) => {
     try {
       const progress = parseDiscoveryProgress(message);
       state = { kind: "searching", progress };
-      renderProgress(progress);
+      renderProgress(discoveryProgressPresentation(progress));
     } catch (error: unknown) {
       setState({
         kind: "error",
@@ -546,8 +572,11 @@ async function generateReport(): Promise<void> {
   if (outputPath === null) {
     return;
   }
-  generateButton.disabled = true;
-  status.textContent = "Generating the full offline report…";
+  const previousResponse =
+    state.kind === "ready" ? state.response : { entries, stats: emptyStats() };
+  renderProgress(reportGenerationProgress(outputPath));
+  setState({ kind: "generating", response: previousResponse });
+  await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
   try {
     const result = parseExportResult(
       await invoke<unknown>("generate_report", {
@@ -559,6 +588,7 @@ async function generateReport(): Promise<void> {
         },
       }),
     );
+    setState({ kind: "ready", response: previousResponse });
     const remembered = rememberGeneratedReport(selected.sourcePath, result.outputPath);
     const summary = `Generated full report at ${result.outputPath}.`;
     try {
@@ -573,8 +603,6 @@ async function generateReport(): Promise<void> {
     }
   } catch (error: unknown) {
     setState({ kind: "error", message: reportClientError("generate_report", error) });
-  } finally {
-    generateButton.disabled = false;
   }
 }
 

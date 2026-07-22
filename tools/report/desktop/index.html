@@ -96,7 +96,16 @@
             <div id="stats" class="stats" aria-live="polite"></div>
           </div>
 
-          <div id="progress-panel" class="progress-panel" hidden>
+          <div
+            id="progress-panel"
+            class="progress-panel"
+            role="progressbar"
+            aria-live="polite"
+            aria-labelledby="progress-label"
+            aria-describedby="progress-value progress-path"
+            aria-valuemin="0"
+            hidden
+          >
             <div class="progress-copy">
               <span id="progress-label">Preparing native index…</span>
               <output id="progress-value">0 / 0</output>

@@ -9,7 +9,7 @@
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "tauri:dev": "tauri dev --config src-tauri/tauri.sidecar.conf.json",
-    "tauri:build": "tauri build --config src-tauri/tauri.sidecar.conf.json",
+    "tauri:build": "tauri build --config src-tauri/tauri.sidecar.conf.json && bash scripts/fix-dmg-hidden-files.sh ../target/release/bundle/dmg",
     "tauri": "tauri"
   },
   "dependencies": {

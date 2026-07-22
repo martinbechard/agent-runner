@@ -8,12 +8,14 @@ import { describe, expect, it } from "vitest";
 import {
   buildReportFilename,
   dateRangeError,
+  discoveryProgressPresentation,
   parseReportHistory,
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseSearchResponse,
   rememberReportForSource,
   rememberedOutputPath,
+  reportGenerationProgress,
 } from "./contracts";
 
 describe("native command contracts", () => {
@@ -85,6 +87,30 @@ describe("native command contracts", () => {
         source: "network",
       }),
     ).toThrow("not cache or scan");
+  });
+
+  it("presents index progress as determinate and report generation as indeterminate", () => {
+    expect(
+      discoveryProgressPresentation({
+        completed_files: 8,
+        candidate_files: 32,
+        path: "/logs/root.jsonl",
+        source: "scan",
+      }),
+    ).toEqual({
+      label: "Reading changed rollout",
+      value: "8 / 32",
+      path: "/logs/root.jsonl",
+      completed: 8,
+      total: 32,
+    });
+    expect(reportGenerationProgress("/reports/root.html")).toEqual({
+      label: "Preparing full report",
+      value: "Working",
+      path: "/reports/root.html",
+      completed: null,
+      total: null,
+    });
   });
 
   it("builds a bounded report filename without path separators", () => {
