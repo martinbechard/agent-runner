@@ -4907,7 +4907,8 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             '<line class="sequence-line" x1="{source_x}" y1="{y}" x2="{target_x}" y2="{y}" '
             'stroke="{color}" marker-end="url(#sequence-arrow-{marker})"{dash}></line>'
             '<circle class="sequence-source-dot" cx="{source_x}" cy="{y}" r="3" fill="{color}"></circle>'
-            '<circle class="sequence-event-hit" cx="{target_x}" cy="{y}" r="12"></circle>'
+            '<line class="sequence-event-hit" x1="{source_x}" y1="{y}" '
+            'x2="{target_x}" y2="{y}"></line>'
             '<text class="sequence-event-label" x="{label_x}" y="{label_y}" '
             'text-anchor="middle">{label}{repeat_count_html}</text>'
             "</g></a>".format(
@@ -6011,7 +6012,7 @@ td {{ font-size:.85em; }}
 .sequence-event-band {{ fill:transparent; }}
 .sequence-line {{ stroke-width:2; }}
 .sequence-event-link .sequence-event > * {{ pointer-events:none; }}
-.sequence-event-link .sequence-event > .sequence-event-hit {{ pointer-events:all; fill:transparent; cursor:pointer; }}
+.sequence-event-link .sequence-event > .sequence-event-hit {{ pointer-events:stroke; fill:none; stroke:transparent; stroke-width:24px; stroke-linecap:round; cursor:pointer; }}
 .sequence-event-link:has(.sequence-event-hit:hover) .sequence-line,
 .sequence-event-link:focus-visible .sequence-line {{ stroke-width:3; }}
 .sequence-offset {{ fill:#78909c; font-family:var(--font-code); font-size:9px; }}

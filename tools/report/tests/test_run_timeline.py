@@ -4003,6 +4003,44 @@ def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
     assert ".sequence-view-status { margin-left:auto; color:#546e7a;" in html
 
 
+def test_native_codex_sequence_arrow_hover_target_spans_start_line_and_head(
+    tmp_path,
+):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+
+    html = module.render_codex_rollout_html(run)
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    first_event = sequence.split('<a class="sequence-event-link"', 1)[1].split(
+        "</a>", 1
+    )[0]
+    visible_line = re.search(
+        r'<line class="sequence-line" x1="([^"]+)" y1="([^"]+)" '
+        r'x2="([^"]+)" y2="([^"]+)"',
+        first_event,
+    )
+    hover_line = re.search(
+        r'<line class="sequence-event-hit" x1="([^"]+)" y1="([^"]+)" '
+        r'x2="([^"]+)" y2="([^"]+)"',
+        first_event,
+    )
+
+    assert visible_line is not None
+    assert hover_line is not None
+    assert hover_line.groups() == visible_line.groups()
+    assert (
+        ".sequence-event-link .sequence-event > .sequence-event-hit { "
+        "pointer-events:stroke; fill:none; stroke:transparent; stroke-width:24px; "
+        "stroke-linecap:round; cursor:pointer; }"
+    ) in html
+    assert ".sequence-event-link:has(.sequence-event-hit:hover) .sequence-line," in html
+
+
 def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles(
     tmp_path,
 ):
@@ -4083,7 +4121,7 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
     assert ".sequence-event-link .sequence-event > * { pointer-events:none; }" in html
     assert (
         ".sequence-event-link .sequence-event > .sequence-event-hit { "
-        "pointer-events:all;"
+        "pointer-events:stroke;"
     ) in html
     assert ".sequence-event-link:has(.sequence-event-hit:hover) .sequence-line," in html
     assert 'class="sequence-event-hit"' in sequence
