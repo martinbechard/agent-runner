@@ -292,9 +292,9 @@ flowchart LR
   - **VALIDATES:** Protocol version, path ownership, cache schema, before/after fingerprint stability, malformed and partial JSONL, and UTF-8 replacement behavior.
 
 - **MODULE: MODULE-10** Desktop run browser
-  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog with progress updates, exports catalog HTML with clickable source locations, and invokes full report generation for a selected root.
+  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog with progress updates, exports catalog HTML with clickable source locations, and invokes a bundled full-report sidecar for a selected root.
   - **USES:** `MODULE-9` as a direct Rust dependency; the webview receives normalized metadata and progress rather than raw transcript content.
-  - **PRODUCES:** A responsive local run list and user-selected offline output artifacts.
+  - **PRODUCES:** A responsive local run list and user-selected offline output artifacts without requiring a separately installed Python interpreter or report command at runtime.
 
 - **PROCESS: PROCESS-1** Discover and parse a run
   - **SYNOPSIS:** Resolve the selected root, index candidate rollout files, traverse descendants, parse each file once, and record all parse gaps.
@@ -333,6 +333,10 @@ flowchart LR
   - **PRODUCES:** Complete metadata for the requested candidate set plus cache and scan statistics suitable for command-line tests and desktop progress.
   - **BECAUSE:** Parallel reads improve cold-start throughput while a single cache writer avoids SQLite contention and unstable live files remain correct on the next observation.
 
+- **PROCESS: PROCESS-8** Build the desktop renderer sidecar
+  - **SYNOPSIS:** Build the native discovery engine, freeze the Python renderer plus its formatter and pricing data into a target-specific executable, and let Tauri embed that external binary in the application bundle.
+  - **VALIDATES:** The frozen command resolves all resources from its extraction root and produces a complete report without Python or `agent-report` on the runtime `PATH`.
+
 - **COMMAND: CMD-1** Extend the timeline reporter CLI
   - **SYNOPSIS:** Add a native rollout input form such as `--codex-thread THREAD_ID` with optional `--sessions-root`, `--live`, `--seal`, and machine-output flags while preserving existing path-based prompt-runner and methodology-runner behavior.
   - **PRODUCES:** The same HTML report entry point plus optional JSON, CSV, and Markdown companions.
@@ -346,7 +350,7 @@ flowchart LR
   - **PRODUCES:** Discovery metadata and statistics without transcript bodies.
 
 - **COMMAND: CMD-4** Browse and export reports from the desktop application
-  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with ordered progress events, then export a native catalog or generate the existing full offline report for a selected root. Remember the last export folder and open each successful local HTML artifact in a separate app window.
+  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder and open each successful local HTML artifact in a separate app window.
   - **PRODUCES:** User-selected HTML artifacts and reopenable report windows without loading a multi-hundred-megabyte report into the catalog webview.
 
 - **FILE: FILE-1** Component design authority
@@ -368,7 +372,7 @@ flowchart LR
   - **SYNOPSIS:** `tools/report/Cargo.toml` owns the shared Rust workspace; `tools/report/rust/agent-report-core/` owns discovery and indexing, and `tools/report/rust/agent-report-cli/` owns the JSON command adapter.
 
 - **FILE: FILE-7** Desktop report application
-  - **SYNOPSIS:** `tools/report/desktop/` owns the strict TypeScript/Vite frontend and its Tauri native application glue.
+  - **SYNOPSIS:** `tools/report/desktop/` owns the strict TypeScript/Vite frontend, Tauri native application glue, and deterministic renderer-sidecar build support.
 
 ## 5. Constraints
 
@@ -568,6 +572,10 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and search filtering, verify HTML export escaping, and validate remembered output folders plus local report-window paths.
   - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, and only existing local HTML artifacts can be opened as report windows.
 
+- **TASK: TEST-28** Run a self-contained desktop report export
+  - **SYNOPSIS:** Build the target-specific renderer sidecar and Tauri application, then generate a report from a sanitized Codex fixture with no external report command configured.
+  - **VALIDATES:** The sidecar starts from the application bundle, locates its frozen report resources and native engine, writes the main and sequence HTML artifacts, and reports renderer failures without suggesting a separate runtime installation.
+
 ## 8. Proposed Modifications
 
 This section records the implementation surfaces implied by the design and their current delivery status.
@@ -603,3 +611,7 @@ This section records the implementation surfaces implied by the design and their
 - **MODIFICATION: MOD-8** Open and remember desktop exports
   - **SYNOPSIS:** Open successful catalog and full-report exports in separate native windows, retain the last output folder across launches, and allow reopening the last local HTML artifact without rescanning.
   - **STATUS:** implemented in 0.6.1
+
+- **MODIFICATION: MOD-9** Bundle the full renderer with the desktop application
+  - **SYNOPSIS:** Freeze the Python report implementation, static data, and native engine into a Tauri sidecar and use it as the default full-report process while retaining an explicit development override.
+  - **STATUS:** implemented in 0.6.2

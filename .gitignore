@@ -15,6 +15,7 @@ target/
 node_modules/
 .vite/
 tools/report/desktop/src-tauri/gen/
+tools/report/desktop/src-tauri/binaries/
 
 # Pytest
 .pytest_cache/

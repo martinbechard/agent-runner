@@ -16,23 +16,49 @@ from pathlib import Path
 from types import ModuleType
 
 
+def _frozen_root() -> Path | None:
+    """Return PyInstaller's extraction root when running as a frozen sidecar."""
+
+    value = getattr(sys, "_MEIPASS", None)
+    return Path(value) if value is not None else None
+
+
+def _native_engine_path() -> Path:
+    """Resolve the required native discovery engine for this distribution."""
+
+    executable_name = (
+        "agent-report-engine.exe"
+        if sys.platform == "win32"
+        else "agent-report-engine"
+    )
+    frozen_root = _frozen_root()
+    if frozen_root is not None:
+        return frozen_root / "agent_report" / "native" / executable_name
+    return Path(__file__).resolve().parent / "native" / executable_name
+
+
 def _configure_bundled_engine() -> None:
     """Point the reporter at the platform engine carried by the installed wheel."""
 
-    executable_name = "agent-report-engine.exe" if sys.platform == "win32" else "agent-report-engine"
-    engine_path = Path(__file__).resolve().parent / "native" / executable_name
-    os.environ.setdefault("AGENT_REPORT_ENGINE", str(engine_path))
+    engine_path = str(_native_engine_path())
+    if _frozen_root() is not None:
+        os.environ["AGENT_REPORT_ENGINE"] = engine_path
+    else:
+        os.environ.setdefault("AGENT_REPORT_ENGINE", engine_path)
+
+
+def _report_script_path() -> Path:
+    """Resolve report data from either a frozen sidecar or an installed wheel."""
+
+    frozen_root = _frozen_root()
+    data_root = frozen_root if frozen_root is not None else Path(sysconfig.get_path("data"))
+    return data_root / "share" / "agent-report" / "run-timeline.py"
 
 
 @cache
 def _load_report_module() -> ModuleType:
     """Load the bundled report implementation once for the installed command."""
-    script_path = (
-        Path(sysconfig.get_path("data"))
-        / "share"
-        / "agent-report"
-        / "run-timeline.py"
-    )
+    script_path = _report_script_path()
     spec = importlib.util.spec_from_file_location("_agent_report_runtime", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load bundled report implementation: {script_path}")
@@ -60,3 +86,7 @@ def main(argv: list[str] | None = None) -> int:
     """
     _configure_bundled_engine()
     return _load_report_module().main(argv)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

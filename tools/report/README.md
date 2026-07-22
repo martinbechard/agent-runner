@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.1/agent_report-0.6.1-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.2/agent_report-0.6.2-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -175,24 +175,33 @@ compact offline index whose source paths open the corresponding local rollout
 files. Every successful export opens in its own app window. The app remembers
 the last export folder across launches and offers **Open last export** without
 rescanning the logs. Selecting a root enables full report generation through
-the installed `agent-report` renderer.
+the renderer bundled into the desktop application.
 
 ```bash
-cd tools/report/desktop
+cd tools/report
+python3 -m venv .venv
+.venv/bin/python -m pip install -e '.[desktop]'
+cd desktop
 pnpm install
-pnpm tauri dev
+pnpm tauri:dev
 ```
 
 Build the native application bundle with:
 
 ```bash
-pnpm tauri build
+pnpm tauri:build
 ```
 
-The app uses the shared Rust crate directly. For full report generation,
-install the v0.6.1 `agent-report` wheel or set `AGENT_REPORT_COMMAND` to the
-installed report command. Catalog search and catalog HTML export do not need
-Python.
+The `tauri:dev` and `tauri:build` scripts merge the sidecar bundle configuration
+and first create a target-specific PyInstaller
+sidecar under the ignored `src-tauri/binaries/` build directory. Tauri embeds
+that executable in the application bundle. It contains the Python renderer,
+its static report data, and the required native Rust engine, so running or
+installing the built app does not require Python or `agent-report` on `PATH`.
+Set `AGENT_REPORT_PYTHON` only to choose a different Python 3.11+ build
+interpreter with PyInstaller 6.21.0. `AGENT_REPORT_COMMAND` remains an explicit
+development override for the renderer process; normal app operation does not
+use it.
 
 The sequence view reads task display names from Codex's local desktop catalogs
 when available, and the same names identify top-level rows in the timeline.

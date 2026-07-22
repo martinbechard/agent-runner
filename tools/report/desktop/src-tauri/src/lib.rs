@@ -6,6 +6,7 @@
 //! Native command boundary for the local agent report desktop application.
 
 use std::env;
+use std::ffi::OsString;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -19,6 +20,7 @@ use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::{AppHandle, WebviewUrl, WebviewWindowBuilder};
+use tauri_plugin_shell::ShellExt;
 use url::Url;
 
 static REPORT_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -105,7 +107,7 @@ pub struct ExportResult {
     pub entry_count: usize,
 }
 
-/// Request to invoke the installed full Python renderer for one selected root.
+/// Request to invoke the bundled full renderer for one selected root.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GenerateReportRequest {
@@ -315,44 +317,46 @@ async fn export_catalog(request: ExportCatalogRequest) -> Result<ExportResult, S
 }
 
 #[tauri::command]
-async fn generate_report(request: GenerateReportRequest) -> Result<ExportResult, String> {
-    tauri::async_runtime::spawn_blocking(move || generate_full_report(request))
-        .await
-        .map_err(|error| format!("report generation task failed: {error}"))?
+async fn generate_report(
+    app: AppHandle,
+    request: GenerateReportRequest,
+) -> Result<ExportResult, String> {
+    generate_full_report(&app, request).await
 }
 
-fn generate_full_report(request: GenerateReportRequest) -> Result<ExportResult, String> {
-    if request.thread_id.trim().is_empty() {
-        return Err("Select a root run before generating a report".to_owned());
-    }
-    ensure_output_parent(&request.output_path)?;
-    let renderer = env::var_os("AGENT_REPORT_COMMAND")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("agent-report"));
-    let mut command = Command::new(&renderer);
-    command
-        .arg("--codex-thread")
-        .arg(&request.thread_id)
-        .arg("--output")
-        .arg(&request.output_path);
+fn renderer_override(value: Option<OsString>) -> Option<PathBuf> {
+    value.filter(|path| !path.is_empty()).map(PathBuf::from)
+}
+
+fn full_report_arguments(request: &GenerateReportRequest) -> Vec<OsString> {
+    let mut arguments = vec![
+        OsString::from("--codex-thread"),
+        OsString::from(&request.thread_id),
+        OsString::from("--output"),
+        request.output_path.as_os_str().to_owned(),
+    ];
     for root in &request.roots {
-        command.arg("--sessions-root").arg(root);
+        arguments.push(OsString::from("--sessions-root"));
+        arguments.push(root.as_os_str().to_owned());
     }
     if request.include_delegations {
-        command.arg("--include-delegations");
+        arguments.push(OsString::from("--include-delegations"));
     }
-    let output = command.output().map_err(|error| {
-        format!(
-            "unable to start full report renderer {}: {error}. Install agent-report or set AGENT_REPORT_COMMAND",
-            renderer.display()
-        )
-    })?;
-    if !output.status.success() {
-        let diagnostic = String::from_utf8_lossy(&output.stderr).trim().to_owned();
+    arguments
+}
+
+fn completed_report(
+    request: GenerateReportRequest,
+    success: bool,
+    status: String,
+    stderr: &[u8],
+) -> Result<ExportResult, String> {
+    if !success {
+        let diagnostic = String::from_utf8_lossy(stderr).trim().to_owned();
         return Err(format!(
             "full report renderer failed: {}",
             if diagnostic.is_empty() {
-                output.status.to_string()
+                status
             } else {
                 diagnostic
             }
@@ -362,6 +366,48 @@ fn generate_full_report(request: GenerateReportRequest) -> Result<ExportResult, 
         output_path: request.output_path,
         entry_count: 1,
     })
+}
+
+async fn generate_full_report(
+    app: &AppHandle,
+    request: GenerateReportRequest,
+) -> Result<ExportResult, String> {
+    if request.thread_id.trim().is_empty() {
+        return Err("Select a root run before generating a report".to_owned());
+    }
+    ensure_output_parent(&request.output_path)?;
+    let arguments = full_report_arguments(&request);
+    if let Some(renderer) = renderer_override(env::var_os("AGENT_REPORT_COMMAND")) {
+        let renderer_display = renderer.display().to_string();
+        let output = tauri::async_runtime::spawn_blocking(move || {
+            Command::new(&renderer).args(&arguments).output()
+        })
+        .await
+        .map_err(|error| format!("report generation task failed: {error}"))?
+        .map_err(|error| {
+            format!("unable to start full report renderer {renderer_display}: {error}")
+        })?;
+        return completed_report(
+            request,
+            output.status.success(),
+            output.status.to_string(),
+            &output.stderr,
+        );
+    }
+
+    let output = app
+        .shell()
+        .sidecar("agent-report")
+        .map_err(|error| format!("unable to prepare bundled full report renderer: {error}"))?
+        .args(arguments)
+        .output()
+        .await
+        .map_err(|error| format!("unable to start bundled full report renderer: {error}"))?;
+    let status = output.status.code().map_or_else(
+        || "terminated without an exit code".to_owned(),
+        |code| format!("exit status {code}"),
+    );
+    completed_report(request, output.status.success(), status, &output.stderr)
 }
 
 fn ensure_output_parent(path: &Path) -> Result<(), String> {
@@ -424,6 +470,7 @@ async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), 
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_shell::init())
         .invoke_handler(tauri::generate_handler![
             desktop_defaults,
             search_rollouts,
@@ -433,4 +480,52 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running agent report desktop application");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+    use std::path::PathBuf;
+
+    use super::{GenerateReportRequest, full_report_arguments, renderer_override};
+
+    #[test]
+    fn defaults_to_bundled_renderer_without_an_override() {
+        assert_eq!(renderer_override(None), None);
+    }
+
+    #[test]
+    fn retains_an_explicit_development_renderer_override() {
+        let path = PathBuf::from("/tmp/development-agent-report");
+
+        assert_eq!(renderer_override(Some(OsString::from(&path))), Some(path));
+    }
+
+    #[test]
+    fn passes_selected_roots_and_delegation_mode_to_the_renderer() {
+        let request = GenerateReportRequest {
+            thread_id: "root-thread".to_owned(),
+            roots: vec![
+                PathBuf::from("/tmp/sessions"),
+                PathBuf::from("/tmp/archive"),
+            ],
+            output_path: PathBuf::from("/tmp/report.html"),
+            include_delegations: true,
+        };
+
+        assert_eq!(
+            full_report_arguments(&request),
+            vec![
+                OsString::from("--codex-thread"),
+                OsString::from("root-thread"),
+                OsString::from("--output"),
+                OsString::from("/tmp/report.html"),
+                OsString::from("--sessions-root"),
+                OsString::from("/tmp/sessions"),
+                OsString::from("--sessions-root"),
+                OsString::from("/tmp/archive"),
+                OsString::from("--include-delegations"),
+            ]
+        );
+    }
 }
