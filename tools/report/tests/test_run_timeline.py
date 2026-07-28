@@ -2838,6 +2838,79 @@ def test_main_catalogs_filtered_codex_roots_without_generating_reports(tmp_path)
     assert not (output.parent / "reports").exists()
 
 
+def test_main_codex_catalog_prefers_codex_app_task_title(tmp_path, monkeypatch):
+    module = _load_module()
+    sessions_root = tmp_path / "sessions"
+    _write_codex_catalog_rollout(
+        sessions_root,
+        thread_id="renamed-root",
+        timestamp="2026-07-14T12:00:00Z",
+        request="This first prompt should only be a fallback.",
+        workspace="/work/agent-runner",
+    )
+    state_path = tmp_path / ".codex" / "state_5.sqlite"
+    state_path.parent.mkdir()
+    connection = module.sqlite3.connect(state_path)
+    try:
+        connection.execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL)"
+        )
+        connection.execute(
+            "INSERT INTO threads (id, title) VALUES (?, ?)",
+            ("renamed-root", "Use task titles in reports"),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    monkeypatch.setattr(module.Path, "home", classmethod(lambda cls: tmp_path))
+    output = tmp_path / "catalog.html"
+
+    rc = module.main(
+        [
+            "--codex-catalog",
+            "--catalog-root",
+            str(sessions_root),
+            "--title-contains",
+            "task titles",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    html = output.read_text(encoding="utf-8")
+    assert "Use task titles in reports" in html
+    assert "This first prompt should only be a fallback" not in html
+
+
+def test_catalog_hour_boundaries_are_inclusive():
+    module = _load_module()
+    entries = [
+        module._AgentCatalogEntry(
+            run_id=run_id,
+            parent_thread_id="",
+            started_at=datetime.fromisoformat(timestamp),
+            task_title=run_id,
+            workspace="",
+            source_path=Path(f"/logs/{run_id}.jsonl"),
+            source_store="sessions",
+        )
+        for run_id, timestamp in (
+            ("before", "2026-07-14T11:59:59+00:00"),
+            ("inside", "2026-07-14T12:59:59+00:00"),
+            ("after", "2026-07-14T13:00:00+00:00"),
+        )
+    ]
+
+    selected = module._select_catalog_entries(
+        entries,
+        from_date="2026-07-14T12",
+        to_date="2026-07-14T12",
+    )
+
+    assert [entry.run_id for entry in selected] == ["inside"]
+
+
 def test_main_catalog_generates_reports_with_two_way_links(tmp_path):
     module = _load_module()
     active_root = tmp_path / "sessions"

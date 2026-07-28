@@ -51,6 +51,7 @@ const REPORT_HISTORY_STORAGE_KEY = "agent-report:last-report-by-source:v1";
 
 const roots = new Set<string>();
 let indexPath: string | null = null;
+let stateDbPath: string | null = null;
 let entries: readonly CatalogEntry[] = [];
 let selectedThreadId: string | null = null;
 let lastExportPath: string | null = null;
@@ -98,6 +99,7 @@ function currentRequest(): SearchRequest {
   return {
     roots: [...roots],
     indexPath,
+    stateDbPath,
     query: queryInput.value.trim(),
     fromDate: fromDateInput.value,
     toDate: toDateInput.value,
@@ -650,6 +652,7 @@ async function initialize(): Promise<void> {
       roots.add(root);
     }
     indexPath = defaults.indexPath;
+    stateDbPath = defaults.stateDbPath;
     diagnosticLogLabel.textContent = defaults.diagnosticLogPath;
     diagnosticLogLabel.title = defaults.diagnosticLogPath;
     openDiagnosticLogButton.disabled = false;

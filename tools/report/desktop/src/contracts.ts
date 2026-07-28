@@ -7,6 +7,7 @@
 export interface DesktopDefaults {
   readonly roots: readonly string[];
   readonly indexPath: string | null;
+  readonly stateDbPath: string | null;
   readonly diagnosticLogPath: string;
 }
 
@@ -14,6 +15,7 @@ export interface DesktopDefaults {
 export interface SearchRequest {
   readonly roots: readonly string[];
   readonly indexPath: string | null;
+  readonly stateDbPath: string | null;
   readonly query: string;
   readonly fromDate: string;
   readonly toDate: string;
@@ -24,7 +26,7 @@ export interface SearchRequest {
 /** Return the user-facing error for a reversed optional ISO date range. */
 export function dateRangeError(fromDate: string, toDate: string): string | null {
   if (fromDate !== "" && toDate !== "" && fromDate > toDate) {
-    return "From date must not be after To date.";
+    return "From date and hour must not be after To date and hour.";
   }
   return null;
 }
@@ -148,12 +150,13 @@ function requireNumber(record: Record<string, unknown>, key: string, label: stri
 /**
  * Narrow unknown native defaults before any filesystem paths reach application state.
  *
- * @throws {Error} When a root, index path, or diagnostic log path has an unsupported shape.
+ * @throws {Error} When a root, local database, or diagnostic path has an unsupported shape.
  */
 export function parseDesktopDefaults(value: unknown): DesktopDefaults {
   const record = requireRecord(value, "desktop defaults");
   const roots = record.roots;
   const indexPath = record.indexPath;
+  const stateDbPath = record.stateDbPath;
   const diagnosticLogPath = record.diagnosticLogPath;
   if (!Array.isArray(roots) || !roots.every(isString)) {
     throw new Error("desktop defaults.roots is not a string array");
@@ -161,10 +164,13 @@ export function parseDesktopDefaults(value: unknown): DesktopDefaults {
   if (indexPath !== null && !isString(indexPath)) {
     throw new Error("desktop defaults.indexPath is not a string or null");
   }
+  if (stateDbPath !== null && !isString(stateDbPath)) {
+    throw new Error("desktop defaults.stateDbPath is not a string or null");
+  }
   if (!isString(diagnosticLogPath) || diagnosticLogPath === "") {
     throw new Error("desktop defaults.diagnosticLogPath is not a non-empty string");
   }
-  return { roots, indexPath, diagnosticLogPath };
+  return { roots, indexPath, stateDbPath, diagnosticLogPath };
 }
 
 function parseCatalogEntry(value: unknown, index: number): CatalogEntry {

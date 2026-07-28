@@ -17,9 +17,9 @@ use std::time::SystemTime;
 
 use agent_report_core::{
     DiscoveryProgress, DiscoveryRequest, DiscoveryResponse, DiscoveryStats, PROTOCOL_VERSION,
-    collect_rollout_paths, index_rollouts,
+    collect_rollout_paths, index_rollouts, read_codex_task_titles,
 };
-use chrono::{DateTime, NaiveDate, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Timelike, Utc};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -142,18 +142,22 @@ fn initialize_diagnostics(app: &AppHandle) -> Result<(), String> {
 
 #[derive(Clone, Copy, Debug)]
 struct CatalogDateRange {
-    from: Option<NaiveDate>,
-    to: Option<NaiveDate>,
+    from: Option<DateTime<Utc>>,
+    to_exclusive: Option<DateTime<Utc>>,
 }
 
 impl CatalogDateRange {
     fn parse(from_date: &str, to_date: &str) -> Result<Self, String> {
         let range = Self {
-            from: parse_catalog_date(from_date, "From")?,
-            to: parse_catalog_date(to_date, "To")?,
+            from: parse_catalog_boundary(from_date, "From", false)?,
+            to_exclusive: parse_catalog_boundary(to_date, "To", true)?,
         };
-        if range.from.zip(range.to).is_some_and(|(from, to)| from > to) {
-            return Err("From date must not be after To date".to_owned());
+        if range
+            .from
+            .zip(range.to_exclusive)
+            .is_some_and(|(from, to)| from >= to)
+        {
+            return Err("From date and hour must not be after To date and hour".to_owned());
         }
         Ok(range)
     }
@@ -162,33 +166,64 @@ impl CatalogDateRange {
         let Some(path_date) = encoded_rollout_date(path) else {
             return true;
         };
-        let earliest_path_date = self.from.and_then(|date| date.pred_opt()).or(self.from);
+        let from_date = self.from.map(|timestamp| timestamp.date_naive());
+        let earliest_path_date = from_date.and_then(|date| date.pred_opt()).or(from_date);
         if earliest_path_date.is_some_and(|from| path_date < from) {
             return false;
         }
-        !self.to.is_some_and(|to| path_date > to)
+        !self
+            .to_exclusive
+            .map(|timestamp| (timestamp - Duration::nanoseconds(1)).date_naive())
+            .is_some_and(|to| path_date > to)
     }
 
     fn includes_timestamp(&self, timestamp: &str) -> bool {
-        if self.from.is_none() && self.to.is_none() {
+        if self.from.is_none() && self.to_exclusive.is_none() {
             return true;
         }
         let Ok(timestamp) = DateTime::parse_from_rfc3339(timestamp) else {
             return false;
         };
-        let date = timestamp.with_timezone(&Utc).date_naive();
-        !self.from.is_some_and(|from| date < from) && !self.to.is_some_and(|to| date > to)
+        let timestamp = timestamp.with_timezone(&Utc);
+        !self.from.is_some_and(|from| timestamp < from)
+            && !self
+                .to_exclusive
+                .is_some_and(|to_exclusive| timestamp >= to_exclusive)
     }
 }
 
-fn parse_catalog_date(value: &str, label: &str) -> Result<Option<NaiveDate>, String> {
+fn parse_catalog_boundary(
+    value: &str,
+    label: &str,
+    upper: bool,
+) -> Result<Option<DateTime<Utc>>, String> {
     let value = value.trim();
     if value.is_empty() {
         return Ok(None);
     }
-    NaiveDate::parse_from_str(value, "%Y-%m-%d")
-        .map(Some)
-        .map_err(|_| format!("Invalid {label} date '{value}'; expected YYYY-MM-DD"))
+    let (parsed, increment) = if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
+        (
+            date.and_hms_opt(0, 0, 0).expect("midnight is a valid time"),
+            Duration::days(1),
+        )
+    } else if value.len() == 13
+        && let Ok(hour) = NaiveDateTime::parse_from_str(&format!("{value}:00"), "%Y-%m-%dT%H:%M")
+    {
+        (hour, Duration::hours(1))
+    } else if let Ok(hour) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M") {
+        if hour.minute() != 0 {
+            return Err(format!(
+                "Invalid {label} date/hour '{value}'; expected a whole UTC hour"
+            ));
+        }
+        (hour, Duration::hours(1))
+    } else {
+        return Err(format!(
+            "Invalid {label} date/hour '{value}'; expected YYYY-MM-DD or YYYY-MM-DDTHH"
+        ));
+    };
+    let parsed = DateTime::from_naive_utc_and_offset(parsed, Utc);
+    Ok(Some(if upper { parsed + increment } else { parsed }))
 }
 
 fn encoded_rollout_date(path: &Path) -> Option<NaiveDate> {
@@ -208,12 +243,15 @@ pub struct SearchRequest {
     pub roots: Vec<PathBuf>,
     /// Optional persistent native index path.
     pub index_path: Option<PathBuf>,
+    /// Optional Codex app state database used to resolve sidebar task titles.
+    #[serde(default)]
+    pub state_db_path: Option<PathBuf>,
     /// Case-insensitive query over normalized metadata.
     pub query: String,
-    /// Optional inclusive UTC start date in YYYY-MM-DD format.
+    /// Optional inclusive UTC start date or hour.
     #[serde(default)]
     pub from_date: String,
-    /// Optional inclusive UTC end date in YYYY-MM-DD format.
+    /// Optional inclusive UTC end date or hour.
     #[serde(default)]
     pub to_date: String,
     /// Whether descendant agent rollouts should appear as rows.
@@ -230,7 +268,7 @@ pub struct CatalogEntry {
     pub thread_id: String,
     /// Empty for roots; populated only for descendant rows.
     pub parent_thread_id: String,
-    /// Bounded task title derived by the native core.
+    /// Codex app task title when available, otherwise the bounded derived title.
     pub task_title: String,
     /// Recorded session timestamp.
     pub started_at: String,
@@ -266,6 +304,8 @@ pub struct DesktopDefaults {
     pub roots: Vec<PathBuf>,
     /// Default incremental native index path.
     pub index_path: Option<PathBuf>,
+    /// Current Codex app state database, when the standard path exists.
+    pub state_db_path: Option<PathBuf>,
     /// Persistent local JSONL file used for bounded troubleshooting diagnostics.
     pub diagnostic_log_path: PathBuf,
 }
@@ -325,7 +365,7 @@ where
         .into_iter()
         .filter(|path| date_range.includes_candidate(path))
         .collect();
-    let response = index_rollouts(
+    let mut response = index_rollouts(
         DiscoveryRequest {
             version: PROTOCOL_VERSION,
             paths,
@@ -335,6 +375,25 @@ where
         progress,
     )
     .map_err(|error| error.to_string())?;
+    if let Some(state_path) = request.state_db_path.as_deref() {
+        let thread_ids = response.entries.iter().filter_map(|entry| {
+            entry
+                .identity
+                .as_ref()
+                .map(|identity| identity.thread_id.clone())
+        });
+        if let Ok(titles) = read_codex_task_titles(state_path, thread_ids) {
+            for entry in &mut response.entries {
+                if let Some(title) = entry
+                    .identity
+                    .as_ref()
+                    .and_then(|identity| titles.get(&identity.thread_id))
+                {
+                    entry.task_title.clone_from(title);
+                }
+            }
+        }
+    }
     Ok(filter_catalog(
         response,
         &request.query,
@@ -458,6 +517,7 @@ fn desktop_defaults(app: AppHandle) -> Result<DesktopDefaults, String> {
         return Ok(DesktopDefaults {
             roots: Vec::new(),
             index_path: None,
+            state_db_path: None,
             diagnostic_log_path,
         });
     };
@@ -473,6 +533,10 @@ fn desktop_defaults(app: AppHandle) -> Result<DesktopDefaults, String> {
                 .join("agent-report")
                 .join("rollout-discovery-v2.sqlite3"),
         ),
+        state_db_path: codex
+            .join("state_5.sqlite")
+            .is_file()
+            .then(|| codex.join("state_5.sqlite")),
         diagnostic_log_path,
     })
 }

@@ -9,6 +9,7 @@ use agent_report_desktop::{
     SearchRequest, render_catalog_html, report_popup_is_allowed, report_window_url,
     search_catalog_sync,
 };
+use rusqlite::Connection;
 use tempfile::TempDir;
 
 #[test]
@@ -41,6 +42,7 @@ fn searches_roots_without_returning_descendant_transcript_content() {
     let response = search_catalog_sync(SearchRequest {
         roots: vec![directory.path().to_path_buf()],
         index_path: Some(directory.path().join("index.sqlite3")),
+        state_db_path: None,
         query: "native report".to_owned(),
         from_date: String::new(),
         to_date: String::new(),
@@ -76,6 +78,7 @@ fn escapes_catalog_html_at_the_native_boundary() {
     let response = search_catalog_sync(SearchRequest {
         roots: vec![directory.path().to_path_buf()],
         index_path: None,
+        state_db_path: None,
         query: String::new(),
         from_date: String::new(),
         to_date: String::new(),
@@ -139,6 +142,50 @@ fn allows_only_the_generated_sequence_companion_as_a_report_popup() {
 }
 
 #[test]
+fn overlays_codex_app_titles_on_discovered_rollouts() {
+    let directory = TempDir::new().expect("create temporary directory");
+    let rollout = directory.path().join("root.jsonl");
+    fs::write(
+        &rollout,
+        concat!(
+            "{\"timestamp\":\"2026-07-21T12:00:00Z\",\"type\":\"session_meta\",",
+            "\"payload\":{\"id\":\"root\",\"cwd\":\"/work/example\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",",
+            "\"role\":\"user\",\"content\":[{\"text\":\"Fallback first prompt\"}]}}\n"
+        ),
+    )
+    .expect("write root rollout");
+    let state_path = directory.path().join("state_5.sqlite");
+    let connection = Connection::open(&state_path).expect("open state fixture");
+    connection
+        .execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
+            (),
+        )
+        .expect("create threads fixture");
+    connection
+        .execute(
+            "INSERT INTO threads (id, title) VALUES (?1, ?2)",
+            ("root", "Stored desktop task title"),
+        )
+        .expect("insert title fixture");
+
+    let response = search_catalog_sync(SearchRequest {
+        roots: vec![directory.path().to_path_buf()],
+        index_path: None,
+        state_db_path: Some(state_path),
+        query: "desktop task".to_owned(),
+        from_date: String::new(),
+        to_date: String::new(),
+        include_descendants: false,
+        workers: Some(1),
+    })
+    .expect("search titled desktop catalog");
+
+    assert_eq!(response.entries[0].task_title, "Stored desktop task title");
+}
+
+#[test]
 fn searches_an_inclusive_utc_date_range_with_path_prefiltering() {
     let directory = TempDir::new().expect("create temporary directory");
     for (filename, thread_id, timestamp) in [
@@ -176,6 +223,7 @@ fn searches_an_inclusive_utc_date_range_with_path_prefiltering() {
         search_catalog_sync(SearchRequest {
             roots: vec![directory.path().to_path_buf()],
             index_path: Some(directory.path().join("index.sqlite3")),
+            state_db_path: None,
             query: String::new(),
             from_date: from_date.to_owned(),
             to_date: to_date.to_owned(),
@@ -203,6 +251,10 @@ fn searches_an_inclusive_utc_date_range_with_path_prefiltering() {
     let from_july_22 = search("2026-07-22", "");
     assert_eq!(from_july_22.stats.candidate_files, 2);
     assert_eq!(from_july_22.entries[0].thread_id, "new");
+
+    let during_utc_hour = search("2026-07-21T23", "2026-07-21T23");
+    assert_eq!(during_utc_hour.entries.len(), 1);
+    assert_eq!(during_utc_hour.entries[0].thread_id, "exact-boundary");
 }
 
 #[test]
@@ -211,6 +263,7 @@ fn rejects_invalid_or_reversed_date_ranges() {
     let request = |from_date: &str, to_date: &str| SearchRequest {
         roots: vec![directory.path().to_path_buf()],
         index_path: None,
+        state_db_path: None,
         query: String::new(),
         from_date: from_date.to_owned(),
         to_date: to_date.to_owned(),
@@ -220,10 +273,10 @@ fn rejects_invalid_or_reversed_date_ranges() {
 
     assert_eq!(
         search_catalog_sync(request("2026-02-30", "")),
-        Err("Invalid From date '2026-02-30'; expected YYYY-MM-DD".to_owned())
+        Err("Invalid From date/hour '2026-02-30'; expected YYYY-MM-DD or YYYY-MM-DDTHH".to_owned())
     );
     assert_eq!(
         search_catalog_sync(request("2026-07-22", "2026-07-21")),
-        Err("From date must not be after To date".to_owned())
+        Err("From date and hour must not be after To date and hour".to_owned())
     );
 }

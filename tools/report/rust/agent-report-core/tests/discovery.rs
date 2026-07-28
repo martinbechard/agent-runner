@@ -3,10 +3,12 @@
 // Responsibility: Verify native rollout discovery, concurrency, and incremental index behavior.
 // Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
+use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use agent_report_core::{DiscoveryRequest, index_rollouts};
+use agent_report_core::{DiscoveryRequest, index_rollouts, read_codex_task_titles};
+use rusqlite::Connection;
 use serde_json::{Value, json};
 use tempfile::TempDir;
 
@@ -61,6 +63,34 @@ fn request(paths: Vec<PathBuf>, index_path: Option<PathBuf>, workers: usize) -> 
         index_path,
         workers: Some(workers),
     }
+}
+
+#[test]
+fn reads_nonempty_codex_app_titles_by_thread_id() {
+    let directory = TempDir::new().expect("create temporary directory");
+    let state_path = directory.path().join("state_5.sqlite");
+    let connection = Connection::open(&state_path).expect("open state fixture");
+    connection
+        .execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
+            (),
+        )
+        .expect("create threads fixture");
+    connection
+        .execute(
+            "INSERT INTO threads (id, title) VALUES (?1, ?2), (?3, ?4)",
+            ("root", "Stored task title", "blank", ""),
+        )
+        .expect("insert title fixtures");
+
+    let titles =
+        read_codex_task_titles(&state_path, ["root", "blank", "missing"].map(str::to_owned))
+            .expect("read Codex task titles");
+
+    assert_eq!(
+        titles,
+        HashMap::from([("root".to_owned(), "Stored task title".to_owned())])
+    );
 }
 
 #[test]

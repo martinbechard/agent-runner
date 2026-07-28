@@ -28,4 +28,5 @@ tauri-plugin-shell = "2.3.5"
 url.workspace = true
 
 [dev-dependencies]
+rusqlite.workspace = true
 tempfile.workspace = true

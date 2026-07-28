@@ -23,11 +23,15 @@ describe("native command contracts", () => {
     const defaults = parseDesktopDefaults({
       roots: ["/logs"],
       indexPath: "/cache/index.sqlite3",
+      stateDbPath: "/home/user/.codex/state_5.sqlite",
       diagnosticLogPath: "/logs/agent-report.log",
     });
 
+    expect(defaults.stateDbPath).toBe("/home/user/.codex/state_5.sqlite");
     expect(defaults.diagnosticLogPath).toBe("/logs/agent-report.log");
-    expect(() => parseDesktopDefaults({ roots: [], indexPath: null })).toThrow(
+    expect(() =>
+      parseDesktopDefaults({ roots: [], indexPath: null, stateDbPath: null }),
+    ).toThrow(
       "diagnosticLogPath",
     );
   });
@@ -170,13 +174,17 @@ describe("native command contracts", () => {
     expect(parseReportHistory(null)).toEqual({});
   });
 
-  it("accepts open and inclusive ranges while rejecting reversed dates", () => {
+  it("accepts open and inclusive ranges while rejecting reversed date-hours", () => {
     expect(dateRangeError("", "")).toBeNull();
     expect(dateRangeError("2026-07-21", "")).toBeNull();
     expect(dateRangeError("", "2026-07-21")).toBeNull();
     expect(dateRangeError("2026-07-21", "2026-07-21")).toBeNull();
+    expect(dateRangeError("2026-07-21T09:00", "2026-07-21T17:00")).toBeNull();
+    expect(dateRangeError("2026-07-21T17:00", "2026-07-21T09:00")).toBe(
+      "From date and hour must not be after To date and hour.",
+    );
     expect(dateRangeError("2026-07-22", "2026-07-21")).toBe(
-      "From date must not be after To date.",
+      "From date and hour must not be after To date and hour.",
     );
   });
 });

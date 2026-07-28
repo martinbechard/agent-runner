@@ -176,9 +176,11 @@ The desktop application searches selected Codex stores locally and keeps the
 large generated report out of its index webview. It virtualizes run rows,
 shows native scan/cache progress, filters on bounded metadata, and exports a
 compact offline index whose source paths open the corresponding local rollout
-files. Optional **From** and **To** controls apply an open-ended or inclusive
-UTC date range and prefilter date-encoded rollout paths before the native index
-opens them. Every successful export opens in its own app window. The app
+files. It reads matching task titles from Codex's local `state_5.sqlite`
+database and falls back to the first genuine prompt when no saved title is
+available. Optional **From** and **To** controls apply an open-ended or
+inclusive UTC date-and-hour range and prefilter date-encoded rollout paths
+before the native index opens them. Every successful export opens in its own app window. The app
 remembers the last export folder across launches and offers **Open last
 export** without rescanning the logs. Selecting a root enables full report
 generation through the renderer bundled into the desktop application. Native
@@ -237,20 +239,23 @@ agent-report \
   --output codex-sequence.html
 ```
 
-Discover reportable root runs by inclusive UTC date range without first finding
-a thread ID. The Codex catalog scans both `~/.codex/sessions` and
-`~/.codex/archived_sessions` by default. It lists each root run's bounded task
-title, start time, workspace, store, thread ID, and rollout path; descendant
-rollouts remain part of their root report rather than appearing as separate
-catalog entries:
+Discover reportable root runs by inclusive UTC date or hour range without first
+finding a thread ID. The Codex catalog scans both `~/.codex/sessions` and
+`~/.codex/archived_sessions` by default and prefers task titles saved by the
+Codex app. It lists each root run's bounded task title, start time, workspace,
+store, thread ID, and rollout path; descendant rollouts remain part of their
+root report rather than appearing as separate catalog entries:
 
 ```bash
 agent-report \
   --codex-catalog \
-  --from-date 2026-07-14 \
-  --to-date 2026-07-17 \
+  --from-date 2026-07-14T09 \
+  --to-date 2026-07-17T17 \
   --output agent-reports/index.html
 ```
+
+Date-only `YYYY-MM-DD` values remain supported. A `To` date includes that
+whole UTC day, and a `To` hour includes that whole UTC hour.
 
 Add `--generate-batch` to generate every selected report under a sibling
 `reports/` directory. The catalog links down to each report and every report

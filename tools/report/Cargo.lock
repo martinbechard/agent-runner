@@ -31,6 +31,7 @@ dependencies = [
  "agent-report-core",
  "chrono",
  "html-escape",
+ "rusqlite",
  "serde",
  "serde_json",
  "tauri",

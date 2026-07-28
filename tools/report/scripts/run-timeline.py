@@ -37,7 +37,7 @@ import sqlite3
 import subprocess
 import sys
 from collections import Counter
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from copy import deepcopy
@@ -11487,13 +11487,29 @@ def _index_junie_catalog(
 
 
 def _parse_catalog_date(raw: str, *, end_of_day: bool) -> datetime:
-    """Parse an inclusive UTC catalog date boundary from YYYY-MM-DD."""
+    """Parse an inclusive UTC catalog date or hour boundary."""
 
-    try:
-        parsed = datetime.strptime(raw, "%Y-%m-%d").replace(tzinfo=timezone.utc)
-    except ValueError as exc:
-        raise ValueError(f"Invalid catalog date {raw!r}; expected YYYY-MM-DD") from exc
-    return parsed + timedelta(days=1) if end_of_day else parsed
+    parsed = None
+    increment = timedelta()
+    for pattern, upper_increment in (
+        ("%Y-%m-%d", timedelta(days=1)),
+        ("%Y-%m-%dT%H", timedelta(hours=1)),
+        ("%Y-%m-%dT%H:%M", timedelta(hours=1)),
+    ):
+        try:
+            candidate = datetime.strptime(raw, pattern).replace(tzinfo=timezone.utc)
+        except ValueError:
+            continue
+        if pattern.endswith("%M") and candidate.minute != 0:
+            continue
+        parsed = candidate
+        increment = upper_increment
+        break
+    if parsed is None:
+        raise ValueError(
+            f"Invalid catalog date/hour {raw!r}; expected YYYY-MM-DD or YYYY-MM-DDTHH"
+        )
+    return parsed + increment if end_of_day else parsed
 
 
 def _select_catalog_entries(
@@ -11646,8 +11662,14 @@ def main(argv: list[str] | None = None) -> int:
         default=[],
         help="Catalog search root; repeat to scan multiple active or archived stores.",
     )
-    parser.add_argument("--from-date", help="Inclusive catalog start date in UTC (YYYY-MM-DD).")
-    parser.add_argument("--to-date", help="Inclusive catalog end date in UTC (YYYY-MM-DD).")
+    parser.add_argument(
+        "--from-date",
+        help="Inclusive catalog start date or hour in UTC (YYYY-MM-DD or YYYY-MM-DDTHH).",
+    )
+    parser.add_argument(
+        "--to-date",
+        help="Inclusive catalog end date or hour in UTC (YYYY-MM-DD or YYYY-MM-DDTHH).",
+    )
     parser.add_argument(
         "--title-contains",
         default="",
@@ -11785,6 +11807,12 @@ def main(argv: list[str] | None = None) -> int:
                     to_date=args.to_date or "",
                     include_all_identities=args.generate_batch,
                 )
+                local_titles = _local_codex_thread_titles(set(catalog_index))
+                for thread_id, task_title in local_titles.items():
+                    catalog_index[thread_id] = replace(
+                        catalog_index[thread_id],
+                        task_title=task_title,
+                    )
                 catalog_candidates = [
                     entry
                     for entry in catalog_index.values()

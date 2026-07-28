@@ -17,7 +17,7 @@ use aho_corasick::{AhoCorasick, AhoCorasickBuilder};
 use crossbeam_channel::bounded;
 use html_escape::decode_html_entities;
 use regex::Regex;
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OpenFlags, params, params_from_iter};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -226,6 +226,50 @@ pub fn collect_rollout_paths(roots: &[PathBuf]) -> Result<Vec<PathBuf>, Discover
         }
     }
     Ok(paths.into_iter().collect())
+}
+
+/// Read nonempty Codex app task titles for the supplied thread identifiers.
+///
+/// `state_path` identifies an existing Codex `state_5.sqlite` database and
+/// `thread_ids` supplies the exact local thread IDs to query. The returned map
+/// contains only matching IDs with normalized nonempty titles. The database is
+/// opened read-only and is never created or modified. SQLite open, schema, query,
+/// and row-decoding failures are returned to the caller, which decides whether
+/// unavailable local task state is fatal or should retain derived fallback titles.
+pub fn read_codex_task_titles<I>(
+    state_path: &Path,
+    thread_ids: I,
+) -> rusqlite::Result<HashMap<String, String>>
+where
+    I: IntoIterator<Item = String>,
+{
+    let thread_ids = thread_ids
+        .into_iter()
+        .filter(|thread_id| !thread_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let connection = Connection::open_with_flags(state_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let placeholders = std::iter::repeat_n("?", thread_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut statement = connection.prepare(&format!(
+        "SELECT id, title FROM threads WHERE id IN ({placeholders})"
+    ))?;
+    let rows = statement.query_map(params_from_iter(thread_ids.iter()), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    let mut titles = HashMap::new();
+    for row in rows {
+        let (thread_id, raw_title) = row?;
+        let title = derive_task_title(&raw_title)
+            .unwrap_or_else(|| raw_title.split_whitespace().collect::<Vec<_>>().join(" "));
+        if !title.is_empty() {
+            titles.insert(thread_id, title);
+        }
+    }
+    Ok(titles)
 }
 
 /// Discover rollout metadata with bounded parallel readers and one SQLite writer.
