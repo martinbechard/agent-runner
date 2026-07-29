@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.3/agent_report-0.6.3-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.4/agent_report-0.6.4-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 

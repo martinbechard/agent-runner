@@ -634,4 +634,4 @@ This section records the implementation surfaces implied by the design and their
 
 - **MODIFICATION: MOD-14** Correlate reports with Codex task titles and UTC hours
   - **SYNOPSIS:** Overlay matching titles from Codex's read-only task database in CLI and desktop catalogs, retain prompt-derived fallback titles, and accept inclusive whole-hour UTC search bounds alongside date-only bounds.
-  - **STATUS:** implemented
+  - **STATUS:** implemented in 0.6.4
