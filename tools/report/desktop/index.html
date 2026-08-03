@@ -23,14 +23,13 @@
         <div id="signal-rail" class="signal-rail" aria-hidden="true">
           <span></span><span></span><span></span><span></span><span></span>
         </div>
-        <p class="masthead-note">Search on device. Open only what matters.</p>
       </header>
 
       <main class="workspace">
         <aside class="control-deck" aria-label="Search controls">
           <section>
             <div class="section-heading">
-              <p class="step">01 / Scope</p>
+              <p class="step">Scope</p>
               <button id="add-root" class="text-action" type="button">Add folder</button>
             </div>
             <h2>Log stores</h2>
@@ -38,31 +37,28 @@
           </section>
 
           <section>
-            <p class="step">02 / Find</p>
-            <label class="field-label" for="query">Title, thread, workspace, path</label>
-            <input id="query" type="search" autocomplete="off" placeholder="Search local run metadata" />
-            <div class="date-range" role="group" aria-label="Inclusive UTC date and hour range">
+            <p class="step">Find</p>
+            <label class="field-label" for="query">Search</label>
+            <input id="query" type="search" autocomplete="off" placeholder="Title, thread, workspace, or path" />
+            <div class="date-range" role="group" aria-label="Inclusive local date and hour range">
               <label for="from-date">
-                <span>From date/hour (UTC)</span>
+                <span>From</span>
                 <input id="from-date" type="datetime-local" step="3600" />
               </label>
               <label for="to-date">
-                <span>To date/hour (UTC)</span>
+                <span>To</span>
                 <input id="to-date" type="datetime-local" step="3600" />
               </label>
             </div>
-            <p class="microcopy date-range-help">Optional. Both selected UTC hours are inclusive.</p>
             <label class="check-row">
               <input id="include-descendants" type="checkbox" />
               <span>Show descendant agent logs</span>
             </label>
-            <button id="search" class="primary-action" type="button">
-              <span>Search logs</span><kbd>↵</kbd>
-            </button>
+            <button id="search" class="primary-action" type="button">Search logs</button>
           </section>
 
           <section class="export-block">
-            <p class="step">03 / Take away</p>
+            <p class="step">Export</p>
             <div class="export-actions">
               <button id="export-catalog" class="secondary-action" type="button" disabled>
                 Export this index
@@ -72,18 +68,16 @@
               </button>
             </div>
             <p id="last-export-path" class="microcopy export-path">No previous export on this device.</p>
-            <p class="microcopy">Catalog exports can be reopened here. Generated full reports are remembered on their source run.</p>
           </section>
 
           <section class="diagnostics-block">
-            <p class="step">04 / Troubleshoot</p>
+            <p class="step">Diagnostics</p>
             <button id="open-diagnostic-log" class="secondary-action" type="button" disabled>
               Open diagnostic log
             </button>
             <p id="diagnostic-log-path" class="microcopy diagnostic-path">
               Diagnostic log location unavailable.
             </p>
-            <p class="microcopy">Errors persist locally across app restarts. The current and previous bounded logs are kept.</p>
           </section>
         </aside>
 
@@ -120,7 +114,7 @@
               <div id="empty-state" class="empty-state">
                 <span class="empty-glyph" aria-hidden="true">⌁</span>
                 <h3>Build the local index</h3>
-                <p>Select the stores you care about, then search. The first pass reads each log once; later searches reuse stable metadata.</p>
+                <p>Choose log folders and search.</p>
               </div>
             </div>
 
@@ -131,7 +125,6 @@
               <button id="generate-report" class="primary-action" type="button" disabled>
                 Generate full report
               </button>
-              <p class="microcopy">The report opens separately as an offline HTML artifact. Its latest path appears here for this source log.</p>
             </aside>
           </div>
 

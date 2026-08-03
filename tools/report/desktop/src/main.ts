@@ -23,6 +23,7 @@ import {
   parseExportResult,
   parseReportHistory,
   parseSearchResponse,
+  localDateHourToUtc,
   rememberReportForSource,
   rememberedOutputPath,
   reportGenerationProgress,
@@ -101,8 +102,8 @@ function currentRequest(): SearchRequest {
     indexPath,
     stateDbPath,
     query: queryInput.value.trim(),
-    fromDate: fromDateInput.value,
-    toDate: toDateInput.value,
+    fromDate: localDateHourToUtc(fromDateInput.value),
+    toDate: localDateHourToUtc(toDateInput.value),
     includeDescendants: includeDescendantsInput.checked,
     workers: null,
   };

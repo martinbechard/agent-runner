@@ -31,6 +31,14 @@ export function dateRangeError(fromDate: string, toDate: string): string | null 
   return null;
 }
 
+/** Convert a browser-local whole-hour value to the UTC boundary expected by native search. */
+export function localDateHourToUtc(value: string): string {
+  if (value === "") {
+    return "";
+  }
+  return new Date(value).toISOString().slice(0, 13);
+}
+
 /** Privacy-bounded metadata for one discovered Codex rollout. */
 export interface CatalogEntry {
   readonly threadId: string;

@@ -9,6 +9,7 @@ import {
   buildReportFilename,
   dateRangeError,
   discoveryProgressPresentation,
+  localDateHourToUtc,
   parseReportHistory,
   parseDesktopDefaults,
   parseDiscoveryProgress,
@@ -185,6 +186,15 @@ describe("native command contracts", () => {
     );
     expect(dateRangeError("2026-07-22", "2026-07-21")).toBe(
       "From date and hour must not be after To date and hour.",
+    );
+  });
+
+  it("converts local date hours to native UTC boundaries", () => {
+    const localHour = "2026-07-21T09:00";
+
+    expect(localDateHourToUtc("")).toBe("");
+    expect(localDateHourToUtc(localHour)).toBe(
+      new Date(localHour).toISOString().slice(0, 13),
     );
   });
 });
