@@ -589,7 +589,7 @@ def test_native_codex_reports_mcp_calls_and_skill_load_sources(tmp_path):
     thread = run.threads[0]
     turn = thread.turns[0]
 
-    assert run.parser_version == "1.19.0"
+    assert run.parser_version == "1.20.0"
     assert thread.skills_used == ["python", "structured-design"]
     assert thread.mcp_skills_loaded == ["python", "structured-design"]
     assert thread.bash_skills_loaded == ["python"]
@@ -1581,6 +1581,402 @@ def test_native_codex_work_units_prefer_explicit_ids_over_agent_path():
     assert "module-a" not in units
 
 
+def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "metrics.jsonl"
+    records = [
+        {
+            "timestamp": "2026-08-05T18:00:00Z",
+            "type": "session_meta",
+            "payload": {"id": "metrics-thread", "source": "user"},
+        },
+        {
+            "timestamp": "2026-08-05T18:00:00Z",
+            "type": "turn_context",
+            "payload": {
+                "turn_id": "metrics-turn",
+                "model": "gpt-5.6-sol",
+                "effort": "high",
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:00Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_started",
+                "turn_id": "metrics-turn",
+                "started_at": "2026-08-05T18:00:00Z",
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:02Z",
+            "type": "response_item",
+            "payload": {"type": "reasoning", "summary": [{"text": "bounded"}]},
+        },
+        {
+            "timestamp": "2026-08-05T18:00:04Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call",
+                "name": "exec_command",
+                "call_id": "first-tool",
+                "arguments": {"cmd": "true"},
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:05Z",
+            "type": "response_item",
+            "payload": {
+                "type": "function_call_output",
+                "call_id": "first-tool",
+                "output": {"wall_time_seconds": 1, "output": "done"},
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:05Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 40,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                        "reasoning_output_tokens": 2,
+                        "total_tokens": 50,
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 40,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                        "reasoning_output_tokens": 2,
+                        "total_tokens": 50,
+                    },
+                    "model_context_window": 100,
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:06Z",
+            "type": "compacted",
+            "payload": {"window_number": 2, "window_id": "window-2"},
+        },
+        {
+            "timestamp": "2026-08-05T18:00:06.100Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 40,
+                        "cached_input_tokens": 20,
+                        "output_tokens": 10,
+                        "reasoning_output_tokens": 2,
+                        "total_tokens": 50,
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 0,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "reasoning_output_tokens": 0,
+                        "total_tokens": 30,
+                    },
+                    "model_context_window": 100,
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:06.200Z",
+            "type": "event_msg",
+            "payload": {"type": "context_compacted"},
+        },
+        {
+            "timestamp": "2026-08-05T18:00:08Z",
+            "type": "response_item",
+            "payload": {"type": "reasoning", "summary": [{"text": "bounded again"}]},
+        },
+        {
+            "timestamp": "2026-08-05T18:00:10Z",
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "assistant",
+                "phase": "final_answer",
+                "content": [{"type": "output_text", "text": "done"}],
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:10Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 65,
+                        "cached_input_tokens": 35,
+                        "output_tokens": 15,
+                        "reasoning_output_tokens": 3,
+                        "total_tokens": 80,
+                    },
+                    "last_token_usage": {
+                        "input_tokens": 25,
+                        "cached_input_tokens": 15,
+                        "output_tokens": 5,
+                        "reasoning_output_tokens": 1,
+                        "total_tokens": 30,
+                    },
+                    "model_context_window": 100,
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-05T18:00:12Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "task_complete",
+                "turn_id": "metrics-turn",
+                "completed_at": "2026-08-05T18:00:12Z",
+                "duration_ms": 12000,
+            },
+        },
+    ]
+    rollout.write_text(
+        "\n".join(json.dumps(record) for record in records) + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("metrics-thread", tmp_path)
+    thread = run.threads[0]
+
+    assert len(thread.responses) == 2
+    first = thread.responses[0]
+    assert first.started_at == "2026-08-05T18:00:00+00:00"
+    assert first.first_output_at == "2026-08-05T18:00:02+00:00"
+    assert first.last_output_at == "2026-08-05T18:00:04+00:00"
+    assert first.completed_at == "2026-08-05T18:00:05+00:00"
+    assert first.duration_ms == 4_000
+    assert first.ttft_ms == 2_000
+    assert first.decode_time_ms == 2_000
+    assert first.context_total_tokens == 50
+    assert first.context_capacity == 100
+    assert first.context_occupancy_percent == pytest.approx(50.0)
+    assert first.reported_usage.input_tokens == 40
+    assert first.reported_usage.cached_input_tokens == 20
+    assert first.reported_usage.output_tokens == 10
+    assert first.reported_usage.reasoning_tokens == 2
+    assert first.timing_confidence == "inferred"
+    assert thread.compactions[0].before_total_tokens == 50
+    assert thread.compactions[0].after_total_tokens == 30
+    assert thread.compactions[0].recorded is True
+    assert run.context_summary.current_total_tokens == 30
+    assert run.context_summary.current_input_tokens == 25
+    assert run.context_summary.current_cached_input_tokens == 15
+    assert run.context_summary.high_water_tokens == 50
+    assert run.context_summary.compaction_count == 1
+    assert run.inference_summary.call_count == 2
+    assert run.inference_summary.measured_call_count == 2
+    assert run.inference_summary.output_tokens == 15
+    assert run.inference_summary.end_to_end_tokens_per_second == pytest.approx(15 / 7.8)
+    assert run.inference_summary.decode_tokens_per_second == pytest.approx(3.75)
+    assert run.context_trends[0].first_total_tokens == 50
+    assert run.context_trends[0].last_total_tokens == 30
+    assert run.context_trends[0].compaction_count == 1
+    assert run.inference_size_bands[0].label == "<128"
+    assert run.inference_size_bands[0].call_count == 2
+
+
+def test_native_codex_classifies_runtime_and_counts_only_global_agent_wait(tmp_path):
+    module = _load_module()
+    root = tmp_path / "root.jsonl"
+    child = tmp_path / "child.jsonl"
+    root_records = [
+        {"timestamp": "2026-08-05T18:00:00Z", "type": "session_meta", "payload": {"id": "root", "source": "user"}},
+        {"timestamp": "2026-08-05T18:00:00Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "root-turn", "started_at": "2026-08-05T18:00:00Z"}},
+        {"timestamp": "2026-08-05T18:00:02Z", "type": "response_item", "payload": {"type": "reasoning", "summary": [{"text": "plan"}]}},
+        {"timestamp": "2026-08-05T18:00:04Z", "type": "response_item", "payload": {"type": "function_call", "name": "exec_command", "call_id": "test-call", "arguments": {"cmd": "pytest -q"}}},
+        {"timestamp": "2026-08-05T18:00:10Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "test-call", "output": {"wall_time_seconds": 6, "output": "1 passed"}}},
+        {"timestamp": "2026-08-05T18:00:10Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}, "last_token_usage": {"input_tokens": 10, "output_tokens": 4, "total_tokens": 14}, "model_context_window": 100}}},
+        {"timestamp": "2026-08-05T18:00:12Z", "type": "response_item", "payload": {"type": "function_call", "name": "wait_agent", "call_id": "wait-call", "arguments": {"timeout_ms": 10000}}},
+        {"timestamp": "2026-08-05T18:00:20Z", "type": "response_item", "payload": {"type": "function_call_output", "call_id": "wait-call", "output": {"status": "timeout"}}},
+        {"timestamp": "2026-08-05T18:00:20Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 20, "output_tokens": 6, "total_tokens": 26}, "last_token_usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}, "model_context_window": 100}}},
+        {"timestamp": "2026-08-05T18:00:22Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "phase": "final_answer", "content": [{"type": "output_text", "text": "done"}]}},
+        {"timestamp": "2026-08-05T18:00:22Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 30, "output_tokens": 8, "total_tokens": 38}, "last_token_usage": {"input_tokens": 10, "output_tokens": 2, "total_tokens": 12}, "model_context_window": 100}}},
+        {"timestamp": "2026-08-05T18:00:30Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "root-turn", "completed_at": "2026-08-05T18:00:30Z", "duration_ms": 30000}},
+    ]
+    child_records = [
+        {"timestamp": "2026-08-05T18:00:12Z", "type": "session_meta", "payload": {"id": "child", "source": {"subagent": {"thread_spawn": {"parent_thread_id": "root", "agent_path": "/root/worker"}}}}},
+        {"timestamp": "2026-08-05T18:00:12Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "child-turn", "started_at": "2026-08-05T18:00:12Z"}},
+        {"timestamp": "2026-08-05T18:00:18Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "child-turn", "completed_at": "2026-08-05T18:00:18Z", "duration_ms": 6000}},
+    ]
+    root.write_text("\n".join(json.dumps(record) for record in root_records) + "\n", encoding="utf-8")
+    child.write_text("\n".join(json.dumps(record) for record in child_records) + "\n", encoding="utf-8")
+
+    run = module.build_codex_rollout_run("root", tmp_path)
+    states = {state.state: state for state in run.runtime_states}
+
+    assert states["model_inference"].agent_time_ms == 8_000
+    assert states["test_process"].agent_time_ms == 6_000
+    assert states["agent_wait"].agent_time_ms == 8_000
+    assert states["unattributed"].agent_time_ms == 14_000
+    assert run.all_agents_waiting_ms == 2_000
+
+
+def test_native_codex_builds_exact_work_item_claim_segments_from_mcp_events(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "claims.jsonl"
+
+    def claim_event(timestamp, call_id, tool, arguments, result):
+        return {
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "mcp_tool_call_end",
+                "call_id": call_id,
+                "invocation": {
+                    "server": "future-agent-claim",
+                    "tool": tool,
+                    "arguments": arguments,
+                },
+                "duration": {"secs": 0, "nanos": 1_000_000},
+                "result": {
+                    "Ok": {
+                        "structuredContent": {"exit_code": 0, "result": result},
+                        "isError": False,
+                    }
+                },
+            },
+        }
+
+    records = [
+        {"timestamp": "2026-08-05T18:00:00Z", "type": "session_meta", "payload": {"id": "claim-thread", "source": "user"}},
+        {"timestamp": "2026-08-05T18:00:00Z", "type": "event_msg", "payload": {"type": "task_started", "turn_id": "claim-turn", "started_at": "2026-08-05T18:00:00Z"}},
+        claim_event(
+            "2026-08-05T18:00:01Z",
+            "acquire-1",
+            "claim_acquire",
+            {"claim_id": "claim-1", "work_item_id": "DEV-42", "activity": "work", "agent": "root", "task": "PRIVATE DESCRIPTION"},
+            {"outcome": "SHARED_CHECKOUT_ACQUIRED", "claim_id": "claim-1", "work_item_id": "DEV-42", "activity": "work", "agent": "root"},
+        ),
+        {"timestamp": "2026-08-05T18:00:02Z", "type": "response_item", "payload": {"type": "reasoning", "summary": [{"text": "work"}]}},
+        {"timestamp": "2026-08-05T18:00:05Z", "type": "response_item", "payload": {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "progress"}]}},
+        {"timestamp": "2026-08-05T18:00:05Z", "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}, "last_token_usage": {"input_tokens": 20, "output_tokens": 10, "total_tokens": 30}, "model_context_window": 100}}},
+        claim_event(
+            "2026-08-05T18:00:06Z",
+            "release-1",
+            "claim_release",
+            {"claim_id": "claim-1", "disposition": "done"},
+            {"outcome": "RELEASED", "claim_id": "claim-1", "work_item_id": "DEV-42", "activity": "work", "disposition": "done", "agent": "root"},
+        ),
+        claim_event(
+            "2026-08-05T18:00:07Z",
+            "acquire-conflict",
+            "claim_acquire",
+            {"claim_id": "claim-conflict", "work_item_id": "DEV-99", "activity": "update", "agent": "root"},
+            {"outcome": "CLAIM_SCOPE_CONFLICT_WAIT_REQUIRED"},
+        ),
+        claim_event(
+            "2026-08-05T18:00:08Z",
+            "acquire-2",
+            "claim_acquire",
+            {"claim_id": "claim-2", "work_item_id": "DEV-77", "activity": "update", "agent": "root"},
+            {"outcome": "SHARED_CHECKOUT_ACQUIRED", "claim_id": "claim-2", "work_item_id": "DEV-77", "activity": "update", "agent": "root"},
+        ),
+        claim_event(
+            "2026-08-05T18:00:09Z",
+            "release-2",
+            "claim_release",
+            {"claim_id": "claim-2", "disposition": "blocked", "blocker_reference": "DEP-9"},
+            {"outcome": "RELEASED", "claim_id": "claim-2", "work_item_id": "DEV-77", "activity": "update", "disposition": "blocked", "blocker_reference": "DEP-9", "agent": "root"},
+        ),
+        {"timestamp": "2026-08-05T18:00:10Z", "type": "event_msg", "payload": {"type": "task_complete", "turn_id": "claim-turn", "completed_at": "2026-08-05T18:00:10Z", "duration_ms": 10000}},
+    ]
+    rollout.write_text("\n".join(json.dumps(record) for record in records) + "\n", encoding="utf-8")
+
+    run = module.build_codex_rollout_run("claim-thread", tmp_path)
+
+    assert [segment.work_item_id for segment in run.work_item_segments] == ["DEV-42", "DEV-77"]
+    completed, blocked = run.work_item_segments
+    assert completed.activity == "work"
+    assert completed.disposition == "done"
+    assert completed.started_at == "2026-08-05T18:00:01+00:00"
+    assert completed.ended_at == "2026-08-05T18:00:06+00:00"
+    assert completed.duration_ms == 5_000
+    assert completed.usage.output_tokens == 10
+    assert completed.inference.call_count == 1
+    assert completed.runtime_state_ms["model_inference"] == 4_000
+    assert blocked.activity == "update"
+    assert blocked.disposition == "blocked"
+    assert blocked.blocker_reference == "DEP-9"
+    assert "PRIVATE DESCRIPTION" not in json.dumps([module.asdict(item) for item in run.work_item_segments])
+    assert "PRIVATE DESCRIPTION" not in module.render_codex_rollout_html(run)
+
+
+def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "render-metrics.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-08-05T18:00:00Z","type":"session_meta","payload":{"id":"render-metrics","source":"user"}}',
+                '{"timestamp":"2026-08-05T18:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn","started_at":"2026-08-05T18:00:00Z"}}',
+                '{"timestamp":"2026-08-05T18:00:01Z","type":"response_item","payload":{"type":"reasoning","summary":[{"text":"bounded"}]}}',
+                '{"timestamp":"2026-08-05T18:00:03Z","type":"response_item","payload":{"type":"message","role":"assistant","phase":"final_answer","content":[{"type":"output_text","text":"done"}]}}',
+                '{"timestamp":"2026-08-05T18:00:03Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":50,"cached_input_tokens":30,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":60},"last_token_usage":{"input_tokens":50,"cached_input_tokens":30,"output_tokens":10,"reasoning_output_tokens":2,"total_tokens":60},"model_context_window":100}}}',
+                '{"timestamp":"2026-08-05T18:00:04Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"turn","completed_at":"2026-08-05T18:00:04Z","duration_ms":4000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("render-metrics", tmp_path)
+    html = module.render_codex_rollout_html(run)
+
+    assert "Context usage" in html
+    assert "Inference rate" in html
+    assert "Runtime activity" in html
+    assert "60.0%" in html
+    assert f"observed {module._local_time_html(run.observed_at)}" in html
+    assert 'class="local-timestamp" datetime="2026-08-05T18:00:00+00:00"' in html
+    assert "Intl.DateTimeFormat" in html
+    assert "Direct telemetry" in html
+    assert "Growth and compactions" in html
+    assert "Response-size bands" in html
+    assert "P50" in html
+    assert "P90" in html
+    assert "3s inference" in html
+    assert "context 60 / 100 (60.0%)" in html
+
+
+def test_native_codex_older_token_logs_keep_usage_without_new_telemetry(tmp_path):
+    module = _load_module()
+    rollout = tmp_path / "legacy-metrics.jsonl"
+    rollout.write_text(
+        "\n".join(
+            [
+                '{"timestamp":"2026-07-14T09:00:00Z","type":"session_meta","payload":{"id":"legacy-metrics","source":"user"}}',
+                '{"timestamp":"2026-07-14T09:00:00Z","type":"event_msg","payload":{"type":"task_started","turn_id":"legacy-turn","started_at":"2026-07-14T09:00:00Z"}}',
+                '{"timestamp":"2026-07-14T09:00:01Z","type":"event_msg","payload":{"type":"token_count","info":{"total_token_usage":{"input_tokens":20,"cached_input_tokens":5,"output_tokens":4,"reasoning_output_tokens":2,"total_tokens":24}}}}',
+                '{"timestamp":"2026-07-14T09:00:02Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"legacy-turn","completed_at":"2026-07-14T09:00:02Z","duration_ms":2000}}',
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    run = module.build_codex_rollout_run("legacy-metrics", tmp_path)
+    html = module.render_codex_rollout_html(run)
+
+    assert run.usage_totals.processed_tokens == 24
+    assert run.context_summary.evidence == "unavailable"
+    assert run.inference_summary.call_count == 1
+    assert run.inference_summary.measured_call_count == 0
+    assert run.threads[0].responses[0].reported_usage.processed_tokens == 0
+    assert "Context usage" not in html
+    assert "Inference rate" in html
+    assert "—" in html
+
+
 def test_native_codex_numeric_epoch_turn_timestamps_drive_concurrency(tmp_path):
     module = _load_module()
     rollout = tmp_path / "numeric-timestamps.jsonl"
@@ -1750,7 +2146,7 @@ def test_native_codex_retains_redacted_lifecycle_content_and_exact_tool_model():
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
     root = run.threads[0]
 
-    assert run.parser_version == "1.19.0"
+    assert run.parser_version == "1.20.0"
     assert [activity.activity_type for activity in root.activities] == [
         "input",
         "reasoning",
@@ -2654,7 +3050,7 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     run.observed_at = "2026-07-16T22:15:00+00:00"
     html = module.render_codex_rollout_html(run)
     assert (
-        "· observed 2026-07-16T22:15:00+00:00 · "
+        f"· observed {module._local_time_html(run.observed_at)} · "
         "API-equivalent estimate: $917.35 USD "
         "(estimate, not an actual charge or invoice).</p>"
     ) in html

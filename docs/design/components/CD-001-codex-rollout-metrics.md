@@ -104,6 +104,22 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
   - **SYNOPSIS:** A Codex catalog lists only rollouts without `parent_thread_id`; generated reports still include the selected root's closed descendant set. A Junie catalog lists each durable session event stream once.
   - **BECAUSE:** Descendant Codex rollouts are components of one reportable run, not independent operator-facing report choices.
 
+- **RULE: RULE-24** Separate direct counters from inferred model timing
+  - **SYNOPSIS:** Preserve `last_token_usage`, model, effort, and context capacity as direct per-call telemetry. Reconstruct model-ready, first recorded output, and last recorded output boundaries only when their surrounding events are available; keep queue time unavailable unless the runtime records it.
+  - **BECAUSE:** A token-count event can follow tool completion, so treating its timestamp as the end of inference would incorrectly charge tool time to the model.
+
+- **RULE: RULE-25** Treat context occupancy as state rather than cumulative usage
+  - **SYNOPSIS:** Report current input and total occupancy, remaining capacity, cache-read proportion, high-water occupancy, and recorded or inferred compaction reductions from `last_token_usage` and `model_context_window`; never add context occupancy to cumulative run tokens.
+  - **BECAUSE:** Context size describes the current request window, while `total_token_usage` describes accumulated processing.
+
+- **RULE: RULE-26** Partition runtime states without hiding concurrency
+  - **SYNOPSIS:** Partition each recorded turn into model inference, tool execution, test or process execution, agent wait, watchdog, approval or infrastructure, and unattributed intervals; keep user pauses between root turns separate. Report summed agent time and interval-union wall time for every state, plus agent-wait time not overlapped by productive work in another thread.
+  - **BECAUSE:** A parent waiting for a working child is not a run-wide stall, while every active task waiting at once is actionable idle time.
+
+- **RULE: RULE-27** Use successful exact-ID claim events as work-item boundaries
+  - **SYNOPSIS:** Pair successful `claim_acquire` and `claim_release` MCP events by exact bounded `work_item_id` and `claim_id`, retain `work` or `update` activity and `done`, `blocked`, or `handoff` disposition, and allocate timing and token metrics inside that segment. Do not retain claim task descriptions or raw claim payloads.
+  - **BECAUSE:** Exact claim events provide deterministic start, end, blocked, and handoff evidence without guessing from file paths, thread titles, or prose.
+
 ## 3. Information Model
 
 This model retains exact source measurements and progressively aggregated views.
@@ -213,6 +229,32 @@ This model retains exact source measurements and progressively aggregated views.
   - **FIELD:** `total_cost`
     - **SYNOPSIS:** Sum of available cost components with currency and estimate label.
   - **RULE:** Reports do not derive or display Codex credit estimates because rollout telemetry does not establish a run-specific credit charge or balance.
+
+- **ENTITY: ENTITY-8** Model inference call
+  - **SYNOPSIS:** One response usage record with direct per-call token counters and optional inferred timing boundaries.
+  - **FIELD:** `started_at`, `first_output_at`, `last_output_at`, and `completed_at`
+    - **SYNOPSIS:** The input-ready boundary, first and last recorded model-output fragments, and later accounting event; every boundary carries a timing method and confidence.
+  - **FIELD:** `duration_ms`, `ttft_ms`, `decode_time_ms`, and `queue_time_ms`
+    - **SYNOPSIS:** End-to-end inferred inference time, ready-to-first-fragment latency, recorded output-fragment span, and direct queue time when available. Unrecorded queue time remains null.
+  - **FIELD:** `reported_usage`, `model`, and `effort`
+    - **SYNOPSIS:** Direct input, cached input, output, reasoning, and total call counters plus the applicable model and reasoning effort.
+
+- **ENTITY: ENTITY-9** Context snapshot and compaction
+  - **SYNOPSIS:** Content-free request-window occupancy and one recorded or inferred reduction.
+  - **FIELD:** `input_tokens`, `total_tokens`, `capacity`, `remaining_tokens`, `occupancy_percent`, and `cached_input_percent`
+    - **SYNOPSIS:** Direct current context dimensions from one token-count event.
+  - **FIELD:** `before_total_tokens`, `after_total_tokens`, `event_timestamp`, and `recorded`
+    - **SYNOPSIS:** Compaction size change, time, and direct-versus-inferred evidence.
+
+- **ENTITY: ENTITY-10** Runtime state interval
+  - **SYNOPSIS:** One mutually exclusive per-thread interval with state, start, end, duration, method, confidence, and optional bounded tool detail.
+
+- **ENTITY: ENTITY-11** Work-item claim segment
+  - **SYNOPSIS:** One exact Work Item ID activity interval paired from successful claim events.
+  - **FIELD:** `work_item_id`, `claim_id`, `activity`, `disposition`, and `blocker_reference`
+    - **SYNOPSIS:** Opaque claim identity and lifecycle evidence without provider-record or prompt content.
+  - **FIELD:** `started_at`, `ended_at`, `duration_ms`, `usage`, `inference`, and `runtime_state_ms`
+    - **SYNOPSIS:** Segment timing plus token, inference, and runtime-state metrics allocated within its exact boundary.
 
 ## 4. Structure And Execution
 
@@ -452,6 +494,10 @@ These conditions define an acceptable implementation and report.
   - **SYNOPSIS:** The HTML renderer evaluates ordered, versioned formatter rules against sanitized tool-argument summaries, displays the first matching human-readable summary in full, and retains a collapsed sanitized `raw` disclosure. It renders recognized plans as full bulleted lists and clamps only long generic argument presentations with access to their complete bounded content. A caller may supply a run-specific config with `--formatter-config`.
   - **BECAUSE:** Claims, patches, messages, waits, and agent lifecycle calls repeat recognizable structures that are easier to scan when reduced to their meaningful fields, while a config lets an agent describe new run-specific patterns without changing parser code.
 
+- **REQUIREMENT: REQ-20** Context, inference, runtime-state, and work-item views
+  - **SYNOPSIS:** The offline HTML report presents compact current-context and high-water cards, collapsed local-time growth and compaction details, end-to-end and output-span inference rates with percentiles, fifteen-minute trends and response-size bands, concurrency-aware runtime states, all-agent waiting time, and exact claim-bounded work-item summaries.
+  - **BECAUSE:** Optimization decisions require direct context pressure, comparable call-rate evidence, test and wait attribution, and deterministic work-item boundaries in one report.
+
 - **REQUIREMENT: REQ-11** Task-specific and compact report presentation
   - **SYNOPSIS:** The HTML document title and page heading identify the reported task, the subtitle carries the observed timestamp and one estimate disclaimer, the execution hierarchy is labeled `Timeline`, and no diagnostics section competes with the primary metrics.
   - **BECAUSE:** A report should be recognizable in a browser tab and understandable at a glance without requiring the reader to infer the task from a thread identifier.
@@ -523,6 +569,22 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 - **TASK: TEST-15** Enforce privacy defaults
   - **SYNOPSIS:** Include sensitive prompt, reasoning, tool payload, final-message text, and a secret-shaped `send_message` assignment in test inputs.
   - **VALIDATES:** Default JSON, CSV, Markdown, and HTML outputs contain metrics, provenance, useful redacted tool-argument summaries, and only bounded redacted tool results; `send_message` exposes only its redacted 50-character preview and original character count, while recognized encrypted messages expose only an encrypted-message length placeholder.
+
+- **TASK: TEST-40** Reconstruct inference and context metrics
+  - **SYNOPSIS:** Record two model calls around an explicit compaction with direct last-call usage and context capacity.
+  - **VALIDATES:** Tool time is excluded from inferred inference time; per-call token dimensions, TTFT, output span, current occupancy, headroom, high water, before-and-after compaction size, trends, percentiles, and size bands are deterministic.
+
+- **TASK: TEST-41** Distinguish global waiting from concurrent work
+  - **SYNOPSIS:** Make a root wait for an agent while a child remains active for only part of that interval and run a test process in another interval.
+  - **VALIDATES:** Agent wait, test or process time, model inference, and unattributed turn remainder are mutually exclusive, and only the wait tail with no productive peer counts as all-agent waiting.
+
+- **TASK: TEST-42** Pair exact work-item claim events
+  - **SYNOPSIS:** Acquire and release one completed and one blocked Work Item ID while including a rejected conflicting acquisition and an unrelated private task description.
+  - **VALIDATES:** Only successful claim pairs become segments; activity, disposition, blocker, duration, token, inference, and runtime metrics are retained; private task text is absent from normalized and rendered outputs.
+
+- **TASK: TEST-43** Preserve older token logs
+  - **SYNOPSIS:** Parse cumulative token events without `last_token_usage`, context capacity, or observable output-fragment boundaries.
+  - **VALIDATES:** Existing usage accounting remains correct while context and timing metrics remain explicitly unavailable.
 
 - **TASK: TEST-16** Open agent and turn tool-call drilldowns
   - **SYNOPSIS:** Expand an agent in the execution timeline, open its turn list, and select one turn for a focused view of that turn's metrics, attribution, and ordered tool calls.
@@ -623,6 +685,10 @@ This section records the implementation surfaces implied by the design and their
 - **MODIFICATION: MOD-11** Bound report titles and open sequence companions
   - **SYNOPSIS:** Compact long prompt-derived page headings, disclose full assignment labels on demand, and register a narrowly scoped Tauri new-window handler for the generated local sequence companion.
   - **STATUS:** implemented
+
+- **MODIFICATION: MOD-12** Add context, inference, runtime-state, and exact work-item metrics
+  - **SYNOPSIS:** Extend native Codex normalization, JSON and Markdown companions, and the compact offline HTML report with direct context and token telemetry, inferred call timing, concurrency-aware states, and exact claim-bounded work segments.
+  - **STATUS:** implemented in 0.6.6
 
 - **MODIFICATION: MOD-12** Persist desktop troubleshooting diagnostics
   - **SYNOPSIS:** Record bounded native failures, renderer diagnostics, frontend exceptions, and panics in the Tauri app-log directory; retain one rotated file and expose the current log from the interface.

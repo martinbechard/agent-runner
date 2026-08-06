@@ -71,7 +71,7 @@ CODEX_CREDIT_RATE_KEYS = (
     "codex_credits_output_per_million",
 )
 CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
-CODEX_ROLLOUT_PARSER_VERSION = "1.19.0"
+CODEX_ROLLOUT_PARSER_VERSION = "1.20.0"
 NATIVE_DISCOVERY_PROTOCOL_VERSION = 1
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
@@ -358,6 +358,200 @@ class ResponseUsage:
     recorded_cost_usd: float | None = None
     derivation_method: str = "cumulative-delta"
     attribution_confidence: str = "exact"
+    started_at: str = ""
+    first_output_at: str = ""
+    last_output_at: str = ""
+    completed_at: str = ""
+    duration_ms: int = 0
+    ttft_ms: int | None = None
+    decode_time_ms: int | None = None
+    queue_time_ms: int | None = None
+    timing_confidence: str = "unavailable"
+    timing_method: str = "unavailable"
+    context_input_tokens: int = 0
+    context_cached_input_tokens: int = 0
+    context_total_tokens: int = 0
+    context_capacity: int = 0
+    context_occupancy_percent: float | None = None
+    reported_usage: UsageTotals = field(default_factory=UsageTotals)
+
+
+@dataclass
+class ContextSnapshot:
+    """Direct per-call context telemetry without retaining request content."""
+
+    event_timestamp: str
+    input_tokens: int
+    cached_input_tokens: int
+    output_tokens: int
+    reasoning_tokens: int
+    total_tokens: int
+    capacity: int
+    remaining_tokens: int
+    occupancy_percent: float
+    cached_input_percent: float
+    source_path: str
+    source_ordinal: int
+    is_compaction_marker: bool = False
+    derivation_method: str = "direct-last-token-usage"
+
+
+@dataclass
+class ContextCompaction:
+    """One recorded or inferred context-size reduction."""
+
+    event_timestamp: str
+    before_total_tokens: int
+    after_total_tokens: int
+    capacity: int
+    window_number: int | None
+    window_id: str
+    source_path: str
+    source_ordinal: int
+    recorded: bool = False
+    derivation_method: str = "recorded-compaction-event"
+
+
+@dataclass
+class ContextSummary:
+    """Current and high-water context usage for the selected root thread."""
+
+    current_total_tokens: int = 0
+    current_input_tokens: int = 0
+    current_cached_input_tokens: int = 0
+    capacity: int = 0
+    remaining_tokens: int = 0
+    occupancy_percent: float | None = None
+    cached_input_percent: float | None = None
+    high_water_tokens: int = 0
+    high_water_percent: float | None = None
+    compaction_count: int = 0
+    last_observed_at: str = ""
+    evidence: str = "unavailable"
+
+
+@dataclass
+class ContextTrendBucket:
+    """One fixed-width context-growth bucket for the selected root thread."""
+
+    started_at: str
+    snapshot_count: int
+    first_total_tokens: int
+    last_total_tokens: int
+    low_total_tokens: int
+    high_total_tokens: int
+    capacity: int
+    compaction_count: int
+
+
+@dataclass
+class InferenceSummary:
+    """Size-aware aggregate over calls with explicit timing confidence."""
+
+    call_count: int = 0
+    measured_call_count: int = 0
+    decode_measured_call_count: int = 0
+    output_tokens: int = 0
+    reasoning_tokens: int = 0
+    inference_time_ms: int = 0
+    decode_time_ms: int = 0
+    end_to_end_tokens_per_second: float | None = None
+    decode_tokens_per_second: float | None = None
+    median_ttft_ms: float | None = None
+    p50_call_tokens_per_second: float | None = None
+    p90_call_tokens_per_second: float | None = None
+    evidence: str = "unavailable"
+
+
+@dataclass
+class InferenceTrendBucket:
+    """One fixed-width inference-rate bucket."""
+
+    started_at: str
+    call_count: int
+    output_tokens: int
+    inference_time_ms: int
+    tokens_per_second: float | None
+
+
+@dataclass
+class InferenceSizeBand:
+    """Inference rate for comparable response-size calls."""
+
+    label: str
+    call_count: int
+    output_tokens: int
+    inference_time_ms: int
+    weighted_tokens_per_second: float | None
+    median_call_tokens_per_second: float | None
+
+
+@dataclass
+class RuntimeStateInterval:
+    """One mutually exclusive per-thread runtime-state interval."""
+
+    thread_id: str
+    turn_id: str | None
+    state: str
+    started_at: str
+    completed_at: str
+    duration_ms: int
+    derivation_method: str
+    attribution_confidence: str
+    detail: str = ""
+
+
+@dataclass
+class RuntimeStateSummary:
+    """Agent-time and concurrency-aware wall-time for one runtime state."""
+
+    state: str
+    interval_count: int
+    agent_time_ms: int
+    run_time_ms: int
+    direct_interval_count: int
+    inferred_interval_count: int
+
+
+@dataclass
+class WorkItemClaimEvent:
+    """Bounded exact-ID lifecycle evidence from a successful claim tool call."""
+
+    operation: str
+    event_timestamp: str
+    work_item_id: str
+    claim_id: str
+    activity: str
+    disposition: str
+    blocker_reference: str
+    agent: str
+    root_task_id: str
+    outcome: str
+    thread_id: str
+    source_path: str
+    source_ordinal: int
+    transport: str
+
+
+@dataclass
+class WorkItemSegment:
+    """One exact claim-bounded work or update activity segment."""
+
+    work_item_id: str
+    claim_id: str
+    activity: str
+    disposition: str
+    blocker_reference: str
+    agent: str
+    thread_id: str
+    started_at: str
+    ended_at: str
+    duration_ms: int
+    open: bool
+    usage: UsageTotals
+    inference: InferenceSummary
+    runtime_state_ms: dict[str, int]
+    attribution_confidence: str = "exact"
 
 
 @dataclass
@@ -539,6 +733,9 @@ class CodexThreadMetrics:
     activities: list[AgentActivity] = field(default_factory=list)
     tool_intervals: list[ToolInterval] = field(default_factory=list)
     mcp_calls: list[McpCallInterval] = field(default_factory=list)
+    context_snapshots: list[ContextSnapshot] = field(default_factory=list)
+    compactions: list[ContextCompaction] = field(default_factory=list)
+    work_item_claim_events: list[WorkItemClaimEvent] = field(default_factory=list)
     skills_used: list[str] = field(default_factory=list)
     mcp_skills_loaded: list[str] = field(default_factory=list)
     bash_skills_loaded: list[str] = field(default_factory=list)
@@ -660,6 +857,15 @@ class CodexRunMetrics:
     runtime: str = "Codex"
     run_label: str = ""
     parent_context: CodexParentContext | None = None
+    context_summary: ContextSummary = field(default_factory=ContextSummary)
+    inference_summary: InferenceSummary = field(default_factory=InferenceSummary)
+    inference_trends: list[InferenceTrendBucket] = field(default_factory=list)
+    inference_size_bands: list[InferenceSizeBand] = field(default_factory=list)
+    context_trends: list[ContextTrendBucket] = field(default_factory=list)
+    runtime_intervals: list[RuntimeStateInterval] = field(default_factory=list)
+    runtime_states: list[RuntimeStateSummary] = field(default_factory=list)
+    all_agents_waiting_ms: int = 0
+    work_item_segments: list[WorkItemSegment] = field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +909,161 @@ def _usage_nonnegative_difference(current: UsageTotals, previous: UsageTotals) -
     if not current.is_monotonic_from(previous):
         return UsageTotals()
     return current.subtract(previous)
+
+
+def _nonnegative_int(value: object) -> int | None:
+    """Return a direct non-negative integer without accepting booleans."""
+
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        return None
+    return value
+
+
+def _context_snapshot(
+    usage: object,
+    capacity_value: object,
+    *,
+    timestamp: str,
+    path: Path,
+    ordinal: int,
+) -> ContextSnapshot | None:
+    """Normalize direct last-call context counters when the full shape is valid."""
+
+    if not isinstance(usage, dict):
+        return None
+    capacity = _nonnegative_int(capacity_value)
+    input_tokens = _nonnegative_int(usage.get("input_tokens", 0))
+    cached_tokens = _nonnegative_int(usage.get("cached_input_tokens", 0))
+    output_tokens = _nonnegative_int(usage.get("output_tokens", 0))
+    reasoning_tokens = _nonnegative_int(usage.get("reasoning_output_tokens", 0))
+    total_tokens = _nonnegative_int(usage.get("total_tokens"))
+    if None in {
+        capacity,
+        input_tokens,
+        cached_tokens,
+        output_tokens,
+        reasoning_tokens,
+        total_tokens,
+    }:
+        return None
+    assert capacity is not None
+    assert input_tokens is not None
+    assert cached_tokens is not None
+    assert output_tokens is not None
+    assert reasoning_tokens is not None
+    assert total_tokens is not None
+    cached_tokens = min(cached_tokens, input_tokens)
+    reasoning_tokens = min(reasoning_tokens, output_tokens)
+    occupancy = total_tokens / capacity * 100 if capacity else 0.0
+    cached_share = cached_tokens / input_tokens * 100 if input_tokens else 0.0
+    is_marker = (
+        total_tokens > 0
+        and input_tokens == 0
+        and output_tokens == 0
+        and reasoning_tokens == 0
+    )
+    return ContextSnapshot(
+        event_timestamp=_normalize_timestamp(timestamp),
+        input_tokens=input_tokens,
+        cached_input_tokens=cached_tokens,
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning_tokens,
+        total_tokens=total_tokens,
+        capacity=capacity,
+        remaining_tokens=max(0, capacity - total_tokens),
+        occupancy_percent=occupancy,
+        cached_input_percent=cached_share,
+        source_path=str(path),
+        source_ordinal=ordinal,
+        is_compaction_marker=is_marker,
+    )
+
+
+def _bounded_claim_value(value: object) -> str:
+    """Retain only the canonical bounded scalar allowed by the claim contract."""
+
+    if not isinstance(value, str):
+        return ""
+    text = value.strip()
+    if not text or "\n" in text or "\r" in text or len(text) > 200:
+        return ""
+    return text
+
+
+def _claim_result(result: object) -> dict[str, object]:
+    """Return the claim result object from a native MCP result envelope."""
+
+    structured = _mcp_structured_result(result)
+    nested = structured.get("result")
+    return nested if isinstance(nested, dict) else structured
+
+
+def _work_item_claim_event_from_mcp(
+    *,
+    thread_id: str,
+    timestamp: str,
+    path: Path,
+    ordinal: int,
+    server_name: str,
+    tool_name: str,
+    arguments: object,
+    result: object,
+) -> WorkItemClaimEvent | None:
+    """Extract successful exact-ID acquire/release evidence without payload text."""
+
+    normalized_tool = tool_name.casefold().replace("-", "_")
+    if normalized_tool not in {"claim_acquire", "claim_release"}:
+        return None
+    if not isinstance(arguments, dict):
+        return None
+    result_fields = _claim_result(result)
+    outcome = _bounded_claim_value(result_fields.get("outcome"))
+    operation = "acquire" if normalized_tool == "claim_acquire" else "release"
+    if operation == "acquire" and not outcome.endswith("ACQUIRED"):
+        return None
+    if operation == "release" and outcome != "RELEASED":
+        return None
+    work_item_id = _bounded_claim_value(
+        result_fields.get("work_item_id") or arguments.get("work_item_id")
+    )
+    claim_id = _bounded_claim_value(
+        result_fields.get("claim_id") or arguments.get("claim_id")
+    )
+    activity = _bounded_claim_value(
+        result_fields.get("activity") or arguments.get("activity")
+    )
+    disposition = _bounded_claim_value(
+        result_fields.get("disposition") or arguments.get("disposition")
+    )
+    if not work_item_id or not claim_id:
+        return None
+    if operation == "acquire" and activity not in {"work", "update"}:
+        return None
+    if operation == "release" and disposition not in {"done", "blocked", "handoff"}:
+        return None
+    return WorkItemClaimEvent(
+        operation=operation,
+        event_timestamp=_normalize_timestamp(timestamp),
+        work_item_id=work_item_id,
+        claim_id=claim_id,
+        activity=activity,
+        disposition=disposition,
+        blocker_reference=_bounded_claim_value(
+            result_fields.get("blocker_reference")
+            or arguments.get("blocker_reference")
+        ),
+        agent=_bounded_claim_value(
+            result_fields.get("agent") or arguments.get("agent")
+        ),
+        root_task_id=_bounded_claim_value(
+            result_fields.get("root_task_id") or arguments.get("root_task_id")
+        ),
+        outcome=outcome,
+        thread_id=thread_id,
+        source_path=str(path),
+        source_ordinal=ordinal,
+        transport=f"mcp:{server_name}",
+    )
 
 
 def _parse_jsonl_append_safe(path: Path) -> tuple[list[tuple[int, dict[str, object]]], list[str]]:
@@ -1210,6 +1571,14 @@ def _mcp_agent_ops_argument_summary(tool_name: str, arguments: object) -> str | 
         parts = [f"repository: {_path_basename(arguments.get('repository'))}"]
         if arguments.get("claim_id"):
             parts.append(f"claim: {arguments['claim_id']}")
+        if arguments.get("work_item_id"):
+            parts.append(f"work item: {arguments['work_item_id']}")
+        if arguments.get("activity"):
+            parts.append(f"activity: {arguments['activity']}")
+        if arguments.get("disposition"):
+            parts.append(f"disposition: {arguments['disposition']}")
+        if arguments.get("blocker_reference"):
+            parts.append(f"blocker: {arguments['blocker_reference']}")
         for key in ("files", "trees", "resources"):
             values = arguments.get(key)
             if isinstance(values, list) and values:
@@ -1988,6 +2357,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     activities: list[AgentActivity] = []
     tools: list[ToolInterval] = []
     mcp_calls: list[McpCallInterval] = []
+    context_snapshots: list[ContextSnapshot] = []
+    compactions: list[ContextCompaction] = []
+    work_item_claim_events: list[WorkItemClaimEvent] = []
     skills_used: set[str] = set()
     mcp_skills_loaded: set[str] = set()
     bash_skills_loaded: set[str] = set()
@@ -1999,6 +2371,20 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     task_request_seen = False
     infer_parent_from_delegation = False
     unknown_event_counts: dict[str, int] = {}
+    model_ready_at = ""
+    pending_model_started_at = ""
+    pending_model_output_timestamps: list[str] = []
+
+    def note_model_output(raw_timestamp: str) -> None:
+        """Track observable model fragments without retaining their content."""
+
+        nonlocal pending_model_started_at
+        normalized = _normalize_timestamp(raw_timestamp)
+        if not normalized:
+            return
+        if not pending_model_output_timestamps:
+            pending_model_started_at = model_ready_at or normalized
+        pending_model_output_timestamps.append(normalized)
 
     for ordinal, record in records:
         timestamp = str(record.get("timestamp") or "")
@@ -2071,6 +2457,39 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 current_effort = effort
             continue
 
+        if record_type == "compacted":
+            previous_context = next(
+                (
+                    snapshot
+                    for snapshot in reversed(context_snapshots)
+                    if not snapshot.is_compaction_marker
+                ),
+                None,
+            )
+            window_number = payload.get("window_number")
+            compactions.append(
+                ContextCompaction(
+                    event_timestamp=_normalize_timestamp(timestamp),
+                    before_total_tokens=(
+                        previous_context.total_tokens if previous_context else 0
+                    ),
+                    after_total_tokens=0,
+                    capacity=(previous_context.capacity if previous_context else 0),
+                    window_number=(
+                        window_number
+                        if isinstance(window_number, int)
+                        and not isinstance(window_number, bool)
+                        else None
+                    ),
+                    window_id=_bounded_claim_value(payload.get("window_id")),
+                    source_path=str(path),
+                    source_ordinal=ordinal,
+                )
+            )
+            pending_model_started_at = ""
+            pending_model_output_timestamps.clear()
+            continue
+
         if record_type == "event_msg":
             event_type = str(payload.get("type") or "")
             if event_type == "task_started":
@@ -2102,17 +2521,80 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 active_turns[turn_id] = turn
                 turns_by_id[turn_id] = turn
                 turns.append(turn)
+                model_ready_at = turn.started_at or _normalize_timestamp(timestamp)
+                pending_model_started_at = ""
+                pending_model_output_timestamps.clear()
+                continue
+
+            if event_type == "context_compacted":
+                if compactions:
+                    compactions[-1].recorded = True
+                model_ready_at = _normalize_timestamp(timestamp)
+                pending_model_started_at = ""
+                pending_model_output_timestamps.clear()
+                continue
+
+            if event_type == "user_message":
+                model_ready_at = _normalize_timestamp(timestamp)
                 continue
 
             if event_type == "token_count":
                 info = payload.get("info")
                 total_snapshot = info.get("total_token_usage") if isinstance(info, dict) else None
+                last_snapshot = info.get("last_token_usage") if isinstance(info, dict) else None
+                context = _context_snapshot(
+                    last_snapshot,
+                    info.get("model_context_window") if isinstance(info, dict) else None,
+                    timestamp=timestamp,
+                    path=path,
+                    ordinal=ordinal,
+                )
+                if context is not None:
+                    previous_context = context_snapshots[-1] if context_snapshots else None
+                    context_snapshots.append(context)
+                    if context.is_compaction_marker:
+                        pending_compaction = next(
+                            (
+                                item
+                                for item in reversed(compactions)
+                                if item.after_total_tokens == 0
+                            ),
+                            None,
+                        )
+                        if pending_compaction is not None:
+                            pending_compaction.after_total_tokens = context.total_tokens
+                            pending_compaction.capacity = context.capacity
+                        pending_model_started_at = ""
+                        pending_model_output_timestamps.clear()
+                    elif (
+                        previous_context is not None
+                        and not previous_context.is_compaction_marker
+                        and previous_context.total_tokens > context.total_tokens
+                        and previous_context.total_tokens - context.total_tokens
+                        >= max(1_000, round(previous_context.total_tokens * 0.1))
+                    ):
+                        compactions.append(
+                            ContextCompaction(
+                                event_timestamp=context.event_timestamp,
+                                before_total_tokens=previous_context.total_tokens,
+                                after_total_tokens=context.total_tokens,
+                                capacity=context.capacity,
+                                window_number=None,
+                                window_id="",
+                                source_path=str(path),
+                                source_ordinal=ordinal,
+                                recorded=False,
+                                derivation_method="inferred-context-drop",
+                            )
+                        )
                 current_usage = _usage_from_snapshot(total_snapshot)
                 rate_limits = payload.get("rate_limits")
                 if isinstance(rate_limits, dict) and rate_limits.get("plan_type"):
                     plan_type = str(rate_limits["plan_type"])
                 if current_usage is None:
                     diagnostics.append(f"invalid token_count at {path}:{ordinal}")
+                    continue
+                if context is not None and context.is_compaction_marker:
                     continue
                 direct_cost = info.get("total_cost_usd") if isinstance(info, dict) else None
                 if isinstance(direct_cost, (int, float)) and not isinstance(direct_cost, bool):
@@ -2126,6 +2608,34 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 if not _usage_is_zero(delta):
                     turn_id = next(iter(active_turns)) if len(active_turns) == 1 else None
                     confidence = "exact" if turn_id else "unattributed"
+                    first_output_at = (
+                        min(pending_model_output_timestamps)
+                        if pending_model_output_timestamps
+                        else ""
+                    )
+                    last_output_at = (
+                        max(pending_model_output_timestamps)
+                        if pending_model_output_timestamps
+                        else ""
+                    )
+                    timing_available = bool(
+                        pending_model_started_at and first_output_at and last_output_at
+                    )
+                    duration_ms = (
+                        _interval_ms(pending_model_started_at, last_output_at)
+                        if timing_available
+                        else 0
+                    )
+                    ttft_ms = (
+                        _interval_ms(pending_model_started_at, first_output_at)
+                        if timing_available
+                        else None
+                    )
+                    decode_time_ms = (
+                        _interval_ms(first_output_at, last_output_at)
+                        if timing_available
+                        else None
+                    )
                     response = ResponseUsage(
                         event_timestamp=timestamp,
                         usage=delta,
@@ -2135,10 +2645,37 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         model=model,
                         effort=current_effort,
                         attribution_confidence=confidence,
+                        started_at=(pending_model_started_at if timing_available else ""),
+                        first_output_at=first_output_at,
+                        last_output_at=last_output_at,
+                        completed_at=_normalize_timestamp(timestamp),
+                        duration_ms=duration_ms,
+                        ttft_ms=ttft_ms,
+                        decode_time_ms=decode_time_ms,
+                        timing_confidence="inferred" if timing_available else "unavailable",
+                        timing_method=(
+                            "ready-boundary-to-recorded-output-fragments"
+                            if timing_available
+                            else "unavailable"
+                        ),
+                        context_input_tokens=context.input_tokens if context else 0,
+                        context_cached_input_tokens=(
+                            context.cached_input_tokens if context else 0
+                        ),
+                        context_total_tokens=context.total_tokens if context else 0,
+                        context_capacity=context.capacity if context else 0,
+                        context_occupancy_percent=(
+                            context.occupancy_percent if context else None
+                        ),
+                        reported_usage=(
+                            _usage_from_snapshot(last_snapshot) or UsageTotals()
+                        ),
                     )
                     responses.append(response)
                     if turn_id and turn_id in turns_by_id:
                         turns_by_id[turn_id].usage = turns_by_id[turn_id].usage + delta
+                    pending_model_started_at = ""
+                    pending_model_output_timestamps.clear()
                 previous_usage = current_usage
                 saw_usage = True
                 continue
@@ -2154,7 +2691,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 raw_argument_summary = _tool_argument_summary({"arguments": arguments})
                 formatted_argument_summary = (
                     _mcp_agent_ops_argument_summary(tool_name, arguments)
-                    if server_name == "mcp-agent-ops"
+                    if server_name == "mcp-agent-ops" or tool_name.startswith("claim_")
                     else None
                 )
                 argument_summary = formatted_argument_summary or raw_argument_summary
@@ -2198,12 +2735,15 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         argument_summary=argument_summary,
                         argument_content=(
                             raw_argument_summary
-                            if formatted_argument_summary
+                            if not tool_name.startswith("claim_")
+                            and formatted_argument_summary
                             and formatted_argument_summary != raw_argument_summary
                             else ""
                         ),
                         result_summary=result_summary,
-                        result_content=_tool_result_content(result),
+                        result_content=(
+                            "" if tool_name.startswith("claim_") else _tool_result_content(result)
+                        ),
                         succeeded=succeeded,
                         source_path=str(path),
                         source_ordinal=ordinal,
@@ -2211,6 +2751,19 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         model=model,
                     )
                 )
+                claim_event = _work_item_claim_event_from_mcp(
+                    thread_id=thread_id,
+                    timestamp=timestamp,
+                    path=path,
+                    ordinal=ordinal,
+                    server_name=server_name,
+                    tool_name=tool_name,
+                    arguments=arguments,
+                    result=result,
+                )
+                if claim_event is not None:
+                    work_item_claim_events.append(claim_event)
+                model_ready_at = completed_at
                 continue
 
             if event_type in {"task_complete", "turn_aborted"}:
@@ -2314,10 +2867,16 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 activities.clear()
                 tools.clear()
                 mcp_calls.clear()
+                context_snapshots.clear()
+                compactions.clear()
+                work_item_claim_events.clear()
                 skills_used.clear()
                 mcp_skills_loaded.clear()
                 bash_skills_loaded.clear()
                 pending_tools.clear()
+                model_ready_at = _normalize_timestamp(timestamp)
+                pending_model_started_at = ""
+                pending_model_output_timestamps.clear()
                 for turn in turns:
                     turn.usage = UsageTotals()
                     turn.skills_used.clear()
@@ -2333,6 +2892,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 role = str(payload.get("role") or "")
                 raw_text = _response_item_text(payload, "content")
                 if raw_text and role == "user":
+                    model_ready_at = _normalize_timestamp(timestamp)
                     request = _genuine_user_request(raw_text)
                     if request and not task_request_seen:
                         task_request_seen = True
@@ -2357,6 +2917,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         raw_text=raw_text,
                     )
                 elif raw_text and role == "assistant":
+                    note_model_output(timestamp)
                     phase = str(payload.get("phase") or "")
                     label = "Final answer" if phase == "final_answer" else "Assistant output"
                     _append_codex_activity(
@@ -2376,6 +2937,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 author = str(payload.get("author") or "")
                 recipient = str(payload.get("recipient") or "")
                 if raw_text and agent_path and recipient == agent_path:
+                    model_ready_at = _normalize_timestamp(timestamp)
                     _append_codex_activity(
                         activities,
                         thread_id=thread_id,
@@ -2388,6 +2950,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         raw_text=raw_text,
                     )
                 elif raw_text and agent_path and author == agent_path:
+                    note_model_output(timestamp)
                     _append_codex_activity(
                         activities,
                         thread_id=thread_id,
@@ -2401,6 +2964,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         model=model,
                     )
             elif item_type == "reasoning":
+                note_model_output(timestamp)
                 raw_fragments = _response_item_fragments(payload, "summary")
                 encrypted_content = payload.get("encrypted_content")
                 if raw_fragments:
@@ -2439,6 +3003,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         model=model,
                     )
             elif item_type in {"function_call", "custom_tool_call"}:
+                note_model_output(timestamp)
                 call_id = str(payload.get("call_id") or payload.get("id") or "")
                 if call_id:
                     tool_name = str(
@@ -2517,6 +3082,11 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                             model=tool_model,
                         )
                     )
+                model_ready_at = _normalize_timestamp(timestamp)
+            elif item_type == "tool_search_call":
+                note_model_output(timestamp)
+            elif item_type == "tool_search_output":
+                model_ready_at = _normalize_timestamp(timestamp)
             continue
 
         if record_type != "world_state":
@@ -2574,6 +3144,9 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         activities=activities,
         tool_intervals=tools,
         mcp_calls=mcp_calls,
+        context_snapshots=context_snapshots,
+        compactions=compactions,
+        work_item_claim_events=work_item_claim_events,
         skills_used=sorted(skills_used, key=str.casefold),
         mcp_skills_loaded=sorted(mcp_skills_loaded, key=str.casefold),
         bash_skills_loaded=sorted(bash_skills_loaded, key=str.casefold),
@@ -3191,6 +3764,7 @@ def _time_metrics(
     for thread in threads:
         agent_time_ms += sum(turn.duration_ms for turn in thread.turns)
         tool_time_ms += sum(tool.duration_ms for tool in thread.tool_intervals)
+        tool_time_ms += sum(call.duration_ms for call in thread.mcp_calls)
         for turn in thread.turns:
             start = _parse_iso_datetime(turn.started_at)
             end = _parse_iso_datetime(turn.completed_at)
@@ -3224,6 +3798,642 @@ def _time_metrics(
         tool_time_ms,
         peak,
     )
+
+
+def _percentile(values: list[float], quantile: float) -> float | None:
+    """Return a linearly interpolated percentile for a bounded numeric list."""
+
+    if not values:
+        return None
+    ordered = sorted(values)
+    position = (len(ordered) - 1) * min(1.0, max(0.0, quantile))
+    lower = int(position)
+    upper = min(len(ordered) - 1, lower + 1)
+    fraction = position - lower
+    return ordered[lower] + (ordered[upper] - ordered[lower]) * fraction
+
+
+def _inference_call_usage(response: ResponseUsage) -> UsageTotals:
+    """Prefer direct last-call counters while retaining older-log fallback."""
+
+    return (
+        response.reported_usage
+        if not _usage_is_zero(response.reported_usage)
+        else response.usage
+    )
+
+
+def _inference_summary(responses: list[ResponseUsage]) -> InferenceSummary:
+    """Aggregate only inference intervals supported by recorded boundaries."""
+
+    output_tokens = sum(_inference_call_usage(response).output_tokens for response in responses)
+    reasoning_tokens = sum(
+        _inference_call_usage(response).reasoning_tokens for response in responses
+    )
+    measured = [response for response in responses if response.duration_ms > 0]
+    decoded = [
+        response
+        for response in measured
+        if response.decode_time_ms is not None and response.decode_time_ms > 0
+    ]
+    inference_ms = sum(response.duration_ms for response in measured)
+    decode_ms = sum(response.decode_time_ms or 0 for response in decoded)
+    measured_output = sum(_inference_call_usage(response).output_tokens for response in measured)
+    decoded_output = sum(_inference_call_usage(response).output_tokens for response in decoded)
+    call_rates = [
+        _inference_call_usage(response).output_tokens / (response.duration_ms / 1000)
+        for response in measured
+    ]
+    ttfts = [
+        float(response.ttft_ms)
+        for response in measured
+        if response.ttft_ms is not None
+    ]
+    return InferenceSummary(
+        call_count=len(responses),
+        measured_call_count=len(measured),
+        decode_measured_call_count=len(decoded),
+        output_tokens=output_tokens,
+        reasoning_tokens=reasoning_tokens,
+        inference_time_ms=inference_ms,
+        decode_time_ms=decode_ms,
+        end_to_end_tokens_per_second=(
+            measured_output / (inference_ms / 1000) if inference_ms else None
+        ),
+        decode_tokens_per_second=(
+            decoded_output / (decode_ms / 1000) if decode_ms else None
+        ),
+        median_ttft_ms=_percentile(ttfts, 0.5),
+        p50_call_tokens_per_second=_percentile(call_rates, 0.5),
+        p90_call_tokens_per_second=_percentile(call_rates, 0.9),
+        evidence=(
+            "inferred-recorded-boundaries" if measured else "unavailable"
+        ),
+    )
+
+
+def _inference_trends(
+    responses: list[ResponseUsage],
+    *,
+    bucket_minutes: int = 15,
+) -> list[InferenceTrendBucket]:
+    """Return stable fixed-width localizable inference-rate buckets."""
+
+    bucket_seconds = bucket_minutes * 60
+    grouped: dict[datetime, list[ResponseUsage]] = {}
+    for response in responses:
+        timestamp = _parse_iso_datetime(
+            response.last_output_at or response.event_timestamp
+        )
+        if timestamp is None:
+            continue
+        epoch = int(timestamp.timestamp())
+        bucket = datetime.fromtimestamp(
+            epoch - epoch % bucket_seconds,
+            tz=timezone.utc,
+        )
+        grouped.setdefault(bucket, []).append(response)
+    trends = []
+    for started_at, members in sorted(grouped.items()):
+        measured = [member for member in members if member.duration_ms > 0]
+        inference_ms = sum(member.duration_ms for member in measured)
+        output_tokens = sum(_inference_call_usage(member).output_tokens for member in measured)
+        trends.append(
+            InferenceTrendBucket(
+                started_at=started_at.isoformat(),
+                call_count=len(members),
+                output_tokens=sum(
+                    _inference_call_usage(member).output_tokens for member in members
+                ),
+                inference_time_ms=inference_ms,
+                tokens_per_second=(
+                    output_tokens / (inference_ms / 1000) if inference_ms else None
+                ),
+            )
+        )
+    return trends
+
+
+def _inference_size_bands(responses: list[ResponseUsage]) -> list[InferenceSizeBand]:
+    """Group measured calls by output size to expose size-controlled variation."""
+
+    definitions = (
+        ("<128", 0, 127),
+        ("128–255", 128, 255),
+        ("256–511", 256, 511),
+        ("512–999", 512, 999),
+        ("1,000+", 1_000, None),
+    )
+    results = []
+    for label, minimum, maximum in definitions:
+        members = [
+            response
+            for response in responses
+            if response.duration_ms > 0
+            and _inference_call_usage(response).output_tokens >= minimum
+            and (
+                maximum is None
+                or _inference_call_usage(response).output_tokens <= maximum
+            )
+        ]
+        if not members:
+            continue
+        inference_ms = sum(response.duration_ms for response in members)
+        output_tokens = sum(
+            _inference_call_usage(response).output_tokens for response in members
+        )
+        call_rates = [
+            _inference_call_usage(response).output_tokens
+            / (response.duration_ms / 1000)
+            for response in members
+        ]
+        results.append(
+            InferenceSizeBand(
+                label=label,
+                call_count=len(members),
+                output_tokens=output_tokens,
+                inference_time_ms=inference_ms,
+                weighted_tokens_per_second=(
+                    output_tokens / (inference_ms / 1000) if inference_ms else None
+                ),
+                median_call_tokens_per_second=_percentile(call_rates, 0.5),
+            )
+        )
+    return results
+
+
+def _context_summary(root_thread: CodexThreadMetrics) -> ContextSummary:
+    """Summarize the selected root's direct context snapshots."""
+
+    if not root_thread.context_snapshots:
+        return ContextSummary()
+    current = root_thread.context_snapshots[-1]
+    high_water = max(
+        root_thread.context_snapshots,
+        key=lambda snapshot: snapshot.total_tokens,
+    )
+    direct_compactions = sum(
+        1 for compaction in root_thread.compactions if compaction.recorded
+    )
+    evidence = (
+        "direct"
+        if direct_compactions == len(root_thread.compactions)
+        else "mixed-direct-and-inferred"
+    )
+    return ContextSummary(
+        current_total_tokens=current.total_tokens,
+        current_input_tokens=current.input_tokens,
+        current_cached_input_tokens=current.cached_input_tokens,
+        capacity=current.capacity,
+        remaining_tokens=current.remaining_tokens,
+        occupancy_percent=current.occupancy_percent,
+        cached_input_percent=current.cached_input_percent,
+        high_water_tokens=high_water.total_tokens,
+        high_water_percent=high_water.occupancy_percent,
+        compaction_count=len(root_thread.compactions),
+        last_observed_at=current.event_timestamp,
+        evidence=evidence,
+    )
+
+
+def _context_trends(
+    root_thread: CodexThreadMetrics,
+    *,
+    bucket_minutes: int = 15,
+) -> list[ContextTrendBucket]:
+    """Summarize root context growth and compactions without payload retention."""
+
+    bucket_seconds = bucket_minutes * 60
+    grouped: dict[datetime, list[ContextSnapshot]] = {}
+    for snapshot in root_thread.context_snapshots:
+        timestamp = _parse_iso_datetime(snapshot.event_timestamp)
+        if timestamp is None:
+            continue
+        epoch = int(timestamp.timestamp())
+        bucket = datetime.fromtimestamp(
+            epoch - epoch % bucket_seconds,
+            tz=timezone.utc,
+        )
+        grouped.setdefault(bucket, []).append(snapshot)
+    compaction_times = [
+        _parse_iso_datetime(compaction.event_timestamp)
+        for compaction in root_thread.compactions
+    ]
+    results = []
+    for started_at, snapshots in sorted(grouped.items()):
+        ended_at = started_at + timedelta(seconds=bucket_seconds)
+        totals = [snapshot.total_tokens for snapshot in snapshots]
+        results.append(
+            ContextTrendBucket(
+                started_at=started_at.isoformat(),
+                snapshot_count=len(snapshots),
+                first_total_tokens=snapshots[0].total_tokens,
+                last_total_tokens=snapshots[-1].total_tokens,
+                low_total_tokens=min(totals),
+                high_total_tokens=max(totals),
+                capacity=snapshots[-1].capacity,
+                compaction_count=sum(
+                    timestamp is not None and started_at <= timestamp < ended_at
+                    for timestamp in compaction_times
+                ),
+            )
+        )
+    return results
+
+
+def _runtime_tool_state(tool_name: str, argument_summary: str) -> str:
+    """Classify only high-signal wait and test/process tool intervals."""
+
+    normalized = tool_name.casefold().replace(":", ".")
+    leaf = normalized.rsplit(".", 1)[-1]
+    if leaf in {"wait_agent", "wait_threads"}:
+        return "agent_wait"
+    if leaf in {"write_stdin", "wait"}:
+        return "test_process"
+    if leaf in {"request_user_input", "request_plugin_install"} or "approval" in leaf:
+        return "approval_infrastructure"
+    if leaf in {"exec", "exec_command", "shell", "terminal"} and re.search(
+        r"(?i)(?:^|[^a-z])(test|pytest|vitest|jest|build|verify|lint|check)(?:[^a-z]|$)",
+        argument_summary,
+    ):
+        return "test_process"
+    return "tool_execution"
+
+
+def _thread_runtime_role(thread: CodexThreadMetrics) -> str:
+    """Return a whole-turn infrastructure role when directly identified."""
+
+    identity = " ".join(
+        (
+            thread.agent_role,
+            thread.agent_path,
+            thread.thread_name,
+            thread.task_title,
+        )
+    ).casefold()
+    if "watchdog" in identity:
+        return "watchdog"
+    if "approval" in identity or "guardian" in identity:
+        return "approval_infrastructure"
+    return ""
+
+
+def _interval_overlap_ms(
+    left_start: str,
+    left_end: str,
+    right_start: str,
+    right_end: str,
+) -> int:
+    """Return the overlap of two ISO intervals in milliseconds."""
+
+    starts = (_parse_iso_datetime(left_start), _parse_iso_datetime(right_start))
+    ends = (_parse_iso_datetime(left_end), _parse_iso_datetime(right_end))
+    if any(value is None for value in (*starts, *ends)):
+        return 0
+    start = max(value for value in starts if value is not None)
+    end = min(value for value in ends if value is not None)
+    return max(0, round((end - start).total_seconds() * 1000))
+
+
+def _runtime_intervals_for_thread(
+    thread: CodexThreadMetrics,
+    *,
+    include_user_pauses: bool,
+) -> list[RuntimeStateInterval]:
+    """Partition recorded turns into mutually exclusive runtime states."""
+
+    role_state = _thread_runtime_role(thread)
+    candidates: list[tuple[str, str, str, str, str, str]] = []
+    for response in thread.responses:
+        if response.started_at and response.last_output_at and response.duration_ms > 0:
+            candidates.append(
+                (
+                    response.started_at,
+                    response.last_output_at,
+                    "model_inference",
+                    response.timing_method,
+                    response.timing_confidence,
+                    response.model,
+                )
+            )
+    for tool in thread.tool_intervals:
+        candidates.append(
+            (
+                tool.started_at,
+                tool.completed_at,
+                _runtime_tool_state(tool.tool_name, tool.argument_summary),
+                tool.derivation_method,
+                tool.attribution_confidence,
+                tool.tool_name,
+            )
+        )
+    for call in thread.mcp_calls:
+        candidates.append(
+            (
+                call.started_at,
+                call.completed_at,
+                _runtime_tool_state(call.tool_name, call.argument_summary),
+                "mcp-recorded-duration",
+                "exact",
+                f"{call.server_name}.{call.tool_name}",
+            )
+        )
+    priority = {
+        "agent_wait": 60,
+        "test_process": 50,
+        "approval_infrastructure": 45,
+        "tool_execution": 40,
+        "model_inference": 30,
+    }
+    intervals: list[RuntimeStateInterval] = []
+    sorted_turns = sorted(
+        thread.turns,
+        key=lambda turn: _parse_iso_datetime(turn.started_at) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    for turn in sorted_turns:
+        turn_start = _parse_iso_datetime(turn.started_at)
+        turn_end = _parse_iso_datetime(turn.completed_at or thread.last_observed_at)
+        if turn_start is None or turn_end is None or turn_end <= turn_start:
+            continue
+        if role_state:
+            intervals.append(
+                RuntimeStateInterval(
+                    thread_id=thread.thread_id,
+                    turn_id=turn.turn_id,
+                    state=role_state,
+                    started_at=turn_start.isoformat(),
+                    completed_at=turn_end.isoformat(),
+                    duration_ms=round((turn_end - turn_start).total_seconds() * 1000),
+                    derivation_method="recorded-agent-role-turn",
+                    attribution_confidence="exact",
+                    detail=thread.agent_role or thread.agent_path or thread.thread_name,
+                )
+            )
+            continue
+        clipped: list[tuple[datetime, datetime, str, str, str, str]] = []
+        boundaries = {turn_start, turn_end}
+        for started_at, completed_at, state, method, confidence, detail in candidates:
+            start = _parse_iso_datetime(started_at)
+            end = _parse_iso_datetime(completed_at)
+            if start is None or end is None:
+                continue
+            start = max(turn_start, start)
+            end = min(turn_end, end)
+            if end <= start:
+                continue
+            clipped.append((start, end, state, method, confidence, detail))
+            boundaries.update((start, end))
+        ordered = sorted(boundaries)
+        for start, end in zip(ordered, ordered[1:]):
+            if end <= start:
+                continue
+            active = [
+                candidate
+                for candidate in clipped
+                if candidate[0] < end and candidate[1] > start
+            ]
+            if active:
+                selected = max(active, key=lambda item: priority.get(item[2], 0))
+                state, method, confidence, detail = selected[2:]
+            else:
+                state = "unattributed"
+                method = "turn-remainder"
+                confidence = "inferred"
+                detail = ""
+            duration_ms = round((end - start).total_seconds() * 1000)
+            if (
+                intervals
+                and intervals[-1].thread_id == thread.thread_id
+                and intervals[-1].turn_id == turn.turn_id
+                and intervals[-1].state == state
+                and intervals[-1].completed_at == start.isoformat()
+                and intervals[-1].detail == detail
+            ):
+                intervals[-1].completed_at = end.isoformat()
+                intervals[-1].duration_ms += duration_ms
+            else:
+                intervals.append(
+                    RuntimeStateInterval(
+                        thread_id=thread.thread_id,
+                        turn_id=turn.turn_id,
+                        state=state,
+                        started_at=start.isoformat(),
+                        completed_at=end.isoformat(),
+                        duration_ms=duration_ms,
+                        derivation_method=method,
+                        attribution_confidence=confidence,
+                        detail=detail,
+                    )
+                )
+    if include_user_pauses:
+        for earlier, later in zip(sorted_turns, sorted_turns[1:]):
+            start = _parse_iso_datetime(earlier.completed_at)
+            end = _parse_iso_datetime(later.started_at)
+            if start is None or end is None or end <= start:
+                continue
+            intervals.append(
+                RuntimeStateInterval(
+                    thread_id=thread.thread_id,
+                    turn_id=None,
+                    state="user_pause",
+                    started_at=start.isoformat(),
+                    completed_at=end.isoformat(),
+                    duration_ms=round((end - start).total_seconds() * 1000),
+                    derivation_method="between-recorded-turns",
+                    attribution_confidence="exact",
+                )
+            )
+    return sorted(
+        intervals,
+        key=lambda interval: (
+            _parse_iso_datetime(interval.started_at)
+            or datetime.min.replace(tzinfo=timezone.utc),
+            interval.thread_id,
+        ),
+    )
+
+
+def _union_interval_ms(intervals: list[tuple[datetime, datetime]]) -> int:
+    """Return concurrency-aware union duration for datetime intervals."""
+
+    valid = sorted((start, end) for start, end in intervals if end > start)
+    if not valid:
+        return 0
+    merged_start, merged_end = valid[0]
+    duration_ms = 0
+    for start, end in valid[1:]:
+        if start <= merged_end:
+            merged_end = max(merged_end, end)
+        else:
+            duration_ms += round((merged_end - merged_start).total_seconds() * 1000)
+            merged_start, merged_end = start, end
+    return duration_ms + round((merged_end - merged_start).total_seconds() * 1000)
+
+
+def _runtime_state_metrics(
+    threads: list[CodexThreadMetrics],
+    *,
+    root_thread_id: str,
+) -> tuple[list[RuntimeStateInterval], list[RuntimeStateSummary], int]:
+    """Aggregate runtime states and isolate waits with no productive peer."""
+
+    intervals = [
+        interval
+        for thread in threads
+        for interval in _runtime_intervals_for_thread(
+            thread,
+            include_user_pauses=thread.thread_id == root_thread_id,
+        )
+    ]
+    summaries = []
+    for state in sorted({interval.state for interval in intervals}):
+        members = [interval for interval in intervals if interval.state == state]
+        wall_intervals = []
+        for member in members:
+            start = _parse_iso_datetime(member.started_at)
+            end = _parse_iso_datetime(member.completed_at)
+            if start is not None and end is not None:
+                wall_intervals.append((start, end))
+        summaries.append(
+            RuntimeStateSummary(
+                state=state,
+                interval_count=len(members),
+                agent_time_ms=sum(member.duration_ms for member in members),
+                run_time_ms=_union_interval_ms(wall_intervals),
+                direct_interval_count=sum(
+                    member.attribution_confidence == "exact" for member in members
+                ),
+                inferred_interval_count=sum(
+                    member.attribution_confidence != "exact" for member in members
+                ),
+            )
+        )
+    waiting_slices: list[tuple[datetime, datetime]] = []
+    productive = [
+        interval
+        for interval in intervals
+        if interval.state not in {"agent_wait", "user_pause"}
+    ]
+    for waiting in (item for item in intervals if item.state == "agent_wait"):
+        waiting_start = _parse_iso_datetime(waiting.started_at)
+        waiting_end = _parse_iso_datetime(waiting.completed_at)
+        if waiting_start is None or waiting_end is None:
+            continue
+        boundaries = {waiting_start, waiting_end}
+        peers: list[tuple[datetime, datetime]] = []
+        for active in productive:
+            if active.thread_id == waiting.thread_id:
+                continue
+            start = _parse_iso_datetime(active.started_at)
+            end = _parse_iso_datetime(active.completed_at)
+            if start is None or end is None:
+                continue
+            start = max(waiting_start, start)
+            end = min(waiting_end, end)
+            if end > start:
+                peers.append((start, end))
+                boundaries.update((start, end))
+        ordered = sorted(boundaries)
+        for start, end in zip(ordered, ordered[1:]):
+            if not any(peer_start < end and peer_end > start for peer_start, peer_end in peers):
+                waiting_slices.append((start, end))
+    return intervals, summaries, _union_interval_ms(waiting_slices)
+
+
+def _work_item_segments(
+    threads: list[CodexThreadMetrics],
+    runtime_intervals: list[RuntimeStateInterval],
+    *,
+    observed_at: str,
+) -> list[WorkItemSegment]:
+    """Pair exact claim events and allocate call/runtime metrics by interval."""
+
+    events = sorted(
+        (
+            event
+            for thread in threads
+            for event in thread.work_item_claim_events
+        ),
+        key=lambda event: (
+            _parse_iso_datetime(event.event_timestamp)
+            or datetime.min.replace(tzinfo=timezone.utc),
+            event.source_ordinal,
+        ),
+    )
+    open_events: dict[tuple[str, str], WorkItemClaimEvent] = {}
+    pairs: list[tuple[WorkItemClaimEvent, WorkItemClaimEvent | None]] = []
+    for event in events:
+        key = (event.thread_id, event.claim_id)
+        if event.operation == "acquire":
+            open_events[key] = event
+        elif event.operation == "release":
+            acquired = open_events.pop(key, None)
+            if acquired is not None and acquired.work_item_id == event.work_item_id:
+                pairs.append((acquired, event))
+    pairs.extend((event, None) for event in open_events.values())
+    responses = [response for thread in threads for response in thread.responses]
+    segments = []
+    for acquired, released in sorted(
+        pairs,
+        key=lambda pair: _parse_iso_datetime(pair[0].event_timestamp)
+        or datetime.min.replace(tzinfo=timezone.utc),
+    ):
+        ended_at = released.event_timestamp if released is not None else observed_at
+        selected_responses = []
+        for response in responses:
+            point = response.last_output_at or response.event_timestamp
+            if _interval_overlap_ms(
+                acquired.event_timestamp,
+                ended_at,
+                point,
+                point,
+            ):
+                selected_responses.append(response)
+                continue
+            point_time = _parse_iso_datetime(point)
+            start_time = _parse_iso_datetime(acquired.event_timestamp)
+            end_time = _parse_iso_datetime(ended_at)
+            if (
+                point_time is not None
+                and start_time is not None
+                and end_time is not None
+                and start_time <= point_time <= end_time
+            ):
+                selected_responses.append(response)
+        usage = UsageTotals()
+        for response in selected_responses:
+            usage = usage + response.usage
+        runtime_state_ms: dict[str, int] = {}
+        for interval in runtime_intervals:
+            overlap_ms = _interval_overlap_ms(
+                acquired.event_timestamp,
+                ended_at,
+                interval.started_at,
+                interval.completed_at,
+            )
+            if overlap_ms:
+                runtime_state_ms[interval.state] = (
+                    runtime_state_ms.get(interval.state, 0) + overlap_ms
+                )
+        segments.append(
+            WorkItemSegment(
+                work_item_id=acquired.work_item_id,
+                claim_id=acquired.claim_id,
+                activity=acquired.activity,
+                disposition=(released.disposition if released else "open"),
+                blocker_reference=(released.blocker_reference if released else ""),
+                agent=acquired.agent,
+                thread_id=acquired.thread_id,
+                started_at=acquired.event_timestamp,
+                ended_at=ended_at,
+                duration_ms=_interval_ms(acquired.event_timestamp, ended_at),
+                open=released is None,
+                usage=usage,
+                inference=_inference_summary(selected_responses),
+                runtime_state_ms=dict(sorted(runtime_state_ms.items())),
+            )
+        )
+    return segments
 
 
 def _aggregate_work_units(
@@ -3662,6 +4872,17 @@ def build_codex_rollout_run(
     root_thread = next(
         thread for thread in threads if thread.thread_id == root_thread_id
     )
+    all_responses = [response for thread in threads for response in thread.responses]
+    runtime_intervals, runtime_states, all_agents_waiting_ms = _runtime_state_metrics(
+        threads,
+        root_thread_id=root_thread_id,
+    )
+    observed_timestamp = observed.astimezone(timezone.utc).isoformat()
+    work_item_segments = _work_item_segments(
+        threads,
+        runtime_intervals,
+        observed_at=observed_timestamp,
+    )
     parent_context = None
     if discovered_parent is not None:
         parent_title = (
@@ -3688,7 +4909,7 @@ def build_codex_rollout_run(
         run_id=root_thread_id,
         root_thread_id=root_thread_id,
         state=state,
-        observed_at=observed.astimezone(timezone.utc).isoformat(),
+        observed_at=observed_timestamp,
         wall_started_at=wall_start,
         wall_ended_at=wall_end,
         wall_time_ms=wall_ms,
@@ -3709,6 +4930,15 @@ def build_codex_rollout_run(
         pricing_digest=pricing_digest if seal else "",
         run_label=run_label,
         parent_context=parent_context,
+        context_summary=_context_summary(root_thread),
+        inference_summary=_inference_summary(all_responses),
+        inference_trends=_inference_trends(all_responses),
+        inference_size_bands=_inference_size_bands(all_responses),
+        context_trends=_context_trends(root_thread),
+        runtime_intervals=runtime_intervals,
+        runtime_states=runtime_states,
+        all_agents_waiting_ms=all_agents_waiting_ms,
+        work_item_segments=work_item_segments,
     )
 
 
@@ -4541,6 +5771,72 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
         f"- Peak concurrency: {run.peak_concurrency}",
         f"- Cost: {_cost_summary(run.cost)}",
     ]
+    if run.context_summary.capacity:
+        context = run.context_summary
+        lines.extend(
+            [
+                "",
+                "## Context usage",
+                "",
+                f"- Current: {context.current_total_tokens:,} / {context.capacity:,} ({context.occupancy_percent:.1f}%)",
+                f"- Current input: {context.current_input_tokens:,} ({context.current_cached_input_tokens:,} cached)",
+                f"- Remaining: {context.remaining_tokens:,}",
+                f"- High water: {context.high_water_tokens:,} ({context.high_water_percent:.1f}%)",
+                f"- Compactions: {context.compaction_count:,}",
+                f"- Evidence: `{context.evidence}`",
+            ]
+        )
+    if run.inference_summary.call_count:
+        inference = run.inference_summary
+        lines.extend(
+            [
+                "",
+                "## Inference rate",
+                "",
+                f"- Measured calls: {inference.measured_call_count:,} / {inference.call_count:,}",
+                f"- End-to-end: {_format_tokens_per_second(inference.end_to_end_tokens_per_second)}",
+                f"- Output span: {_format_tokens_per_second(inference.decode_tokens_per_second)}",
+                f"- Median TTFT: {_format_detail_ms(round(inference.median_ttft_ms)) if inference.median_ttft_ms is not None else '—'}",
+                f"- Call-rate percentiles: P50 {_format_tokens_per_second(inference.p50_call_tokens_per_second)}, P90 {_format_tokens_per_second(inference.p90_call_tokens_per_second)}",
+                f"- Evidence: `{inference.evidence}`",
+            ]
+        )
+    if run.runtime_states:
+        lines.extend(
+            [
+                "",
+                "## Runtime activity",
+                "",
+                f"- All agents waiting: {_format_ms(run.all_agents_waiting_ms)}",
+                "",
+                "| State | Agent time | Wall time | Intervals |",
+                "|---|---:|---:|---:|",
+            ]
+        )
+        for summary in run.runtime_states:
+            lines.append(
+                f"| {summary.state.replace('_', ' ')} | {_format_ms(summary.agent_time_ms)} | "
+                f"{_format_ms(summary.run_time_ms)} | {summary.interval_count:,} |"
+            )
+    if run.work_item_segments:
+        lines.extend(
+            [
+                "",
+                "## Work items",
+                "",
+                "| Work item | Activity | Started | Ended | Duration | Outcome | Processed |",
+                "|---|---|---|---|---:|---|---:|",
+            ]
+        )
+        for segment in run.work_item_segments:
+            outcome = segment.disposition
+            if segment.blocker_reference:
+                outcome += f" ({segment.blocker_reference})"
+            lines.append(
+                f"| `{segment.work_item_id}` | {segment.activity} | {segment.started_at} | "
+                f"{segment.ended_at} | {_format_ms(segment.duration_ms)} | {outcome} | "
+                f"{segment.usage.processed_tokens:,} |"
+            )
     if run.runtime.lower() == "codex":
         lines.extend(
             [
@@ -5347,6 +6643,246 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     )
 
 
+def _local_time_html(timestamp: str) -> str:
+    """Render an ISO fallback that the offline report localizes in-place."""
+
+    normalized = _normalize_timestamp(timestamp)
+    return (
+        f'<time class="local-timestamp" datetime="{_escape_html_attribute(normalized)}">'
+        f"{_escape_html(normalized or '—')}</time>"
+    )
+
+
+def _format_tokens_per_second(value: float | None) -> str:
+    """Render one inference rate without implying unavailable precision."""
+
+    return f"{value:.2f} tok/s" if value is not None else "—"
+
+
+def _render_context_metrics(run: CodexRunMetrics) -> str:
+    """Render direct current/high-water context telemetry compactly."""
+
+    summary = run.context_summary
+    if summary.capacity <= 0 or summary.occupancy_percent is None:
+        return ""
+    rows = []
+    for thread in run.threads:
+        if not thread.context_snapshots:
+            continue
+        current = thread.context_snapshots[-1]
+        high_water = max(
+            thread.context_snapshots,
+            key=lambda snapshot: snapshot.total_tokens,
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{_clamped_agent_title_html(thread)}</td>"
+            f"<td>{current.total_tokens:,} / {current.capacity:,} ({current.occupancy_percent:.1f}%)</td>"
+            f"<td>{current.remaining_tokens:,}</td>"
+            f"<td>{high_water.total_tokens:,} ({high_water.occupancy_percent:.1f}%)</td>"
+            f"<td>{len(thread.compactions):,}</td>"
+            f"<td>{_local_time_html(current.event_timestamp)}</td>"
+            "</tr>"
+        )
+    evidence_label = (
+        "Direct telemetry"
+        if summary.evidence == "direct"
+        else "Direct telemetry + inferred drops"
+    )
+    trend_rows = "".join(
+        "<tr>"
+        f"<td>{_local_time_html(bucket.started_at)}</td>"
+        f"<td>{bucket.first_total_tokens:,}</td>"
+        f"<td>{bucket.last_total_tokens:,}</td>"
+        f"<td>{bucket.low_total_tokens:,}–{bucket.high_total_tokens:,}</td>"
+        f"<td>{bucket.compaction_count:,}</td></tr>"
+        for bucket in run.context_trends
+    )
+    compaction_rows = "".join(
+        "<tr>"
+        f"<td>{_local_time_html(compaction.event_timestamp)}</td>"
+        f"<td>{compaction.before_total_tokens:,}</td>"
+        f"<td>{compaction.after_total_tokens:,}</td>"
+        f"<td>{_escape_html('direct' if compaction.recorded else 'inferred')}</td></tr>"
+        for compaction in next(
+            thread.compactions
+            for thread in run.threads
+            if thread.thread_id == run.root_thread_id
+        )
+    )
+    return (
+        '<section id="context-usage" class="metric-view">'
+        '<div class="agents-heading"><h2>Context usage</h2>'
+        f'<span class="evidence-badge">{_escape_html(evidence_label)}</span></div>'
+        '<div class="metrics compact-metrics">'
+        '<div class="metric"><div class="label">Current</div>'
+        f'<div class="value">{summary.current_total_tokens:,} / {summary.capacity:,}</div>'
+        f'<span class="metric-detail">{summary.occupancy_percent:.1f}% · input {summary.current_input_tokens:,}</span></div>'
+        '<div class="metric"><div class="label">Headroom</div>'
+        f'<div class="value">{summary.remaining_tokens:,}</div></div>'
+        '<div class="metric"><div class="label">High water</div>'
+        f'<div class="value">{summary.high_water_tokens:,}</div>'
+        f'<span class="metric-detail">{summary.high_water_percent:.1f}%</span></div>'
+        '<div class="metric"><div class="label">Compactions</div>'
+        f'<div class="value">{summary.compaction_count:,}</div></div></div>'
+        '<details class="metric-details"><summary>Per-agent context</summary>'
+        '<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Current</th>'
+        '<th>Headroom</th><th>High water</th><th>Compactions</th><th>Updated</th>'
+        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
+        '<details class="metric-details"><summary>Growth and compactions</summary>'
+        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
+        '<th>Last</th><th>Range</th><th>Compactions</th></tr></thead>'
+        f"<tbody>{trend_rows}</tbody></table></div>"
+        f'{"<div class=\"table-scroll compact-table\"><table><thead><tr><th>Compacted</th><th>Before</th><th>After</th><th>Evidence</th></tr></thead><tbody>" + compaction_rows + "</tbody></table></div>" if compaction_rows else ""}'
+        "</details></section>"
+    )
+
+
+def _render_inference_metrics(run: CodexRunMetrics) -> str:
+    """Render call timing and size-aware rate trends without claiming decoder telemetry."""
+
+    summary = run.inference_summary
+    if summary.call_count == 0:
+        return ""
+    trend_rows = "".join(
+        "<tr>"
+        f"<td>{_local_time_html(bucket.started_at)}</td>"
+        f"<td>{bucket.call_count:,}</td>"
+        f"<td>{bucket.output_tokens:,}</td>"
+        f"<td>{_format_ms(bucket.inference_time_ms)}</td>"
+        f"<td>{_escape_html(_format_tokens_per_second(bucket.tokens_per_second))}</td>"
+        "</tr>"
+        for bucket in run.inference_trends
+    )
+    median_ttft = (
+        _format_detail_ms(round(summary.median_ttft_ms))
+        if summary.median_ttft_ms is not None
+        else "—"
+    )
+    percentile_text = (
+        f"P50 {_format_tokens_per_second(summary.p50_call_tokens_per_second)} · "
+        f"P90 {_format_tokens_per_second(summary.p90_call_tokens_per_second)}"
+    )
+    size_rows = "".join(
+        "<tr>"
+        f"<td>{_escape_html(band.label)}</td>"
+        f"<td>{band.call_count:,}</td>"
+        f"<td>{band.output_tokens:,}</td>"
+        f"<td>{_escape_html(_format_tokens_per_second(band.weighted_tokens_per_second))}</td>"
+        f"<td>{_escape_html(_format_tokens_per_second(band.median_call_tokens_per_second))}</td></tr>"
+        for band in run.inference_size_bands
+    )
+    return (
+        '<section id="inference-rate" class="metric-view">'
+        '<div class="agents-heading"><h2>Inference rate</h2>'
+        '<span class="evidence-badge">Inferred boundaries</span></div>'
+        '<div class="metrics compact-metrics">'
+        '<div class="metric"><div class="label">End to end</div>'
+        f'<div class="value">{_escape_html(_format_tokens_per_second(summary.end_to_end_tokens_per_second))}</div></div>'
+        '<div class="metric"><div class="label">Output span</div>'
+        f'<div class="value">{_escape_html(_format_tokens_per_second(summary.decode_tokens_per_second))}</div></div>'
+        '<div class="metric"><div class="label">Median TTFT</div>'
+        f'<div class="value">{_escape_html(median_ttft)}</div></div>'
+        '<div class="metric"><div class="label">Measured calls</div>'
+        f'<div class="value">{summary.measured_call_count:,} / {summary.call_count:,}</div></div></div>'
+        f'<details class="metric-details"><summary>15-minute trend · {_escape_html(percentile_text)}</summary>'
+        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>Calls</th>'
+        '<th>Output</th><th>Inference</th><th>Rate</th></tr></thead>'
+        f"<tbody>{trend_rows}</tbody></table></div></details>"
+        '<details class="metric-details"><summary>Response-size bands</summary>'
+        '<div class="table-scroll"><table><thead><tr><th>Output tokens</th><th>Calls</th>'
+        '<th>Output</th><th>Weighted rate</th><th>Median call rate</th></tr></thead>'
+        f"<tbody>{size_rows}</tbody></table></div></details></section>"
+    )
+
+
+def _render_runtime_metrics(run: CodexRunMetrics) -> str:
+    """Render state durations while keeping summed agent time separate from wall time."""
+
+    if not run.runtime_states:
+        return ""
+    labels = {
+        "model_inference": "Model inference",
+        "tool_execution": "Tool execution",
+        "test_process": "Test / process",
+        "agent_wait": "Waiting for agent",
+        "user_pause": "User pause",
+        "watchdog": "Watchdog",
+        "approval_infrastructure": "Approval / infrastructure",
+        "unattributed": "Unattributed",
+    }
+    preferred = list(labels)
+    by_state = {summary.state: summary for summary in run.runtime_states}
+    rows = []
+    for state in preferred + sorted(set(by_state) - set(preferred)):
+        summary = by_state.get(state)
+        if summary is None:
+            continue
+        evidence = (
+            "direct"
+            if summary.inferred_interval_count == 0
+            else "mixed"
+            if summary.direct_interval_count
+            else "inferred"
+        )
+        rows.append(
+            "<tr>"
+            f"<td>{_escape_html(labels.get(state, state.replace('_', ' ').title()))}</td>"
+            f"<td>{_format_ms(summary.agent_time_ms)}</td>"
+            f"<td>{_format_ms(summary.run_time_ms)}</td>"
+            f"<td>{summary.interval_count:,}</td>"
+            f"<td>{_escape_html(evidence)}</td></tr>"
+        )
+    return (
+        '<section id="runtime-activity" class="metric-view">'
+        '<div class="agents-heading"><h2>Runtime activity</h2></div>'
+        '<div class="metrics compact-metrics">'
+        '<div class="metric"><div class="label">All agents waiting</div>'
+        f'<div class="value">{_format_ms(run.all_agents_waiting_ms)}</div></div>'
+        '<div class="metric"><div class="label">Inference</div>'
+        f'<div class="value">{_format_ms(by_state.get("model_inference", RuntimeStateSummary("", 0, 0, 0, 0, 0)).run_time_ms)}</div></div>'
+        '<div class="metric"><div class="label">Tests / processes</div>'
+        f'<div class="value">{_format_ms(by_state.get("test_process", RuntimeStateSummary("", 0, 0, 0, 0, 0)).run_time_ms)}</div></div></div>'
+        '<details class="metric-details"><summary>State breakdown</summary>'
+        '<div class="table-scroll"><table><thead><tr><th>State</th><th>Agent time</th>'
+        '<th>Wall time</th><th>Intervals</th><th>Evidence</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div></details></section>"
+    )
+
+
+def _render_work_item_metrics(run: CodexRunMetrics) -> str:
+    """Render exact claim-bounded work-item segments and their measured usage."""
+
+    if not run.work_item_segments:
+        return ""
+    rows = []
+    for segment in run.work_item_segments:
+        disposition = segment.disposition
+        if segment.blocker_reference:
+            disposition += f" · {segment.blocker_reference}"
+        rows.append(
+            "<tr>"
+            f"<td><code>{_escape_html(segment.work_item_id)}</code></td>"
+            f"<td>{_escape_html(segment.activity)}</td>"
+            f"<td>{_local_time_html(segment.started_at)}</td>"
+            f"<td>{_local_time_html(segment.ended_at)}</td>"
+            f"<td>{_format_ms(segment.duration_ms)}</td>"
+            f"<td>{_escape_html(disposition)}</td>"
+            f"<td>{segment.usage.processed_tokens:,}</td>"
+            f"<td>{_escape_html(_format_tokens_per_second(segment.inference.end_to_end_tokens_per_second))}</td>"
+            "</tr>"
+        )
+    return (
+        '<section id="work-item-metrics" class="metric-view">'
+        '<div class="agents-heading"><h2>Work items</h2>'
+        '<span class="evidence-badge">Exact claim events</span></div>'
+        '<div class="table-scroll"><table><thead><tr><th>Work item</th><th>Activity</th>'
+        '<th>Started</th><th>Ended</th><th>Duration</th><th>Outcome</th>'
+        '<th>Processed</th><th>Inference rate</th></tr></thead>'
+        f"<tbody>{''.join(rows)}</tbody></table></div></section>"
+    )
+
+
 def render_codex_rollout_html(
     run: CodexRunMetrics,
     formatter_config: ToolFormatterConfig | None = None,
@@ -5594,6 +7130,7 @@ def render_codex_rollout_html(
                 )
             for response_index, response in enumerate(turn_responses):
                 response_cost = _cost_for_response(thread, response)
+                call_usage = _inference_call_usage(response)
                 response_cost_label = (
                     f"${response_cost.total_cost:.2f}"
                     if response_cost.total_cost is not None
@@ -5605,22 +7142,42 @@ def render_codex_rollout_html(
                     turn_activities,
                 )
                 cache_write_summary = (
-                    f' · {response.usage.cache_create_input_tokens:,} cache-write'
+                    f' · {call_usage.cache_create_input_tokens:,} cache-write'
                     if show_cache_write
                     else ""
                 )
                 model_arguments = (
-                    f'<div class="activity-summary">{response.usage.direct_input_tokens:,} fresh-input · '
-                    f'{response.usage.cached_input_tokens:,} cache-read'
+                    f'<div class="activity-summary">{call_usage.direct_input_tokens:,} fresh-input · '
+                    f'{call_usage.cached_input_tokens:,} cache-read'
                     f'{cache_write_summary}</div>'
                     + _render_model_activity_disclosure(
                         prompt_fragments,
                         raw_label="raw arguments",
                     )
                 )
+                response_rate = (
+                    call_usage.output_tokens / (response.duration_ms / 1000)
+                    if response.duration_ms
+                    else None
+                )
+                timing_summary = (
+                    f'{_format_detail_ms(response.duration_ms)} inference · '
+                    f'{_format_detail_ms(response.ttft_ms) if response.ttft_ms is not None else "—"} TTFT · '
+                    f'{_format_tokens_per_second(response_rate)} · {response.timing_confidence}'
+                    if response.duration_ms
+                    else "Inference timing unavailable"
+                )
+                context_summary = (
+                    f' · context {response.context_total_tokens:,} / {response.context_capacity:,} '
+                    f'({response.context_occupancy_percent:.1f}%)'
+                    if response.context_capacity
+                    and response.context_occupancy_percent is not None
+                    else ""
+                )
                 model_result = (
-                    f'<div class="activity-summary">{response.usage.output_tokens:,} output · '
-                    f'{response.usage.reasoning_tokens:,} reasoning</div>'
+                    f'<div class="activity-summary">{call_usage.output_tokens:,} output · '
+                    f'{call_usage.reasoning_tokens:,} reasoning</div>'
+                    f'<div class="activity-summary inference-call-summary">{_escape_html(timing_summary + context_summary)}</div>'
                     + _render_model_activity_disclosure(
                         result_fragments,
                         raw_label="raw result",
@@ -6016,6 +7573,10 @@ def render_codex_rollout_html(
         else ""
     )
     model_usage_html = _render_model_usage_section(run)
+    context_metrics_html = _render_context_metrics(run)
+    inference_metrics_html = _render_inference_metrics(run)
+    runtime_metrics_html = _render_runtime_metrics(run)
+    work_item_metrics_html = _render_work_item_metrics(run)
     sequence_html = _render_codex_sequence_section(run)
     sequence_document_html = (
         f"<!-- agent-sequence:start -->{sequence_html}<!-- agent-sequence:end -->"
@@ -6092,6 +7653,15 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .label {{ color:#666; font-size:.82em; }}
 .value {{ font-size:1.2em; font-weight:600; margin-top:3px; }}
 .metric-detail {{ display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }}
+.metric-view {{ margin-top:28px; }}
+.metric-view .agents-heading {{ margin-top:0; gap:9px; }}
+.compact-metrics {{ grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); margin-top:10px; }}
+.compact-metrics .metric {{ padding:10px 11px; }}
+.evidence-badge {{ padding:3px 7px; color:#455a64; background:#eef4f8; border:1px solid #c5d3dc; border-radius:999px; font-size:.7em; font-weight:700; }}
+.metric-details {{ margin-top:8px; }}
+.metric-details > summary {{ width:max-content; color:#2563a6; cursor:pointer; font-size:.84em; font-weight:700; }}
+.metric-details .table-scroll {{ margin-top:8px; max-height:42vh; }}
+.local-timestamp {{ font-variant-numeric:tabular-nums; }}
 .turn-state-detail {{ font-size:.66em; line-height:1.25; }}
 .turn-state-source {{ display:block; margin-top:2px; color:#78909c; font-size:.58em; font-weight:400; line-height:1.2; overflow-wrap:anywhere; }}
 table {{ border-collapse:collapse; width:100%; margin:10px 0; background:#fff; }}
@@ -6316,7 +7886,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <h1{report_title_attribute}>{_escape_html(report_title)}</h1>
 {nav_html}
 {run_label_html}
-<p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_escape_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
+<p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_local_time_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 {view_nav_html}
 {parent_context_html}
 <div class="metrics">
@@ -6340,6 +7910,10 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="composition-legend"><span class="composition-fresh">Fresh input {run.usage_totals.direct_input_tokens:,}</span> · <span class="composition-cached">Cache read {run.usage_totals.cached_input_tokens:,}</span>{cache_write_legend} · <span class="composition-output">output {visible_output_tokens:,}</span> · <span class="composition-reasoning">reasoning {run.usage_totals.reasoning_tokens:,}</span></div>
 {pricing_link}
 {model_usage_html}
+{context_metrics_html}
+{inference_metrics_html}
+{runtime_metrics_html}
+{work_item_metrics_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
 <div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>{agent_activity_heading}</th><th>{agent_time_heading}</th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody>{agent_rows_html}</tbody></table></div>
@@ -6348,6 +7922,17 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
 <script>
+var localTimestampFormatter = new Intl.DateTimeFormat(undefined, {{
+  dateStyle: "medium",
+  timeStyle: "short"
+}});
+document.querySelectorAll("time.local-timestamp").forEach(function(element) {{
+  var timestamp = new Date(element.dateTime);
+  if (!Number.isNaN(timestamp.getTime())) {{
+    element.textContent = localTimestampFormatter.format(timestamp);
+    element.title = element.dateTime;
+  }}
+}});
 var sequenceOnly =
   document.body.classList.contains("sequence-only") ||
   new URLSearchParams(window.location.search).get("view") === "sequence";
@@ -11178,7 +12763,7 @@ def _split_codex_sequence_document(
         1,
     )
     head_end = full_html.find("</head>")
-    script_start = full_html.find("<script>\nvar sequenceOnly =")
+    script_start = full_html.find("<script>\n")
     if head_end < 0 or script_start < 0:
         return None
     head = full_html[: head_end + len("</head>")]

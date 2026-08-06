@@ -178,9 +178,10 @@ shows native scan/cache progress, filters on bounded metadata, and exports a
 compact offline index whose source paths open the corresponding local rollout
 files. It reads matching task titles from Codex's local `state_5.sqlite`
 database and falls back to the first genuine prompt when no saved title is
-available. Optional **From** and **To** controls apply an open-ended or
-inclusive UTC date-and-hour range and prefilter date-encoded rollout paths
-before the native index opens them. Every successful export opens in its own app window. The app
+available. Optional **From** and **To** controls accept local date and time,
+normalize the values to inclusive UTC boundaries for native search, and
+prefilter date-encoded rollout paths before the native index opens them. Every
+successful export opens in its own app window. The app
 remembers the last export folder across launches and offers **Open last
 export** without rescanning the logs. Selecting a root enables full report
 generation through the renderer bundled into the desktop application. Native
@@ -357,6 +358,15 @@ without copying transcript content. It includes token composition, observed
 thread bars, an agent inventory derived from recorded assignment paths and
 runtime nicknames, expandable per-turn duration and time-to-first-token rows,
 input/cache/output/reasoning counters, and tool-name/count/duration summaries.
+For current Codex logs it also shows direct context occupancy, headroom,
+high-water use, compaction changes, per-call token dimensions, inferred model
+timing and response-size-controlled rates, test/process and wait states, and
+the portion of agent waiting not overlapped by productive child work. Successful
+exact-ID claim acquire/release events create work-item segments with start, end,
+blocked or handoff disposition, token use, inference rate, and runtime-state
+time. Older logs keep their existing usage report and mark unavailable metrics
+instead of inventing values. Browser-facing timestamps in these metric views
+use the viewer's local timezone.
 For aborted turns, it also correlates an explicit `interrupt_agent` call from
 another included thread and shows compact caller, parent-relationship, caller-
 turn, and abort-reason details beneath the state badge when that evidence is

@@ -140,7 +140,9 @@ agent-report \
 
 Agent Report prefers task titles saved by the Codex app and falls back to the
 first genuine prompt when a saved title is unavailable. Generated HTML reports
-open directly from disk.
+open directly from disk. Native Codex reports include context pressure and
+compactions, inferred inference-rate trends, concurrency-aware runtime states,
+and exact claim-bounded work-item timing when those events are recorded.
 
 The matching macOS desktop DMG is attached to the
 [latest GitHub release](https://github.com/martinbechard/agent-runner/releases/latest).
