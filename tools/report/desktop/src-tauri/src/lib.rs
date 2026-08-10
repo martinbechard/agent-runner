@@ -880,7 +880,7 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
-            initialize_diagnostics(&app.handle()).map_err(std::io::Error::other)?;
+            initialize_diagnostics(app.handle()).map_err(std::io::Error::other)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
