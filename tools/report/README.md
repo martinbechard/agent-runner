@@ -179,8 +179,14 @@ compact offline index whose source paths open the corresponding local rollout
 files. It reads matching task titles from Codex's local `state_5.sqlite`
 database and falls back to the first genuine prompt when no saved title is
 available. Optional **From** and **To** controls accept local date and time,
-normalize the values to inclusive UTC boundaries for native search, and
-prefilter date-encoded rollout paths before the native index opens them. Every
+normalize the values to inclusive UTC boundaries for native search, and select
+only rollout files whose observed activity overlaps that range. Discovery uses
+the rollout filename's local timestamp as the file's creation time and filesystem
+modification time as its update time, so a long-running rollout is selected
+when it starts in the range, is updated in the range, or spans the complete
+range. Each selected file is parsed as a whole; event history and parent/child
+report context are not clipped to the range. Stable selected files continue to
+reuse metadata from the incremental SQLite index without being reopened. Every
 successful export opens in its own app window. The app
 remembers the last export folder across launches and offers **Open last
 export** without rescanning the logs. Selecting a root enables full report

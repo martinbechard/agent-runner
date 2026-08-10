@@ -18,7 +18,7 @@ tauri-build = { version = "2.6.3", features = [] }
 
 [dependencies]
 agent-report-core = { path = "../../rust/agent-report-core" }
-chrono.workspace = true
+chrono = { workspace = true, features = ["clock"] }
 html-escape.workspace = true
 serde.workspace = true
 serde_json.workspace = true

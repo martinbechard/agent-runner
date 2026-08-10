@@ -3,14 +3,40 @@
 // Responsibility: Verify desktop catalog filtering and privacy-safe HTML export behavior.
 // Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
-use std::fs;
+use std::fs::{self, FileTimes, OpenOptions};
+use std::time::{Duration as StdDuration, SystemTime};
 
 use agent_report_desktop::{
     SearchRequest, render_catalog_html, report_popup_is_allowed, report_window_url,
     search_catalog_sync,
 };
+use chrono::{DateTime, Local};
 use rusqlite::Connection;
 use tempfile::TempDir;
+
+fn set_modified_at(path: &std::path::Path, timestamp: &str) {
+    let timestamp = DateTime::parse_from_rfc3339(timestamp).expect("parse modification time");
+    let elapsed = StdDuration::from_secs(
+        timestamp
+            .timestamp()
+            .try_into()
+            .expect("positive modification timestamp"),
+    ) + StdDuration::from_nanos(timestamp.timestamp_subsec_nanos().into());
+    OpenOptions::new()
+        .write(true)
+        .open(path)
+        .expect("open rollout to set modification time")
+        .set_times(FileTimes::new().set_modified(SystemTime::UNIX_EPOCH + elapsed))
+        .expect("set rollout modification time");
+}
+
+fn rollout_filename(created_at: &str, suffix: &str) -> String {
+    let created_at = DateTime::parse_from_rfc3339(created_at).expect("parse creation time");
+    format!(
+        "rollout-{}-{suffix}.jsonl",
+        created_at.with_timezone(&Local).format("%Y-%m-%dT%H-%M-%S")
+    )
+}
 
 #[test]
 fn searches_roots_without_returning_descendant_transcript_content() {
@@ -186,75 +212,100 @@ fn overlays_codex_app_titles_on_discovered_rollouts() {
 }
 
 #[test]
-fn searches_an_inclusive_utc_date_range_with_path_prefiltering() {
+fn selects_rollouts_created_updated_or_spanning_the_requested_range() {
     let directory = TempDir::new().expect("create temporary directory");
-    for (filename, thread_id, timestamp) in [
+    for (created_at, suffix, thread_id, recorded_at, modified_at) in [
         (
-            "rollout-2026-07-19T12-00-00-old.jsonl",
-            "old",
-            "2026-07-19T12:00:00Z",
+            "2026-07-21T12:15:00Z",
+            "created-during",
+            "created-during",
+            "2026-07-21T12:15:00Z",
+            "2026-07-21T14:00:00Z",
         ),
         (
-            "rollout-2026-07-20T23-30-00-offset.jsonl",
-            "offset-boundary",
-            "2026-07-20T23:30:00-04:00",
+            "2026-07-21T10:00:00Z",
+            "updated-during",
+            "updated-during",
+            "2026-07-21T10:00:00Z",
+            "2026-07-21T12:30:00Z",
         ),
         (
-            "rollout-2026-07-21T23-59-59-exact.jsonl",
-            "exact-boundary",
-            "2026-07-21T23:59:59Z",
+            "2026-07-21T10:00:00Z",
+            "spanning",
+            "spanning",
+            "2026-07-21T10:00:00Z",
+            "2026-07-21T14:00:00Z",
         ),
         (
-            "rollout-2026-07-22T00-00-00-new.jsonl",
-            "new",
-            "2026-07-22T00:00:00Z",
+            "2026-07-21T10:00:00Z",
+            "completed-before",
+            "completed-before",
+            "2026-07-21T10:00:00Z",
+            "2026-07-21T11:59:00Z",
+        ),
+        (
+            "2026-07-21T13:00:00Z",
+            "started-after",
+            "started-after",
+            "2026-07-21T13:00:00Z",
+            "2026-07-21T14:00:00Z",
         ),
     ] {
+        let filename = rollout_filename(created_at, suffix);
+        let path = directory.path().join(filename);
         fs::write(
-            directory.path().join(filename),
+            &path,
             format!(
-                "{{\"timestamp\":\"{timestamp}\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{thread_id}\",\"cwd\":\"/work/example\"}}}}\n"
+                "{{\"timestamp\":\"{recorded_at}\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"{thread_id}\",\"cwd\":\"/work/example\"}}}}\n\
+                 {{\"timestamp\":\"2026-07-21T14:00:00Z\",\"type\":\"response_item\",\"payload\":{{\"type\":\"message\",\"role\":\"user\",\"content\":[{{\"text\":\"Full {thread_id} context.\"}}]}}}}\n"
             ),
         )
         .expect("write dated rollout");
+        set_modified_at(&path, modified_at);
     }
 
-    let search = |from_date: &str, to_date: &str| {
+    let search = || {
         search_catalog_sync(SearchRequest {
             roots: vec![directory.path().to_path_buf()],
             index_path: Some(directory.path().join("index.sqlite3")),
             state_db_path: None,
             query: String::new(),
-            from_date: from_date.to_owned(),
-            to_date: to_date.to_owned(),
+            from_date: "2026-07-21T12".to_owned(),
+            to_date: "2026-07-21T12".to_owned(),
             include_descendants: false,
             workers: Some(2),
         })
         .expect("search UTC date range")
     };
-    let response = search("2026-07-21", "2026-07-21");
+    let response = search();
 
-    assert_eq!(response.stats.candidate_files, 2);
+    assert_eq!(response.stats.candidate_files, 3);
+    assert_eq!(response.stats.scanned_files, 3);
+    assert_eq!(response.stats.cached_files, 0);
+    let mut selected_ids = response
+        .entries
+        .iter()
+        .map(|entry| entry.thread_id.as_str())
+        .collect::<Vec<_>>();
+    selected_ids.sort_unstable();
+    assert_eq!(
+        selected_ids,
+        vec!["created-during", "spanning", "updated-during"]
+    );
     assert_eq!(
         response
             .entries
             .iter()
-            .map(|entry| entry.thread_id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["exact-boundary", "offset-boundary"]
+            .find(|entry| entry.thread_id == "spanning")
+            .expect("spanning rollout entry")
+            .task_title,
+        "Full spanning context"
     );
 
-    let through_july_19 = search("", "2026-07-19");
-    assert_eq!(through_july_19.stats.candidate_files, 1);
-    assert_eq!(through_july_19.entries[0].thread_id, "old");
-
-    let from_july_22 = search("2026-07-22", "");
-    assert_eq!(from_july_22.stats.candidate_files, 2);
-    assert_eq!(from_july_22.entries[0].thread_id, "new");
-
-    let during_utc_hour = search("2026-07-21T23", "2026-07-21T23");
-    assert_eq!(during_utc_hour.entries.len(), 1);
-    assert_eq!(during_utc_hour.entries[0].thread_id, "exact-boundary");
+    let warm = search();
+    assert_eq!(warm.stats.candidate_files, 3);
+    assert_eq!(warm.stats.scanned_files, 0);
+    assert_eq!(warm.stats.cached_files, 3);
 }
 
 #[test]

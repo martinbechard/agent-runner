@@ -120,6 +120,10 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
   - **SYNOPSIS:** Pair successful `claim_acquire` and `claim_release` MCP events by exact bounded `work_item_id` and `claim_id`, retain `work` or `update` activity and `done`, `blocked`, or `handoff` disposition, and allocate timing and token metrics inside that segment. Do not retain claim task descriptions or raw claim payloads.
   - **BECAUSE:** Exact claim events provide deterministic start, end, blocked, and handoff evidence without guessing from file paths, thread titles, or prose.
 
+- **RULE: RULE-28** Select complete rollout files by observed activity
+  - **SYNOPSIS:** For a requested desktop catalog range, treat the machine-local timestamp encoded in a rollout filename as its creation time and filesystem modification time as its update time. Select the file when either endpoint is in the range or when the two endpoints span the range, then parse the complete selected file without event-level date filtering or hierarchy clipping.
+  - **BECAUSE:** A long-running rollout can be created before the requested period and remain active throughout it; clipping its events would remove the context needed to interpret the run.
+
 ## 3. Information Model
 
 This model retains exact source measurements and progressively aggregated views.
@@ -334,7 +338,7 @@ flowchart LR
   - **VALIDATES:** Protocol version, path ownership, cache schema, before/after fingerprint stability, malformed and partial JSONL, and UTF-8 replacement behavior.
 
 - **MODULE: MODULE-10** Desktop run browser
-  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC date-and-hour range and metadata with progress updates, overlays matching titles from Codex's read-only local task state, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root, opens only its matching local sequence companion in a child report window, and persists bounded local troubleshooting diagnostics.
+  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC file-activity range and metadata with progress updates, overlays matching titles from Codex's read-only local task state, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root, opens only its matching local sequence companion in a child report window, and persists bounded local troubleshooting diagnostics.
   - **USES:** `MODULE-9` as a direct Rust dependency; the webview receives normalized metadata and progress rather than raw transcript content.
   - **PRODUCES:** A responsive local run list, user-selected offline output artifacts, and current plus previous JSONL diagnostic logs without requiring a separately installed Python interpreter or report command at runtime.
 
@@ -371,7 +375,7 @@ flowchart LR
   - **PRODUCES:** One catalog in list-only mode or one catalog plus a linked `reports/` directory in batch mode.
 
 - **PROCESS: PROCESS-7** Build or refresh the native discovery index
-  - **SYNOPSIS:** Enumerate caller-bounded candidates, fingerprint them, dispatch only missing or changed files to bounded streaming workers, preserve input order, skip caching files that changed during their scan, and persist stable updates in one SQLite transaction.
+  - **SYNOPSIS:** Enumerate caller-bounded candidates, apply any requested file-activity range from filename creation and filesystem update metadata, fingerprint the selected files, dispatch only missing or changed files to bounded streaming workers, preserve input order, skip caching files that changed during their scan, and persist stable updates in one SQLite transaction.
   - **PRODUCES:** Complete metadata for the requested candidate set plus cache and scan statistics suitable for command-line tests and desktop progress.
   - **BECAUSE:** Parallel reads improve cold-start throughput while a single cache writer avoids SQLite contention and unstable live files remain correct on the next observation.
 
@@ -392,7 +396,7 @@ flowchart LR
   - **PRODUCES:** Discovery metadata and statistics without transcript bodies.
 
 - **COMMAND: CMD-4** Browse and export reports from the desktop application
-  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with optional open-ended or inclusive UTC From and To dates and hours plus ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder, open each successful local HTML artifact in a separate app window, admit the report's `window.open` request only for its existing same-folder `-sequence` companion, and open the current diagnostic log on request.
+  - **SYNOPSIS:** Search selected local stores through asynchronous Tauri commands with optional open-ended or inclusive UTC From and To dates and hours that select whole files by observed activity, plus ordered progress events, then export a native catalog or generate the existing full offline report for a selected root through the bundled renderer sidecar. Remember the last export folder, open each successful local HTML artifact in a separate app window, admit the report's `window.open` request only for its existing same-folder `-sequence` companion, and open the current diagnostic log on request.
   - **PRODUCES:** User-selected HTML artifacts, reopenable report windows, and a bounded local troubleshooting trail without loading a multi-hundred-megabyte report into the catalog webview.
 
 - **FILE: FILE-1** Component design authority
@@ -631,8 +635,8 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
   - **VALIDATES:** Valid output preserves the normalized report while every engine contract failure is explicit and no Python discovery scanner runs.
 
 - **TASK: TEST-27** Operate the desktop catalog and export boundary
-  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and metadata plus inclusive UTC date-and-hour filtering, verify Codex app title overlays and HTML export escaping, and validate remembered output folders, local report-window paths, sequence popups, and diagnostic-log persistence.
-  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed date-hour bounds are rejected, offset timestamps use their UTC instant, selected To hours are inclusive, encoded path dates reduce candidate parsing without losing boundary runs, saved task titles replace prompt fallbacks when available, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, only the matching local sequence companion can be opened from a report window, and structured diagnostics rotate at the configured size boundary.
+  - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and inclusive UTC file-activity selection, verify Codex app title overlays and HTML export escaping, and validate remembered output folders, local report-window paths, sequence popups, and diagnostic-log persistence.
+  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed date-hour bounds are rejected, files created in the range, updated in the range, or spanning the range are selected, files wholly outside the range are excluded, complete selected-file metadata remains available, unchanged selected files reuse indexed metadata, saved task titles replace prompt fallbacks when available, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, only the matching local sequence companion can be opened from a report window, and structured diagnostics rotate at the configured size boundary.
 
 - **TASK: TEST-28** Run a self-contained desktop report export
   - **SYNOPSIS:** Build the target-specific renderer sidecar and Tauri application, then generate a report from a sanitized Codex fixture with no external report command configured.
@@ -679,7 +683,7 @@ This section records the implementation surfaces implied by the design and their
   - **STATUS:** implemented in 0.6.2
 
 - **MODIFICATION: MOD-10** Filter desktop runs by date range
-  - **SYNOPSIS:** Add optional From and To controls to the desktop search, validate inclusive UTC boundaries at the native command boundary, and prefilter confidently date-encoded rollout paths before indexing.
+  - **SYNOPSIS:** Add optional From and To controls to the desktop search, validate inclusive UTC boundaries at the native command boundary, and select complete rollout files by filename creation time plus filesystem modification time before incremental indexing.
   - **STATUS:** implemented
 
 - **MODIFICATION: MOD-11** Bound report titles and open sequence companions

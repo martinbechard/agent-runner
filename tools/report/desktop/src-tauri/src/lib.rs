@@ -19,7 +19,10 @@ use agent_report_core::{
     DiscoveryProgress, DiscoveryRequest, DiscoveryResponse, DiscoveryStats, PROTOCOL_VERSION,
     collect_rollout_paths, index_rollouts, read_codex_task_titles,
 };
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Timelike, Utc};
+use chrono::{
+    DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone,
+    Timelike, Utc,
+};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
@@ -163,32 +166,27 @@ impl CatalogDateRange {
     }
 
     fn includes_candidate(&self, path: &Path) -> bool {
-        let Some(path_date) = encoded_rollout_date(path) else {
-            return true;
-        };
-        let from_date = self.from.map(|timestamp| timestamp.date_naive());
-        let earliest_path_date = from_date.and_then(|date| date.pred_opt()).or(from_date);
-        if earliest_path_date.is_some_and(|from| path_date < from) {
-            return false;
-        }
-        !self
-            .to_exclusive
-            .map(|timestamp| (timestamp - Duration::nanoseconds(1)).date_naive())
-            .is_some_and(|to| path_date > to)
-    }
-
-    fn includes_timestamp(&self, timestamp: &str) -> bool {
         if self.from.is_none() && self.to_exclusive.is_none() {
             return true;
         }
-        let Ok(timestamp) = DateTime::parse_from_rfc3339(timestamp) else {
-            return false;
+        let Some(created_at) = encoded_rollout_timestamp(path) else {
+            return true;
         };
-        let timestamp = timestamp.with_timezone(&Utc);
-        !self.from.is_some_and(|from| timestamp < from)
-            && !self
-                .to_exclusive
-                .is_some_and(|to_exclusive| timestamp >= to_exclusive)
+        let Ok(updated_at) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+            return true;
+        };
+        let updated_at = DateTime::<Utc>::from(updated_at);
+        let occurred_during = |timestamp: DateTime<Utc>| {
+            !self.from.is_some_and(|from| timestamp < from)
+                && !self
+                    .to_exclusive
+                    .is_some_and(|to_exclusive| timestamp >= to_exclusive)
+        };
+        let spans_range = self
+            .from
+            .zip(self.to_exclusive)
+            .is_some_and(|(from, to_exclusive)| created_at < from && updated_at >= to_exclusive);
+        occurred_during(created_at) || occurred_during(updated_at) || spans_range
     }
 }
 
@@ -226,13 +224,18 @@ fn parse_catalog_boundary(
     Ok(Some(if upper { parsed + increment } else { parsed }))
 }
 
-fn encoded_rollout_date(path: &Path) -> Option<NaiveDate> {
+fn encoded_rollout_timestamp(path: &Path) -> Option<DateTime<Utc>> {
     let filename = path.file_name()?.to_str()?;
     let start = filename.find("rollout-")? + "rollout-".len();
-    let date = filename.get(start..start + 10)?;
-    (filename.get(start + 10..start + 11) == Some("T"))
-        .then(|| NaiveDate::parse_from_str(date, "%Y-%m-%d").ok())
-        .flatten()
+    let timestamp = filename.get(start..start + 19)?;
+    let timestamp = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H-%M-%S").ok()?;
+    match Local.from_local_datetime(&timestamp) {
+        LocalResult::Single(timestamp) => Some(timestamp.with_timezone(&Utc)),
+        LocalResult::Ambiguous(first, second) => {
+            Some((if first <= second { first } else { second }).with_timezone(&Utc))
+        }
+        LocalResult::None => None,
+    }
 }
 
 /// Search controls accepted from the desktop webview.
@@ -397,7 +400,6 @@ where
     Ok(filter_catalog(
         response,
         &request.query,
-        &date_range,
         request.include_descendants,
     ))
 }
@@ -405,7 +407,6 @@ where
 fn filter_catalog(
     response: DiscoveryResponse,
     query: &str,
-    date_range: &CatalogDateRange,
     include_descendants: bool,
 ) -> SearchResponse {
     let normalized_query = query.trim().to_lowercase();
@@ -415,9 +416,6 @@ fn filter_catalog(
         .filter_map(|entry| {
             let identity = entry.identity?;
             if !include_descendants && !identity.parent_thread_id.is_empty() {
-                return None;
-            }
-            if !date_range.includes_timestamp(&entry.started_at) {
                 return None;
             }
             let catalog_entry = CatalogEntry {
