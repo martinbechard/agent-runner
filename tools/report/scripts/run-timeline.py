@@ -7328,7 +7328,7 @@ function initializeExecutionHeatmap(section) {
     }
     status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized within this view";
     requestAnimationFrame(function() {
-      if (selectedCell) selectedCell.scrollIntoView({ block:"nearest", inline:"center" });
+      if (selectedCell) selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" });
       updateHeatmapScrollButtons();
     });
   }

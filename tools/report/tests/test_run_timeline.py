@@ -2386,6 +2386,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "function shiftDrilldown(direction)" in html
     assert "direction * current.minutes * 60000" in html
     assert 'grid.querySelector(".heatmap-column")' in html
+    assert 'selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" })' in html
+    assert 'inline:"center"' not in html
     assert "Math.max(240, heatmapScroll.clientWidth * .8)" not in html
     assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
     assert 'data-heatmap-drilldown-path aria-label="Drilldown path"' in html
