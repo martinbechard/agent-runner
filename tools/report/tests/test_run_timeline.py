@@ -2410,12 +2410,17 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
     assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
     assert '{ id:"output_tokens", label:"Output" }' in html
-    assert '{ id:"context_tokens", label:"Context size", aggregation:"maximum" }' in html
+    assert '{ id:"average_context_tokens", source:"context_tokens", label:"Average context size", aggregation:"average", format:"context" }' in html
+    assert '{ id:"maximum_context_tokens", source:"context_tokens", label:"Maximum context size", aggregation:"maximum", format:"context" }' in html
     assert '{ id:"cost_usd", label:"Cost", format:"currency" }' in html
     assert html.index('label:"Reasoning"') < html.index('label:"Output"')
+    assert 'row.aggregation === "average"' in html
     assert 'row.aggregation === "maximum"' in html
+    assert 'values.filter(function(value) { return value > 0; })' in html
+    assert 'return percent + "%\\n" + compact(value)' in html
+    assert ".heatmap-cell.is-context { white-space:pre-line" in html
     assert "var rowMaximum = matrix[rowIndex].reduce" in html
-    assert 'row.id === "context_tokens" ? data.context_capacity : rowMaximum' in html
+    assert 'row.format === "context" ? data.context_capacity : rowMaximum' in html
     assert "Math.min(1, value / scaleMaximum)" in html
     assert 'status.textContent = bucketValues.length + " buckets"' in html
     assert "rows · per-row scales · context uses full window" not in html

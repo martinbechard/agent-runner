@@ -6944,6 +6944,7 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-column { top:0; z-index:3; min-width:72px; text-align:center; font-family:var(--font-code); }
 .heatmap-row-label { display:flex; align-items:center; min-width:170px; max-width:220px; white-space:normal; }
 .heatmap-cell { --heatmap-color:198,40,40; --heatmap-accent:#8e1b16; min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(var(--heatmap-color),var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
+.heatmap-cell.is-context { white-space:pre-line; line-height:1.25; }
 .heatmap-cell.is-inactive { --heatmap-color:37,99,166; --heatmap-accent:#0d47a1; }
 .heatmap-cell:hover { box-shadow:inset 0 0 0 2px var(--heatmap-accent); }
 .heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px var(--heatmap-accent); }
@@ -7000,7 +7001,8 @@ function initializeExecutionHeatmap(section) {
     { id:"cached_input_tokens", label:"Cached input" },
     { id:"reasoning_tokens", label:"Reasoning" },
     { id:"output_tokens", label:"Output" },
-    { id:"context_tokens", label:"Context size", aggregation:"maximum" },
+    { id:"average_context_tokens", source:"context_tokens", label:"Average context size", aggregation:"average", format:"context" },
+    { id:"maximum_context_tokens", source:"context_tokens", label:"Maximum context size", aggregation:"maximum", format:"context" },
     { id:"cost_usd", label:"Cost", format:"currency" }
   ];
   var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
@@ -7028,11 +7030,15 @@ function initializeExecutionHeatmap(section) {
     return "$" + value.toFixed(2);
   }
   function responseValue(response, metric, row) {
-    return row.id === "cost_usd" ? response.cost_usd : response.usage[row.id];
+    return row.id === "cost_usd" ? response.cost_usd : response.usage[row.source || row.id];
   }
   function formatValue(metric, value, row) {
     if (metric === "wall_time") return duration(value);
     if (row && row.format === "currency") return currency(value);
+    if (row && row.format === "context") {
+      var percent = data.context_capacity ? Math.round(value / data.context_capacity * 100) : 0;
+      return percent + "%\n" + compact(value);
+    }
     return compact(value);
   }
   function buckets() {
@@ -7089,6 +7095,10 @@ function initializeExecutionHeatmap(section) {
       var matchesRow = metric === "tokens" || response.thread_id === row.id;
       return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) { return responseValue(response, metric, row); });
+    if (row.format === "context") values = values.filter(function(value) { return value > 0; });
+    if (row.aggregation === "average") {
+      return values.length ? values.reduce(function(total, value) { return total + value; }, 0) / values.length : 0;
+    }
     if (row.aggregation === "maximum") {
       return values.reduce(function(largest, value) { return Math.max(largest, value); }, 0);
     }
@@ -7116,7 +7126,7 @@ function initializeExecutionHeatmap(section) {
       if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
       return {
         started_at:response.completed_at || response.started_at,
-        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric, row), row) + " " + row.label.toLowerCase(),
+        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + row.label.toLowerCase(),
         detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
       };
     });
@@ -7311,7 +7321,7 @@ function initializeExecutionHeatmap(section) {
     });
     rowValues.forEach(function(row, rowIndex) {
       var rowMaximum = matrix[rowIndex].reduce(function(largest, value) { return Math.max(largest, value); }, 0);
-      var scaleMaximum = row.id === "context_tokens" ? data.context_capacity : rowMaximum;
+      var scaleMaximum = row.format === "context" ? data.context_capacity : rowMaximum;
       var label = document.createElement("div");
       label.className = "heatmap-row-label";
       label.textContent = row.label;
@@ -7321,7 +7331,7 @@ function initializeExecutionHeatmap(section) {
         var intensity = scaleMaximum ? Math.min(1, value / scaleMaximum) : 0;
         var cell = document.createElement("button");
         cell.type = "button";
-        cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
+        cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "") + (row.format === "context" ? " is-context" : "");
         cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
         var isSelected = currentDrilldown
           && currentDrilldown.metric === metric
@@ -7329,7 +7339,7 @@ function initializeExecutionHeatmap(section) {
           && currentDrilldown.trail[currentDrilldown.trail.length - 1].bucket.start === bucket.start;
         cell.setAttribute("aria-pressed", isSelected ? "true" : "false");
         cell.textContent = formatValue(metric, value, row);
-        cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
+        cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent.replaceAll("\n", ", "));
         cell.addEventListener("click", function() {
           clearTimeout(pendingCellSelection);
           pendingCellSelection = setTimeout(function() { selectCell(metric, row, bucket, cell); }, 300);
