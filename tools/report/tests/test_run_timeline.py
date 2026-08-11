@@ -1964,7 +1964,13 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert f"observed {module._local_time_html(run.observed_at)}" in html
     assert 'class="local-timestamp" datetime="2026-08-05T18:00:00+00:00"' in html
     assert "Intl.DateTimeFormat" in html
-    assert "Direct telemetry" in html
+    assert "Direct telemetry" not in html
+    assert "Inferred boundaries" not in html
+    assert '<div class="label">Remaining tokens</div>' in html
+    assert '<div class="label">Max</div>' in html
+    assert "<th>Remaining tokens</th><th>Max</th>" in html
+    assert "<th>Last</th><th>Max</th><th>Context window</th>" in html
+    assert "<td>60</td><td>60</td><td>60.0%</td>" in html
     assert "Growth and compactions" in html
     assert "Response-size bands" in html
     assert "P50" in html

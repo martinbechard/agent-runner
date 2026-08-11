@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.10.0/agent_report-0.10.0-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.10.1/agent_report-0.10.1-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -489,8 +489,8 @@ without copying transcript content. It includes token composition, observed
 thread bars, an agent inventory derived from recorded assignment paths and
 runtime nicknames, expandable per-turn duration and time-to-first-token rows,
 input/cache/output/reasoning counters, and tool-name/count/duration summaries.
-For current Codex logs it also shows direct context occupancy, headroom,
-high-water use, compaction changes, per-call token dimensions, inferred model
+For current Codex logs it also shows direct context occupancy, remaining tokens,
+maximum use, compaction changes, per-call token dimensions, inferred model
 timing and response-size-controlled rates, test/process and wait states, and
 the portion of agent waiting not overlapped by productive child work. Successful
 exact-ID claim acquire/release events create work-item segments with start, end,

@@ -414,7 +414,7 @@ class ContextCompaction:
 
 @dataclass
 class ContextSummary:
-    """Current and high-water context usage for the selected root thread."""
+    """Current and maximum context usage for the selected root thread."""
 
     current_total_tokens: int = 0
     current_input_tokens: int = 0
@@ -4023,6 +4023,7 @@ def _context_trends(
     for started_at, snapshots in sorted(grouped.items()):
         ended_at = started_at + timedelta(seconds=bucket_seconds)
         totals = [snapshot.total_tokens for snapshot in snapshots]
+        maximum = max(snapshots, key=lambda snapshot: snapshot.total_tokens)
         results.append(
             ContextTrendBucket(
                 started_at=started_at.isoformat(),
@@ -4031,7 +4032,7 @@ def _context_trends(
                 last_total_tokens=snapshots[-1].total_tokens,
                 low_total_tokens=min(totals),
                 high_total_tokens=max(totals),
-                capacity=snapshots[-1].capacity,
+                capacity=maximum.capacity,
                 compaction_count=sum(
                     timestamp is not None and started_at <= timestamp < ended_at
                     for timestamp in compaction_times
@@ -5812,7 +5813,7 @@ def render_codex_rollout_markdown(run: CodexRunMetrics) -> str:
                 f"- Current: {context.current_total_tokens:,} / {context.capacity:,} ({context.occupancy_percent:.1f}%)",
                 f"- Current input: {context.current_input_tokens:,} ({context.current_cached_input_tokens:,} cached)",
                 f"- Remaining: {context.remaining_tokens:,}",
-                f"- High water: {context.high_water_tokens:,} ({context.high_water_percent:.1f}%)",
+                f"- Max: {context.high_water_tokens:,} ({context.high_water_percent:.1f}%)",
                 f"- Compactions: {context.compaction_count:,}",
                 f"- Evidence: `{context.evidence}`",
             ]
@@ -6691,7 +6692,7 @@ def _format_tokens_per_second(value: float | None) -> str:
 
 
 def _render_context_metrics(run: CodexRunMetrics) -> str:
-    """Render direct current/high-water context telemetry compactly."""
+    """Render current and maximum context measurements compactly."""
 
     summary = run.context_summary
     if summary.capacity <= 0 or summary.occupancy_percent is None:
@@ -6715,17 +6716,13 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
             f"<td>{_local_time_html(current.event_timestamp)}</td>"
             "</tr>"
         )
-    evidence_label = (
-        "Direct telemetry"
-        if summary.evidence == "direct"
-        else "Direct telemetry + inferred drops"
-    )
     trend_rows = "".join(
         "<tr>"
         f"<td>{_local_time_html(bucket.started_at)}</td>"
         f"<td>{bucket.first_total_tokens:,}</td>"
         f"<td>{bucket.last_total_tokens:,}</td>"
-        f"<td>{bucket.low_total_tokens:,}–{bucket.high_total_tokens:,}</td>"
+        f"<td>{bucket.high_total_tokens:,}</td>"
+        f"<td>{f'{bucket.high_total_tokens / bucket.capacity * 100:.1f}%' if bucket.capacity > 0 else '—'}</td>"
         f"<td>{bucket.compaction_count:,}</td></tr>"
         for bucket in run.context_trends
     )
@@ -6750,26 +6747,25 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
     )
     return (
         '<section id="context-usage" class="metric-view">'
-        '<div class="agents-heading"><h2>Context usage</h2>'
-        f'<span class="evidence-badge">{_escape_html(evidence_label)}</span></div>'
+        '<div class="agents-heading"><h2>Context usage</h2></div>'
         '<div class="metrics compact-metrics">'
         '<div class="metric"><div class="label">Current</div>'
         f'<div class="value">{summary.current_total_tokens:,} / {summary.capacity:,}</div>'
         f'<span class="metric-detail">{summary.occupancy_percent:.1f}% · input {summary.current_input_tokens:,}</span></div>'
-        '<div class="metric"><div class="label">Headroom</div>'
+        '<div class="metric"><div class="label">Remaining tokens</div>'
         f'<div class="value">{summary.remaining_tokens:,}</div></div>'
-        '<div class="metric"><div class="label">High water</div>'
+        '<div class="metric"><div class="label">Max</div>'
         f'<div class="value">{summary.high_water_tokens:,}</div>'
         f'<span class="metric-detail">{summary.high_water_percent:.1f}%</span></div>'
         '<div class="metric"><div class="label">Compactions</div>'
         f'<div class="value">{summary.compaction_count:,}</div></div></div>'
         '<details class="metric-details"><summary>Per-agent context</summary>'
         '<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Current</th>'
-        '<th>Headroom</th><th>High water</th><th>Compactions</th><th>Updated</th>'
+        '<th>Remaining tokens</th><th>Max</th><th>Compactions</th><th>Updated</th>'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
         '<details class="metric-details"><summary>Growth and compactions</summary>'
         '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
-        '<th>Last</th><th>Range</th><th>Compactions</th></tr></thead>'
+        '<th>Last</th><th>Max</th><th>Context window</th><th>Compactions</th></tr></thead>'
         f"<tbody>{trend_rows}</tbody></table></div>"
         f"{compaction_table}"
         "</details></section>"
@@ -6812,8 +6808,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
     )
     return (
         '<section id="inference-rate" class="metric-view">'
-        '<div class="agents-heading"><h2>Inference rate</h2>'
-        '<span class="evidence-badge">Inferred boundaries</span></div>'
+        '<div class="agents-heading"><h2>Inference rate</h2></div>'
         '<div class="metrics compact-metrics">'
         '<div class="metric"><div class="label">End to end</div>'
         f'<div class="value">{_escape_html(_format_tokens_per_second(summary.end_to_end_tokens_per_second))}</div></div>'
