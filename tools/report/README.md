@@ -112,23 +112,26 @@ git push origin agent-report-vVERSION
 ## Execution heatmap
 
 The offline HTML report includes an execution heatmap with 1, 5, 15, 30, and
-60-minute buckets. The measure selector provides these views:
+60-minute periods. The measure selector provides these views:
 
 - **Wall time** shows one row for each runtime activity. User pauses use a blue
   inactivity scale; other activities use a red heat scale.
 - **Tokens** shows uncached input, cached input, reasoning, output, matched tool
   calls, average and maximum context size, and cost. Token and cost rows sum
-  events in each bucket. Tool calls count completed matched calls. Context rows
+  events in each period. Tool calls count completed matched calls. Context rows
   use recorded observations and display context-window percentage above the
   compact token count.
 - **Models** shows one row for each model and reasoning-effort combination.
-  Cells sum processed tokens and use compact `K`, `M`, and `B` suffixes.
+  Cells sum processed tokens and use compact `K`, `M`, and `B` suffixes. A cost
+  row sums cost across all models.
 
 Each non-context row normalizes color intensity against its own largest visible
-bucket. Context rows normalize against the recorded full context-window size.
+period. Context rows normalize against the recorded full context-window size.
 Single-click a cell to select its event range without changing scale.
-Double-click to drill down one bucket level. Right-click to step back. The
-breadcrumb returns to an earlier level, and the side arrows move by one bucket.
+Double-click to drill down one period level. Right-click to step back. The
+breadcrumb returns to an earlier level, and the side arrows move by one period.
+Cost rows use a green scale; other active measures use a red scale, and user
+pauses use a blue scale.
 
 ## MCP server
 

@@ -416,6 +416,8 @@ class ContextCompaction:
 class ContextSummary:
     """Current and maximum context usage for the selected root thread."""
 
+    average_total_tokens: int = 0
+    average_percent: float | None = None
     current_total_tokens: int = 0
     current_input_tokens: int = 0
     current_cached_input_tokens: int = 0
@@ -3968,6 +3970,15 @@ def _context_summary(root_thread: CodexThreadMetrics) -> ContextSummary:
     if not root_thread.context_snapshots:
         return ContextSummary()
     current = root_thread.context_snapshots[-1]
+    average_total_tokens = round(
+        sum(snapshot.total_tokens for snapshot in root_thread.context_snapshots)
+        / len(root_thread.context_snapshots)
+    )
+    observed_percentages = [
+        snapshot.occupancy_percent
+        for snapshot in root_thread.context_snapshots
+        if snapshot.occupancy_percent is not None
+    ]
     high_water = max(
         root_thread.context_snapshots,
         key=lambda snapshot: snapshot.total_tokens,
@@ -3981,6 +3992,12 @@ def _context_summary(root_thread: CodexThreadMetrics) -> ContextSummary:
         else "mixed-direct-and-inferred"
     )
     return ContextSummary(
+        average_total_tokens=average_total_tokens,
+        average_percent=(
+            sum(observed_percentages) / len(observed_percentages)
+            if observed_percentages
+            else None
+        ),
         current_total_tokens=current.total_tokens,
         current_input_tokens=current.input_tokens,
         current_cached_input_tokens=current.cached_input_tokens,
@@ -6749,11 +6766,9 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         '<section id="context-usage" class="metric-view">'
         '<div class="agents-heading"><h2>Context usage</h2></div>'
         '<div class="metrics compact-metrics">'
-        '<div class="metric"><div class="label">Current</div>'
-        f'<div class="value">{summary.current_total_tokens:,} / {summary.capacity:,}</div>'
-        f'<span class="metric-detail">{summary.occupancy_percent:.1f}% · input {summary.current_input_tokens:,}</span></div>'
-        '<div class="metric"><div class="label">Remaining tokens</div>'
-        f'<div class="value">{summary.remaining_tokens:,}</div></div>'
+        '<div class="metric"><div class="label">Average</div>'
+        f'<div class="value">{summary.average_total_tokens:,}</div>'
+        f'<span class="metric-detail">{summary.average_percent:.1f}%</span></div>'
         '<div class="metric"><div class="label">Max</div>'
         f'<div class="value">{summary.high_water_tokens:,}</div>'
         f'<span class="metric-detail">{summary.high_water_percent:.1f}%</span></div>'
@@ -6941,6 +6956,7 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-cell { --heatmap-color:198,40,40; --heatmap-accent:#8e1b16; min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(var(--heatmap-color),var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
 .heatmap-cell.is-context { white-space:pre-line; line-height:1.25; }
 .heatmap-cell.is-inactive { --heatmap-color:37,99,166; --heatmap-accent:#0d47a1; }
+.heatmap-cell.is-cost { --heatmap-color:31,122,69; --heatmap-accent:#176b3a; }
 .heatmap-cell:hover { box-shadow:inset 0 0 0 2px var(--heatmap-accent); }
 .heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px var(--heatmap-accent); }
 .heatmap-empty { padding:16px; color:#607d8b; }
@@ -7001,6 +7017,7 @@ function initializeExecutionHeatmap(section) {
     { id:"maximum_context_tokens", source:"context_tokens", label:"Context size (max)", aggregation:"maximum", format:"context" },
     { id:"cost_usd", label:"Cost", format:"currency" }
   ];
+  var modelRows = data.models.concat([{ id:"cost_usd", label:"Cost", format:"currency" }]);
   var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
   var fullTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"medium" });
 
@@ -7064,7 +7081,7 @@ function initializeExecutionHeatmap(section) {
       return data.states.map(function(state) { return { id:state.id, label:state.label }; });
     }
     if (metric === "tokens") return tokenRows;
-    if (metric === "models") return data.models;
+    if (metric === "models") return modelRows;
     return data.agents.map(function(agent) { return { id:agent.id, label:agent.label }; });
   }
   function cellValue(metric, row, bucket) {
@@ -7096,10 +7113,10 @@ function initializeExecutionHeatmap(section) {
     }
     var values = data.responses.filter(function(response) {
       var occurredAt = responseTime(response);
-      var matchesRow = metric === "tokens" || (metric === "models" && response.model_id === row.id) || response.thread_id === row.id;
+      var matchesRow = metric === "tokens" || (metric === "models" && (row.id === "cost_usd" || response.model_id === row.id)) || response.thread_id === row.id;
       return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) {
-      return metric === "models" ? response.usage.processed_tokens : responseValue(response, metric, row);
+      return metric === "models" ? (row.id === "cost_usd" ? response.cost_usd : response.usage.processed_tokens) : responseValue(response, metric, row);
     });
     if (row.format === "context") values = values.filter(function(value) { return value > 0; });
     if (row.aggregation === "average") {
@@ -7136,7 +7153,7 @@ function initializeExecutionHeatmap(section) {
     }
     return data.responses.filter(function(response) {
       var occurredAt = responseTime(response);
-      var matchesRow = metric === "tokens" || (metric === "models" && response.model_id === row.id) || response.thread_id === row.id;
+      var matchesRow = metric === "tokens" || (metric === "models" && (row.id === "cost_usd" || response.model_id === row.id)) || response.thread_id === row.id;
       return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) {
       var modelLabel = response.model || "Model response";
@@ -7144,7 +7161,7 @@ function initializeExecutionHeatmap(section) {
       if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
       return {
         started_at:response.completed_at || response.started_at,
-        label:modelLabel + " · " + formatValue(metric, metric === "models" ? response.usage.processed_tokens : responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + (metric === "models" ? "processed tokens" : row.label.toLowerCase()),
+        label:modelLabel + " · " + formatValue(metric, metric === "models" ? (row.id === "cost_usd" ? response.cost_usd : response.usage.processed_tokens) : responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + (metric === "models" && row.id !== "cost_usd" ? "processed tokens" : row.label.toLowerCase()),
         detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
       };
     });
@@ -7328,7 +7345,7 @@ function initializeExecutionHeatmap(section) {
     grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
     var corner = document.createElement("div");
     corner.className = "heatmap-corner";
-    corner.textContent = metric === "wall_time" ? "Activity" : "Measure";
+    corner.textContent = "Periods";
     grid.appendChild(corner);
     bucketValues.forEach(function(bucket) {
       var heading = document.createElement("div");
@@ -7349,7 +7366,7 @@ function initializeExecutionHeatmap(section) {
         var intensity = scaleMaximum ? Math.min(1, value / scaleMaximum) : 0;
         var cell = document.createElement("button");
         cell.type = "button";
-        cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "") + (row.format === "context" ? " is-context" : "");
+        cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "") + (row.format === "context" ? " is-context" : "") + (row.id === "cost_usd" ? " is-cost" : "");
         cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
         var isSelected = currentDrilldown
           && currentDrilldown.metric === metric
@@ -7385,7 +7402,7 @@ function initializeExecutionHeatmap(section) {
       eventList.replaceChildren();
       eventList.hidden = true;
     }
-    status.textContent = bucketValues.length + " buckets";
+    status.textContent = bucketValues.length + " periods";
     requestAnimationFrame(function() {
       if (selectedCell && selectedCellViewportOffset !== null) {
         var currentOffset = selectedCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
@@ -8145,7 +8162,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<option value="tokens">Tokens</option>'
         '<option value="models">Models</option>'
         '</select></div>'
-        '<fieldset class="heatmap-granularity"><legend>Bucket size</legend>'
+        '<fieldset class="heatmap-granularity"><legend>Period</legend>'
         '<button type="button" data-heatmap-minutes="1">1 min</button>'
         '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>'
         '<button type="button" data-heatmap-minutes="15">15 min</button>'
@@ -8160,14 +8177,14 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<p class="heatmap-empty" data-heatmap-empty hidden>No heatmap evidence is available.</p>'
         '</div><button type="button" class="heatmap-scroll-button" data-heatmap-scroll="right" aria-label="Scroll heatmap right">→</button>'
         '</div><div class="heatmap-drilldown-frame">'
-        '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="-1" aria-label="Previous drilldown bucket" disabled>←</button>'
+        '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="-1" aria-label="Previous drilldown period" disabled>←</button>'
         '<div class="heatmap-drilldown">'
         '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
         'Choose a cell to inspect its events.</p>'
         '<nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav>'
         '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
-        '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown bucket" disabled>→</button></div>'
+        '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown period" disabled>→</button></div>'
         f'<script type="application/json" id="execution-heatmap-data">{payload}</script>'
         '</section>'
     )

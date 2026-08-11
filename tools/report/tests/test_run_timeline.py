@@ -1783,6 +1783,8 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
     assert thread.compactions[0].after_total_tokens == 30
     assert thread.compactions[0].recorded is True
     assert run.context_summary.current_total_tokens == 30
+    assert run.context_summary.average_total_tokens == 37
+    assert run.context_summary.average_percent == pytest.approx(110 / 3)
     assert run.context_summary.current_input_tokens == 25
     assert run.context_summary.current_cached_input_tokens == 15
     assert run.context_summary.high_water_tokens == 50
@@ -1966,8 +1968,10 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Intl.DateTimeFormat" in html
     assert "Direct telemetry" not in html
     assert "Inferred boundaries" not in html
-    assert '<div class="label">Remaining tokens</div>' in html
+    assert '<div class="label">Average</div>' in html
     assert '<div class="label">Max</div>' in html
+    assert '<div class="label">Current</div>' not in html
+    assert '<div class="label">Remaining tokens</div>' not in html
     assert "<th>Remaining tokens</th><th>Max</th>" in html
     assert "<th>Last</th><th>Max</th><th>Context window</th>" in html
     assert "<td>60</td><td>60</td><td>60.0%</td>" in html
@@ -2410,9 +2414,10 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'aria-live="polite"' in html
     assert "--heatmap-color:198,40,40" in html
     assert ".heatmap-cell.is-inactive { --heatmap-color:37,99,166" in html
+    assert ".heatmap-cell.is-cost { --heatmap-color:31,122,69" in html
     assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
     assert 'metric === "wall_time" && row.id === "user_pause"' in html
-    assert 'metric === "wall_time" ? "Activity" : "Measure"' in html
+    assert 'corner.textContent = "Periods"' in html
     assert '{ id:"uncached_input_tokens", label:"Uncached input" }' in html
     assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
     assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
@@ -2423,7 +2428,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '{ id:"cost_usd", label:"Cost", format:"currency" }' in html
     assert html.index('label:"Reasoning"') < html.index('label:"Output"')
     assert 'if (value >= 1000000000)' in html
-    assert 'if (metric === "models") return data.models;' in html
+    assert 'var modelRows = data.models.concat([{ id:"cost_usd", label:"Cost", format:"currency" }]);' in html
+    assert 'if (metric === "models") return modelRows;' in html
+    assert 'row.id === "cost_usd" ? response.cost_usd : response.usage.processed_tokens' in html
     assert 'response.usage.processed_tokens' in html
     assert 'row.aggregation === "average"' in html
     assert 'row.aggregation === "maximum"' in html
@@ -2433,7 +2440,10 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "var rowMaximum = matrix[rowIndex].reduce" in html
     assert 'row.format === "context" ? data.context_capacity : rowMaximum' in html
     assert "Math.min(1, value / scaleMaximum)" in html
-    assert 'status.textContent = bucketValues.length + " buckets"' in html
+    assert 'status.textContent = bucketValues.length + " periods"' in html
+    assert '<fieldset class="heatmap-granularity"><legend>Period</legend>' in html
+    assert 'aria-label="Previous drilldown period"' in html
+    assert 'aria-label="Next drilldown period"' in html
     assert "rows · per-row scales · context uses full window" not in html
     assert "normalized within this view" not in html
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
