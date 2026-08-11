@@ -2362,6 +2362,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     html = module.render_codex_rollout_html(run)
 
     assert '<section id="execution-heatmap" class="metric-view">' in html
+    assert "Recorded + inferred boundaries" not in html
     assert '<a href="#execution-heatmap">Heatmap</a>' in html
     assert '<label for="heatmap-metric">Measure</label>' in html
     assert '<option value="wall_time">Wall time</option>' in html

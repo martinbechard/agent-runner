@@ -7608,8 +7608,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
     ).replace("</", "<\\/")
     return (
         '<section id="execution-heatmap" class="metric-view">'
-        '<div class="agents-heading"><h2>Execution heatmap</h2>'
-        '<span class="evidence-badge">Recorded + inferred boundaries</span></div>'
+        '<div class="agents-heading"><h2>Execution heatmap</h2></div>'
         '<p class="execution-note">Compare time or response-attributed tokens across the run. '
         'Select a cell to zoom the top heatmap and inspect events. Right-click a cell to step back.</p>'
         '<div class="heatmap-controls">'
