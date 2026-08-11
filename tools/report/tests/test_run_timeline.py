@@ -2376,6 +2376,13 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'data-heatmap-scroll="left" aria-label="Scroll heatmap left"' in html
     assert 'data-heatmap-scroll="right" aria-label="Scroll heatmap right"' in html
     assert "heatmapScroll.scrollBy" in html
+    assert "scrollbar-width:none" in html
+    assert ".heatmap-scroll::-webkit-scrollbar { display:none; }" in html
+    assert 'data-heatmap-drilldown-step="-1"' in html
+    assert 'data-heatmap-drilldown-step="1"' in html
+    assert "function shiftDrilldown(direction)" in html
+    assert 'grid.querySelector(".heatmap-column")' in html
+    assert "Math.max(240, heatmapScroll.clientWidth * .8)" not in html
     assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
     assert 'data-heatmap-drilldown-path aria-label="Drilldown path"' in html
     assert 'data-heatmap-drilldown-buckets role="group"' in html

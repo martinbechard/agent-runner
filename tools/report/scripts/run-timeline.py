@@ -6931,7 +6931,8 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-granularity button[aria-pressed="true"] { color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }
 .heatmap-control select:focus-visible, .heatmap-granularity button:focus-visible, .heatmap-cell:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
 .heatmap-scroll-frame { display:grid; grid-template-columns:36px minmax(0,1fr) 36px; align-items:center; gap:6px; margin-top:8px; }
-.heatmap-scroll { min-width:0; overflow:auto; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.heatmap-scroll { min-width:0; overflow:auto; scrollbar-width:none; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.heatmap-scroll::-webkit-scrollbar { display:none; }
 .heatmap-scroll-button { width:36px; height:48px; padding:0; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:6px; cursor:pointer; font:700 1.3em var(--font-ui); }
 .heatmap-scroll-button:hover:not(:disabled) { color:#0d47a1; border-color:#2563a6; }
 .heatmap-scroll-button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
@@ -6948,7 +6949,8 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px var(--heatmap-accent); }
 .heatmap-empty { padding:16px; color:#607d8b; }
 .heatmap-status { margin-left:auto; color:#546e7a; font-family:var(--font-code); font-size:.78em; }
-.heatmap-drilldown { margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
+.heatmap-drilldown-frame { display:grid; grid-template-columns:36px minmax(0,1fr) 36px; align-items:center; gap:6px; margin-top:10px; }
+.heatmap-drilldown { min-width:0; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
 .heatmap-drilldown h3 { margin:0 0 4px; color:#263238; }
 .heatmap-drilldown-summary { margin:0; color:#455a64; font-size:.86em; }
 .heatmap-drilldown-path { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:9px; color:#607d8b; font-size:.78em; }
@@ -6961,7 +6963,7 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
 .heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
 .heatmap-event-list code { color:#263238; }
-@media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
+@media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame, .heatmap-drilldown-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
 """
 
 
@@ -6979,6 +6981,7 @@ function initializeExecutionHeatmap(section) {
   var drilldownSummary = section.querySelector("[data-heatmap-drilldown-summary]");
   var drilldownPath = section.querySelector("[data-heatmap-drilldown-path]");
   var drilldownBuckets = section.querySelector("[data-heatmap-drilldown-buckets]");
+  var drilldownStepButtons = Array.from(section.querySelectorAll("[data-heatmap-drilldown-step]"));
   var eventList = section.querySelector("[data-heatmap-event-list]");
   if (!dataElement || !grid || !heatmapScroll || !metricSelect) return;
 
@@ -6991,6 +6994,7 @@ function initializeExecutionHeatmap(section) {
   }
   var selectedMinutes = 5;
   var selectedCell = null;
+  var currentDrilldown = null;
   var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
   var agentLabels = new Map(data.agents.map(function(agent) { return [agent.id, agent.label]; }));
   var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
@@ -7113,6 +7117,51 @@ function initializeExecutionHeatmap(section) {
     }
     return values;
   }
+  function alignedBucket(value, minutes) {
+    var width = minutes * 60000;
+    var start = Math.floor(value / width) * width;
+    return { start:start, end:start + width };
+  }
+  function drilldownTrailFor(metric, row, minutes, bucket) {
+    var trail = [];
+    function add(levelMinutes) {
+      var levelBucket = alignedBucket(bucket.start, levelMinutes);
+      trail.push({ bucket:levelBucket, minutes:levelMinutes, value:cellValue(metric, row, levelBucket) });
+    }
+    add(selectedMinutes);
+    if (selectedMinutes === 15 && minutes <= 5) add(5);
+    if (minutes === 1 && selectedMinutes > 1) add(1);
+    return trail;
+  }
+  function updateDrilldownStepButtons() {
+    drilldownStepButtons.forEach(function(button) {
+      if (!currentDrilldown) {
+        button.disabled = true;
+        return;
+      }
+      var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+      var direction = Number(button.dataset.heatmapDrilldownStep);
+      var shiftedStart = current.bucket.start + direction * current.minutes * 60000;
+      var shiftedEnd = shiftedStart + current.minutes * 60000;
+      button.disabled = shiftedEnd <= timestamp(data.started_at) || shiftedStart >= timestamp(data.ended_at);
+    });
+  }
+  function shiftDrilldown(direction) {
+    if (!currentDrilldown) return;
+    var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+    var shifted = {
+      start:current.bucket.start + direction * current.minutes * 60000,
+      end:current.bucket.end + direction * current.minutes * 60000
+    };
+    if (shifted.end <= timestamp(data.started_at) || shifted.start >= timestamp(data.ended_at)) return;
+    if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
+    selectedCell = null;
+    renderDrilldownLevel(
+      currentDrilldown.metric,
+      currentDrilldown.row,
+      drilldownTrailFor(currentDrilldown.metric, currentDrilldown.row, current.minutes, shifted)
+    );
+  }
   function renderDrilldownPath(metric, row, trail) {
     drilldownPath.replaceChildren();
     trail.forEach(function(item, index) {
@@ -7159,6 +7208,8 @@ function initializeExecutionHeatmap(section) {
     }
   }
   function renderDrilldownLevel(metric, row, trail) {
+    currentDrilldown = { metric:metric, row:row, trail:trail };
+    updateDrilldownStepButtons();
     var current = trail[trail.length - 1];
     var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
     var childMinutes = current.minutes === 15 ? 5 : current.minutes === 5 ? 1 : 0;
@@ -7251,6 +7302,8 @@ function initializeExecutionHeatmap(section) {
     emptyState.hidden = rowValues.length > 0 && bucketValues.length > 0;
     grid.hidden = !emptyState.hidden;
     selectedCell = null;
+    currentDrilldown = null;
+    updateDrilldownStepButtons();
     drilldownTitle.textContent = "Select a heatmap cell";
     drilldownSummary.textContent = "Choose a cell to inspect smaller buckets and individual events.";
     drilldownPath.replaceChildren();
@@ -7272,7 +7325,14 @@ function initializeExecutionHeatmap(section) {
   scrollButtons.forEach(function(button) {
     button.addEventListener("click", function() {
       var direction = button.dataset.heatmapScroll === "left" ? -1 : 1;
-      heatmapScroll.scrollBy({ left:direction * Math.max(240, heatmapScroll.clientWidth * .8), behavior:"smooth" });
+      var column = grid.querySelector(".heatmap-column");
+      var bucketWidth = column ? column.getBoundingClientRect().width : 72;
+      heatmapScroll.scrollBy({ left:direction * bucketWidth, behavior:"smooth" });
+    });
+  });
+  drilldownStepButtons.forEach(function(button) {
+    button.addEventListener("click", function() {
+      shiftDrilldown(Number(button.dataset.heatmapDrilldownStep));
     });
   });
   heatmapScroll.addEventListener("scroll", updateHeatmapScrollButtons, { passive:true });
@@ -7528,13 +7588,16 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="heatmap-grid" data-heatmap-grid></div>'
         '<p class="heatmap-empty" data-heatmap-empty hidden>No heatmap evidence is available.</p>'
         '</div><button type="button" class="heatmap-scroll-button" data-heatmap-scroll="right" aria-label="Scroll heatmap right">→</button>'
-        '</div><div class="heatmap-drilldown">'
+        '</div><div class="heatmap-drilldown-frame">'
+        '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="-1" aria-label="Previous drilldown bucket" disabled>←</button>'
+        '<div class="heatmap-drilldown">'
         '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
         'Choose a cell to inspect smaller buckets and individual events.</p>'
         '<nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav>'
         '<div class="heatmap-drilldown-buckets" data-heatmap-drilldown-buckets role="group" aria-label="Drilldown buckets"></div>'
         '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
+        '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown bucket" disabled>→</button></div>'
         f'<script type="application/json" id="execution-heatmap-data">{payload}</script>'
         '</section>'
     )
