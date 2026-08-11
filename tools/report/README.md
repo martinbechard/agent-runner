@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.10.1/agent_report-0.10.1-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.10.2/agent_report-0.10.2-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -312,14 +312,22 @@ only rollout files whose observed activity overlaps that range. Discovery uses
 the rollout filename's local timestamp as the file's creation time and filesystem
 modification time as its update time, so a long-running rollout is selected
 when it starts in the range, is updated in the range, or spans the complete
-range. Each selected file is parsed as a whole; event history and parent/child
+range. Search results are ordered by last activity, with start time retained as
+secondary detail. Each selected file is parsed as a whole; event history and parent/child
 report context are not clipped to the range. Stable selected files continue to
 reuse metadata from the incremental SQLite index without being reopened. Every
 successful export opens in its own app window. The app
 remembers the last export folder across launches and offers **Open last
 export** without rescanning the logs. Selecting a root enables full report
-generation through the renderer bundled into the desktop application. Native
-command failures, renderer standard error, frontend exceptions, and panics are
+generation through the renderer bundled into the desktop application.
+The persistent **Worker threads** setting controls the bounded concurrency used
+by both native discovery and full-report generation. Independent rollout parsing
+and per-agent heatmap preview preparation use that worker pool; deterministic
+assembly and file writing remain serial. During report generation, the progress
+panel shows one current-operation line per active worker above **Cancel**.
+Heatmap preview matching uses chronological overlap sweeps rather than rescanning
+an agent's complete event history for every period. Native command failures,
+renderer standard error, frontend exceptions, and panics are
 written as bounded JSON Lines entries in the local Tauri app-log directory.
 The **Open diagnostic log** control opens the current file directly. On macOS
 it is `~/Library/Logs/ca.devconsult.agent-report/agent-report.log`; one rotated

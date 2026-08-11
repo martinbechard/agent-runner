@@ -10,9 +10,11 @@ import {
   dateRangeError,
   discoveryProgressPresentation,
   localDateHourToUtc,
+  normalizeWorkerCount,
   parseReportHistory,
   parseDesktopDefaults,
   parseDiscoveryProgress,
+  parseReportGenerationProgress,
   parseSearchResponse,
   rememberReportForSource,
   rememberedOutputPath,
@@ -45,6 +47,7 @@ describe("native command contracts", () => {
           parentThreadId: "",
           taskTitle: "Build native index",
           startedAt: "2026-07-21T12:00:00Z",
+          lastActivityAt: "2026-07-21T12:30:00Z",
           workspace: "/work/example",
           sourcePath: "/logs/root.jsonl",
           agentPath: "",
@@ -94,7 +97,7 @@ describe("native command contracts", () => {
     ).toThrow("not cache or scan");
   });
 
-  it("presents index progress as determinate and report generation as indeterminate", () => {
+  it("presents index and report-generation progress as determinate", () => {
     expect(
       discoveryProgressPresentation({
         completed_files: 8,
@@ -110,12 +113,43 @@ describe("native command contracts", () => {
       total: 32,
     });
     expect(reportGenerationProgress("/reports/root.html")).toEqual({
-      label: "Preparing full report",
-      value: "Working",
+      label: "Starting report generation",
+      value: "0%",
       path: "/reports/root.html",
-      completed: null,
-      total: null,
+      completed: 0,
+      total: 100,
+      detail: "Preparing the renderer process.",
     });
+    expect(
+      parseReportGenerationProgress({
+        completed: 75,
+        total: 100,
+        label: "Analyzing",
+        detail: "Aggregating metrics.",
+        worker: null,
+      }),
+    ).toEqual({
+      completed: 75,
+      total: 100,
+      label: "Analyzing",
+      detail: "Aggregating metrics.",
+      worker: null,
+    });
+    expect(() =>
+      parseReportGenerationProgress({
+        completed: 101,
+        total: 100,
+        label: "Invalid",
+        detail: "Invalid.",
+      }),
+    ).toThrow("outside its total");
+  });
+
+  it("normalizes the persisted worker-thread setting", () => {
+    expect(normalizeWorkerCount("8", 4)).toBe(8);
+    expect(normalizeWorkerCount(64, 4)).toBe(64);
+    expect(normalizeWorkerCount("0", 4)).toBe(4);
+    expect(normalizeWorkerCount("many", 4)).toBe(4);
   });
 
   it("builds a bounded report filename without path separators", () => {

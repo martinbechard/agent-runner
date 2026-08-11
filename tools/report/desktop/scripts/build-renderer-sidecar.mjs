@@ -145,6 +145,7 @@ const hiddenImports = [
   "argparse",
   "bisect",
   "collections",
+  "concurrent.futures",
   "copy",
   "csv",
   "dataclasses",
@@ -156,6 +157,7 @@ const hiddenImports = [
   "shutil",
   "sqlite3",
   "subprocess",
+  "threading",
 ];
 const pyinstallerArguments = [
   "-m",

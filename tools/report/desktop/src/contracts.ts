@@ -45,6 +45,7 @@ export interface CatalogEntry {
   readonly parentThreadId: string;
   readonly taskTitle: string;
   readonly startedAt: string;
+  readonly lastActivityAt: string;
   readonly workspace: string;
   readonly sourcePath: string;
   readonly agentPath: string;
@@ -85,6 +86,22 @@ export interface ProgressPresentation {
   readonly path: string;
   readonly completed: number | null;
   readonly total: number | null;
+  readonly detail?: string;
+}
+
+/** Determinate phase progress emitted by the full-report renderer. */
+export interface ReportGenerationProgress {
+  readonly completed: number;
+  readonly total: number;
+  readonly label: string;
+  readonly detail: string;
+  readonly worker: string | null;
+}
+
+/** Clamp persisted or user-entered worker counts to the supported renderer range. */
+export function normalizeWorkerCount(value: unknown, fallback: number): number {
+  const parsed = typeof value === "number" ? value : Number(value);
+  return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 64 ? parsed : fallback;
 }
 
 /** Present native discovery events as determinate progress. */
@@ -100,14 +117,34 @@ export function discoveryProgressPresentation(
   };
 }
 
-/** Present full-report rendering as indeterminate progress until the renderer exits. */
+/** Present the initial full-report rendering phase as determinate progress. */
 export function reportGenerationProgress(outputPath: string): ProgressPresentation {
   return {
-    label: "Preparing full report",
-    value: "Working",
+    label: "Starting report generation",
+    value: "0%",
     path: outputPath,
-    completed: null,
-    total: null,
+    completed: 0,
+    total: 100,
+    detail: "Preparing the renderer process.",
+  };
+}
+
+export function parseReportGenerationProgress(value: unknown): ReportGenerationProgress {
+  const record = requireRecord(value, "report generation progress");
+  const completed = requireNumber(record, "completed", "report generation progress");
+  const total = requireNumber(record, "total", "report generation progress");
+  if (total === 0 || completed > total) {
+    throw new Error("report generation progress is outside its total");
+  }
+  return {
+    completed,
+    total,
+    label: requireString(record, "label", "report generation progress"),
+    detail: requireString(record, "detail", "report generation progress"),
+    worker:
+      record.worker === null
+        ? null
+        : requireString(record, "worker", "report generation progress"),
   };
 }
 
@@ -193,6 +230,7 @@ function parseCatalogEntry(value: unknown, index: number): CatalogEntry {
     parentThreadId: requireString(record, "parentThreadId", label),
     taskTitle: requireString(record, "taskTitle", label),
     startedAt: requireString(record, "startedAt", label),
+    lastActivityAt: requireString(record, "lastActivityAt", label),
     workspace: requireString(record, "workspace", label),
     sourcePath: requireString(record, "sourcePath", label),
     agentPath: requireString(record, "agentPath", label),

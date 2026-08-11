@@ -25,7 +25,8 @@ The path can be:
 from __future__ import annotations
 
 import argparse
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
 import hashlib
 import io
@@ -36,12 +37,26 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import threading
 from collections import Counter
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from copy import deepcopy
 from functools import lru_cache
+from urllib.parse import quote
+
+
+ProgressCallback = Callable[[int, str, str], None]
+WorkerProgressCallback = Callable[[int, str, str, str], None]
+
+
+def _current_worker_id() -> str:
+    """Return a stable one-based label for the current bounded worker."""
+
+    suffix = threading.current_thread().name.rsplit("_", 1)[-1]
+    return str(int(suffix) + 1) if suffix.isdigit() else "1"
 
 
 # ---------------------------------------------------------------------------
@@ -99,13 +114,8 @@ CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
 _SKILL_PATH_PATTERN = re.compile(
     r"(?<![A-Za-z0-9._:-])(?P<name>[A-Za-z0-9][A-Za-z0-9._:-]*)/SKILL\.md\b"
 )
-_FAILED_VERDICT_PATTERN = re.compile(
-    r"^\s*(?:[#>*_`~-]+\s*)*FAIL\b", re.IGNORECASE | re.MULTILINE
-)
-_REVIEW_FINDING_PATTERN = re.compile(
-    r"^\s*(?:\d+[.)]|[-*])\s+\*{0,2}(?:CRITICAL|HIGH|MEDIUM|LOW)\b",
-    re.IGNORECASE | re.MULTILINE,
-)
+_VERDICT_PREFIX_CHARS = "#>*_`~-"
+_REVIEW_SEVERITIES = ("CRITICAL", "HIGH", "MEDIUM", "LOW")
 _UPDATE_PLAN_ITEM_PATTERN = re.compile(
     r"\{\s*[\"']?step[\"']?\s*:\s*\"(?P<step>(?:\\.|[^\"\\])*)\"\s*,\s*"
     r"[\"']?status[\"']?\s*:\s*\"(?P<status>completed|in_progress|pending)\"\s*\}"
@@ -2302,33 +2312,54 @@ def _append_codex_activity(
 def _terminal_turn_outcome(
     event_type: str,
     turn_id: str,
-    activities: list[AgentActivity],
+    final_outputs: list[str],
     *,
     agent_path: str,
     agent_nickname: str,
     final_message: object,
 ) -> str:
-    final_outputs = [
-        activity.content
-        for activity in activities
-        if activity.turn_id == turn_id
-        and activity.activity_type == "output"
-        and activity.summary.startswith("Final answer")
-        and activity.content
-    ]
+    final_outputs = list(final_outputs)
     if isinstance(final_message, str) and final_message.strip():
         final_outputs.append(final_message)
-    if any(_FAILED_VERDICT_PATTERN.search(output) for output in final_outputs):
+
+    def starts_with_word(candidate: str, word: str) -> bool:
+        return candidate.startswith(word) and (
+            len(candidate) == len(word)
+            or not (candidate[len(word)].isalnum() or candidate[len(word)] == "_")
+        )
+
+    def is_failed_verdict(line: str) -> bool:
+        candidate = line.lstrip().lstrip(_VERDICT_PREFIX_CHARS).lstrip().upper()
+        return starts_with_word(candidate, "FAIL")
+
+    def is_review_finding(line: str) -> bool:
+        candidate = line.lstrip()
+        if candidate.startswith(("- ", "* ")):
+            candidate = candidate[2:].lstrip()
+        else:
+            marker = re.match(r"\d+[.)][ \t]+", candidate)
+            if marker is None:
+                return False
+            candidate = candidate[marker.end() :].lstrip()
+        candidate = candidate.removeprefix("**").upper()
+        return any(starts_with_word(candidate, severity) for severity in _REVIEW_SEVERITIES)
+
+    lines = (line for output in final_outputs for line in output.splitlines())
+    if any(is_failed_verdict(line) for line in lines):
         return "failed"
     agent_identity = f"{agent_path} {agent_nickname}".casefold()
     if "review" in agent_identity and any(
-        _REVIEW_FINDING_PATTERN.search(output) for output in final_outputs
+        is_review_finding(line)
+        for output in final_outputs
+        for line in output.splitlines()
     ):
         return "failed"
     return "complete" if event_type == "task_complete" else "aborted"
 
 
-def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
+def parse_codex_rollout(
+    path: Path, *, cancelled: Callable[[], bool] | None = None
+) -> CodexThreadMetrics:
     """Parse one native Codex Desktop rollout with bounded local disclosures.
 
     The returned counters belong only to this thread. Cumulative token events
@@ -2357,6 +2388,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
     turns: list[AgentTurn] = []
     responses: list[ResponseUsage] = []
     activities: list[AgentActivity] = []
+    final_outputs_by_turn: dict[str, list[str]] = {}
+    output_turn_ids: set[str] = set()
     tools: list[ToolInterval] = []
     mcp_calls: list[McpCallInterval] = []
     context_snapshots: list[ContextSnapshot] = []
@@ -2389,6 +2422,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
         pending_model_output_timestamps.append(normalized)
 
     for ordinal, record in records:
+        if cancelled is not None and cancelled():
+            raise RuntimeError("Report operation cancelled")
         timestamp = str(record.get("timestamp") or "")
         if timestamp:
             timestamps.append(timestamp)
@@ -2805,7 +2840,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 turn.outcome = _terminal_turn_outcome(
                     event_type,
                     turn.turn_id,
-                    activities,
+                    final_outputs_by_turn.get(turn.turn_id, []),
                     agent_path=agent_path,
                     agent_nickname=agent_nickname,
                     final_message=final_message,
@@ -2813,10 +2848,7 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                 if event_type == "turn_aborted":
                     turn.abort_reason = str(payload.get("reason") or "")
                     turn.abort_event_timestamp = _normalize_timestamp(timestamp)
-                has_recorded_output = any(
-                    activity.turn_id == turn.turn_id and activity.activity_type == "output"
-                    for activity in activities
-                )
+                has_recorded_output = turn.turn_id in output_turn_ids
                 if (
                     isinstance(final_message, str)
                     and final_message.strip()
@@ -2867,6 +2899,8 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                     )
                 responses.clear()
                 activities.clear()
+                final_outputs_by_turn.clear()
+                output_turn_ids.clear()
                 tools.clear()
                 mcp_calls.clear()
                 context_snapshots.clear()
@@ -2934,6 +2968,12 @@ def parse_codex_rollout(path: Path) -> CodexThreadMetrics:
                         raw_text=raw_text,
                         model=model,
                     )
+                    if turn_id:
+                        output_turn_ids.add(turn_id)
+                        if phase == "final_answer":
+                            final_outputs_by_turn.setdefault(turn_id, []).append(
+                                _tool_argument_content(raw_text)
+                            )
             elif item_type == "agent_message":
                 raw_text = _response_item_text(payload, "content")
                 author = str(payload.get("author") or "")
@@ -3179,6 +3219,8 @@ class _RolloutDiscoveryMetadata:
     identity: tuple[str, str, str, str] | None
     delegation_source_ids: frozenset[str]
     task_title: str
+    started_at: str
+    modified_at_ns: int
 
 
 @dataclass(frozen=True)
@@ -3305,10 +3347,16 @@ def _native_rollout_discovery(
         task_title = entry.get("task_title")
         if not isinstance(task_title, str):
             raise RuntimeError("Required native discovery engine returned invalid task title")
+        started_at = entry.get("started_at")
+        modified_at_ns = entry.get("modified_at_ns")
+        if not isinstance(started_at, str) or type(modified_at_ns) is not int:
+            raise RuntimeError("Required native discovery engine returned invalid activity span")
         metadata[expected_path] = _RolloutDiscoveryMetadata(
             identity=identity,
             delegation_source_ids=frozenset(raw_sources),
             task_title=task_title,
+            started_at=started_at,
+            modified_at_ns=modified_at_ns,
         )
     raw_stats = response.get("stats")
     required_stats = (
@@ -4131,7 +4179,26 @@ def _runtime_intervals_for_thread(
     """Partition recorded turns into mutually exclusive runtime states."""
 
     role_state = _thread_runtime_role(thread)
-    candidates: list[tuple[str, str, str, str, str, str]] = []
+    candidates_by_turn: dict[
+        str | None, list[tuple[datetime, datetime, str, str, str, str]]
+    ] = {}
+
+    def add_candidate(
+        turn_id: str | None,
+        started_at: str,
+        completed_at: str,
+        state: str,
+        method: str,
+        confidence: str,
+        detail: str,
+    ) -> None:
+        start = _parse_iso_datetime(started_at)
+        end = _parse_iso_datetime(completed_at)
+        if start is not None and end is not None and end > start:
+            candidates_by_turn.setdefault(turn_id, []).append(
+                (start, end, state, method, confidence, detail)
+            )
+
     for response in thread.responses:
         if response.started_at and response.last_output_at and response.duration_ms > 0:
             response_detail = response.model
@@ -4143,37 +4210,34 @@ def _runtime_intervals_for_thread(
                     if response_detail
                     else effort_detail
                 )
-            candidates.append(
-                (
-                    response.started_at,
-                    response.last_output_at,
-                    "model_inference",
-                    response.timing_method,
-                    response.timing_confidence,
-                    response_detail,
-                )
+            add_candidate(
+                response.turn_id,
+                response.started_at,
+                response.last_output_at,
+                "model_inference",
+                response.timing_method,
+                response.timing_confidence,
+                response_detail,
             )
     for tool in thread.tool_intervals:
-        candidates.append(
-            (
-                tool.started_at,
-                tool.completed_at,
-                _runtime_tool_state(tool.tool_name, tool.argument_summary),
-                tool.derivation_method,
-                tool.attribution_confidence,
-                tool.tool_name,
-            )
+        add_candidate(
+            tool.turn_id,
+            tool.started_at,
+            tool.completed_at,
+            _runtime_tool_state(tool.tool_name, tool.argument_summary),
+            tool.derivation_method,
+            tool.attribution_confidence,
+            tool.tool_name,
         )
     for call in thread.mcp_calls:
-        candidates.append(
-            (
-                call.started_at,
-                call.completed_at,
-                _runtime_tool_state(call.tool_name, call.argument_summary),
-                "mcp-recorded-duration",
-                "exact",
-                f"{call.server_name}.{call.tool_name}",
-            )
+        add_candidate(
+            call.turn_id,
+            call.started_at,
+            call.completed_at,
+            _runtime_tool_state(call.tool_name, call.argument_summary),
+            "mcp-recorded-duration",
+            "exact",
+            f"{call.server_name}.{call.tool_name}",
         )
     priority = {
         "agent_wait": 60,
@@ -4209,11 +4273,10 @@ def _runtime_intervals_for_thread(
             continue
         clipped: list[tuple[datetime, datetime, str, str, str, str]] = []
         boundaries = {turn_start, turn_end}
-        for started_at, completed_at, state, method, confidence, detail in candidates:
-            start = _parse_iso_datetime(started_at)
-            end = _parse_iso_datetime(completed_at)
-            if start is None or end is None:
-                continue
+        turn_candidates = candidates_by_turn.get(turn.turn_id, [])
+        if None in candidates_by_turn:
+            turn_candidates = turn_candidates + candidates_by_turn[None]
+        for start, end, state, method, confidence, detail in turn_candidates:
             start = max(turn_start, start)
             end = min(turn_end, end)
             if end <= start:
@@ -4346,11 +4409,22 @@ def _runtime_state_metrics(
             )
         )
     waiting_slices: list[tuple[datetime, datetime]] = []
-    productive = [
-        interval
-        for interval in intervals
-        if interval.state not in {"agent_wait", "user_pause"}
-    ]
+    productive_by_thread: dict[str, list[tuple[datetime, datetime]]] = {}
+    for interval in intervals:
+        if interval.state in {"agent_wait", "user_pause"}:
+            continue
+        start = _parse_iso_datetime(interval.started_at)
+        end = _parse_iso_datetime(interval.completed_at)
+        if start is not None and end is not None:
+            productive_by_thread.setdefault(interval.thread_id, []).append((start, end))
+    for thread_id, members in productive_by_thread.items():
+        merged: list[tuple[datetime, datetime]] = []
+        for start, end in sorted(members):
+            if merged and start <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], end))
+            else:
+                merged.append((start, end))
+        productive_by_thread[thread_id] = merged
     for waiting in (item for item in intervals if item.state == "agent_wait"):
         waiting_start = _parse_iso_datetime(waiting.started_at)
         waiting_end = _parse_iso_datetime(waiting.completed_at)
@@ -4358,18 +4432,19 @@ def _runtime_state_metrics(
             continue
         boundaries = {waiting_start, waiting_end}
         peers: list[tuple[datetime, datetime]] = []
-        for active in productive:
-            if active.thread_id == waiting.thread_id:
+        for active_thread_id, active_intervals in productive_by_thread.items():
+            if active_thread_id == waiting.thread_id:
                 continue
-            start = _parse_iso_datetime(active.started_at)
-            end = _parse_iso_datetime(active.completed_at)
-            if start is None or end is None:
-                continue
-            start = max(waiting_start, start)
-            end = min(waiting_end, end)
-            if end > start:
-                peers.append((start, end))
-                boundaries.update((start, end))
+            starts = [item[0] for item in active_intervals]
+            first = max(0, bisect_right(starts, waiting_start) - 1)
+            for active_start, active_end in active_intervals[first:]:
+                if active_start >= waiting_end:
+                    break
+                start = max(waiting_start, active_start)
+                end = min(waiting_end, active_end)
+                if end > start:
+                    peers.append((start, end))
+                    boundaries.update((start, end))
         ordered = sorted(boundaries)
         for start, end in zip(ordered, ordered[1:]):
             if not any(peer_start < end and peer_end > start for peer_start, peer_end in peers):
@@ -4795,6 +4870,10 @@ def build_codex_rollout_run(
     title: str = "",
     thread_titles: dict[str, str] | None = None,
     discovery_index_path: Path | None = None,
+    cancelled: Callable[[], bool] | None = None,
+    progress: ProgressCallback | None = None,
+    worker_progress: WorkerProgressCallback | None = None,
+    workers: int = 1,
 ) -> CodexRunMetrics:
     """Discover, parse, reconcile, and aggregate one native Codex subtree.
 
@@ -4821,6 +4900,12 @@ def build_codex_rollout_run(
     )
     if not candidates:
         raise ValueError(f"No Codex rollout files found under {sessions_root}")
+    if progress is not None:
+        progress(
+            15,
+            "Indexing candidate threads",
+            f"Found {len(candidates):,} rollout files in the selected stores.",
+        )
     initial_files = set(candidates)
     initial_stats = {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in candidates}
     included_paths, diagnostics, discovered_parent = _discover_rollout_paths(
@@ -4829,7 +4914,62 @@ def build_codex_rollout_run(
         include_delegations=include_delegations,
         index_path=discovery_index_path,
     )
-    threads = [parse_codex_rollout(path) for path in included_paths]
+    if progress is not None:
+        progress(
+            25,
+            "Resolving related threads",
+            f"Selected {len(included_paths):,} thread logs for this report.",
+        )
+    def parse_path(index: int, path: Path) -> tuple[int, CodexThreadMetrics]:
+        worker = _current_worker_id()
+        if worker_progress is not None:
+            worker_progress(
+                25,
+                "Parsing thread logs",
+                f"Thread {index + 1:,} of {len(included_paths):,}: {path.name}",
+                worker,
+            )
+        parsed = parse_codex_rollout(path, cancelled=cancelled)
+        return index, parsed
+
+    thread_slots: list[CodexThreadMetrics | None] = [None] * len(included_paths)
+    worker_count = min(max(1, workers), max(1, len(included_paths)))
+    if worker_count == 1:
+        for index, path in enumerate(included_paths):
+            _, thread_slots[index] = parse_path(index, path)
+            if progress is not None:
+                completed = 25 + round((index + 1) / max(1, len(included_paths)) * 40)
+                progress(
+                    completed,
+                    "Parsing thread logs",
+                    f"Completed {index + 1:,} of {len(included_paths):,} thread logs.",
+                )
+    else:
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="agent-report-worker",
+        ) as executor:
+            futures = {
+                executor.submit(parse_path, index, path): index
+                for index, path in enumerate(included_paths)
+            }
+            completed_count = 0
+            for future in as_completed(futures):
+                index, parsed = future.result()
+                thread_slots[index] = parsed
+                completed_count += 1
+                if progress is not None:
+                    completed = 25 + round(
+                        completed_count / max(1, len(included_paths)) * 40
+                    )
+                    progress(
+                        completed,
+                        "Parsing thread logs",
+                        f"Completed {completed_count:,} of {len(included_paths):,} thread logs.",
+                    )
+    threads = [thread for thread in thread_slots if thread is not None]
+    if progress is not None:
+        progress(65, "Resolving thread titles", "Matching parsed threads to Codex task titles.")
     title_thread_ids = {thread.thread_id for thread in threads}
     if discovered_parent is not None:
         title_thread_ids.add(discovered_parent.thread_id)
@@ -4845,6 +4985,8 @@ def build_codex_rollout_run(
         if thread.thread_id in resolved_thread_titles:
             thread.task_title = resolved_thread_titles[thread.thread_id]
     _record_explicit_interrupt_provenance(threads)
+    if progress is not None:
+        progress(70, "Aggregating run metrics", "Combining timing, usage, context, and runtime state.")
     if seal:
         final_candidates = set(
             candidate_paths
@@ -7530,6 +7672,90 @@ def _response_activity_preview(
     return "Internal reasoning (content unavailable)" if matched_reasoning else ""
 
 
+def _response_activity_previews(
+    thread: CodexThreadMetrics,
+    limit: int = 150,
+) -> dict[int, str]:
+    """Build all response previews from one reusable chronological thread index."""
+
+    activity_rows = []
+    for activity in thread.activities:
+        if activity.activity_type not in {"reasoning", "output"}:
+            continue
+        occurred_at = _parse_iso_datetime(activity.event_timestamp)
+        if occurred_at is not None:
+            activity_rows.append((occurred_at, activity.source_ordinal, activity))
+    activity_rows.sort(key=lambda item: (item[0], item[1]))
+    activities_by_turn: dict[str | None, list[tuple[datetime, int, AgentActivity]]] = {}
+    for row in activity_rows:
+        activities_by_turn.setdefault(row[2].turn_id, []).append(row)
+
+    tool_rows: list[tuple[datetime, str | None, str]] = []
+    for tool in thread.tool_intervals:
+        started_at = _parse_iso_datetime(tool.started_at)
+        if started_at is None:
+            continue
+        detail = tool.argument_summary or tool.result_summary or tool.tool_name
+        tool_rows.append(
+            (started_at, tool.turn_id, _tool_activity_preview(tool.tool_name, detail, limit))
+        )
+    for call in thread.mcp_calls:
+        started_at = _parse_iso_datetime(call.started_at)
+        if started_at is None:
+            continue
+        name = f"{call.server_name}.{call.tool_name}"
+        detail = call.argument_summary or call.result_summary or name
+        tool_rows.append((started_at, call.turn_id, f"{name}: {detail}"))
+    tool_rows.sort(key=lambda item: item[0])
+    tools_by_turn: dict[str | None, list[tuple[datetime, str | None, str]]] = {}
+    for row in tool_rows:
+        tools_by_turn.setdefault(row[1], []).append(row)
+
+    previews: dict[int, str] = {}
+    one_second = timedelta(seconds=1)
+    for response in thread.responses:
+        started_at = _parse_iso_datetime(response.started_at)
+        ended_at = _parse_iso_datetime(response.last_output_at or response.completed_at)
+        matched_reasoning = False
+        if started_at is not None and ended_at is not None:
+            candidates = (
+                activities_by_turn.get(response.turn_id, [])
+                if response.turn_id
+                else activity_rows
+            )
+            candidate_times = [item[0] for item in candidates]
+            start_index = bisect_left(candidate_times, started_at)
+            end_index = bisect_right(candidate_times, ended_at)
+            for _, _, activity in candidates[start_index:end_index]:
+                matched_reasoning = matched_reasoning or activity.activity_type == "reasoning"
+                preview = _compact_display_text(activity.content, limit)
+                if preview:
+                    previews[id(response)] = preview
+                    break
+        if id(response) in previews:
+            continue
+        response_end = _parse_iso_datetime(response.last_output_at)
+        if response_end is not None:
+            candidates = (
+                tools_by_turn.get(response.turn_id, [])
+                if response.turn_id
+                else tool_rows
+            )
+            candidate_times = [item[0] for item in candidates]
+            start_index = bisect_left(candidate_times, response_end - one_second)
+            end_index = bisect_right(candidate_times, response_end + one_second)
+            if start_index < end_index:
+                previews[id(response)] = _compact_display_text(
+                    candidates[start_index][2],
+                    limit,
+                )
+                continue
+        previews[id(response)] = (
+            "Internal reasoning (content unavailable)" if matched_reasoning else ""
+        )
+    return previews
+
+
 def _runtime_interval_preview(
     thread: CodexThreadMetrics,
     interval: RuntimeStateInterval,
@@ -7592,6 +7818,332 @@ def _runtime_interval_preview(
     )
 
 
+def _overlap_sweep(
+    intervals: list[tuple[int, RuntimeStateInterval, datetime, datetime]],
+    events: list[tuple[datetime, datetime, object]],
+) -> dict[int, object]:
+    """Select the greatest-overlap event per interval without rescanning all events."""
+
+    ordered_events = sorted(events, key=lambda item: item[0])
+    if not ordered_events:
+        return {}
+    starts = [event[0] for event in ordered_events]
+    prefix_latest_end: list[int] = []
+    prefix_end_values: list[datetime] = []
+    latest_index = 0
+    for index, (_, event_end, _) in enumerate(ordered_events):
+        if index == 0 or event_end > ordered_events[latest_index][1]:
+            latest_index = index
+        prefix_latest_end.append(latest_index)
+        prefix_end_values.append(ordered_events[latest_index][1])
+
+    tree_size = 1
+    while tree_size < len(ordered_events):
+        tree_size *= 2
+    max_end_tree: list[datetime | None] = [None] * (tree_size * 2)
+    for index, (_, event_end, _) in enumerate(ordered_events):
+        max_end_tree[tree_size + index] = event_end
+    for node in range(tree_size - 1, 0, -1):
+        children = [value for value in max_end_tree[node * 2 : node * 2 + 2] if value]
+        max_end_tree[node] = max(children) if children else None
+
+    def first_ending_at_or_after(
+        query_start: int,
+        query_end: int,
+        threshold: datetime,
+        node: int = 1,
+        node_start: int = 0,
+        node_end: int | None = None,
+    ) -> int | None:
+        node_end = tree_size if node_end is None else node_end
+        node_max = max_end_tree[node]
+        if (
+            node_end <= query_start
+            or node_start >= query_end
+            or node_max is None
+            or node_max < threshold
+        ):
+            return None
+        if node_end - node_start == 1:
+            return node_start
+        midpoint = (node_start + node_end) // 2
+        left = first_ending_at_or_after(
+            query_start,
+            query_end,
+            threshold,
+            node * 2,
+            node_start,
+            midpoint,
+        )
+        return (
+            left
+            if left is not None
+            else first_ending_at_or_after(
+                query_start,
+                query_end,
+                threshold,
+                node * 2 + 1,
+                midpoint,
+                node_end,
+            )
+        )
+
+    duration_tree: list[tuple[timedelta, int, object] | None] = [None] * (
+        tree_size * 2
+    )
+
+    def add_duration(index: int) -> None:
+        event_start, event_end, value = ordered_events[index]
+        node = tree_size + index
+        duration_tree[node] = (event_end - event_start, -index, value)
+        node //= 2
+        while node:
+            children = [value for value in duration_tree[node * 2 : node * 2 + 2] if value]
+            duration_tree[node] = max(children, key=lambda item: item[:2]) if children else None
+            node //= 2
+
+    def longest_duration(query_start: int, query_end: int) -> tuple[timedelta, int, object] | None:
+        left = tree_size + query_start
+        right = tree_size + query_end
+        best: tuple[timedelta, int, object] | None = None
+        while left < right:
+            if left % 2:
+                candidate = duration_tree[left]
+                if candidate is not None and (
+                    best is None or candidate[:2] > best[:2]
+                ):
+                    best = candidate
+                left += 1
+            if right % 2:
+                right -= 1
+                candidate = duration_tree[right]
+                if candidate is not None and (
+                    best is None or candidate[:2] > best[:2]
+                ):
+                    best = candidate
+            left //= 2
+            right //= 2
+        return best
+
+    matches: dict[int, object] = {}
+    events_by_end = sorted(range(len(ordered_events)), key=lambda index: ordered_events[index][1])
+    end_cursor = 0
+    for interval_index, _, interval_start, interval_end in sorted(
+        intervals, key=lambda item: item[3]
+    ):
+        while (
+            end_cursor < len(events_by_end)
+            and ordered_events[events_by_end[end_cursor]][1] < interval_end
+        ):
+            add_duration(events_by_end[end_cursor])
+            end_cursor += 1
+        overlapping: list[tuple[timedelta, int, object]] = []
+        before_or_at = bisect_right(starts, interval_start) - 1
+        if before_or_at >= 0:
+            latest_before = prefix_latest_end[before_or_at]
+            if ordered_events[latest_before][1] >= interval_end:
+                first_containing = bisect_left(
+                    prefix_end_values,
+                    interval_end,
+                    0,
+                    before_or_at + 1,
+                )
+                candidate = ordered_events[prefix_latest_end[first_containing]]
+            else:
+                first_containing = latest_before
+            candidate = ordered_events[first_containing]
+            if candidate[1] > interval_start:
+                overlapping.append(
+                    (
+                        min(interval_end, candidate[1]) - interval_start,
+                        -first_containing,
+                        candidate[2],
+                    )
+                )
+        inside_start = before_or_at + 1
+        inside_end = bisect_left(starts, interval_end)
+        spanning_index = first_ending_at_or_after(
+            inside_start,
+            inside_end,
+            interval_end,
+        )
+        if spanning_index is not None:
+            event_start, _, value = ordered_events[spanning_index]
+            overlapping.append(
+                (interval_end - event_start, -spanning_index, value)
+            )
+        contained = longest_duration(inside_start, inside_end)
+        if contained is not None:
+            overlapping.append(contained)
+        if overlapping:
+            matches[interval_index] = max(
+                overlapping,
+                key=lambda item: item[:2],
+            )[2]
+    return matches
+
+
+def _runtime_thread_interval_previews(
+    thread_index: int,
+    thread_total: int,
+    thread: CodexThreadMetrics,
+    intervals: list[tuple[int, RuntimeStateInterval, datetime, datetime]],
+    worker_progress: WorkerProgressCallback | None,
+) -> dict[int, str]:
+    worker = _current_worker_id()
+    if worker_progress is not None:
+        worker_progress(
+            93,
+            "Heatmap drilldown previews",
+            f"Agent {thread_index:,} of {thread_total:,}: indexing events.",
+            worker,
+        )
+    responses: list[tuple[datetime, datetime, object]] = []
+    for response in thread.responses:
+        started_at = _parse_iso_datetime(response.started_at)
+        completed_at = _parse_iso_datetime(response.last_output_at or response.completed_at)
+        if started_at is not None and completed_at is not None:
+            responses.append((started_at, completed_at, response))
+    tools: list[tuple[datetime, datetime, object]] = []
+    for tool in thread.tool_intervals:
+        started_at = _parse_iso_datetime(tool.started_at)
+        completed_at = _parse_iso_datetime(tool.completed_at)
+        if started_at is None or completed_at is None:
+            continue
+        detail = tool.argument_summary or tool.result_summary or tool.tool_name
+        tools.append(
+            (started_at, completed_at, _tool_activity_preview(tool.tool_name, detail))
+        )
+    for call in thread.mcp_calls:
+        started_at = _parse_iso_datetime(call.started_at)
+        completed_at = _parse_iso_datetime(call.completed_at)
+        if started_at is None or completed_at is None:
+            continue
+        name = f"{call.server_name}.{call.tool_name}"
+        detail = call.argument_summary or call.result_summary or name
+        tools.append((started_at, completed_at, f"{name}: {detail}"))
+
+    if worker_progress is not None:
+        worker_progress(
+            93,
+            "Heatmap drilldown previews",
+            f"Agent {thread_index:,} of {thread_total:,}: preparing response previews.",
+            worker,
+        )
+    response_previews = _response_activity_previews(thread)
+    if worker_progress is not None:
+        worker_progress(
+            93,
+            "Heatmap drilldown previews",
+            f"Agent {thread_index:,} of {thread_total:,}: matching periods.",
+            worker,
+        )
+    inference_intervals = [item for item in intervals if item[1].state == "model_inference"]
+    response_matches = _overlap_sweep(inference_intervals, responses)
+    tool_matches = _overlap_sweep(intervals, tools)
+    previews: dict[int, str] = {}
+    for interval_index, _, _, _ in intervals:
+        response = response_matches.get(interval_index)
+        if isinstance(response, ResponseUsage):
+            previews[interval_index] = response_previews.get(id(response), "")
+            continue
+        tool_preview = tool_matches.get(interval_index)
+        if isinstance(tool_preview, str):
+            previews[interval_index] = _compact_display_text(tool_preview, 150)
+    if worker_progress is not None:
+        worker_progress(
+            93,
+            "Heatmap drilldown previews",
+            f"Agent {thread_index:,} of {thread_total:,}: {len(intervals):,} periods complete.",
+            worker,
+        )
+    return previews
+
+
+def _runtime_interval_previews(
+    run: CodexRunMetrics,
+    progress: ProgressCallback | None = None,
+    worker_progress: WorkerProgressCallback | None = None,
+    workers: int = 1,
+) -> dict[int, str]:
+    """Build heatmap previews using bounded per-agent overlap sweeps."""
+
+    intervals_by_thread: dict[
+        str, list[tuple[int, RuntimeStateInterval, datetime, datetime]]
+    ] = {}
+    for interval_index, interval in enumerate(run.runtime_intervals):
+        if progress is not None and (
+            interval_index == 0
+            or interval_index + 1 == len(run.runtime_intervals)
+            or interval_index % max(1, len(run.runtime_intervals) // 100) == 0
+        ):
+            progress(
+                93,
+                "Indexing heatmap intervals",
+                f"Interval {interval_index + 1:,} of {len(run.runtime_intervals):,}.",
+            )
+        started_at = _parse_iso_datetime(interval.started_at)
+        completed_at = _parse_iso_datetime(interval.completed_at)
+        if started_at is None or completed_at is None:
+            continue
+        intervals_by_thread.setdefault(interval.thread_id, []).append(
+            (interval_index, interval, started_at, completed_at)
+        )
+
+    threads_by_id = {thread.thread_id: thread for thread in run.threads}
+    interval_threads = [
+        (thread_id, intervals)
+        for thread_id, intervals in intervals_by_thread.items()
+        if thread_id in threads_by_id
+    ]
+    previews: dict[int, str] = {}
+    worker_count = min(max(1, workers), max(1, len(interval_threads)))
+    if worker_count == 1:
+        for thread_index, (thread_id, intervals) in enumerate(interval_threads, start=1):
+            previews.update(
+                _runtime_thread_interval_previews(
+                    thread_index,
+                    len(interval_threads),
+                    threads_by_id[thread_id],
+                    intervals,
+                    worker_progress,
+                )
+            )
+            if progress is not None:
+                progress(
+                    93,
+                    "Building heatmap drilldown previews",
+                    f"Completed agent {thread_index:,} of {len(interval_threads):,}.",
+                )
+    else:
+        with ThreadPoolExecutor(
+            max_workers=worker_count,
+            thread_name_prefix="agent-report-worker",
+        ) as executor:
+            futures = [
+                executor.submit(
+                    _runtime_thread_interval_previews,
+                    thread_index,
+                    len(interval_threads),
+                    threads_by_id[thread_id],
+                    intervals,
+                    worker_progress,
+                )
+                for thread_index, (thread_id, intervals) in enumerate(
+                    interval_threads, start=1
+                )
+            ]
+            for completed_count, future in enumerate(as_completed(futures), start=1):
+                previews.update(future.result())
+                if progress is not None:
+                    progress(
+                        93,
+                        "Building heatmap drilldown previews",
+                        f"Completed {completed_count:,} of {len(interval_threads):,} agents.",
+                    )
+    return previews
+
+
 def _time_range_event_id(kind: str, *parts: object) -> str:
     """Return one deterministic opaque event identifier for a task snapshot."""
 
@@ -7625,7 +8177,14 @@ def _response_event_id(thread: CodexThreadMetrics, response: ResponseUsage) -> s
     )
 
 
-def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
+def _execution_heatmap_payload(
+    run: CodexRunMetrics,
+    *,
+    include_previews: bool = True,
+    progress: ProgressCallback | None = None,
+    worker_progress: WorkerProgressCallback | None = None,
+    workers: int = 1,
+) -> dict[str, object]:
     """Return bounded runtime and response evidence for the offline heatmap."""
 
     state_labels = {
@@ -7654,7 +8213,27 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
     ]
     threads_by_id = {thread.thread_id: thread for thread in run.threads}
     intervals = []
+    interval_previews = (
+        _runtime_interval_previews(
+            run,
+            progress=progress,
+            worker_progress=worker_progress,
+            workers=workers,
+        )
+        if include_previews
+        else {}
+    )
     for interval_index, interval in enumerate(run.runtime_intervals):
+        if progress is not None and (
+            interval_index == 0
+            or interval_index + 1 == len(run.runtime_intervals)
+            or interval_index % max(1, len(run.runtime_intervals) // 100) == 0
+        ):
+            progress(
+                93,
+                "Serializing heatmap intervals",
+                f"Interval {interval_index + 1:,} of {len(run.runtime_intervals):,}.",
+            )
         if not interval.started_at or not interval.completed_at:
             continue
         thread = threads_by_id.get(interval.thread_id)
@@ -7669,15 +8248,26 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                 "duration_ms": interval.duration_ms,
                 "confidence": interval.attribution_confidence,
                 "detail": _compact_display_text(interval.detail, 160),
-                "preview": (
-                    _runtime_interval_preview(thread, interval) if thread else ""
-                ),
+                "preview": interval_previews.get(interval_index, ""),
             }
         )
     models = []
     model_ids: set[str] = set()
     responses = []
-    for thread in run.threads:
+    for thread_index, thread in enumerate(run.threads, start=1):
+        if progress is not None and (
+            thread_index == 1
+            or thread_index == len(run.threads)
+            or thread_index % max(1, len(run.threads) // 100) == 0
+        ):
+            progress(
+                94,
+                "Serializing heatmap responses",
+                f"Agent {thread_index:,} of {len(run.threads):,}.",
+            )
+        response_previews = (
+            _response_activity_previews(thread) if include_previews else {}
+        )
         fallback_model = (
             thread.model
             if thread.model and not thread.model.startswith("mixed (")
@@ -7718,7 +8308,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                     "duration_ms": response.duration_ms,
                     "confidence": response.timing_confidence,
                     "cost_usd": response_cost.total_cost or 0,
-                    "preview": _response_activity_preview(thread, response),
+                    "preview": response_previews.get(id(response), ""),
                     "usage": {
                         "uncached_input_tokens": usage.direct_input_tokens,
                         "cached_input_tokens": usage.cached_input_tokens,
@@ -7739,9 +8329,13 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
             "started_at": tool.started_at,
             "completed_at": tool.completed_at,
             "duration_ms": tool.duration_ms,
-            "preview": _tool_activity_preview(
-                tool.tool_name,
-                tool.argument_summary or tool.result_summary or tool.tool_name,
+            "preview": (
+                _tool_activity_preview(
+                    tool.tool_name,
+                    tool.argument_summary or tool.result_summary or tool.tool_name,
+                )
+                if include_previews
+                else ""
             ),
         }
         for thread in run.threads
@@ -7819,7 +8413,59 @@ def query_codex_run_time_range(
     if query_start >= query_end:
         raise ValueError("requested time range does not overlap the task runtime")
 
-    payload = _execution_heatmap_payload(run)
+    if measure == "wall_time":
+        payload = _execution_heatmap_payload(run, include_previews=include_events)
+    else:
+        agents = [
+            {"id": thread.thread_id, "label": _heatmap_agent_label(thread)}
+            for thread in run.threads
+        ]
+        responses: list[dict[str, object]] = []
+        for thread in run.threads:
+            response_previews = (
+                _response_activity_previews(thread) if include_events else {}
+            )
+            fallback_model = (
+                thread.model
+                if thread.model and not thread.model.startswith("mixed (")
+                else "Unknown model"
+            )
+            for response in thread.responses:
+                usage = _inference_call_usage(response)
+                response_effort = _response_effort(thread, response)
+                responses.append(
+                    {
+                        "event_id": (
+                            _response_event_id(thread, response)
+                            if include_events
+                            else ""
+                        ),
+                        "thread_id": thread.thread_id,
+                        "turn_id": response.turn_id or "",
+                        "model": response.model or fallback_model,
+                        "effort": response_effort,
+                        "started_at": response.started_at or response.event_timestamp,
+                        "completed_at": response.completed_at or response.event_timestamp,
+                        "duration_ms": response.duration_ms,
+                        "cost_usd": (
+                            _cost_for_response(thread, response).total_cost or 0
+                            if measure == "cost_usd"
+                            else 0
+                        ),
+                        "preview": (
+                            response_previews.get(id(response), "")
+                        ),
+                        "usage": {
+                            "uncached_input_tokens": usage.direct_input_tokens,
+                            "cached_input_tokens": usage.cached_input_tokens,
+                            "output_tokens": max(
+                                0, usage.output_tokens - usage.reasoning_tokens
+                            ),
+                            "reasoning_tokens": usage.reasoning_tokens,
+                        },
+                    }
+                )
+        payload = {"agents": agents, "responses": responses}
     bucket_width = timedelta(minutes=bucket_minutes)
     buckets: list[tuple[datetime, datetime]] = []
     bucket_start = query_start
@@ -8140,13 +8786,30 @@ def get_codex_run_event_details(
     return None
 
 
-def _render_execution_heatmap(run: CodexRunMetrics) -> str:
+def _render_execution_heatmap(
+    run: CodexRunMetrics,
+    progress: ProgressCallback | None = None,
+    worker_progress: WorkerProgressCallback | None = None,
+    workers: int = 1,
+) -> str:
     """Render controls and bounded data for an offline execution heatmap."""
 
     if not run.runtime_intervals:
         return ""
+    heatmap_data = _execution_heatmap_payload(
+        run,
+        progress=progress,
+        worker_progress=worker_progress,
+        workers=workers,
+    )
+    if progress is not None:
+        progress(
+            95,
+            "Encoding heatmap data",
+            "Encoding period measures and drilldown events as offline JSON.",
+        )
     payload = json.dumps(
-        _execution_heatmap_payload(run),
+        heatmap_data,
         ensure_ascii=False,
         separators=(",", ":"),
     ).replace("</", "<\\/")
@@ -8195,8 +8858,13 @@ def render_codex_rollout_html(
     formatter_config: ToolFormatterConfig | None = None,
     *,
     nav_links: list[tuple[str, str]] | None = None,
+    progress: ProgressCallback | None = None,
+    worker_progress: WorkerProgressCallback | None = None,
+    workers: int = 1,
 ) -> str:
     """Render execution detail with optional navigation to an owning catalog."""
+    if progress is not None:
+        progress(80, "Rendering report summary", "Preparing headline metrics and agent inventory.")
     formatter_config = formatter_config or _load_tool_formatter_config()
     nav_html = ""
     if nav_links:
@@ -8281,9 +8949,18 @@ def render_codex_rollout_html(
     )
     agent_rows: list[tuple[str, str]] = []
     agent_detail_ids: dict[str, str] = {}
-    for agent_index, (thread, agent_depth) in enumerate(
-        _agent_inventory_threads(run), start=1
-    ):
+    inventory_threads = _agent_inventory_threads(run)
+    for agent_index, (thread, agent_depth) in enumerate(inventory_threads, start=1):
+        if progress is not None and (
+            agent_index == 1
+            or agent_index == len(inventory_threads)
+            or agent_index % max(1, len(inventory_threads) // 100) == 0
+        ):
+            progress(
+                80 + round(agent_index / max(1, len(inventory_threads)) * 3),
+                "Rendering agent inventory",
+                f"Agent {agent_index:,} of {len(inventory_threads):,}.",
+            )
         agent_detail_id = f"agent-detail-{agent_index}"
         agent_detail_ids[thread.thread_id] = agent_detail_id
         agent_time_ms = sum(turn.duration_ms for turn in thread.turns)
@@ -8358,10 +9035,22 @@ def render_codex_rollout_html(
             "</span></td>"
             "</tr>",
         ))
+    if progress is not None:
+        progress(83, "Rendering agent details", "Building expandable agent and turn tables.")
     thread_details: dict[str, str] = {}
     tool_call_overlays = []
     turn_detail_overlays = []
     for thread_index, thread in enumerate(run.threads, start=1):
+        if progress is not None and (
+            thread_index == 1
+            or thread_index == len(run.threads)
+            or thread_index % max(1, len(run.threads) // 100) == 0
+        ):
+            progress(
+                83 + round(thread_index / max(1, len(run.threads)) * 4),
+                "Rendering agent and turn tables",
+                f"Agent {thread_index:,} of {len(run.threads):,}.",
+            )
         tool_call_overlay_id = f"turn-tool-call-list-{thread_index}"
         agent_assignment = _agent_assignment(thread)
         work_units = {turn.work_unit_id or "unattributed" for turn in thread.turns}
@@ -8803,6 +9492,8 @@ def render_codex_rollout_html(
         summary_row + thread_details.get(thread_id, "")
         for thread_id, summary_row in agent_rows
     )
+    if progress is not None:
+        progress(87, "Rendering usage details", "Preparing pricing, token, and model summaries.")
     pricing_rows = []
     for model, prices in _pricing_reference_rows():
         pricing_rows.append(
@@ -8879,12 +9570,29 @@ def render_codex_rollout_html(
         if run.run_label and run.run_label != full_report_title
         else ""
     )
+    if progress is not None:
+        progress(89, "Rendering model usage", "Building model and token usage sections.")
     model_usage_html = _render_model_usage_section(run)
+    if progress is not None:
+        progress(90, "Rendering context usage", "Building context growth and compaction sections.")
     context_metrics_html = _render_context_metrics(run)
+    if progress is not None:
+        progress(91, "Rendering inference metrics", "Building inference timing and throughput sections.")
     inference_metrics_html = _render_inference_metrics(run)
+    if progress is not None:
+        progress(92, "Rendering runtime metrics", "Building runtime state and work-item sections.")
     runtime_metrics_html = _render_runtime_metrics(run)
-    execution_heatmap_html = _render_execution_heatmap(run)
     work_item_metrics_html = _render_work_item_metrics(run)
+    if progress is not None:
+        progress(93, "Rendering execution heatmap", "Serializing period measures and drilldown events.")
+    execution_heatmap_html = _render_execution_heatmap(
+        run,
+        progress=progress,
+        worker_progress=worker_progress,
+        workers=workers,
+    )
+    if progress is not None:
+        progress(96, "Rendering sequence diagram", "Building thread messages, delegations, and lifecycle events.")
     sequence_html = _render_codex_sequence_section(run)
     sequence_document_html = (
         f"<!-- agent-sequence:start -->{sequence_html}<!-- agent-sequence:end -->"
@@ -14055,6 +14763,25 @@ def _default_codex_discovery_index_path() -> Path:
     return Path.home() / ".codex" / "agent-report" / "rollout-discovery-v2.sqlite3"
 
 
+def _emit_report_progress(
+    completed: int,
+    label: str,
+    detail: str,
+    worker: str | None = None,
+) -> None:
+    """Emit one machine-readable desktop progress event on stderr."""
+
+    event = {
+        "completed": completed,
+        "total": 100,
+        "label": label,
+        "detail": detail,
+        "worker": worker,
+    }
+    payload = json.dumps(event, separators=(",", ":"))
+    print(f"AGENT_REPORT_PROGRESS {payload}", file=sys.stderr, flush=True)
+
+
 def _child_output_path(parent_output: Path, slug: str) -> Path:
     suffix = parent_output.suffix or ".html"
     return parent_output.with_name(f"{parent_output.stem}-{slug}{suffix}")
@@ -14077,7 +14804,7 @@ def _split_codex_sequence_document(
     main_html = main_html.replace(
         'href="?view=sequence#agent-sequence"',
         'href="{filename}?view=sequence#agent-sequence"'.format(
-            filename=_escape_html(sequence_filename)
+            filename=_escape_html_attribute(quote(sequence_filename, safe=""))
         ),
         1,
     )
@@ -14105,18 +14832,41 @@ def _write_codex_outputs(
     turn_csv_output: Path | None = None,
     work_unit_csv_output: Path | None = None,
     markdown_output: Path | None = None,
+    emit_progress: bool = False,
+    workers: int = 1,
 ) -> None:
     html_output.parent.mkdir(parents=True, exist_ok=True)
+    if emit_progress:
+        _emit_report_progress(
+            80,
+            "Rendering report",
+            "Building heatmaps, timelines, tables, and the sequence view.",
+        )
     rendered_html = render_codex_rollout_html(
         run,
         formatter_config,
         nav_links=nav_links,
+        progress=_emit_report_progress if emit_progress else None,
+        worker_progress=_emit_report_progress if emit_progress else None,
+        workers=workers,
     )
     sequence_output = _child_output_path(html_output, "sequence")
+    if emit_progress:
+        _emit_report_progress(
+            97,
+            "Preparing report files",
+            "Separating the sequence view from the main report.",
+        )
     split_documents = _split_codex_sequence_document(
         rendered_html,
         sequence_output.name,
     )
+    if emit_progress:
+        _emit_report_progress(
+            99,
+            "Writing report files",
+            "Saving the main report and its companion files.",
+        )
     if split_documents is None:
         html_output.write_text(rendered_html, encoding="utf-8")
     else:
@@ -14549,6 +15299,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", help="Path to analyze (workspace, run, rollout, or manifest).")
     parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
     parser.add_argument("--codex-thread", help="Root Codex Desktop thread ID to report.")
+    parser.add_argument(
+        "--progress",
+        action="store_true",
+        help=argparse.SUPPRESS,
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=1,
+        help="Number of bounded worker threads to use for independent report work (1-64).",
+    )
     catalog_group = parser.add_mutually_exclusive_group()
     catalog_group.add_argument(
         "--codex-catalog",
@@ -14793,6 +15554,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Generated {len(report_hrefs)} linked report(s) under {output.parent / 'reports'}")
         return 0
 
+    if not 1 <= args.workers <= 64:
+        parser.error("--workers must be between 1 and 64")
+
     input_path = Path(args.path).resolve() if args.path else None
     if input_path is not None and not input_path.exists():
         print(f"Path not found: {input_path}", file=sys.stderr)
@@ -14810,6 +15574,8 @@ def main(argv: list[str] | None = None) -> int:
     if thread_titles and not (args.codex_thread or native_rollout_path):
         parser.error("--thread-title requires --codex-thread or a Codex rollout path")
     if args.codex_thread or native_rollout_path is not None:
+        if args.progress:
+            _emit_report_progress(0, "Starting report generation", "Preparing the renderer process.")
         if args.codex_thread:
             root_thread_id = args.codex_thread
             if args.sessions_root:
@@ -14849,6 +15615,8 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     session_roots.append(primary_root.parent / sibling_name)
         output = Path(args.output).resolve() if args.output else (Path.cwd() / f"{root_thread_id}-timeline.html")
+        if args.progress:
+            _emit_report_progress(10, "Discovering related threads", "Finding the selected thread and linked child logs.")
         try:
             run = build_codex_rollout_run(
                 root_thread_id,
@@ -14859,10 +15627,15 @@ def main(argv: list[str] | None = None) -> int:
                 title=args.title or "",
                 thread_titles=thread_titles,
                 discovery_index_path=_default_codex_discovery_index_path(),
+                progress=_emit_report_progress if args.progress else None,
+                worker_progress=_emit_report_progress if args.progress else None,
+                workers=args.workers,
             )
         except ValueError as exc:
             print(str(exc), file=sys.stderr)
             return 1
+        if args.progress:
+            _emit_report_progress(75, "Analyzing recorded events", "Aggregating timing, tokens, models, context, and cost.")
         json_output = Path(args.json_output).resolve() if args.json_output else None
         turn_csv_output = Path(args.turn_csv_output).resolve() if args.turn_csv_output else None
         work_unit_csv_output = Path(args.work_unit_csv_output).resolve() if args.work_unit_csv_output else None
@@ -14880,7 +15653,11 @@ def main(argv: list[str] | None = None) -> int:
             turn_csv_output=turn_csv_output,
             work_unit_csv_output=work_unit_csv_output,
             markdown_output=markdown_output,
+            emit_progress=args.progress,
+            workers=args.workers,
         )
+        if args.progress:
+            _emit_report_progress(100, "Report complete", "The report is ready to open.")
         print(f"Codex rollout report written to {output}")
         sequence_output = _child_output_path(output, "sequence")
         if sequence_output.exists():

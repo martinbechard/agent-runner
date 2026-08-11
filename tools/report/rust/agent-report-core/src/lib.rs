@@ -66,6 +66,8 @@ pub struct DiscoveryEntry {
     pub delegation_source_ids: Vec<String>,
     /// Timestamp recorded with the session identity.
     pub started_at: String,
+    /// Filesystem modification timestamp in Unix nanoseconds.
+    pub modified_at_ns: i64,
     /// Workspace recorded with the session identity.
     pub workspace: String,
     /// Bounded title derived from the first genuine user request.
@@ -272,6 +274,39 @@ where
     Ok(titles)
 }
 
+/// Read authoritative Codex parent relationships for the supplied task IDs.
+///
+/// Tasks absent from the returned map are top-level tasks. Callers should only
+/// use that absence as authoritative when this function succeeds, because older
+/// Codex state databases may not contain the spawn-edge table.
+pub fn read_codex_task_parents<I>(
+    state_path: &Path,
+    thread_ids: I,
+) -> rusqlite::Result<HashMap<String, String>>
+where
+    I: IntoIterator<Item = String>,
+{
+    let thread_ids = thread_ids
+        .into_iter()
+        .filter(|thread_id| !thread_id.is_empty())
+        .collect::<BTreeSet<_>>();
+    if thread_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let connection = Connection::open_with_flags(state_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let placeholders = std::iter::repeat_n("?", thread_ids.len())
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut statement = connection.prepare(&format!(
+        "SELECT child_thread_id, parent_thread_id FROM thread_spawn_edges \
+         WHERE child_thread_id IN ({placeholders})"
+    ))?;
+    let rows = statement.query_map(params_from_iter(thread_ids.iter()), |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.collect()
+}
+
 /// Discover rollout metadata with bounded parallel readers and one SQLite writer.
 ///
 /// The callback runs on the caller thread after each cached or scanned candidate
@@ -431,13 +466,16 @@ fn effective_worker_count(requested: Option<usize>) -> Result<usize, DiscoveryEr
 fn run_scan_job(job: ScanJob) -> ScanResult {
     match scan_rollout(&job.path) {
         Ok(mut entry) => match file_fingerprint(&job.path) {
-            Ok(after) if after == job.fingerprint_before => ScanResult {
-                index: job.index,
-                entry,
-                stable_fingerprint: Some(after),
-                unstable: false,
-                unreadable: false,
-            },
+            Ok(after) if after == job.fingerprint_before => {
+                entry.modified_at_ns = after.modified_at_ns;
+                ScanResult {
+                    index: job.index,
+                    entry,
+                    stable_fingerprint: Some(after),
+                    unstable: false,
+                    unreadable: false,
+                }
+            }
             Ok(_) => {
                 entry.diagnostic = Some("rollout changed during native discovery".to_owned());
                 ScanResult {
@@ -551,6 +589,7 @@ fn scan_rollout(path: &Path) -> io::Result<DiscoveryEntry> {
         identity,
         delegation_source_ids: delegation_source_ids.into_iter().collect(),
         started_at,
+        modified_at_ns: 0,
         workspace,
         task_title,
         diagnostic: None,
@@ -726,6 +765,7 @@ fn unreadable_entry(path: &Path, error: &io::Error) -> DiscoveryEntry {
         identity: None,
         delegation_source_ids: Vec::new(),
         started_at: String::new(),
+        modified_at_ns: 0,
         workspace: String::new(),
         task_title: String::new(),
         diagnostic: Some(format!("unable to read rollout: {error}")),
@@ -817,6 +857,7 @@ fn load_cache(
                         }),
                         delegation_source_ids,
                         started_at: row.get(11).unwrap_or_default(),
+                        modified_at_ns: row.get(4)?,
                         workspace: row.get(12).unwrap_or_default(),
                         task_title: row.get(13).unwrap_or_default(),
                         diagnostic: None,

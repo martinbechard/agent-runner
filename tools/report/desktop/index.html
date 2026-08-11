@@ -52,7 +52,11 @@
             </div>
             <label class="check-row">
               <input id="include-descendants" type="checkbox" />
-              <span>Show descendant agent logs</span>
+              <span>Include child threads</span>
+            </label>
+            <label class="worker-setting" for="worker-threads">
+              <span>Worker threads</span>
+              <input id="worker-threads" type="number" min="1" max="64" step="1" />
             </label>
             <button id="search" class="primary-action" type="button">Search logs</button>
           </section>
@@ -106,6 +110,9 @@
             </div>
             <div class="progress-track"><i id="progress-bar"></i></div>
             <p id="progress-path" class="progress-path"></p>
+            <p id="progress-detail" class="progress-detail"></p>
+            <div id="worker-progress" class="worker-progress" aria-live="polite" hidden></div>
+            <button id="cancel-generation" class="progress-cancel" type="button" hidden>Cancel</button>
           </div>
 
           <div class="run-browser">

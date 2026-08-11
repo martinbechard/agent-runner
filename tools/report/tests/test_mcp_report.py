@@ -27,6 +27,7 @@ class FakeRuntime:
     def __init__(self, entries: list[tuple[str, str, datetime, Path]]) -> None:
         self.entries = entries
         self.build_calls = 0
+        self.catalog_reads = 0
         self.protocol_calls: list[tuple[list[Path], Path | None]] = []
 
     def _candidate_rollouts(self, root: Path) -> list[Path]:
@@ -45,6 +46,8 @@ class FakeRuntime:
                 path: SimpleNamespace(
                     identity=(by_path[path][0], "", "", ""),
                     task_title=by_path[path][1],
+                    started_at=by_path[path][2].isoformat(),
+                    modified_at_ns=path.stat().st_mtime_ns,
                 )
                 for path in paths
             }
@@ -54,6 +57,7 @@ class FakeRuntime:
         self, path: Path, _source_store: str, *, include_title: bool
     ) -> SimpleNamespace:
         assert include_title is True
+        self.catalog_reads += 1
         entry = next(entry for entry in self.entries if entry[3] == path)
         return SimpleNamespace(started_at=entry[2], task_title=entry[1])
 
@@ -107,10 +111,16 @@ def _entry(
     thread_id: str,
     title: str,
     timestamp: str,
+    *,
+    last_activity: str | None = None,
 ) -> tuple[str, str, datetime, Path]:
     path = root / f"{thread_id}.jsonl"
     path.write_text("{}\n", encoding="utf-8")
-    return thread_id, title, datetime.fromisoformat(timestamp), path.resolve()
+    started_at = datetime.fromisoformat(timestamp)
+    activity_at = datetime.fromisoformat(last_activity) if last_activity else started_at
+    activity_ns = int(activity_at.timestamp() * 1_000_000_000)
+    os.utime(path, ns=(activity_ns, activity_ns))
+    return thread_id, title, started_at, path.resolve()
 
 
 def test_load_server_config_rejects_oversized_inline_limit(tmp_path: Path) -> None:
@@ -168,6 +178,69 @@ def test_time_range_query_builds_one_task_and_returns_structured_data(tmp_path: 
     assert result["measure"] == "output_tokens"
     assert result["include_events"] is True
     assert runtime.build_calls == 1
+
+
+def test_exact_time_range_query_only_reads_selected_catalog_entry(tmp_path: Path) -> None:
+    entries = [
+        _entry(
+            tmp_path,
+            f"thread-{index}",
+            f"Task {index}",
+            "2026-08-10T12:00:00+00:00",
+        )
+        for index in range(100)
+    ]
+    runtime = FakeRuntime(entries)
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    result = generator.query_time_range(thread_id="thread-73")
+
+    assert result["ok"] is True
+    assert runtime.catalog_reads == 1
+
+
+def test_repeated_time_range_query_reuses_fresh_task_snapshot(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
+
+    class CacheRuntime(FakeRuntime):
+        def build_codex_rollout_run(self, thread_id: str, *_args, **_kwargs) -> object:
+            self.build_calls += 1
+            stat = entry[3].stat()
+            return SimpleNamespace(
+                thread_id=thread_id,
+                source_manifest=[
+                    SimpleNamespace(
+                        path=str(entry[3]),
+                        size_bytes=stat.st_size,
+                        modified_at_ns=stat.st_mtime_ns,
+                    )
+                ],
+            )
+
+    runtime = CacheRuntime([entry])
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    first = generator.query_time_range(thread_id="thread-1", bucket_minutes=15)
+    second = generator.query_time_range(thread_id="thread-1", bucket_minutes=5)
+
+    assert first["ok"] is True
+    assert second["ok"] is True
+    assert runtime.build_calls == 1
+    assert runtime.catalog_reads == 1
+
+
+def test_cancelled_time_range_query_stops_before_catalog_reads(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
+    runtime = FakeRuntime([entry])
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    result = generator.query_time_range(
+        thread_id="thread-1", cancelled=lambda: True
+    )
+
+    assert result["code"] == "REPORT_DISCOVERY_FAILED"
+    assert runtime.catalog_reads == 0
+    assert runtime.build_calls == 0
 
 
 def test_time_range_query_rejects_unsupported_bucket_before_build(tmp_path: Path) -> None:
@@ -243,6 +316,28 @@ def test_filtered_selection_is_start_inclusive_end_exclusive_and_all_names_match
 
     assert result["ok"] is True
     assert result["thread_id"] == "start"
+
+
+def test_filtered_selection_includes_task_active_during_range(tmp_path: Path) -> None:
+    entry = _entry(
+        tmp_path,
+        "active",
+        "Long-running task",
+        "2026-08-09T20:00:00+00:00",
+        last_activity="2026-08-10T12:30:00+00:00",
+    )
+    generator = ReportGenerator(
+        FakeRuntime([entry]), _config(tmp_path, Path(".codex/report"))
+    )
+
+    result = generator.generate_report(
+        from_time="2026-08-10T12:00:00Z",
+        to_time="2026-08-10T13:00:00Z",
+        workspace_root=tmp_path,
+    )
+
+    assert result["ok"] is True
+    assert result["thread_id"] == "active"
 
 
 def test_filtered_selection_returns_structured_ambiguity(tmp_path: Path) -> None:

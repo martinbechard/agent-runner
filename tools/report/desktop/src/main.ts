@@ -21,9 +21,11 @@ import {
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseExportResult,
+  parseReportGenerationProgress,
   parseReportHistory,
   parseSearchResponse,
   localDateHourToUtc,
+  normalizeWorkerCount,
   rememberReportForSource,
   rememberedOutputPath,
   reportGenerationProgress,
@@ -49,6 +51,8 @@ const ROW_HEIGHT = 118;
 const OVERSCAN = 5;
 const LAST_EXPORT_STORAGE_KEY = "agent-report:last-export-path:v1";
 const REPORT_HISTORY_STORAGE_KEY = "agent-report:last-report-by-source:v1";
+const WORKER_COUNT_STORAGE_KEY = "agent-report:worker-threads:v1";
+const DEFAULT_WORKER_COUNT = Math.min(8, Math.max(1, navigator.hardwareConcurrency || 4));
 
 const roots = new Set<string>();
 let indexPath: string | null = null;
@@ -58,6 +62,16 @@ let selectedThreadId: string | null = null;
 let lastExportPath: string | null = null;
 let reportHistory: ReportHistory = {};
 let state: ViewState = { kind: "idle" };
+let reportCancellationRequested = false;
+let progressPhaseStartedAt = 0;
+let progressPhaseDetail = "";
+let progressPhaseLabel = "";
+interface WorkerProgressState {
+  readonly label: string;
+  readonly detail: string;
+  readonly startedAt: number;
+}
+const workerProgressStates = new Map<string, WorkerProgressState>();
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -73,6 +87,7 @@ const queryInput = element<HTMLInputElement>("query");
 const fromDateInput = element<HTMLInputElement>("from-date");
 const toDateInput = element<HTMLInputElement>("to-date");
 const includeDescendantsInput = element<HTMLInputElement>("include-descendants");
+const workerThreadsInput = element<HTMLInputElement>("worker-threads");
 const searchButton = element<HTMLButtonElement>("search");
 const exportButton = element<HTMLButtonElement>("export-catalog");
 const openLastExportButton = element<HTMLButtonElement>("open-last-export");
@@ -87,6 +102,9 @@ const progressLabel = element<HTMLSpanElement>("progress-label");
 const progressValue = element<HTMLOutputElement>("progress-value");
 const progressBar = element<HTMLElement>("progress-bar");
 const progressPath = element<HTMLParagraphElement>("progress-path");
+const progressDetail = element<HTMLParagraphElement>("progress-detail");
+const workerProgress = element<HTMLDivElement>("worker-progress");
+const cancelGenerationButton = element<HTMLButtonElement>("cancel-generation");
 const resultsViewport = element<HTMLDivElement>("results-viewport");
 const resultsCanvas = element<HTMLDivElement>("results-canvas");
 const emptyState = element<HTMLDivElement>("empty-state");
@@ -105,8 +123,12 @@ function currentRequest(): SearchRequest {
     fromDate: localDateHourToUtc(fromDateInput.value),
     toDate: localDateHourToUtc(toDateInput.value),
     includeDescendants: includeDescendantsInput.checked,
-    workers: null,
+    workers: selectedWorkerCount(),
   };
+}
+
+function selectedWorkerCount(): number {
+  return normalizeWorkerCount(workerThreadsInput.value, DEFAULT_WORKER_COUNT);
 }
 
 function renderRoots(): void {
@@ -146,6 +168,8 @@ function setState(nextState: ViewState): void {
   generateButton.disabled =
     busy || !entries.some((entry) => entry.threadId === selectedThreadId);
   progressPanel.hidden = !busy;
+  cancelGenerationButton.hidden = state.kind !== "generating";
+  cancelGenerationButton.disabled = false;
   progressPanel.setAttribute("aria-busy", String(busy));
   signalRail.classList.toggle("is-live", busy);
   statusDot.className = busy ? "searching" : state.kind;
@@ -169,6 +193,16 @@ function renderProgress(progress: ProgressPresentation): void {
   progressValue.value = progress.value;
   progressPath.textContent = progress.path;
   progressPath.title = progress.path;
+  if (progress.detail !== undefined) {
+    if (progress.label !== progressPhaseLabel) progressPhaseStartedAt = Date.now();
+    progressPhaseLabel = progress.label;
+    progressPhaseDetail = progress.detail;
+  } else {
+    progressPhaseStartedAt = 0;
+    progressPhaseDetail = "";
+    progressPhaseLabel = "";
+  }
+  renderProgressDetail();
   progressPanel.setAttribute("aria-valuetext", `${progress.label}: ${progress.value}`);
   if (indeterminate) {
     progressBar.style.width = "32%";
@@ -182,6 +216,58 @@ function renderProgress(progress: ProgressPresentation): void {
   progressPanel.setAttribute("aria-valuenow", String(progress.completed));
   progressPanel.setAttribute("aria-valuemax", String(progress.total));
 }
+
+function renderProgressDetail(): void {
+  if (progressPhaseDetail === "" || progressPhaseStartedAt === 0) {
+    progressDetail.hidden = true;
+    progressDetail.textContent = "";
+    return;
+  }
+  const elapsedSeconds = Math.floor((Date.now() - progressPhaseStartedAt) / 1_000);
+  progressDetail.hidden = false;
+  progressDetail.textContent = `${progressPhaseDetail} ${elapsedSeconds}s`;
+}
+
+function renderWorkerProgress(): void {
+  workerProgress.replaceChildren();
+  const entries = [...workerProgressStates.entries()].sort(([left], [right]) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  );
+  workerProgress.hidden = entries.length === 0;
+  for (const [worker, progress] of entries) {
+    const row = document.createElement("p");
+    const elapsed = Math.floor((Date.now() - progress.startedAt) / 1_000);
+    row.textContent = `Worker ${worker} — ${progress.label} · ${progress.detail} ${elapsed}s`;
+    row.title = row.textContent;
+    workerProgress.append(row);
+  }
+}
+
+function updateWorkerProgress(
+  worker: string,
+  label: string,
+  detail: string,
+): void {
+  const previous = workerProgressStates.get(worker);
+  workerProgressStates.set(worker, {
+    label,
+    detail,
+    startedAt: previous?.label === label ? previous.startedAt : Date.now(),
+  });
+  renderWorkerProgress();
+}
+
+function resetWorkerProgress(): void {
+  workerProgressStates.clear();
+  renderWorkerProgress();
+}
+
+window.setInterval(() => {
+  if (state.kind === "generating") {
+    renderProgressDetail();
+    renderWorkerProgress();
+  }
+}, 1_000);
 
 function formatDuration(milliseconds: number): string {
   if (milliseconds < 1_000) {
@@ -252,8 +338,9 @@ function renderVirtualRows(): void {
     title.textContent = entry.taskTitle || "Untitled Codex run";
     title.title = title.textContent;
     const time = document.createElement("time");
-    time.textContent = formatTimestamp(entry.startedAt);
-    time.dateTime = entry.startedAt;
+    time.textContent = formatTimestamp(entry.lastActivityAt);
+    time.dateTime = entry.lastActivityAt;
+    time.title = `Last activity · started ${formatTimestamp(entry.startedAt)}`;
     const context = document.createElement("span");
     context.className = "row-context";
     context.textContent = entry.workspace || entry.sourcePath;
@@ -282,7 +369,8 @@ function renderSelection(): void {
   }
   detailTitle.textContent = selected.taskTitle || "Untitled Codex run";
   detailTitle.title = detailTitle.textContent;
-  addDetail("Observed", formatTimestamp(selected.startedAt));
+  addDetail("Last activity", formatTimestamp(selected.lastActivityAt));
+  addDetail("Started", formatTimestamp(selected.startedAt));
   addDetail("Thread", selected.threadId, true);
   addDetail("Workspace", selected.workspace || "Unavailable", true);
   addDetail("Source", selected.sourcePath, true);
@@ -593,9 +681,27 @@ async function generateReportFor(selected: ReportTarget): Promise<void> {
   const previousResponse =
     state.kind === "ready" ? state.response : { entries, stats: emptyStats() };
   renderProgress(reportGenerationProgress(outputPath));
+  resetWorkerProgress();
+  reportCancellationRequested = false;
   setState({ kind: "generating", response: previousResponse });
   await new Promise<void>((resolve) => window.requestAnimationFrame(() => resolve()));
   try {
+    const onEvent = new Channel<unknown>();
+    onEvent.onmessage = (message: unknown) => {
+      const progress = parseReportGenerationProgress(message);
+      if (progress.worker !== null) {
+        updateWorkerProgress(progress.worker, progress.label, progress.detail);
+        return;
+      }
+      renderProgress({
+        label: progress.label,
+        value: `${Math.round((progress.completed / progress.total) * 100)}%`,
+        path: outputPath,
+        completed: progress.completed,
+        total: progress.total,
+        detail: progress.detail,
+      });
+    };
     const result = parseExportResult(
       await invoke<unknown>("generate_report", {
         request: {
@@ -603,7 +709,9 @@ async function generateReportFor(selected: ReportTarget): Promise<void> {
           roots: [...roots],
           outputPath,
           includeDelegations: true,
+          workers: selectedWorkerCount(),
         },
+        onEvent,
       }),
     );
     setState({ kind: "ready", response: previousResponse });
@@ -620,7 +728,26 @@ async function generateReportFor(selected: ReportTarget): Promise<void> {
       status.textContent = `${summary} The file was saved, but its window could not be opened: ${reportClientError("open_generated_report", error)}`;
     }
   } catch (error: unknown) {
-    setState({ kind: "error", message: reportClientError("generate_report", error) });
+    if (reportCancellationRequested) {
+      setState({ kind: "ready", response: previousResponse });
+      status.textContent = "Report generation cancelled.";
+    } else {
+      setState({ kind: "error", message: reportClientError("generate_report", error) });
+    }
+  }
+}
+
+async function cancelReportGeneration(): Promise<void> {
+  if (state.kind !== "generating" || reportCancellationRequested) return;
+  reportCancellationRequested = true;
+  cancelGenerationButton.disabled = true;
+  status.textContent = "Cancelling report generation…";
+  try {
+    await invoke<void>("cancel_report_generation");
+  } catch (error: unknown) {
+    reportCancellationRequested = false;
+    cancelGenerationButton.disabled = false;
+    setState({ kind: "error", message: reportClientError("cancel_report_generation", error) });
   }
 }
 
@@ -640,6 +767,9 @@ async function generateParentReport(request: ParentReportRequest): Promise<void>
 async function initialize(): Promise<void> {
   restoreLastExport();
   restoreReportHistory();
+  workerThreadsInput.value = String(
+    normalizeWorkerCount(localStorage.getItem(WORKER_COUNT_STORAGE_KEY), DEFAULT_WORKER_COUNT),
+  );
   try {
     await listen<ParentReportRequest>("view-parent-report", (event) => {
       void generateParentReport(event.payload);
@@ -671,6 +801,12 @@ exportButton.addEventListener("click", () => void exportCatalog());
 openLastExportButton.addEventListener("click", () => void openLastExport());
 openDiagnosticLogButton.addEventListener("click", () => void openDiagnosticLog());
 generateButton.addEventListener("click", () => void generateReport());
+cancelGenerationButton.addEventListener("click", () => void cancelReportGeneration());
+workerThreadsInput.addEventListener("change", () => {
+  const workers = selectedWorkerCount();
+  workerThreadsInput.value = String(workers);
+  localStorage.setItem(WORKER_COUNT_STORAGE_KEY, String(workers));
+});
 for (const input of [queryInput, fromDateInput, toDateInput]) {
   input.addEventListener("keydown", (event: KeyboardEvent) => {
     if (event.key === "Enter") {

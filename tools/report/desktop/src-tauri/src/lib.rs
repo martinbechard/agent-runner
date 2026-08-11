@@ -12,27 +12,28 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::SystemTime;
 
 use agent_report_core::{
-    DiscoveryProgress, DiscoveryRequest, DiscoveryResponse, DiscoveryStats, PROTOCOL_VERSION,
-    collect_rollout_paths, index_rollouts, read_codex_task_titles,
+    DiscoveryEntry, DiscoveryProgress, DiscoveryRequest, DiscoveryResponse, DiscoveryStats,
+    PROTOCOL_VERSION, collect_rollout_paths, index_rollouts, read_codex_task_parents,
+    read_codex_task_titles,
 };
-use chrono::{
-    DateTime, Duration, Local, LocalResult, NaiveDate, NaiveDateTime, SecondsFormat, TimeZone,
-    Timelike, Utc,
-};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Timelike, Utc};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use tauri::ipc::Channel;
 use tauri::webview::NewWindowResponse;
 use tauri::{AppHandle, Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_shell::ShellExt;
+use tauri_plugin_shell::process::{CommandChild, CommandEvent};
 use url::Url;
 
 static REPORT_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
 static DIAGNOSTIC_WRITE_LOCK: Mutex<()> = Mutex::new(());
+static REPORT_PROCESS: Mutex<Option<CommandChild>> = Mutex::new(None);
+static REPORT_CANCEL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 const DIAGNOSTIC_LOG_FILENAME: &str = "agent-report.log";
 const DIAGNOSTIC_LOG_PREVIOUS_FILENAME: &str = "agent-report.previous.log";
@@ -165,28 +166,21 @@ impl CatalogDateRange {
         Ok(range)
     }
 
-    fn includes_candidate(&self, path: &Path) -> bool {
+    fn includes_entry(&self, entry: &DiscoveryEntry) -> bool {
         if self.from.is_none() && self.to_exclusive.is_none() {
             return true;
         }
-        let Some(created_at) = encoded_rollout_timestamp(path) else {
+        let Ok(created_at) = DateTime::parse_from_rfc3339(&entry.started_at) else {
             return true;
         };
-        let Ok(updated_at) = fs::metadata(path).and_then(|metadata| metadata.modified()) else {
+        let Some(updated_at) = activity_timestamp(entry.modified_at_ns) else {
             return true;
         };
-        let updated_at = DateTime::<Utc>::from(updated_at);
-        let occurred_during = |timestamp: DateTime<Utc>| {
-            !self.from.is_some_and(|from| timestamp < from)
-                && !self
-                    .to_exclusive
-                    .is_some_and(|to_exclusive| timestamp >= to_exclusive)
-        };
-        let spans_range = self
-            .from
-            .zip(self.to_exclusive)
-            .is_some_and(|(from, to_exclusive)| created_at < from && updated_at >= to_exclusive);
-        occurred_during(created_at) || occurred_during(updated_at) || spans_range
+        let created_at = created_at.with_timezone(&Utc);
+        !self
+            .to_exclusive
+            .is_some_and(|to_exclusive| created_at >= to_exclusive)
+            && !self.from.is_some_and(|from| updated_at < from)
     }
 }
 
@@ -224,18 +218,11 @@ fn parse_catalog_boundary(
     Ok(Some(if upper { parsed + increment } else { parsed }))
 }
 
-fn encoded_rollout_timestamp(path: &Path) -> Option<DateTime<Utc>> {
-    let filename = path.file_name()?.to_str()?;
-    let start = filename.find("rollout-")? + "rollout-".len();
-    let timestamp = filename.get(start..start + 19)?;
-    let timestamp = NaiveDateTime::parse_from_str(timestamp, "%Y-%m-%dT%H-%M-%S").ok()?;
-    match Local.from_local_datetime(&timestamp) {
-        LocalResult::Single(timestamp) => Some(timestamp.with_timezone(&Utc)),
-        LocalResult::Ambiguous(first, second) => {
-            Some((if first <= second { first } else { second }).with_timezone(&Utc))
-        }
-        LocalResult::None => None,
-    }
+fn activity_timestamp(timestamp_ns: i64) -> Option<DateTime<Utc>> {
+    DateTime::from_timestamp(
+        timestamp_ns.div_euclid(1_000_000_000),
+        u32::try_from(timestamp_ns.rem_euclid(1_000_000_000)).ok()?,
+    )
 }
 
 /// Search controls accepted from the desktop webview.
@@ -275,6 +262,8 @@ pub struct CatalogEntry {
     pub task_title: String,
     /// Recorded session timestamp.
     pub started_at: String,
+    /// Last observed rollout activity timestamp.
+    pub last_activity_at: String,
     /// Recorded workspace path.
     pub workspace: String,
     /// Exact local rollout path.
@@ -297,6 +286,17 @@ pub struct SearchResponse {
     pub entries: Vec<CatalogEntry>,
     /// Native scan and cache statistics.
     pub stats: DiscoveryStats,
+}
+
+/// One determinate progress update from the report renderer.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportGenerationProgress {
+    pub completed: u8,
+    pub total: u8,
+    pub label: String,
+    pub detail: String,
+    pub worker: Option<String>,
 }
 
 /// Initial local locations suggested by the native application.
@@ -345,6 +345,8 @@ pub struct GenerateReportRequest {
     pub output_path: PathBuf,
     /// Whether cross-root delegation links should be followed.
     pub include_delegations: bool,
+    /// Number of bounded worker threads used by the renderer.
+    pub workers: usize,
 }
 
 /// Search caller-selected roots synchronously for tests and native commands.
@@ -363,11 +365,7 @@ where
         return Err("Select at least one Codex log folder".to_owned());
     }
     let date_range = CatalogDateRange::parse(&request.from_date, &request.to_date)?;
-    let paths = collect_rollout_paths(&request.roots)
-        .map_err(|error| error.to_string())?
-        .into_iter()
-        .filter(|path| date_range.includes_candidate(path))
-        .collect();
+    let paths = collect_rollout_paths(&request.roots).map_err(|error| error.to_string())?;
     let mut response = index_rollouts(
         DiscoveryRequest {
             version: PROTOCOL_VERSION,
@@ -379,13 +377,17 @@ where
     )
     .map_err(|error| error.to_string())?;
     if let Some(state_path) = request.state_db_path.as_deref() {
-        let thread_ids = response.entries.iter().filter_map(|entry| {
-            entry
-                .identity
-                .as_ref()
-                .map(|identity| identity.thread_id.clone())
-        });
-        if let Ok(titles) = read_codex_task_titles(state_path, thread_ids) {
+        let thread_ids = response
+            .entries
+            .iter()
+            .filter_map(|entry| {
+                entry
+                    .identity
+                    .as_ref()
+                    .map(|identity| identity.thread_id.clone())
+            })
+            .collect::<Vec<_>>();
+        if let Ok(titles) = read_codex_task_titles(state_path, thread_ids.clone()) {
             for entry in &mut response.entries {
                 if let Some(title) = entry
                     .identity
@@ -396,11 +398,22 @@ where
                 }
             }
         }
+        if let Ok(parents) = read_codex_task_parents(state_path, thread_ids) {
+            for entry in &mut response.entries {
+                if let Some(identity) = entry.identity.as_mut() {
+                    identity.parent_thread_id = parents
+                        .get(&identity.thread_id)
+                        .cloned()
+                        .unwrap_or_default();
+                }
+            }
+        }
     }
     Ok(filter_catalog(
         response,
         &request.query,
         request.include_descendants,
+        date_range,
     ))
 }
 
@@ -408,13 +421,18 @@ fn filter_catalog(
     response: DiscoveryResponse,
     query: &str,
     include_descendants: bool,
+    date_range: CatalogDateRange,
 ) -> SearchResponse {
     let normalized_query = query.trim().to_lowercase();
     let mut entries = response
         .entries
         .into_iter()
         .filter_map(|entry| {
+            if !date_range.includes_entry(&entry) {
+                return None;
+            }
             let identity = entry.identity?;
+            let last_activity_at = activity_timestamp(entry.modified_at_ns)?.to_rfc3339();
             if !include_descendants && !identity.parent_thread_id.is_empty() {
                 return None;
             }
@@ -423,6 +441,7 @@ fn filter_catalog(
                 parent_thread_id: identity.parent_thread_id,
                 task_title: entry.task_title,
                 started_at: entry.started_at,
+                last_activity_at,
                 workspace: entry.workspace,
                 source_path: entry.path,
                 agent_path: identity.agent_path,
@@ -446,8 +465,9 @@ fn filter_catalog(
         .collect::<Vec<_>>();
     entries.sort_by(|left, right| {
         right
-            .started_at
-            .cmp(&left.started_at)
+            .last_activity_at
+            .cmp(&left.last_activity_at)
+            .then_with(|| right.started_at.cmp(&left.started_at))
             .then_with(|| left.source_path.cmp(&right.source_path))
     });
     SearchResponse {
@@ -477,7 +497,7 @@ pub fn render_catalog_html(response: &SearchResponse) -> String {
                 "<article class=\"run\"><p class=\"time\">{}</p><h2>{}</h2>\
                  <p class=\"thread\">{}</p><dl><dt>Workspace</dt><dd>{}</dd>\
                  <dt>Source</dt><dd>{}</dd></dl></article>",
-                encode_text(&entry.started_at),
+                encode_text(&entry.last_activity_at),
                 encode_text(if entry.task_title.is_empty() {
                     "Untitled Codex run"
                 } else {
@@ -590,9 +610,49 @@ async fn export_catalog(
 async fn generate_report(
     app: AppHandle,
     request: GenerateReportRequest,
+    on_event: Channel<ReportGenerationProgress>,
 ) -> Result<ExportResult, String> {
-    let result = generate_full_report(&app, request).await;
+    let result = generate_full_report(&app, request, &on_event).await;
     record_failed_result(&app, "generate_report", result)
+}
+
+#[tauri::command]
+fn cancel_report_generation() -> Result<(), String> {
+    REPORT_CANCEL_REQUESTED.store(true, Ordering::SeqCst);
+    let child = REPORT_PROCESS
+        .lock()
+        .map_err(|_| "report process lock is unavailable".to_owned())?
+        .take();
+    if let Some(child) = child {
+        terminate_process_tree(child.pid());
+        let _ = child.kill();
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn terminate_process_tree(pid: u32) {
+    let output = Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .output();
+    if let Ok(output) = output {
+        for child_pid in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|value| value.trim().parse::<u32>().ok())
+        {
+            terminate_process_tree(child_pid);
+            let _ = Command::new("kill")
+                .args(["-KILL", &child_pid.to_string()])
+                .status();
+        }
+    }
+}
+
+#[cfg(windows)]
+fn terminate_process_tree(pid: u32) {
+    let _ = Command::new("taskkill")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .status();
 }
 
 fn renderer_override(value: Option<OsString>) -> Option<PathBuf> {
@@ -601,10 +661,13 @@ fn renderer_override(value: Option<OsString>) -> Option<PathBuf> {
 
 fn full_report_arguments(request: &GenerateReportRequest) -> Vec<OsString> {
     let mut arguments = vec![
+        OsString::from("--progress"),
         OsString::from("--codex-thread"),
         OsString::from(&request.thread_id),
         OsString::from("--output"),
         request.output_path.as_os_str().to_owned(),
+        OsString::from("--workers"),
+        OsString::from(request.workers.to_string()),
     ];
     for root in &request.roots {
         arguments.push(OsString::from("--sessions-root"));
@@ -642,43 +705,71 @@ fn completed_report(
 async fn generate_full_report(
     app: &AppHandle,
     request: GenerateReportRequest,
+    on_event: &Channel<ReportGenerationProgress>,
 ) -> Result<ExportResult, String> {
     if request.thread_id.trim().is_empty() {
         return Err("Select a root run before generating a report".to_owned());
     }
+    if !(1..=64).contains(&request.workers) {
+        return Err("Worker threads must be between 1 and 64".to_owned());
+    }
     ensure_output_parent(&request.output_path)?;
     let arguments = full_report_arguments(&request);
-    if let Some(renderer) = renderer_override(env::var_os("AGENT_REPORT_COMMAND")) {
-        let renderer_display = renderer.display().to_string();
-        let output = tauri::async_runtime::spawn_blocking(move || {
-            Command::new(&renderer).args(&arguments).output()
-        })
-        .await
-        .map_err(|error| format!("report generation task failed: {error}"))?
-        .map_err(|error| {
-            format!("unable to start full report renderer {renderer_display}: {error}")
-        })?;
-        return completed_report(
-            request,
-            output.status.success(),
-            output.status.to_string(),
-            &output.stderr,
-        );
+    REPORT_CANCEL_REQUESTED.store(false, Ordering::SeqCst);
+    let command = if let Some(renderer) = renderer_override(env::var_os("AGENT_REPORT_COMMAND")) {
+        app.shell().command(renderer).args(arguments)
+    } else {
+        app.shell()
+            .sidecar("agent-report")
+            .map_err(|error| format!("unable to prepare bundled full report renderer: {error}"))?
+            .args(arguments)
+    };
+    let (mut receiver, child) = command
+        .spawn()
+        .map_err(|error| format!("unable to start full report renderer: {error}"))?;
+    *REPORT_PROCESS
+        .lock()
+        .map_err(|_| "report process lock is unavailable".to_owned())? = Some(child);
+    let mut stderr = Vec::new();
+    let mut exit_code = None;
+    while let Some(event) = receiver.recv().await {
+        match event {
+            CommandEvent::Stderr(line) => {
+                if let Ok(text) = std::str::from_utf8(&line)
+                    && let Some(payload) = text.strip_prefix("AGENT_REPORT_PROGRESS ")
+                    && let Ok(progress) = serde_json::from_str::<ReportGenerationProgress>(payload)
+                {
+                    let _ = on_event.send(progress);
+                } else {
+                    stderr.extend_from_slice(&line);
+                    stderr.push(b'\n');
+                }
+            }
+            CommandEvent::Terminated(payload) => exit_code = payload.code,
+            CommandEvent::Error(error) => {
+                stderr.extend_from_slice(error.as_bytes());
+                stderr.push(b'\n');
+            }
+            CommandEvent::Stdout(_) => {}
+            _ => {}
+        }
     }
-
-    let output = app
-        .shell()
-        .sidecar("agent-report")
-        .map_err(|error| format!("unable to prepare bundled full report renderer: {error}"))?
-        .args(arguments)
-        .output()
-        .await
-        .map_err(|error| format!("unable to start bundled full report renderer: {error}"))?;
-    let status = output.status.code().map_or_else(
-        || "terminated without an exit code".to_owned(),
-        |code| format!("exit status {code}"),
-    );
-    completed_report(request, output.status.success(), status, &output.stderr)
+    REPORT_PROCESS
+        .lock()
+        .map_err(|_| "report process lock is unavailable".to_owned())?
+        .take();
+    if REPORT_CANCEL_REQUESTED.swap(false, Ordering::SeqCst) {
+        return Err("Report generation cancelled".to_owned());
+    }
+    completed_report(
+        request,
+        exit_code == Some(0),
+        exit_code.map_or_else(
+            || "terminated without an exit code".to_owned(),
+            |code| format!("exit status {code}"),
+        ),
+        &stderr,
+    )
 }
 
 fn ensure_output_parent(path: &Path) -> Result<(), String> {
@@ -804,6 +895,7 @@ async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), 
             REPORT_WINDOW_COUNTER.fetch_add(1, Ordering::Relaxed)
         );
         let navigation_app = app.clone();
+        let popup_app = app.clone();
         WebviewWindowBuilder::new(&app, label, WebviewUrl::CustomProtocol(url))
             .title(format!("Agent Report — {title}"))
             .inner_size(1280.0, 800.0)
@@ -823,7 +915,18 @@ async fn open_report_window(app: AppHandle, output_path: PathBuf) -> Result<(), 
                 false
             })
             .on_new_window(move |popup_url, _features| {
-                if report_popup_is_allowed(&report_path, &popup_url) {
+                let allowed = report_popup_is_allowed(&report_path, &popup_url);
+                let _ = record_diagnostic(
+                    &popup_app,
+                    if allowed { "info" } else { "warning" },
+                    if allowed {
+                        "sequence_popup_allowed"
+                    } else {
+                        "sequence_popup_denied"
+                    },
+                    popup_url.as_str(),
+                );
+                if allowed {
                     NewWindowResponse::Allow
                 } else {
                     NewWindowResponse::Deny
@@ -888,6 +991,7 @@ pub fn run() {
             search_rollouts,
             export_catalog,
             generate_report,
+            cancel_report_generation,
             open_report_window,
             record_client_error,
             open_diagnostic_log,
@@ -901,10 +1005,18 @@ mod tests {
     use std::ffi::OsString;
     use std::fs;
     use std::path::PathBuf;
+    #[cfg(unix)]
+    use std::process::Command;
+    #[cfg(unix)]
+    use std::thread;
+    #[cfg(unix)]
+    use std::time::Duration;
 
     use serde_json::Value;
     use tempfile::TempDir;
 
+    #[cfg(unix)]
+    use super::terminate_process_tree;
     use super::{
         DIAGNOSTIC_LOG_MAX_BYTES, GenerateReportRequest, append_diagnostic_entry,
         full_report_arguments, parent_report_request, renderer_override,
@@ -969,21 +1081,62 @@ mod tests {
             ],
             output_path: PathBuf::from("/tmp/report.html"),
             include_delegations: true,
+            workers: 6,
         };
 
         assert_eq!(
             full_report_arguments(&request),
             vec![
+                OsString::from("--progress"),
                 OsString::from("--codex-thread"),
                 OsString::from("root-thread"),
                 OsString::from("--output"),
                 OsString::from("/tmp/report.html"),
+                OsString::from("--workers"),
+                OsString::from("6"),
                 OsString::from("--sessions-root"),
                 OsString::from("/tmp/sessions"),
                 OsString::from("--sessions-root"),
                 OsString::from("/tmp/archive"),
                 OsString::from("--include-delegations"),
             ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn terminates_descendants_of_a_cancelled_renderer() {
+        let mut parent = Command::new("sh")
+            .args(["-c", "sleep 60 & wait"])
+            .spawn()
+            .expect("spawn renderer fixture");
+        let child_pid = (0..20)
+            .find_map(|_| {
+                let output = Command::new("pgrep")
+                    .args(["-P", &parent.id().to_string()])
+                    .output()
+                    .expect("query renderer child");
+                let pid = String::from_utf8_lossy(&output.stdout)
+                    .lines()
+                    .next()
+                    .and_then(|value| value.parse::<u32>().ok());
+                if pid.is_none() {
+                    thread::sleep(Duration::from_millis(10));
+                }
+                pid
+            })
+            .expect("renderer child started");
+
+        terminate_process_tree(parent.id());
+        let _ = parent.kill();
+        let _ = parent.wait();
+
+        assert!(
+            !Command::new("kill")
+                .args(["-0", &child_pid.to_string()])
+                .status()
+                .expect("check renderer child")
+                .success()
         );
     }
 

@@ -191,6 +191,12 @@ fn overlays_codex_app_titles_on_discovered_rollouts() {
         .expect("create threads fixture");
     connection
         .execute(
+            "CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL)",
+            (),
+        )
+        .expect("create spawn-edge fixture");
+    connection
+        .execute(
             "INSERT INTO threads (id, title) VALUES (?1, ?2)",
             ("root", "Stored desktop task title"),
         )
@@ -209,6 +215,60 @@ fn overlays_codex_app_titles_on_discovered_rollouts() {
     .expect("search titled desktop catalog");
 
     assert_eq!(response.entries[0].task_title, "Stored desktop task title");
+}
+
+#[test]
+fn treats_reused_delegation_tasks_as_roots_when_codex_has_no_spawn_edge() {
+    let directory = TempDir::new().expect("create temporary directory");
+    let rollout = directory.path().join("reused.jsonl");
+    fs::write(
+        &rollout,
+        concat!(
+            "{\"timestamp\":\"2026-07-21T12:00:00Z\",\"type\":\"session_meta\",",
+            "\"payload\":{\"id\":\"reused\",\"cwd\":\"/work/example\",",
+            "\"thread_source\":\"subagent\"}}\n",
+            "{\"type\":\"response_item\",\"payload\":{\"type\":\"message\",",
+            "\"role\":\"user\",\"content\":[{\"text\":\"<codex_delegation>",
+            "<source_thread_id>origin</source_thread_id><input>Dispatch current work</input>",
+            "</codex_delegation>\"}]}}\n"
+        ),
+    )
+    .expect("write reused rollout");
+    let state_path = directory.path().join("state_5.sqlite");
+    let connection = Connection::open(&state_path).expect("open state fixture");
+    connection
+        .execute(
+            "CREATE TABLE threads (id TEXT PRIMARY KEY, title TEXT NOT NULL)",
+            (),
+        )
+        .expect("create threads fixture");
+    connection
+        .execute(
+            "CREATE TABLE thread_spawn_edges (parent_thread_id TEXT NOT NULL, child_thread_id TEXT PRIMARY KEY, status TEXT NOT NULL)",
+            (),
+        )
+        .expect("create spawn-edge fixture");
+    connection
+        .execute(
+            "INSERT INTO threads (id, title) VALUES ('reused', 'Dispatch current work')",
+            (),
+        )
+        .expect("insert task fixture");
+
+    let response = search_catalog_sync(SearchRequest {
+        roots: vec![directory.path().to_path_buf()],
+        index_path: None,
+        state_db_path: Some(state_path),
+        query: String::new(),
+        from_date: String::new(),
+        to_date: String::new(),
+        include_descendants: false,
+        workers: Some(1),
+    })
+    .expect("search reused root task");
+
+    assert_eq!(response.entries.len(), 1);
+    assert_eq!(response.entries[0].thread_id, "reused");
 }
 
 #[test]
@@ -279,8 +339,8 @@ fn selects_rollouts_created_updated_or_spanning_the_requested_range() {
     };
     let response = search();
 
-    assert_eq!(response.stats.candidate_files, 3);
-    assert_eq!(response.stats.scanned_files, 3);
+    assert_eq!(response.stats.candidate_files, 5);
+    assert_eq!(response.stats.scanned_files, 5);
     assert_eq!(response.stats.cached_files, 0);
     let mut selected_ids = response
         .entries
@@ -303,9 +363,9 @@ fn selects_rollouts_created_updated_or_spanning_the_requested_range() {
     );
 
     let warm = search();
-    assert_eq!(warm.stats.candidate_files, 3);
+    assert_eq!(warm.stats.candidate_files, 5);
     assert_eq!(warm.stats.scanned_files, 0);
-    assert_eq!(warm.stats.cached_files, 3);
+    assert_eq!(warm.stats.cached_files, 5);
 }
 
 #[test]

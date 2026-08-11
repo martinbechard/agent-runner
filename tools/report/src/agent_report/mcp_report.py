@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import os
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
-from datetime import datetime, time, timedelta, tzinfo
+from datetime import datetime, time, timedelta, timezone, tzinfo
 from pathlib import Path
+from time import monotonic
 from types import ModuleType
 from typing import Literal
 from urllib.parse import urlparse
@@ -39,6 +40,7 @@ TimeRangeMeasure = Literal[
     "cost_usd",
 ]
 BucketMinutes = Literal[1, 5, 15, 30, 60]
+RUN_CACHE_FRESH_SECONDS = 60.0
 
 
 @dataclass(frozen=True)
@@ -60,6 +62,7 @@ class TaskCandidate:
     thread_id: str
     title: str
     timestamp: datetime
+    last_activity_at: datetime
 
 
 def load_server_config(
@@ -178,6 +181,12 @@ class ReportGenerator:
     def __init__(self, runtime: ModuleType, config: ReportServerConfig) -> None:
         self._runtime = runtime
         self._config = config
+        self._run_cache: dict[
+            str, tuple[object, tuple[tuple[str, int, int], ...], float]
+        ] = {}
+        self._discovery_cache: (
+            tuple[list[TaskCandidate], list[Path], str | None, float] | None
+        ) = None
 
     def generate_report(
         self,
@@ -204,7 +213,7 @@ class ReportGenerator:
             )
 
         try:
-            candidates, candidate_paths = self._discover_candidates()
+            candidates, candidate_paths = self._discover_candidates(thread_id=thread_id)
         except (OSError, RuntimeError, ValueError) as error:
             return self._error("REPORT_DISCOVERY_FAILED", str(error))
 
@@ -301,6 +310,7 @@ class ReportGenerator:
         bucket_minutes: BucketMinutes = 5,
         measure: TimeRangeMeasure = "wall_time",
         include_events: bool = False,
+        cancelled: Callable[[], bool] | None = None,
     ) -> dict[str, object]:
         """Return bucketed task telemetry without rendering or writing a report."""
 
@@ -343,7 +353,9 @@ class ReportGenerator:
             return self._error("REPORT_INVALID_REQUEST", str(error))
 
         try:
-            candidates, candidate_paths = self._discover_candidates()
+            candidates, candidate_paths = self._discover_candidates(
+                thread_id=thread_id, cancelled=cancelled
+            )
         except (OSError, RuntimeError, ValueError) as error:
             return self._error("REPORT_DISCOVERY_FAILED", str(error))
         lower_bound, upper_bound = self._selection_range(None, None)
@@ -358,12 +370,11 @@ class ReportGenerator:
             return selected
 
         try:
-            run = self._runtime.build_codex_rollout_run(
+            run = self._get_or_build_run(
                 selected.thread_id,
-                list(self._config.session_roots),
                 candidate_paths=candidate_paths,
                 title=selected.title,
-                discovery_index_path=self._runtime._default_codex_discovery_index_path(),
+                cancelled=cancelled,
             )
             query = self._runtime.query_codex_run_time_range(
                 run,
@@ -389,6 +400,7 @@ class ReportGenerator:
         *,
         thread_id: str,
         event_id: str,
+        cancelled: Callable[[], bool] | None = None,
     ) -> dict[str, object]:
         """Resolve one query event ID through a fresh authoritative task snapshot."""
 
@@ -402,7 +414,9 @@ class ReportGenerator:
                 "event_id must use the evt_ prefix followed by 24 lowercase hexadecimal characters",
             )
         try:
-            candidates, candidate_paths = self._discover_candidates()
+            candidates, candidate_paths = self._discover_candidates(
+                thread_id=thread_id, cancelled=cancelled
+            )
         except (OSError, RuntimeError, ValueError) as error:
             return self._error("REPORT_DISCOVERY_FAILED", str(error))
         lower_bound, upper_bound = self._selection_range(None, None)
@@ -416,12 +430,11 @@ class ReportGenerator:
         if isinstance(selected, dict):
             return selected
         try:
-            run = self._runtime.build_codex_rollout_run(
+            run = self._get_or_build_run(
                 selected.thread_id,
-                list(self._config.session_roots),
                 candidate_paths=candidate_paths,
                 title=selected.title,
-                discovery_index_path=self._runtime._default_codex_discovery_index_path(),
+                cancelled=cancelled,
             )
             event = self._runtime.get_codex_run_event_details(run, event_id)
         except (OSError, RuntimeError, ValueError) as error:
@@ -464,7 +477,17 @@ class ReportGenerator:
             parsed = parsed.replace(tzinfo=self._config.timezone)
         return parsed
 
-    def _discover_candidates(self) -> tuple[list[TaskCandidate], list[Path]]:
+    def _discover_candidates(
+        self,
+        *,
+        thread_id: str | None = None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> tuple[list[TaskCandidate], list[Path]]:
+        cached = self._discovery_cache
+        if cached is not None and monotonic() - cached[3] <= RUN_CACHE_FRESH_SECONDS:
+            candidates, paths, cached_thread_id, _cached_at = cached
+            if cached_thread_id is None or cached_thread_id == thread_id:
+                return candidates, paths
         candidate_paths = sorted(
             {
                 path.resolve()
@@ -479,7 +502,11 @@ class ReportGenerator:
         candidates: list[TaskCandidate] = []
         seen: dict[str, Path] = {}
         for path, metadata in discovery.metadata.items():
+            if cancelled is not None and cancelled():
+                raise RuntimeError("Report operation cancelled")
             if metadata.identity is None:
+                continue
+            if thread_id is not None and metadata.identity[0] != thread_id:
                 continue
             indexed_entry = self._runtime._read_codex_catalog_entry(
                 path, path.parent.name, include_title=True
@@ -489,7 +516,10 @@ class ReportGenerator:
             candidate = TaskCandidate(
                 thread_id=metadata.identity[0],
                 title=indexed_entry.task_title or metadata.task_title,
-                timestamp=indexed_entry.started_at,
+                timestamp=datetime.fromisoformat(metadata.started_at.replace("Z", "+00:00")),
+                last_activity_at=datetime.fromtimestamp(
+                    metadata.modified_at_ns / 1_000_000_000, tz=timezone.utc
+                ),
             )
             previous = seen.get(candidate.thread_id)
             if previous is not None and previous != path:
@@ -499,7 +529,51 @@ class ReportGenerator:
                 )
             seen[candidate.thread_id] = path
             candidates.append(candidate)
+        self._discovery_cache = (candidates, candidate_paths, thread_id, monotonic())
         return candidates, candidate_paths
+
+    def _get_or_build_run(
+        self,
+        thread_id: str,
+        *,
+        candidate_paths: list[Path],
+        title: str,
+        cancelled: Callable[[], bool] | None,
+    ) -> object:
+        if cancelled is not None and cancelled():
+            raise RuntimeError("Report operation cancelled")
+        cached = self._run_cache.get(thread_id)
+        if cached is not None:
+            run, signature, cached_at = cached
+            if monotonic() - cached_at <= RUN_CACHE_FRESH_SECONDS:
+                return run
+            try:
+                current = tuple(
+                    (path, Path(path).stat().st_size, Path(path).stat().st_mtime_ns)
+                    for path, _size, _mtime in signature
+                )
+            except OSError:
+                current = ()
+            if current == signature:
+                return run
+            self._run_cache.pop(thread_id, None)
+
+        run = self._runtime.build_codex_rollout_run(
+            thread_id,
+            list(self._config.session_roots),
+            candidate_paths=candidate_paths,
+            title=title,
+            discovery_index_path=self._runtime._default_codex_discovery_index_path(),
+            cancelled=cancelled,
+        )
+        manifest = getattr(run, "source_manifest", None)
+        if isinstance(manifest, list) and manifest:
+            signature = tuple(
+                (str(entry.path), int(entry.size_bytes), int(entry.modified_at_ns))
+                for entry in manifest
+            )
+            self._run_cache[thread_id] = (run, signature, monotonic())
+        return run
 
     def _select_candidate(
         self,
@@ -517,15 +591,16 @@ class ReportGenerator:
             matches = [
                 item
                 for item in candidates
-                if lower_bound
-                <= item.timestamp.astimezone(lower_bound.tzinfo)
-                < upper_bound
+                if item.timestamp.astimezone(lower_bound.tzinfo) < upper_bound
+                and item.last_activity_at.astimezone(lower_bound.tzinfo) >= lower_bound
                 and all(query in item.title.casefold() for query in queries)
             ]
         if not matches:
             return self._error("REPORT_NOT_FOUND", "No matching Codex task was found.")
         if len(matches) > 1:
-            ordered = sorted(matches, key=lambda item: (item.timestamp, item.thread_id))
+            ordered = sorted(
+                matches, key=lambda item: (item.last_activity_at, item.thread_id)
+            )
             return {
                 "ok": False,
                 "code": "REPORT_SELECTION_AMBIGUOUS",
@@ -535,6 +610,7 @@ class ReportGenerator:
                         "thread_id": item.thread_id,
                         "title": item.title,
                         "timestamp": item.timestamp.isoformat(),
+                        "last_activity_at": item.last_activity_at.isoformat(),
                     }
                     for item in ordered
                 ],

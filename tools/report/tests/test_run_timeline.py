@@ -2523,6 +2523,71 @@ def test_native_codex_heatmap_exec_preview_starts_with_parameters():
     ).startswith("exec: const p = await tools.update_plan")
 
 
+def test_native_codex_heatmap_batches_interval_preview_matching(monkeypatch):
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    def reject_per_interval_scan(*_args, **_kwargs):
+        raise AssertionError("heatmap must not rescan a thread for every interval")
+
+    monkeypatch.setattr(module, "_runtime_interval_preview", reject_per_interval_scan)
+
+    payload = module._execution_heatmap_payload(run)
+
+    assert payload["intervals"]
+    assert any(interval["preview"] for interval in payload["intervals"])
+
+
+def test_native_codex_heatmap_workers_preserve_output_and_report_distinct_phase():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    aggregate_events = []
+    worker_events = []
+
+    serial = module._execution_heatmap_payload(run, workers=1)
+    parallel = module._execution_heatmap_payload(
+        run,
+        workers=2,
+        progress=lambda completed, label, detail: aggregate_events.append(
+            (completed, label, detail)
+        ),
+        worker_progress=lambda completed, label, detail, worker: worker_events.append(
+            (completed, label, detail, worker)
+        ),
+    )
+
+    assert parallel == serial
+    assert any(
+        label == "Building heatmap drilldown previews"
+        for _, label, _ in aggregate_events
+    )
+    assert any(label == "Heatmap drilldown previews" for _, label, _, _ in worker_events)
+
+
+def test_heatmap_overlap_index_handles_many_long_lived_events_exactly():
+    module = _load_module()
+    base = datetime(2026, 8, 11, tzinfo=timezone.utc)
+    events = [
+        (base + timedelta(seconds=start), base + timedelta(seconds=end), value)
+        for start, end, value in (
+            (10, 169, "earliest containing"),
+            (25, 218, "longer containing"),
+            (38, 230, "latest ending"),
+            (71, 122, "starts inside"),
+        )
+    ]
+    intervals = [
+        (
+            0,
+            None,
+            base + timedelta(seconds=70),
+            base + timedelta(seconds=122),
+        )
+    ]
+
+    assert module._overlap_sweep(intervals, events) == {0: "earliest containing"}
+
+
 def test_native_codex_time_range_query_returns_bucketed_series_and_optional_events():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
@@ -4930,6 +4995,25 @@ def test_codex_output_writer_splits_sequence_into_companion_file(tmp_path):
     assert '<div id="timeline"' not in sequence_html
     assert 'class="agent-table"' not in sequence_html
     assert '<div class="metrics">' not in sequence_html
+
+
+def test_codex_output_writer_url_encodes_sequence_companion_filename(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    run = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_delegations=True,
+    )
+    output = tmp_path / "# report with spaces.html"
+
+    module._write_codex_outputs(run, output)
+
+    main_html = output.read_text(encoding="utf-8")
+    assert (
+        'href="%23%20report%20with%20spaces-sequence.html?view=sequence#agent-sequence"'
+        in main_html
+    )
 
 
 def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):

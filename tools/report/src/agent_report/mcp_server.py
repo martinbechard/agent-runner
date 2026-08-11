@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
+import threading
+from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import Literal
+from typing import Literal, TypeVar
 
 from fastmcp import Context, FastMCP
 
@@ -24,6 +25,8 @@ from agent_report.mcp_report import (
     validate_startup,
     workspace_root_from_uri,
 )
+
+_T = TypeVar("_T")
 
 
 @asynccontextmanager
@@ -55,6 +58,23 @@ async def _client_workspace_root(ctx: Context) -> Path | None:
         if path is not None:
             return path
     return None
+
+
+async def _run_cancellable(
+    operation: Callable[..., _T], /, **kwargs: object
+) -> _T:
+    """Run report work off-loop and ask it to stop when the MCP call is cancelled."""
+
+    cancel_event = threading.Event()
+    try:
+        return await asyncio.to_thread(
+            operation,
+            cancelled=cancel_event.is_set,
+            **kwargs,
+        )
+    except asyncio.CancelledError:
+        cancel_event.set()
+        raise
 
 
 def create_server() -> FastMCP:
@@ -122,7 +142,7 @@ def create_server() -> FastMCP:
         if not isinstance(report_lock, asyncio.Lock):
             raise TypeError("Agent report server did not initialize correctly")
         async with report_lock:
-            return await asyncio.to_thread(
+            return await _run_cancellable(
                 generator.query_time_range,
                 thread_id=thread_id,
                 from_time=from_time,
@@ -147,7 +167,7 @@ def create_server() -> FastMCP:
         if not isinstance(report_lock, asyncio.Lock):
             raise TypeError("Agent report server did not initialize correctly")
         async with report_lock:
-            return await asyncio.to_thread(
+            return await _run_cancellable(
                 generator.get_event_details,
                 thread_id=thread_id,
                 event_id=event_id,
