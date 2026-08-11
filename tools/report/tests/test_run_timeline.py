@@ -2373,6 +2373,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<button type="button" data-heatmap-minutes="1">1 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
+    assert '<button type="button" data-heatmap-minutes="30">30 min</button>' in html
+    assert '<button type="button" data-heatmap-minutes="60">1 hour</button>' in html
     assert 'data-heatmap-scroll="left" aria-label="Scroll heatmap left"' in html
     assert 'data-heatmap-scroll="right" aria-label="Scroll heatmap right"' in html
     assert "heatmapScroll.scrollBy" in html
@@ -2381,6 +2383,10 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'data-heatmap-drilldown-step="-1"' in html
     assert 'data-heatmap-drilldown-step="1"' in html
     assert "function shiftDrilldown(direction)" in html
+    assert "function drilldownStepMinutes(current)" in html
+    assert "var stepMinutes = drilldownStepMinutes(current);" in html
+    assert "direction * stepMinutes * 60000" in html
+    assert "direction * current.minutes * 60000" not in html
     assert 'grid.querySelector(".heatmap-column")' in html
     assert "Math.max(240, heatmapScroll.clientWidth * .8)" not in html
     assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
@@ -2397,8 +2403,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
     assert "function renderDrilldownLevel(metric, row, trail)" in html
-    assert "current.minutes === 15 ? 5 : current.minutes === 5 ? 1 : 0" in html
-    assert "Select a cell to drill from 15 to 5 to 1 minute" in html
+    assert "var childMinutes = drilldownMinutes[currentIndex + 1] || 0;" in html
+    assert "Select a cell to drill through smaller time buckets" in html
+    assert "var drilldownMinutes = [60, 30, 15, 5, 1];" in html
     assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html

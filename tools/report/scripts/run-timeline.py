@@ -6993,6 +6993,7 @@ function initializeExecutionHeatmap(section) {
     return;
   }
   var selectedMinutes = 5;
+  var drilldownMinutes = [60, 30, 15, 5, 1];
   var selectedCell = null;
   var currentDrilldown = null;
   var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
@@ -7125,13 +7126,17 @@ function initializeExecutionHeatmap(section) {
   function drilldownTrailFor(metric, row, minutes, bucket) {
     var trail = [];
     function add(levelMinutes) {
-      var levelBucket = alignedBucket(bucket.start, levelMinutes);
+      var levelBucket = levelMinutes === minutes ? bucket : alignedBucket(bucket.start, levelMinutes);
       trail.push({ bucket:levelBucket, minutes:levelMinutes, value:cellValue(metric, row, levelBucket) });
     }
-    add(selectedMinutes);
-    if (selectedMinutes === 15 && minutes <= 5) add(5);
-    if (minutes === 1 && selectedMinutes > 1) add(1);
+    var selectedIndex = drilldownMinutes.indexOf(selectedMinutes);
+    var currentIndex = drilldownMinutes.indexOf(minutes);
+    drilldownMinutes.slice(selectedIndex, currentIndex + 1).forEach(add);
     return trail;
+  }
+  function drilldownStepMinutes(current) {
+    var currentIndex = drilldownMinutes.indexOf(current.minutes);
+    return drilldownMinutes[currentIndex + 1] || current.minutes;
   }
   function updateDrilldownStepButtons() {
     drilldownStepButtons.forEach(function(button) {
@@ -7140,18 +7145,20 @@ function initializeExecutionHeatmap(section) {
         return;
       }
       var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+      var stepMinutes = drilldownStepMinutes(current);
       var direction = Number(button.dataset.heatmapDrilldownStep);
-      var shiftedStart = current.bucket.start + direction * current.minutes * 60000;
-      var shiftedEnd = shiftedStart + current.minutes * 60000;
+      var shiftedStart = current.bucket.start + direction * stepMinutes * 60000;
+      var shiftedEnd = current.bucket.end + direction * stepMinutes * 60000;
       button.disabled = shiftedEnd <= timestamp(data.started_at) || shiftedStart >= timestamp(data.ended_at);
     });
   }
   function shiftDrilldown(direction) {
     if (!currentDrilldown) return;
     var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+    var stepMinutes = drilldownStepMinutes(current);
     var shifted = {
-      start:current.bucket.start + direction * current.minutes * 60000,
-      end:current.bucket.end + direction * current.minutes * 60000
+      start:current.bucket.start + direction * stepMinutes * 60000,
+      end:current.bucket.end + direction * stepMinutes * 60000
     };
     if (shifted.end <= timestamp(data.started_at) || shifted.start >= timestamp(data.ended_at)) return;
     if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
@@ -7212,7 +7219,8 @@ function initializeExecutionHeatmap(section) {
     updateDrilldownStepButtons();
     var current = trail[trail.length - 1];
     var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
-    var childMinutes = current.minutes === 15 ? 5 : current.minutes === 5 ? 1 : 0;
+    var currentIndex = drilldownMinutes.indexOf(current.minutes);
+    var childMinutes = drilldownMinutes[currentIndex + 1] || 0;
     drilldownTitle.textContent = row.label + " · " + rangeLabel(current.bucket);
     drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value) + ".";
     renderDrilldownPath(metric, row, trail);
@@ -7565,7 +7573,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="agents-heading"><h2>Execution heatmap</h2>'
         '<span class="evidence-badge">Recorded + inferred boundaries</span></div>'
         '<p class="execution-note">Compare time or response-attributed tokens across the run. '
-        'Select a cell to drill from 15 to 5 to 1 minute, then inspect individual events.</p>'
+        'Select a cell to drill through smaller time buckets, then inspect individual events.</p>'
         '<div class="heatmap-controls">'
         '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
         '<select id="heatmap-metric">'
@@ -7580,6 +7588,8 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<button type="button" data-heatmap-minutes="1">1 min</button>'
         '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>'
         '<button type="button" data-heatmap-minutes="15">15 min</button>'
+        '<button type="button" data-heatmap-minutes="30">30 min</button>'
+        '<button type="button" data-heatmap-minutes="60">1 hour</button>'
         '</fieldset><output class="heatmap-status" data-heatmap-status></output></div>'
         '<p class="execution-note">Cost follows the report\'s recorded or API-equivalent estimate method.</p>'
         '<div class="heatmap-scroll-frame">'
