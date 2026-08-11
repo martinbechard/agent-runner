@@ -1820,6 +1820,17 @@ def test_native_codex_classifies_runtime_and_counts_only_global_agent_wait(tmp_p
     assert states["unattributed"].agent_time_ms == 14_000
     assert run.all_agents_waiting_ms == 2_000
 
+    html = module.render_codex_rollout_html(run)
+    payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
+        "</script>", 1
+    )[0]
+    payload = json.loads(payload_text)
+    assert '<div class="label">Build / Test</div>' in html
+    assert "Tests / processes" not in html
+    assert {state["id"]: state["label"] for state in payload["states"]}[
+        "test_process"
+    ] == "Build / Test"
+
 
 def test_native_codex_builds_exact_work_item_claim_segments_from_mcp_events(tmp_path):
     module = _load_module()

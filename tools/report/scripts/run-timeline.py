@@ -6811,7 +6811,7 @@ def _render_runtime_metrics(run: CodexRunMetrics) -> str:
     labels = {
         "model_inference": "Model inference",
         "tool_execution": "Tool execution",
-        "test_process": "Test / process",
+        "test_process": "Build / Test",
         "agent_wait": "Waiting for agent",
         "user_pause": "User pause",
         "watchdog": "Watchdog",
@@ -6848,7 +6848,7 @@ def _render_runtime_metrics(run: CodexRunMetrics) -> str:
         f'<div class="value">{_format_ms(run.all_agents_waiting_ms)}</div></div>'
         '<div class="metric"><div class="label">Inference</div>'
         f'<div class="value">{_format_ms(by_state.get("model_inference", RuntimeStateSummary("", 0, 0, 0, 0, 0)).run_time_ms)}</div></div>'
-        '<div class="metric"><div class="label">Tests / processes</div>'
+        '<div class="metric"><div class="label">Build / Test</div>'
         f'<div class="value">{_format_ms(by_state.get("test_process", RuntimeStateSummary("", 0, 0, 0, 0, 0)).run_time_ms)}</div></div></div>'
         '<details class="metric-details"><summary>State breakdown</summary>'
         '<div class="table-scroll"><table><thead><tr><th>State</th><th>Agent time</th>'
@@ -7146,7 +7146,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
     state_labels = {
         "model_inference": "Model inference",
         "tool_execution": "Tool execution",
-        "test_process": "Test / process",
+        "test_process": "Build / Test",
         "agent_wait": "Waiting for agent",
         "user_pause": "User pause",
         "watchdog": "Watchdog",
