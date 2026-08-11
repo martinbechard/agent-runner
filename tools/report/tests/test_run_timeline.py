@@ -2367,6 +2367,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert ".heatmap-cell.is-inactive { --heatmap-color:37,99,166" in html
     assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
     assert 'metric === "wall_time" && row.id === "user_pause"' in html
+    assert 'metric === "wall_time" ? "Activity" : "Agent"' in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
 
     payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(

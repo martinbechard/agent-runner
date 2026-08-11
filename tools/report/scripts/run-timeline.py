@@ -7104,7 +7104,7 @@ function initializeExecutionHeatmap(section) {
     grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
     var corner = document.createElement("div");
     corner.className = "heatmap-corner";
-    corner.textContent = metric === "wall_time" ? "Level 2 runtime state" : "Agent";
+    corner.textContent = metric === "wall_time" ? "Activity" : "Agent";
     grid.appendChild(corner);
     bucketValues.forEach(function(bucket) {
       var heading = document.createElement("div");
