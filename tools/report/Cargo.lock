@@ -10,7 +10,7 @@ checksum = "320119579fcad9c21884f5c4861d16174d0e06250625266f50fe6898340abefa"
 
 [[package]]
 name = "agent-report-core"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "aho-corasick",
  "crossbeam-channel",
@@ -26,7 +26,7 @@ dependencies = [
 
 [[package]]
 name = "agent-report-desktop"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "agent-report-core",
  "chrono",
@@ -44,7 +44,7 @@ dependencies = [
 
 [[package]]
 name = "agent-report-engine"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "agent-report-core",
  "serde_json",

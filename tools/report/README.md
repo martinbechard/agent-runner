@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.7.0/agent_report-0.7.0-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.7.1/agent_report-0.7.1-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -111,7 +111,7 @@ git push origin agent-report-vVERSION
 
 ## MCP server
 
-The platform wheel also installs `agent-report-mcp`, a FastMCP stdio server
+The platform wheel also installs `mcp-agent-report`, a FastMCP stdio server
 with one `generate_report` operation. The operation selects a Codex task by
 exact thread ID or by an ISO 8601 half-open time range and case-insensitive task
 name substrings. It writes one coherent report snapshot using these stable
@@ -137,8 +137,8 @@ Configure server-owned paths and limits in the MCP host environment:
 ```json
 {
   "mcpServers": {
-    "agent-report": {
-      "command": "/absolute/path/to/agent-report-mcp",
+    "mcp-agent-report": {
+      "command": "/absolute/path/to/mcp-agent-report",
       "env": {
         "AGENT_REPORT_SESSIONS_ROOTS": "/Users/example/.codex/sessions",
         "AGENT_REPORT_DEFAULT_OUTPUT": ".codex/report",

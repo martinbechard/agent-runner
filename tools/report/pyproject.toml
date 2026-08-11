@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "agent-report"
-version = "0.7.0"
+version = "0.7.1"
 description = "Generate privacy-safe execution reports for agent runs."
 readme = "README.md"
 requires-python = ">=3.11"
@@ -16,7 +16,7 @@ desktop = ["pyinstaller==6.21.0"]
 
 [project.scripts]
 agent-report = "agent_report.cli:main"
-agent-report-mcp = "agent_report.mcp_server:main"
+mcp-agent-report = "agent_report.mcp_server:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

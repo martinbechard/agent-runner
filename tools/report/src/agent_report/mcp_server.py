@@ -59,7 +59,7 @@ def create_server() -> FastMCP:
     """Create the agent report MCP server and register its public operation."""
 
     server = FastMCP(
-        "Agent Report",
+        "mcp-agent-report",
         instructions=(
             "Generate a complete local report bundle for one Codex task, selected "
             "by exact thread ID or by time and task-name filters."

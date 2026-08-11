@@ -84,7 +84,7 @@ def verify_release_wheel(
         entry_points = archive.read(entry_point_names[0]).decode("utf-8")
         required_entry_points = {
             "agent-report = agent_report.cli:main",
-            "agent-report-mcp = agent_report.mcp_server:main",
+            "mcp-agent-report = agent_report.mcp_server:main",
         }
         missing_entry_points = sorted(
             value for value in required_entry_points if value not in entry_points

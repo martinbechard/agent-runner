@@ -19,6 +19,8 @@ from fastmcp import Client, Context, FastMCP
 def test_generate_report_schema_hides_server_implementation_details() -> None:
     """Expose only task selection, output directory, and inline-delivery inputs."""
 
+    assert mcp.name == "mcp-agent-report"
+
     async def inspect_schema() -> None:
         tools = await mcp.list_tools()
         assert [tool.name for tool in tools] == ["generate_report"]
