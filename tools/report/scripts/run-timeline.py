@@ -6991,6 +6991,7 @@ function initializeExecutionHeatmap(section) {
   var drilldownMinutes = [60, 30, 15, 5, 1];
   var selectedCell = null;
   var selectedCellViewportOffset = null;
+  var pendingCellSelection = null;
   var currentDrilldown = null;
   var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
   var agentLabels = new Map(data.agents.map(function(agent) { return [agent.id, agent.label]; }));
@@ -7267,6 +7268,13 @@ function initializeExecutionHeatmap(section) {
     eventList.replaceChildren();
     renderEvents(metric, row, current.bucket);
   }
+  function selectCell(metric, row, bucket, sourceCell) {
+    selectedCellViewportOffset = sourceCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
+    var existingTrail = currentDrilldown && currentDrilldown.metric === metric && currentDrilldown.row.id === row.id
+      ? currentDrilldown.trail
+      : [];
+    selectDrilldown(metric, row, selectionTrail(metric, row, selectedMinutes, bucket, existingTrail));
+  }
   function drillIntoCell(metric, row, bucket, sourceCell) {
     selectedCellViewportOffset = sourceCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
     var existingTrail = currentDrilldown && currentDrilldown.metric === metric && currentDrilldown.row.id === row.id
@@ -7322,7 +7330,15 @@ function initializeExecutionHeatmap(section) {
         cell.setAttribute("aria-pressed", isSelected ? "true" : "false");
         cell.textContent = formatValue(metric, value, row);
         cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
-        cell.addEventListener("click", function() { drillIntoCell(metric, row, bucket, cell); });
+        cell.addEventListener("click", function() {
+          clearTimeout(pendingCellSelection);
+          pendingCellSelection = setTimeout(function() { selectCell(metric, row, bucket, cell); }, 300);
+        });
+        cell.addEventListener("dblclick", function() {
+          clearTimeout(pendingCellSelection);
+          pendingCellSelection = null;
+          drillIntoCell(metric, row, bucket, cell);
+        });
         if (isSelected) selectedCell = cell;
         grid.appendChild(cell);
       });
@@ -7336,12 +7352,12 @@ function initializeExecutionHeatmap(section) {
       currentDrilldown = null;
       updateDrilldownStepButtons();
       drilldownTitle.textContent = "Select a heatmap cell";
-      drilldownSummary.textContent = "Choose a cell to inspect its events and zoom the top heatmap.";
+      drilldownSummary.textContent = "Choose a cell to inspect its events.";
       drilldownPath.replaceChildren();
       eventList.replaceChildren();
       eventList.hidden = true;
     }
-    status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · per-row scales · context uses full window";
+    status.textContent = bucketValues.length + " buckets";
     requestAnimationFrame(function() {
       if (selectedCell && selectedCellViewportOffset !== null) {
         var currentOffset = selectedCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
@@ -8047,7 +8063,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<section id="execution-heatmap" class="metric-view">'
         '<div class="agents-heading"><h2>Execution heatmap</h2></div>'
         '<p class="execution-note">Compare time or response-attributed tokens across the run. '
-        'Select a cell to zoom the top heatmap and inspect events. Right-click a cell to step back.</p>'
+        'Single-click a cell to inspect its events. Double-click to drill down; right-click to step back.</p>'
         '<div class="heatmap-controls">'
         '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
         '<select id="heatmap-metric">'
@@ -8073,7 +8089,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="heatmap-drilldown">'
         '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
-        'Choose a cell to inspect its events and zoom the top heatmap.</p>'
+        'Choose a cell to inspect its events.</p>'
         '<nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav>'
         '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
         '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown bucket" disabled>→</button></div>'

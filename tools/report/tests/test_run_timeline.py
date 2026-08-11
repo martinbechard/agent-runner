@@ -2389,6 +2389,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'grid.querySelector(".heatmap-column")' in html
     assert "var selectedCellViewportOffset = null;" in html
     assert "currentOffset - selectedCellViewportOffset" in html
+    assert 'setTimeout(function() { selectCell(metric, row, bucket, cell); }, 300)' in html
+    assert 'cell.addEventListener("dblclick"' in html
     assert 'drillIntoCell(metric, row, bucket, cell)' in html
     assert 'selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" })' in html
     assert 'inline:"center"' not in html
@@ -2415,17 +2417,19 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "var rowMaximum = matrix[rowIndex].reduce" in html
     assert 'row.id === "context_tokens" ? data.context_capacity : rowMaximum' in html
     assert "Math.min(1, value / scaleMaximum)" in html
-    assert "per-row scales · context uses full window" in html
+    assert 'status.textContent = bucketValues.length + " buckets"' in html
+    assert "rows · per-row scales · context uses full window" not in html
     assert "normalized within this view" not in html
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
     assert "function renderDrilldownLevel(metric, row, trail)" in html
+    assert "function selectCell(metric, row, bucket, sourceCell)" in html
     assert "function drillIntoCell(metric, row, bucket, sourceCell)" in html
     assert "function stepBack()" in html
     assert "function visibleBucket(value, minutes)" in html
     assert 'grid.addEventListener("contextmenu"' in html
     assert "renderEvents(metric, row, current.bucket);" in html
-    assert "Select a cell to zoom the top heatmap" in html
+    assert "Single-click a cell to inspect its events. Double-click to drill down" in html
     assert "var drilldownMinutes = [60, 30, 15, 5, 1];" in html
     assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
