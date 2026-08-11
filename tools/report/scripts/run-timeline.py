@@ -6993,6 +6993,12 @@ function initializeExecutionHeatmap(section) {
   var currentDrilldown = null;
   var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
   var agentLabels = new Map(data.agents.map(function(agent) { return [agent.id, agent.label]; }));
+  var tokenRows = [
+    { id:"uncached_input_tokens", label:"Uncached input" },
+    { id:"cached_input_tokens", label:"Cached input" },
+    { id:"output_tokens", label:"Output" },
+    { id:"reasoning_tokens", label:"Reasoning" }
+  ];
   var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
   var fullTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"medium" });
 
@@ -7017,8 +7023,9 @@ function initializeExecutionHeatmap(section) {
     if (value < .01) return "$" + value.toFixed(4);
     return "$" + value.toFixed(2);
   }
-  function responseValue(response, metric) {
-    return metric === "cost_usd" ? response.cost_usd : response.usage[metric];
+  function responseValue(response, metric, row) {
+    if (metric === "cost_usd") return response.cost_usd;
+    return response.usage[metric === "tokens" ? row.id : metric];
   }
   function formatValue(metric, value) {
     if (metric === "wall_time") return duration(value);
@@ -7050,6 +7057,7 @@ function initializeExecutionHeatmap(section) {
     if (metric === "wall_time") {
       return data.states.map(function(state) { return { id:state.id, label:state.label }; });
     }
+    if (metric === "tokens") return tokenRows;
     return data.agents.map(function(agent) { return { id:agent.id, label:agent.label }; });
   }
   function cellValue(metric, row, bucket) {
@@ -7075,8 +7083,9 @@ function initializeExecutionHeatmap(section) {
     }
     return data.responses.reduce(function(total, response) {
       var occurredAt = responseTime(response);
-      return response.thread_id === row.id && occurredAt >= bucket.start && occurredAt < bucket.end
-        ? total + responseValue(response, metric)
+      var matchesRow = metric === "tokens" || response.thread_id === row.id;
+      return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end
+        ? total + responseValue(response, metric, row)
         : total;
     }, 0);
   }
@@ -7094,13 +7103,15 @@ function initializeExecutionHeatmap(section) {
     }
     return data.responses.filter(function(response) {
       var occurredAt = responseTime(response);
-      return response.thread_id === row.id && occurredAt >= bucket.start && occurredAt < bucket.end;
+      var matchesRow = metric === "tokens" || response.thread_id === row.id;
+      return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) {
       var modelLabel = response.model || "Model response";
       if (response.effort) modelLabel += " · effort " + response.effort;
+      if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
       return {
         started_at:response.completed_at || response.started_at,
-        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric)) + " " + metric.replaceAll("_", " "),
+        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric, row)) + (metric === "tokens" ? " " + row.label.toLowerCase() : " " + metric.replaceAll("_", " ")),
         detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
       };
     });
@@ -7279,7 +7290,7 @@ function initializeExecutionHeatmap(section) {
     grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
     var corner = document.createElement("div");
     corner.className = "heatmap-corner";
-    corner.textContent = metric === "wall_time" ? "Activity" : "Agent";
+    corner.textContent = metric === "wall_time" ? "Activity" : metric === "tokens" ? "Token type" : "Agent";
     grid.appendChild(corner);
     bucketValues.forEach(function(bucket) {
       var heading = document.createElement("div");
@@ -8022,10 +8033,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
         '<select id="heatmap-metric">'
         '<option value="wall_time">Wall time</option>'
-        '<option value="uncached_input_tokens">Uncached input</option>'
-        '<option value="cached_input_tokens">Cached input</option>'
-        '<option value="output_tokens">Output</option>'
-        '<option value="reasoning_tokens">Reasoning</option>'
+        '<option value="tokens">Tokens</option>'
         '<option value="cost_usd">Cost (USD)</option>'
         '</select></div>'
         '<fieldset class="heatmap-granularity"><legend>Bucket size</legend>'

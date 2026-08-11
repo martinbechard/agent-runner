@@ -2366,10 +2366,11 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<a href="#execution-heatmap">Heatmap</a>' in html
     assert '<label for="heatmap-metric">Measure</label>' in html
     assert '<option value="wall_time">Wall time</option>' in html
-    assert '<option value="uncached_input_tokens">Uncached input</option>' in html
-    assert '<option value="cached_input_tokens">Cached input</option>' in html
-    assert '<option value="output_tokens">Output</option>' in html
-    assert '<option value="reasoning_tokens">Reasoning</option>' in html
+    assert '<option value="tokens">Tokens</option>' in html
+    assert '<option value="uncached_input_tokens">' not in html
+    assert '<option value="cached_input_tokens">' not in html
+    assert '<option value="output_tokens">' not in html
+    assert '<option value="reasoning_tokens">' not in html
     assert '<option value="cost_usd">Cost (USD)</option>' in html
     assert '<button type="button" data-heatmap-minutes="1">1 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
@@ -2399,7 +2400,11 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert ".heatmap-cell.is-inactive { --heatmap-color:37,99,166" in html
     assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
     assert 'metric === "wall_time" && row.id === "user_pause"' in html
-    assert 'metric === "wall_time" ? "Activity" : "Agent"' in html
+    assert 'metric === "wall_time" ? "Activity" : metric === "tokens" ? "Token type" : "Agent"' in html
+    assert '{ id:"uncached_input_tokens", label:"Uncached input" }' in html
+    assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
+    assert '{ id:"output_tokens", label:"Output" }' in html
+    assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
     assert "function renderDrilldownLevel(metric, row, trail)" in html
