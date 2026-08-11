@@ -8,7 +8,7 @@ version = "0.6.6"
 description = "Generate privacy-safe execution reports for agent runs."
 readme = "README.md"
 requires-python = ">=3.11"
-dependencies = []
+dependencies = ["fastmcp>=3.0,<4", "tzdata>=2025.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
@@ -16,6 +16,7 @@ desktop = ["pyinstaller==6.21.0"]
 
 [project.scripts]
 agent-report = "agent_report.cli:main"
+agent-report-mcp = "agent_report.mcp_server:main"
 
 [tool.setuptools.package-dir]
 "" = "src"

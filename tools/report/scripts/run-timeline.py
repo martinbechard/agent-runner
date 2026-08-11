@@ -6710,6 +6710,13 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
             if thread.thread_id == run.root_thread_id
         )
     )
+    compaction_table = (
+        '<div class="table-scroll compact-table"><table><thead><tr>'
+        '<th>Compacted</th><th>Before</th><th>After</th><th>Evidence</th>'
+        f"</tr></thead><tbody>{compaction_rows}</tbody></table></div>"
+        if compaction_rows
+        else ""
+    )
     return (
         '<section id="context-usage" class="metric-view">'
         '<div class="agents-heading"><h2>Context usage</h2>'
@@ -6733,7 +6740,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
         '<th>Last</th><th>Range</th><th>Compactions</th></tr></thead>'
         f"<tbody>{trend_rows}</tbody></table></div>"
-        f'{"<div class=\"table-scroll compact-table\"><table><thead><tr><th>Compacted</th><th>Before</th><th>After</th><th>Evidence</th></tr></thead><tbody>" + compaction_rows + "</tbody></table></div>" if compaction_rows else ""}'
+        f"{compaction_table}"
         "</details></section>"
     )
 

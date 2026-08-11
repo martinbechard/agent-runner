@@ -82,6 +82,56 @@ python -m build --wheel
 The wheel build fails if Rust cannot build `agent-report-engine`; it never
 emits a Python-only package with different discovery behavior.
 
+## MCP server
+
+The platform wheel also installs `agent-report-mcp`, a FastMCP stdio server
+with one `generate_report` operation. The operation selects a Codex task by
+exact thread ID or by an ISO 8601 half-open time range and case-insensitive task
+name substrings. It writes one coherent report snapshot using these stable
+filenames:
+
+```text
+report.html
+report.json
+turns.csv
+work-units.csv
+report.md
+```
+
+Without an explicit output directory, the bundle is written to
+`.codex/report` under the first local workspace root advertised by the MCP
+client, then the configured workspace root, then the server working directory.
+`output_path` is always a directory. Set `return_via_mcp` to return one complete
+HTML, Markdown, or JSON representation inline as well. Inline content is never
+truncated.
+
+Configure server-owned paths and limits in the MCP host environment:
+
+```json
+{
+  "mcpServers": {
+    "agent-report": {
+      "command": "/absolute/path/to/agent-report-mcp",
+      "env": {
+        "AGENT_REPORT_SESSIONS_ROOTS": "/Users/example/.codex/sessions",
+        "AGENT_REPORT_DEFAULT_OUTPUT": ".codex/report",
+        "AGENT_REPORT_WORKSPACE_ROOT": "/Users/example/workspace",
+        "AGENT_REPORT_TIMEZONE": "America/Toronto",
+        "AGENT_REPORT_MAX_INLINE_BYTES": "65536"
+      }
+    }
+  }
+}
+```
+
+Separate multiple session roots with the platform path separator. Omit
+`AGENT_REPORT_SESSIONS_ROOTS` to use `~/.codex/sessions`; include both the
+active and archived paths in the variable to search both stores. The inline
+limit defaults to 65,536 UTF-8 bytes and cannot be configured above that value.
+At startup, the server validates these settings and probes the bundled Rust
+engine's expected discovery protocol. It never downloads or compiles an engine
+during a tool call.
+
 Report a live Codex Desktop hierarchy with lifecycle rows for input ingestion,
 model usage, available reasoning summaries, tool execution, and output
 generation. Plaintext input, reasoning summaries, and assistant output use
