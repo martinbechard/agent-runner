@@ -124,6 +124,11 @@ These directives shape parsing, aggregation, attribution, and reporting behavior
   - **SYNOPSIS:** For a requested desktop catalog range, treat the machine-local timestamp encoded in a rollout filename as its creation time and filesystem modification time as its update time. Select the file when either endpoint is in the range or when the two endpoints span the range, then parse the complete selected file without event-level date filtering or hierarchy clipping.
   - **BECAUSE:** A long-running rollout can be created before the requested period and remain active throughout it; clipping its events would remove the context needed to interpret the run.
 
+- **RULE: RULE-29** Compare bucketed execution evidence with row-owned scales
+  - **SYNOPSIS:** Render 1, 5, 15, 30, and 60-minute heatmap buckets for runtime activities, consolidated token and cost counters, matched tool-call counts, context occupancy, and model-and-effort processed-token totals. Normalize each ordinary row against its largest visible bucket, normalize context rows against the recorded full context window, and display context percentage above compact tokens.
+  - **INTERACTION:** A single click selects the bucket's events without changing scale; a double click drills down one level; a right click steps back; breadcrumbs restore an earlier level; and side arrows move exactly one bucket.
+  - **BECAUSE:** Comparable heat within each row reveals temporal concentration, while context occupancy must retain an absolute capacity scale and selection must not unexpectedly change the timeline.
+
 ## 3. Information Model
 
 This model retains exact source measurements and progressively aggregated views.
@@ -383,6 +388,18 @@ flowchart LR
   - **SYNOPSIS:** Build the native discovery engine, freeze the Python renderer plus its formatter and pricing data into a target-specific executable, and let Tauri embed that external binary in the application bundle.
   - **VALIDATES:** The frozen command resolves all resources from its extraction root and produces a complete report without Python or `agent-report` on the runtime `PATH`.
 
+- **PROCESS: PROCESS-9** Navigate heatmap evidence
+  - **SYNOPSIS:** Select one bucket at the current scale, list its bounded event evidence, optionally drill to the next smaller bucket while preserving the selected horizontal position, and restore larger scales through right-click or breadcrumbs.
+  - **VALIDATES:** Selection and drilldown remain separate actions; every arrow moves one bucket; 1-minute selection does not shift the time range; and event previews remain bounded and privacy-safe.
+
+```mermaid
+flowchart LR
+  A[Visible heatmap bucket] -->|single click| B[Selected event range]
+  A -->|double click| C[Next smaller bucket]
+  C --> D[Selected cell at preserved position]
+  D -->|right click or breadcrumb| A
+```
+
 - **COMMAND: CMD-1** Extend the timeline reporter CLI
   - **SYNOPSIS:** Add a native rollout input form such as `--codex-thread THREAD_ID` with optional `--sessions-root`, `--live`, `--seal`, and machine-output flags while preserving existing path-based prompt-runner and methodology-runner behavior.
   - **PRODUCES:** The same HTML report entry point plus optional JSON, CSV, and Markdown companions.
@@ -499,7 +516,7 @@ These conditions define an acceptable implementation and report.
   - **BECAUSE:** Claims, patches, messages, waits, and agent lifecycle calls repeat recognizable structures that are easier to scan when reduced to their meaningful fields, while a config lets an agent describe new run-specific patterns without changing parser code.
 
 - **REQUIREMENT: REQ-20** Context, inference, runtime-state, and work-item views
-  - **SYNOPSIS:** The offline HTML report presents compact current-context and high-water cards, collapsed local-time growth and compaction details, end-to-end and output-span inference rates with percentiles, fifteen-minute trends and response-size bands, concurrency-aware runtime states, all-agent waiting time, and exact claim-bounded work-item summaries.
+  - **SYNOPSIS:** The offline HTML report presents compact current-context and high-water cards, collapsed local-time growth and compaction details, end-to-end and output-span inference rates with percentiles, fifteen-minute trends and response-size bands, concurrency-aware runtime states, all-agent waiting time, exact claim-bounded work-item summaries, and an interactive bucketed heatmap for wall time, tokens, tool calls, context occupancy, cost, and model-and-effort usage.
   - **BECAUSE:** Optimization decisions require direct context pressure, comparable call-rate evidence, test and wait attribution, and deterministic work-item boundaries in one report.
 
 - **REQUIREMENT: REQ-11** Task-specific and compact report presentation
@@ -589,6 +606,10 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 - **TASK: TEST-43** Preserve older token logs
   - **SYNOPSIS:** Parse cumulative token events without `last_token_usage`, context capacity, or observable output-fragment boundaries.
   - **VALIDATES:** Existing usage accounting remains correct while context and timing metrics remain explicitly unavailable.
+
+- **TASK: TEST-44** Navigate and scale the execution heatmap
+  - **SYNOPSIS:** Render multiple runtime states, token categories, tool calls, context observations, costs, and model-and-effort combinations across several bucket sizes.
+  - **VALIDATES:** Token rows appear in lifecycle order; tool calls count matched completions; context average excludes unavailable observations; context maximum and average use full-window heat and percentage-first labels; model rows use processed-token K, M, and B formatting; ordinary rows normalize independently; single click only changes the selected events; double click drills one level without horizontal displacement; and arrows move one bucket.
 
 - **TASK: TEST-16** Open agent and turn tool-call drilldowns
   - **SYNOPSIS:** Expand an agent in the execution timeline, open its turn list, and select one turn for a focused view of that turn's metrics, attribution, and ordered tool calls.

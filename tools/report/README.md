@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.9.0/agent_report-0.9.0-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.10.0/agent_report-0.10.0-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -108,6 +108,27 @@ candidate, publish it with:
 git tag agent-report-vVERSION
 git push origin agent-report-vVERSION
 ```
+
+## Execution heatmap
+
+The offline HTML report includes an execution heatmap with 1, 5, 15, 30, and
+60-minute buckets. The measure selector provides these views:
+
+- **Wall time** shows one row for each runtime activity. User pauses use a blue
+  inactivity scale; other activities use a red heat scale.
+- **Tokens** shows uncached input, cached input, reasoning, output, matched tool
+  calls, average and maximum context size, and cost. Token and cost rows sum
+  events in each bucket. Tool calls count completed matched calls. Context rows
+  use recorded observations and display context-window percentage above the
+  compact token count.
+- **Models** shows one row for each model and reasoning-effort combination.
+  Cells sum processed tokens and use compact `K`, `M`, and `B` suffixes.
+
+Each non-context row normalizes color intensity against its own largest visible
+bucket. Context rows normalize against the recorded full context-window size.
+Single-click a cell to select its event range without changing scale.
+Double-click to drill down one bucket level. Right-click to step back. The
+breadcrumb returns to an earlier level, and the side arrows move by one bucket.
 
 ## MCP server
 

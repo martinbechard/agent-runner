@@ -23,12 +23,12 @@ SPEC.loader.exec_module(MODULE)
 def _write_wheel(path: Path, *, include_engine: bool = True) -> None:
     """Write the smallest representative platform wheel fixture."""
 
-    prefix = "agent_report-0.9.0.data/purelib"
-    dist_info = "agent_report-0.9.0.dist-info"
+    prefix = "agent_report-0.10.0.data/purelib"
+    dist_info = "agent_report-0.10.0.dist-info"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             f"{dist_info}/METADATA",
-            "Metadata-Version: 2.4\nName: agent-report\nVersion: 0.9.0\n",
+            "Metadata-Version: 2.4\nName: agent-report\nVersion: 0.10.0\n",
         )
         archive.writestr(
             f"{dist_info}/WHEEL",
@@ -43,7 +43,7 @@ def _write_wheel(path: Path, *, include_engine: bool = True) -> None:
         archive.writestr(f"{prefix}/agent_report/mcp_report.py", "")
         archive.writestr(f"{prefix}/agent_report/mcp_server.py", "")
         archive.writestr(
-            "agent_report-0.9.0.data/data/share/agent-report/run-timeline.py", ""
+            "agent_report-0.10.0.data/data/share/agent-report/run-timeline.py", ""
         )
         if include_engine:
             archive.writestr(
@@ -54,27 +54,27 @@ def _write_wheel(path: Path, *, include_engine: bool = True) -> None:
 def test_accepts_complete_platform_wheel(tmp_path: Path) -> None:
     """Accept a versioned wheel that contains both MCP and native runtimes."""
 
-    wheel = tmp_path / "agent_report-0.9.0-py3-none-linux_x86_64.whl"
+    wheel = tmp_path / "agent_report-0.10.0-py3-none-linux_x86_64.whl"
     _write_wheel(wheel)
 
-    assert MODULE.verify_release_wheel(tmp_path, "0.9.0") == wheel.resolve()
+    assert MODULE.verify_release_wheel(tmp_path, "0.10.0") == wheel.resolve()
 
 
 def test_rejects_wheel_without_platform_engine(tmp_path: Path) -> None:
     """Prevent publication of a Python-only wheel that cannot index rollouts."""
 
-    wheel = tmp_path / "agent_report-0.9.0-py3-none-linux_x86_64.whl"
+    wheel = tmp_path / "agent_report-0.10.0-py3-none-linux_x86_64.whl"
     _write_wheel(wheel, include_engine=False)
 
     with pytest.raises(ValueError, match="bundled agent-report-engine"):
-        MODULE.verify_release_wheel(wheel, "0.9.0")
+        MODULE.verify_release_wheel(wheel, "0.10.0")
 
 
 def test_rejects_universal_macos_wheel_for_arm64_release(tmp_path: Path) -> None:
     """Do not advertise Intel support when the bundled parser is ARM-only."""
 
-    wheel = tmp_path / "agent_report-0.9.0-py3-none-macosx_10_9_universal2.whl"
+    wheel = tmp_path / "agent_report-0.10.0-py3-none-macosx_10_9_universal2.whl"
     _write_wheel(wheel)
 
     with pytest.raises(ValueError, match="does not match macos-arm64"):
-        MODULE.verify_release_wheel(wheel, "0.9.0", "macos-arm64")
+        MODULE.verify_release_wheel(wheel, "0.10.0", "macos-arm64")
