@@ -2364,7 +2364,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "initializeExecutionHeatmap" in html
     assert 'aria-live="polite"' in html
     assert "--heatmap-color:198,40,40" in html
+    assert ".heatmap-cell.is-inactive { --heatmap-color:37,99,166" in html
     assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
+    assert 'metric === "wall_time" && row.id === "user_pause"' in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
 
     payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
@@ -2375,6 +2377,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert payload["ended_at"] == run.wall_ended_at
     assert payload["states"]
     assert payload["agents"]
+    assert payload["agents"][0]["label"] == "main"
+    assert all("Thread:" not in agent["label"] for agent in payload["agents"])
     assert payload["intervals"]
     assert payload["responses"]
     assert set(payload["responses"][0]["usage"]) == {

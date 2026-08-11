@@ -5220,6 +5220,18 @@ def _agent_assignment_label(thread: CodexThreadMetrics) -> str:
     return label
 
 
+def _heatmap_agent_label(thread: CodexThreadMetrics) -> str:
+    """Return a concise agent identity without embedding its assignment prompt."""
+
+    role = thread.agent_role or ("default" if thread.parent_thread_id else "main")
+    name = thread.agent_nickname
+    if not name and thread.parent_thread_id:
+        name = _agent_assignment(thread)
+    if name and name not in {role, "root"}:
+        return f"{role} ({name})"
+    return role
+
+
 def _compact_agent_assignment_label(
     thread: CodexThreadMetrics,
     assignment_limit: int = 72,
@@ -6906,9 +6918,10 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-corner { z-index:4; }
 .heatmap-column { top:0; z-index:3; min-width:72px; text-align:center; font-family:var(--font-code); }
 .heatmap-row-label { display:flex; align-items:center; min-width:170px; max-width:220px; white-space:normal; }
-.heatmap-cell { --heatmap-color:198,40,40; min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(var(--heatmap-color),var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
-.heatmap-cell:hover { box-shadow:inset 0 0 0 2px #b3261e; }
-.heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px #8e1b16; }
+.heatmap-cell { --heatmap-color:198,40,40; --heatmap-accent:#8e1b16; min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(var(--heatmap-color),var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
+.heatmap-cell.is-inactive { --heatmap-color:37,99,166; --heatmap-accent:#0d47a1; }
+.heatmap-cell:hover { box-shadow:inset 0 0 0 2px var(--heatmap-accent); }
+.heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px var(--heatmap-accent); }
 .heatmap-empty { padding:16px; color:#607d8b; }
 .heatmap-status { margin-left:auto; color:#546e7a; font-family:var(--font-code); font-size:.78em; }
 .heatmap-drilldown { margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
@@ -7110,7 +7123,7 @@ function initializeExecutionHeatmap(section) {
         var intensity = maximum ? value / maximum : 0;
         var cell = document.createElement("button");
         cell.type = "button";
-        cell.className = "heatmap-cell";
+        cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
         cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
         cell.setAttribute("aria-pressed", "false");
         cell.textContent = formatValue(metric, value);
@@ -7164,7 +7177,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
         for state in sorted(present_states - set(state_labels))
     )
     agents = [
-        {"id": thread.thread_id, "label": _agent_assignment_label(thread)}
+        {"id": thread.thread_id, "label": _heatmap_agent_label(thread)}
         for thread in run.threads
     ]
     intervals = [
