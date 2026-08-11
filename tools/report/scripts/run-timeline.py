@@ -6890,6 +6890,360 @@ def _render_work_item_metrics(run: CodexRunMetrics) -> str:
     )
 
 
+_EXECUTION_HEATMAP_CSS = """
+.heatmap-controls { display:flex; flex-wrap:wrap; align-items:end; gap:10px 16px; margin:10px 0; }
+.heatmap-control { display:grid; gap:4px; color:#455a64; font-size:.8em; font-weight:700; }
+.heatmap-control select { min-height:34px; padding:5px 28px 5px 8px; color:#263238; background:#fff; border:1px solid #90a4ae; border-radius:5px; font:inherit; }
+.heatmap-granularity { display:flex; gap:4px; margin:0; padding:0; border:0; }
+.heatmap-granularity legend { margin-bottom:4px; color:#455a64; font-size:.8em; font-weight:700; }
+.heatmap-granularity button { min-height:34px; padding:5px 10px; color:#455a64; background:#fff; border:1px solid #90a4ae; border-radius:5px; cursor:pointer; font:600 .8em var(--font-ui); }
+.heatmap-granularity button[aria-pressed="true"] { color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }
+.heatmap-control select:focus-visible, .heatmap-granularity button:focus-visible, .heatmap-cell:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-scroll { overflow:auto; margin-top:8px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.heatmap-grid { display:grid; width:max-content; min-width:100%; align-items:stretch; }
+.heatmap-corner, .heatmap-column, .heatmap-row-label { position:sticky; z-index:2; box-sizing:border-box; padding:7px 8px; color:#455a64; background:#f5f7f8; border-right:1px solid #d7e0e5; border-bottom:1px solid #d7e0e5; font-size:.76em; font-weight:700; }
+.heatmap-corner, .heatmap-row-label { left:0; }
+.heatmap-corner { z-index:4; }
+.heatmap-column { top:0; z-index:3; min-width:72px; text-align:center; font-family:var(--font-code); }
+.heatmap-row-label { display:flex; align-items:center; min-width:170px; max-width:220px; white-space:normal; }
+.heatmap-cell { min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(37,99,166,var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
+.heatmap-cell:hover { box-shadow:inset 0 0 0 2px #2563a6; }
+.heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px #0d47a1; }
+.heatmap-empty { padding:16px; color:#607d8b; }
+.heatmap-status { margin-left:auto; color:#546e7a; font-family:var(--font-code); font-size:.78em; }
+.heatmap-drilldown { margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
+.heatmap-drilldown h3 { margin:0 0 4px; color:#263238; }
+.heatmap-drilldown-summary { margin:0; color:#455a64; font-size:.86em; }
+.heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
+.heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
+.heatmap-event-list code { color:#263238; }
+@media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-row-label { min-width:140px; } }
+"""
+
+
+_EXECUTION_HEATMAP_SCRIPT = r"""
+function initializeExecutionHeatmap(section) {
+  var dataElement = section.querySelector("#execution-heatmap-data");
+  var grid = section.querySelector("[data-heatmap-grid]");
+  var emptyState = section.querySelector("[data-heatmap-empty]");
+  var metricSelect = section.querySelector("#heatmap-metric");
+  var minuteButtons = Array.from(section.querySelectorAll("[data-heatmap-minutes]"));
+  var status = section.querySelector("[data-heatmap-status]");
+  var drilldownTitle = section.querySelector("#heatmap-drilldown-title");
+  var drilldownSummary = section.querySelector("[data-heatmap-drilldown-summary]");
+  var eventList = section.querySelector("[data-heatmap-event-list]");
+  if (!dataElement || !grid || !metricSelect) return;
+
+  var data;
+  try { data = JSON.parse(dataElement.textContent); }
+  catch (error) {
+    emptyState.hidden = false;
+    emptyState.textContent = "Heatmap data could not be loaded.";
+    return;
+  }
+  var selectedMinutes = 5;
+  var selectedCell = null;
+  var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
+  var agentLabels = new Map(data.agents.map(function(agent) { return [agent.id, agent.label]; }));
+  var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
+  var fullTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"medium" });
+
+  function timestamp(value) { return new Date(value).getTime(); }
+  function compact(value) {
+    if (value >= 1000000) return (value / 1000000).toFixed(value >= 10000000 ? 0 : 1) + "M";
+    if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + "K";
+    return Math.round(value).toLocaleString();
+  }
+  function duration(value) {
+    if (value < 1000) return Math.round(value) + "ms";
+    if (value < 60000) return (value / 1000).toFixed(value < 10000 ? 1 : 0) + "s";
+    var minutes = Math.floor(value / 60000);
+    var seconds = Math.round((value % 60000) / 1000);
+    return minutes + "m " + seconds + "s";
+  }
+  function buckets() {
+    var width = selectedMinutes * 60000;
+    var runStart = timestamp(data.started_at);
+    var runEnd = timestamp(data.ended_at);
+    var first = Math.floor(runStart / width) * width;
+    var values = [];
+    for (var start = first; start < runEnd; start += width) {
+      values.push({ start:start, end:start + width });
+    }
+    return values;
+  }
+  function responseTime(response) {
+    return timestamp(response.completed_at || response.ended_at || response.started_at);
+  }
+  function rows(metric) {
+    if (metric === "wall_time") {
+      return data.states.map(function(state) { return { id:state.id, label:state.label }; });
+    }
+    return data.agents.map(function(agent) { return { id:agent.id, label:agent.label }; });
+  }
+  function cellValue(metric, row, bucket) {
+    if (metric === "wall_time") {
+      var segments = data.intervals.filter(function(interval) {
+        return interval.state === row.id && timestamp(interval.ended_at) > bucket.start && timestamp(interval.started_at) < bucket.end;
+      }).map(function(interval) {
+        return [Math.max(timestamp(interval.started_at), bucket.start), Math.min(timestamp(interval.ended_at), bucket.end)];
+      }).sort(function(left, right) { return left[0] - right[0]; });
+      if (!segments.length) return 0;
+      var total = 0;
+      var mergedStart = segments[0][0];
+      var mergedEnd = segments[0][1];
+      segments.slice(1).forEach(function(segment) {
+        if (segment[0] <= mergedEnd) mergedEnd = Math.max(mergedEnd, segment[1]);
+        else {
+          total += mergedEnd - mergedStart;
+          mergedStart = segment[0];
+          mergedEnd = segment[1];
+        }
+      });
+      return total + mergedEnd - mergedStart;
+    }
+    return data.responses.reduce(function(total, response) {
+      var occurredAt = responseTime(response);
+      return response.thread_id === row.id && occurredAt >= bucket.start && occurredAt < bucket.end
+        ? total + response.usage[metric]
+        : total;
+    }, 0);
+  }
+  function matchingEvents(metric, row, bucket) {
+    if (metric === "wall_time") {
+      return data.intervals.filter(function(interval) {
+        return interval.state === row.id && timestamp(interval.ended_at) > bucket.start && timestamp(interval.started_at) < bucket.end;
+      }).map(function(interval) {
+        return {
+          started_at:interval.started_at,
+          label:interval.detail || stateLabels.get(interval.state) || interval.state,
+          detail:duration(interval.duration_ms) + " · " + interval.confidence
+        };
+      });
+    }
+    return data.responses.filter(function(response) {
+      var occurredAt = responseTime(response);
+      return response.thread_id === row.id && occurredAt >= bucket.start && occurredAt < bucket.end;
+    }).map(function(response) {
+      return {
+        started_at:response.started_at || response.completed_at,
+        label:(response.model || "Model response") + " · " + compact(response.usage[metric]) + " " + metric.replaceAll("_", " "),
+        detail:duration(response.duration_ms) + " · " + response.confidence
+      };
+    });
+  }
+  function showDrilldown(metric, row, bucket, value, button) {
+    if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
+    selectedCell = button;
+    selectedCell.setAttribute("aria-pressed", "true");
+    var start = new Date(bucket.start);
+    var end = new Date(bucket.end);
+    var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
+    drilldownTitle.textContent = row.label + " · " + timeFormatter.format(start) + "–" + timeFormatter.format(end);
+    drilldownSummary.textContent = metricLabel + ": " + (metric === "wall_time" ? duration(value) : compact(value)) + ". Level 3 evidence is listed below.";
+    eventList.replaceChildren();
+    var events = matchingEvents(metric, row, bucket).sort(function(left, right) {
+      return timestamp(left.started_at) - timestamp(right.started_at);
+    });
+    if (!events.length) {
+      var empty = document.createElement("li");
+      empty.textContent = "No recorded evidence in this cell.";
+      eventList.appendChild(empty);
+      return;
+    }
+    events.slice(0, 100).forEach(function(event) {
+      var item = document.createElement("li");
+      var time = document.createElement("code");
+      time.textContent = timeFormatter.format(new Date(event.started_at));
+      item.append(time, document.createTextNode(" · " + event.label + " · " + event.detail));
+      eventList.appendChild(item);
+    });
+    if (events.length > 100) {
+      var remainder = document.createElement("li");
+      remainder.textContent = (events.length - 100).toLocaleString() + " additional events omitted from this view.";
+      eventList.appendChild(remainder);
+    }
+  }
+  function render() {
+    var metric = metricSelect.value;
+    var bucketValues = buckets();
+    var rowValues = rows(metric);
+    var matrix = rowValues.map(function(row) {
+      return bucketValues.map(function(bucket) { return cellValue(metric, row, bucket); });
+    });
+    var maximum = matrix.reduce(function(largest, values) {
+      return values.reduce(function(rowLargest, value) { return Math.max(rowLargest, value); }, largest);
+    }, 0);
+    grid.replaceChildren();
+    grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
+    var corner = document.createElement("div");
+    corner.className = "heatmap-corner";
+    corner.textContent = metric === "wall_time" ? "Level 2 runtime state" : "Agent";
+    grid.appendChild(corner);
+    bucketValues.forEach(function(bucket) {
+      var heading = document.createElement("div");
+      heading.className = "heatmap-column";
+      heading.textContent = timeFormatter.format(new Date(bucket.start));
+      heading.title = fullTimeFormatter.format(new Date(bucket.start));
+      grid.appendChild(heading);
+    });
+    rowValues.forEach(function(row, rowIndex) {
+      var label = document.createElement("div");
+      label.className = "heatmap-row-label";
+      label.textContent = row.label;
+      grid.appendChild(label);
+      bucketValues.forEach(function(bucket, bucketIndex) {
+        var value = matrix[rowIndex][bucketIndex];
+        var intensity = maximum ? value / maximum : 0;
+        var cell = document.createElement("button");
+        cell.type = "button";
+        cell.className = "heatmap-cell";
+        cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
+        cell.setAttribute("aria-pressed", "false");
+        cell.textContent = metric === "wall_time" ? duration(value) : compact(value);
+        cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
+        cell.addEventListener("click", function() { showDrilldown(metric, row, bucket, value, cell); });
+        grid.appendChild(cell);
+      });
+    });
+    emptyState.hidden = rowValues.length > 0 && bucketValues.length > 0;
+    grid.hidden = !emptyState.hidden;
+    selectedCell = null;
+    drilldownTitle.textContent = "Select a heatmap cell";
+    drilldownSummary.textContent = "Choose a cell to inspect its exact Level 3 intervals or model responses.";
+    eventList.replaceChildren();
+    status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized within this view";
+  }
+  metricSelect.addEventListener("change", render);
+  minuteButtons.forEach(function(button) {
+    button.addEventListener("click", function() {
+      selectedMinutes = Number(button.dataset.heatmapMinutes);
+      minuteButtons.forEach(function(candidate) { candidate.setAttribute("aria-pressed", candidate === button ? "true" : "false"); });
+      render();
+    });
+  });
+  render();
+}
+"""
+
+
+def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
+    """Return bounded runtime and response evidence for the offline heatmap."""
+
+    state_labels = {
+        "model_inference": "Model inference",
+        "tool_execution": "Tool execution",
+        "test_process": "Test / process",
+        "agent_wait": "Waiting for agent",
+        "user_pause": "User pause",
+        "watchdog": "Watchdog",
+        "approval_infrastructure": "Approval / infrastructure",
+        "unattributed": "Unattributed",
+    }
+    present_states = {interval.state for interval in run.runtime_intervals}
+    states = [
+        {"id": state, "label": label}
+        for state, label in state_labels.items()
+        if state in present_states
+    ]
+    states.extend(
+        {"id": state, "label": state.replace("_", " ").title()}
+        for state in sorted(present_states - set(state_labels))
+    )
+    agents = [
+        {"id": thread.thread_id, "label": _agent_assignment_label(thread)}
+        for thread in run.threads
+    ]
+    intervals = [
+        {
+            "state": interval.state,
+            "thread_id": interval.thread_id,
+            "turn_id": interval.turn_id or "",
+            "started_at": interval.started_at,
+            "ended_at": interval.completed_at,
+            "duration_ms": interval.duration_ms,
+            "confidence": interval.attribution_confidence,
+            "detail": _compact_display_text(interval.detail, 160),
+        }
+        for interval in run.runtime_intervals
+        if interval.started_at and interval.completed_at
+    ]
+    responses = []
+    for thread in run.threads:
+        for response in thread.responses:
+            usage = _inference_call_usage(response)
+            responses.append(
+                {
+                    "thread_id": thread.thread_id,
+                    "turn_id": response.turn_id or "",
+                    "model": response.model,
+                    "started_at": response.started_at or response.event_timestamp,
+                    "completed_at": response.completed_at or response.event_timestamp,
+                    "duration_ms": response.duration_ms,
+                    "confidence": response.timing_confidence,
+                    "usage": {
+                        "uncached_input_tokens": usage.direct_input_tokens,
+                        "cached_input_tokens": usage.cached_input_tokens,
+                        "output_tokens": max(
+                            0, usage.output_tokens - usage.reasoning_tokens
+                        ),
+                        "reasoning_tokens": usage.reasoning_tokens,
+                    },
+                }
+            )
+    return {
+        "started_at": run.wall_started_at,
+        "ended_at": run.wall_ended_at,
+        "states": states,
+        "agents": agents,
+        "intervals": intervals,
+        "responses": responses,
+    }
+
+
+def _render_execution_heatmap(run: CodexRunMetrics) -> str:
+    """Render controls and bounded data for an offline execution heatmap."""
+
+    if not run.runtime_intervals:
+        return ""
+    payload = json.dumps(
+        _execution_heatmap_payload(run),
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    return (
+        '<section id="execution-heatmap" class="metric-view">'
+        '<div class="agents-heading"><h2>Execution heatmap</h2>'
+        '<span class="evidence-badge">Recorded + inferred boundaries</span></div>'
+        '<p class="execution-note">Compare time or response-attributed tokens across the run. '
+        'Time rows are Level 2 runtime states; select a cell to inspect its exact Level 3 evidence.</p>'
+        '<div class="heatmap-controls">'
+        '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
+        '<select id="heatmap-metric">'
+        '<option value="wall_time">Wall time</option>'
+        '<option value="uncached_input_tokens">Uncached input</option>'
+        '<option value="cached_input_tokens">Cached input</option>'
+        '<option value="output_tokens">Output</option>'
+        '<option value="reasoning_tokens">Reasoning</option>'
+        '</select></div>'
+        '<fieldset class="heatmap-granularity"><legend>Bucket size</legend>'
+        '<button type="button" data-heatmap-minutes="1">1 min</button>'
+        '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>'
+        '<button type="button" data-heatmap-minutes="15">15 min</button>'
+        '</fieldset><output class="heatmap-status" data-heatmap-status></output></div>'
+        '<div class="heatmap-scroll" tabindex="0" aria-label="Scrollable execution heatmap">'
+        '<div class="heatmap-grid" data-heatmap-grid></div>'
+        '<p class="heatmap-empty" data-heatmap-empty hidden>No heatmap evidence is available.</p>'
+        '</div><div class="heatmap-drilldown">'
+        '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
+        '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
+        'Choose a cell to inspect its exact Level 3 intervals or model responses.</p>'
+        '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
+        f'<script type="application/json" id="execution-heatmap-data">{payload}</script>'
+        '</section>'
+    )
+
+
 def render_codex_rollout_html(
     run: CodexRunMetrics,
     formatter_config: ToolFormatterConfig | None = None,
@@ -7583,6 +7937,7 @@ def render_codex_rollout_html(
     context_metrics_html = _render_context_metrics(run)
     inference_metrics_html = _render_inference_metrics(run)
     runtime_metrics_html = _render_runtime_metrics(run)
+    execution_heatmap_html = _render_execution_heatmap(run)
     work_item_metrics_html = _render_work_item_metrics(run)
     sequence_html = _render_codex_sequence_section(run)
     sequence_document_html = (
@@ -7590,13 +7945,19 @@ def render_codex_rollout_html(
         if sequence_html
         else ""
     )
+    view_links = []
+    if execution_heatmap_html:
+        view_links.append('<a href="#execution-heatmap">Heatmap</a>')
+    view_links.append('<a href="#timeline">Timeline</a>')
+    if sequence_html:
+        view_links.append(
+            '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
+            'data-sequence-window>Sequence window</a>'
+        )
     view_nav_html = (
         '<nav class="view-nav" aria-label="Report views"><span>Views</span>'
-        '<a href="#timeline">Timeline</a>'
-        '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
-        'data-sequence-window>Sequence window</a></nav>'
-        if sequence_html
-        else ""
+        + "".join(view_links)
+        + "</nav>"
     )
     parent_context_html = ""
     if run.parent_context is not None:
@@ -7888,6 +8249,7 @@ td {{ font-size:.85em; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
+{_EXECUTION_HEATMAP_CSS}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
 <h1{report_title_attribute}>{_escape_html(report_title)}</h1>
@@ -7920,6 +8282,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {context_metrics_html}
 {inference_metrics_html}
 {runtime_metrics_html}
+{execution_heatmap_html}
 {work_item_metrics_html}
 <div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">{_escape_html(agent_note)}</div></details></div>
 <p class="execution-note">{_escape_html(execution_note)} Expand an agent for {turn_singular}, token, cost, and tool-call detail.</p>
@@ -8401,6 +8764,9 @@ document.querySelectorAll(".clamped-less").forEach(function(button) {{
     if (disclosure) disclosure.open = false;
   }});
 }});
+{_EXECUTION_HEATMAP_SCRIPT}
+var executionHeatmap = document.getElementById("execution-heatmap");
+if (executionHeatmap && !sequenceOnly) initializeExecutionHeatmap(executionHeatmap);
 </script>
 </body></html>"""
 

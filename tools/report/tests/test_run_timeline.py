@@ -2330,6 +2330,48 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     assert "<th>State</th>" in root_tool_overlay
 
 
+def test_native_codex_html_renders_accessible_execution_heatmap():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    html = module.render_codex_rollout_html(run)
+
+    assert '<section id="execution-heatmap" class="metric-view">' in html
+    assert '<a href="#execution-heatmap">Heatmap</a>' in html
+    assert '<label for="heatmap-metric">Measure</label>' in html
+    assert '<option value="wall_time">Wall time</option>' in html
+    assert '<option value="uncached_input_tokens">Uncached input</option>' in html
+    assert '<option value="cached_input_tokens">Cached input</option>' in html
+    assert '<option value="output_tokens">Output</option>' in html
+    assert '<option value="reasoning_tokens">Reasoning</option>' in html
+    assert '<button type="button" data-heatmap-minutes="1">1 min</button>' in html
+    assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
+    assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
+    assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
+    assert 'id="execution-heatmap-data"' in html
+    assert "initializeExecutionHeatmap" in html
+    assert 'aria-live="polite"' in html
+
+    payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
+        "</script>", 1
+    )[0]
+    payload = json.loads(payload_text)
+    assert payload["started_at"] == run.wall_started_at
+    assert payload["ended_at"] == run.wall_ended_at
+    assert payload["states"]
+    assert payload["agents"]
+    assert payload["intervals"]
+    assert payload["responses"]
+    assert set(payload["responses"][0]["usage"]) == {
+        "uncached_input_tokens",
+        "cached_input_tokens",
+        "output_tokens",
+        "reasoning_tokens",
+    }
+    assert all(len(interval["detail"]) <= 160 for interval in payload["intervals"])
+    assert "PRIVATE-TOOL-PAYLOAD" not in payload_text
+
+
 def test_native_codex_report_uses_first_genuine_request_as_title():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
