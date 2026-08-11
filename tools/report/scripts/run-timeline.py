@@ -7001,6 +7001,7 @@ function initializeExecutionHeatmap(section) {
     { id:"cached_input_tokens", label:"Cached input" },
     { id:"reasoning_tokens", label:"Reasoning" },
     { id:"output_tokens", label:"Output" },
+    { id:"tool_calls", label:"Tool calls", format:"count" },
     { id:"average_context_tokens", source:"context_tokens", label:"Context size (avg)", aggregation:"average", format:"context" },
     { id:"maximum_context_tokens", source:"context_tokens", label:"Context size (max)", aggregation:"maximum", format:"context" },
     { id:"cost_usd", label:"Cost", format:"currency" }
@@ -7010,6 +7011,7 @@ function initializeExecutionHeatmap(section) {
 
   function timestamp(value) { return new Date(value).getTime(); }
   function compact(value) {
+    if (value >= 1000000000) return (value / 1000000000).toFixed(value >= 10000000000 ? 0 : 1) + "B";
     if (value >= 1000000) return (value / 1000000).toFixed(value >= 10000000 ? 0 : 1) + "M";
     if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + "K";
     return Math.round(value).toLocaleString();
@@ -7067,6 +7069,7 @@ function initializeExecutionHeatmap(section) {
       return data.states.map(function(state) { return { id:state.id, label:state.label }; });
     }
     if (metric === "tokens") return tokenRows;
+    if (metric === "models") return data.models;
     return data.agents.map(function(agent) { return { id:agent.id, label:agent.label }; });
   }
   function cellValue(metric, row, bucket) {
@@ -7090,11 +7093,19 @@ function initializeExecutionHeatmap(section) {
       });
       return total + mergedEnd - mergedStart;
     }
+    if (row.id === "tool_calls") {
+      return data.tools.filter(function(tool) {
+        var occurredAt = timestamp(tool.completed_at || tool.started_at);
+        return occurredAt >= bucket.start && occurredAt < bucket.end;
+      }).length;
+    }
     var values = data.responses.filter(function(response) {
       var occurredAt = responseTime(response);
-      var matchesRow = metric === "tokens" || response.thread_id === row.id;
+      var matchesRow = metric === "tokens" || (metric === "models" && response.model_id === row.id) || response.thread_id === row.id;
       return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
-    }).map(function(response) { return responseValue(response, metric, row); });
+    }).map(function(response) {
+      return metric === "models" ? response.usage.processed_tokens : responseValue(response, metric, row);
+    });
     if (row.format === "context") values = values.filter(function(value) { return value > 0; });
     if (row.aggregation === "average") {
       return values.length ? values.reduce(function(total, value) { return total + value; }, 0) / values.length : 0;
@@ -7116,9 +7127,21 @@ function initializeExecutionHeatmap(section) {
         };
       });
     }
+    if (row.id === "tool_calls") {
+      return data.tools.filter(function(tool) {
+        var occurredAt = timestamp(tool.completed_at || tool.started_at);
+        return occurredAt >= bucket.start && occurredAt < bucket.end;
+      }).map(function(tool) {
+        return {
+          started_at:tool.started_at,
+          label:tool.tool_name,
+          detail:duration(tool.duration_ms) + (tool.preview ? " · " + tool.preview : "")
+        };
+      });
+    }
     return data.responses.filter(function(response) {
       var occurredAt = responseTime(response);
-      var matchesRow = metric === "tokens" || response.thread_id === row.id;
+      var matchesRow = metric === "tokens" || (metric === "models" && response.model_id === row.id) || response.thread_id === row.id;
       return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) {
       var modelLabel = response.model || "Model response";
@@ -7126,7 +7149,7 @@ function initializeExecutionHeatmap(section) {
       if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
       return {
         started_at:response.completed_at || response.started_at,
-        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + row.label.toLowerCase(),
+        label:modelLabel + " · " + formatValue(metric, metric === "models" ? response.usage.processed_tokens : responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + (metric === "models" ? "processed tokens" : row.label.toLowerCase()),
         detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
       };
     });
@@ -7271,7 +7294,7 @@ function initializeExecutionHeatmap(section) {
     currentDrilldown = { metric:metric, row:row, trail:trail };
     updateDrilldownStepButtons();
     var current = trail[trail.length - 1];
-    var metricLabel = metric === "tokens" ? row.label : metricSelect.options[metricSelect.selectedIndex].text;
+    var metricLabel = metric === "tokens" || metric === "models" ? row.label : metricSelect.options[metricSelect.selectedIndex].text;
     drilldownTitle.textContent = row.label + " · " + rangeLabel(current.bucket);
     drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value, row) + ". Events in this period are listed below.";
     renderDrilldownPath(metric, row, trail);
@@ -7639,18 +7662,44 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                 ),
             }
         )
+    models = []
+    model_ids: set[str] = set()
     responses = []
     for thread in run.threads:
+        fallback_model = (
+            thread.model
+            if thread.model and not thread.model.startswith("mixed (")
+            else "Unknown model"
+        )
         for response in thread.responses:
             usage = _inference_call_usage(response)
             response_cost = _cost_for_response(thread, response)
             response_effort = _response_effort(thread, response)
+            response_model = response.model or fallback_model
+            model_identity = json.dumps(
+                [response_model, response_effort],
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            model_id = "model_" + hashlib.sha256(
+                model_identity.encode("utf-8")
+            ).hexdigest()[:16]
+            if model_id not in model_ids:
+                model_ids.add(model_id)
+                models.append(
+                    {
+                        "id": model_id,
+                        "label": response_model
+                        + (f" · effort {response_effort}" if response_effort else ""),
+                    }
+                )
             responses.append(
                 {
                     "event_id": _response_event_id(thread, response),
                     "thread_id": thread.thread_id,
                     "turn_id": response.turn_id or "",
-                    "model": response.model,
+                    "model": response_model,
+                    "model_id": model_id,
                     "effort": response_effort,
                     "started_at": response.started_at or response.event_timestamp,
                     "completed_at": response.completed_at or response.event_timestamp,
@@ -7665,10 +7714,28 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                             0, usage.output_tokens - usage.reasoning_tokens
                         ),
                         "reasoning_tokens": usage.reasoning_tokens,
+                        "processed_tokens": usage.processed_tokens,
                         "context_tokens": response.context_total_tokens,
                     },
                 }
             )
+    tools = [
+        {
+            "thread_id": thread.thread_id,
+            "turn_id": tool.turn_id or "",
+            "tool_name": tool.tool_name,
+            "started_at": tool.started_at,
+            "completed_at": tool.completed_at,
+            "duration_ms": tool.duration_ms,
+            "preview": _tool_activity_preview(
+                tool.tool_name,
+                tool.argument_summary or tool.result_summary or tool.tool_name,
+            ),
+        }
+        for thread in run.threads
+        for tool in thread.tool_intervals
+        if tool.started_at and tool.completed_at
+    ]
     return {
         "started_at": run.wall_started_at,
         "ended_at": run.wall_ended_at,
@@ -7682,8 +7749,10 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
         ),
         "states": states,
         "agents": agents,
+        "models": models,
         "intervals": intervals,
         "responses": responses,
+        "tools": tools,
     }
 
 
@@ -8079,6 +8148,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<select id="heatmap-metric">'
         '<option value="wall_time">Wall time</option>'
         '<option value="tokens">Tokens</option>'
+        '<option value="models">Models</option>'
         '</select></div>'
         '<fieldset class="heatmap-granularity"><legend>Bucket size</legend>'
         '<button type="button" data-heatmap-minutes="1">1 min</button>'

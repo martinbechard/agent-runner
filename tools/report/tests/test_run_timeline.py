@@ -2367,6 +2367,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<label for="heatmap-metric">Measure</label>' in html
     assert '<option value="wall_time">Wall time</option>' in html
     assert '<option value="tokens">Tokens</option>' in html
+    assert '<option value="models">Models</option>' in html
     assert '<option value="uncached_input_tokens">' not in html
     assert '<option value="cached_input_tokens">' not in html
     assert '<option value="output_tokens">' not in html
@@ -2410,10 +2411,14 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
     assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
     assert '{ id:"output_tokens", label:"Output" }' in html
+    assert '{ id:"tool_calls", label:"Tool calls", format:"count" }' in html
     assert '{ id:"average_context_tokens", source:"context_tokens", label:"Context size (avg)", aggregation:"average", format:"context" }' in html
     assert '{ id:"maximum_context_tokens", source:"context_tokens", label:"Context size (max)", aggregation:"maximum", format:"context" }' in html
     assert '{ id:"cost_usd", label:"Cost", format:"currency" }' in html
     assert html.index('label:"Reasoning"') < html.index('label:"Output"')
+    assert 'if (value >= 1000000000)' in html
+    assert 'if (metric === "models") return data.models;' in html
+    assert 'response.usage.processed_tokens' in html
     assert 'row.aggregation === "average"' in html
     assert 'row.aggregation === "maximum"' in html
     assert 'values.filter(function(value) { return value > 0; })' in html
@@ -2451,17 +2456,26 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert payload["context_capacity"] == run.context_summary.capacity
     assert payload["states"]
     assert payload["agents"]
+    assert payload["models"]
+    assert all(model["id"].startswith("model_") for model in payload["models"])
+    assert all(model["label"] for model in payload["models"])
     assert payload["agents"][0]["label"] == "main"
     assert all("Thread:" not in agent["label"] for agent in payload["agents"])
     assert payload["intervals"]
     assert payload["responses"]
+    assert payload["tools"]
+    assert len(payload["tools"]) == sum(
+        len(thread.tool_intervals) for thread in run.threads
+    )
     assert set(payload["responses"][0]["usage"]) == {
         "uncached_input_tokens",
         "cached_input_tokens",
         "output_tokens",
         "reasoning_tokens",
+        "processed_tokens",
         "context_tokens",
     }
+    assert all("model_id" in response for response in payload["responses"])
     assert "effort" in payload["responses"][0]
     assert "preview" in payload["responses"][0]
     assert all(len(response["preview"]) <= 150 for response in payload["responses"])
