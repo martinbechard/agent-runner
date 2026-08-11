@@ -23,8 +23,13 @@ def test_generate_report_schema_hides_server_implementation_details() -> None:
 
     async def inspect_schema() -> None:
         tools = await mcp.list_tools()
-        assert [tool.name for tool in tools] == ["generate_report"]
-        assert set(tools[0].parameters["properties"]) == {
+        assert [tool.name for tool in tools] == [
+            "generate_report",
+            "query_time_range",
+            "get_event_details",
+        ]
+        generate, query, details = tools
+        assert set(generate.parameters["properties"]) == {
             "thread_id",
             "from_time",
             "to_time",
@@ -33,6 +38,32 @@ def test_generate_report_schema_hides_server_implementation_details() -> None:
             "return_via_mcp",
             "return_format",
         }
+        assert set(query.parameters["properties"]) == {
+            "thread_id",
+            "from_time",
+            "to_time",
+            "bucket_minutes",
+            "measure",
+            "include_events",
+        }
+        assert query.parameters["required"] == ["thread_id"]
+        assert query.parameters["properties"]["bucket_minutes"]["enum"] == [
+            1,
+            5,
+            15,
+            30,
+            60,
+        ]
+        assert query.parameters["properties"]["measure"]["enum"] == [
+            "wall_time",
+            "uncached_input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "cost_usd",
+        ]
+        assert set(details.parameters["properties"]) == {"thread_id", "event_id"}
+        assert details.parameters["required"] == ["thread_id", "event_id"]
 
     asyncio.run(inspect_schema())
 

@@ -1,13 +1,14 @@
 # Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 # AI attribution: Generated with AI assistance.
-# Responsibility: Select Codex tasks and generate bounded MCP report results.
+# Responsibility: Select Codex tasks and return bounded report or query results.
 # Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
-"""MCP-facing report configuration, selection, rendering, and output handling."""
+"""MCP-facing task selection, report generation, and telemetry queries."""
 
 from __future__ import annotations
 
 import os
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta, tzinfo
@@ -29,6 +30,15 @@ REPORT_FILENAMES = {
     "markdown": "report.md",
 }
 InlineFormat = Literal["html", "markdown", "json"]
+TimeRangeMeasure = Literal[
+    "wall_time",
+    "uncached_input_tokens",
+    "cached_input_tokens",
+    "output_tokens",
+    "reasoning_tokens",
+    "cost_usd",
+]
+BucketMinutes = Literal[1, 5, 15, 30, 60]
 
 
 @dataclass(frozen=True)
@@ -281,6 +291,152 @@ class ReportGenerator:
         if inline is not None:
             result["inline"] = inline
         return result
+
+    def query_time_range(
+        self,
+        *,
+        thread_id: str,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        bucket_minutes: BucketMinutes = 5,
+        measure: TimeRangeMeasure = "wall_time",
+        include_events: bool = False,
+    ) -> dict[str, object]:
+        """Return bucketed task telemetry without rendering or writing a report."""
+
+        if not thread_id.strip():
+            return self._error("REPORT_INVALID_REQUEST", "thread_id must not be empty")
+        if bucket_minutes not in {1, 5, 15, 30, 60}:
+            return self._error(
+                "REPORT_INVALID_REQUEST",
+                "bucket_minutes must be one of 1, 5, 15, 30, or 60",
+            )
+        if measure not in {
+            "wall_time",
+            "uncached_input_tokens",
+            "cached_input_tokens",
+            "output_tokens",
+            "reasoning_tokens",
+            "cost_usd",
+        }:
+            return self._error(
+                "REPORT_INVALID_REQUEST",
+                "Unsupported time-range measure",
+            )
+        try:
+            normalized_from = (
+                self._parse_timestamp(from_time, "from_time").isoformat()
+                if from_time
+                else None
+            )
+            normalized_to = (
+                self._parse_timestamp(to_time, "to_time").isoformat()
+                if to_time
+                else None
+            )
+            if normalized_from and normalized_to:
+                if datetime.fromisoformat(normalized_from) >= datetime.fromisoformat(
+                    normalized_to
+                ):
+                    raise ValueError("from_time must be earlier than to_time")
+        except ValueError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+
+        try:
+            candidates, candidate_paths = self._discover_candidates()
+        except (OSError, RuntimeError, ValueError) as error:
+            return self._error("REPORT_DISCOVERY_FAILED", str(error))
+        lower_bound, upper_bound = self._selection_range(None, None)
+        selected = self._select_candidate(
+            candidates,
+            thread_id=thread_id,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            name_contains=[],
+        )
+        if isinstance(selected, dict):
+            return selected
+
+        try:
+            run = self._runtime.build_codex_rollout_run(
+                selected.thread_id,
+                list(self._config.session_roots),
+                candidate_paths=candidate_paths,
+                title=selected.title,
+                discovery_index_path=self._runtime._default_codex_discovery_index_path(),
+            )
+            query = self._runtime.query_codex_run_time_range(
+                run,
+                from_time=normalized_from,
+                to_time=normalized_to,
+                bucket_minutes=bucket_minutes,
+                measure=measure,
+                include_events=include_events,
+            )
+        except ValueError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+        except (OSError, RuntimeError) as error:
+            return self._error("REPORT_GENERATION_FAILED", str(error))
+        return {
+            "ok": True,
+            "thread_id": selected.thread_id,
+            "task_name": selected.title,
+            **query,
+        }
+
+    def get_event_details(
+        self,
+        *,
+        thread_id: str,
+        event_id: str,
+    ) -> dict[str, object]:
+        """Resolve one query event ID through a fresh authoritative task snapshot."""
+
+        if not thread_id.strip():
+            return self._error("REPORT_INVALID_REQUEST", "thread_id must not be empty")
+        if not event_id.strip():
+            return self._error("REPORT_INVALID_REQUEST", "event_id must not be empty")
+        if re.fullmatch(r"evt_[0-9a-f]{24}", event_id) is None:
+            return self._error(
+                "REPORT_INVALID_REQUEST",
+                "event_id must use the evt_ prefix followed by 24 lowercase hexadecimal characters",
+            )
+        try:
+            candidates, candidate_paths = self._discover_candidates()
+        except (OSError, RuntimeError, ValueError) as error:
+            return self._error("REPORT_DISCOVERY_FAILED", str(error))
+        lower_bound, upper_bound = self._selection_range(None, None)
+        selected = self._select_candidate(
+            candidates,
+            thread_id=thread_id,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            name_contains=[],
+        )
+        if isinstance(selected, dict):
+            return selected
+        try:
+            run = self._runtime.build_codex_rollout_run(
+                selected.thread_id,
+                list(self._config.session_roots),
+                candidate_paths=candidate_paths,
+                title=selected.title,
+                discovery_index_path=self._runtime._default_codex_discovery_index_path(),
+            )
+            event = self._runtime.get_codex_run_event_details(run, event_id)
+        except (OSError, RuntimeError, ValueError) as error:
+            return self._error("REPORT_GENERATION_FAILED", str(error))
+        if event is None:
+            return self._error(
+                "REPORT_EVENT_NOT_FOUND",
+                "The event ID was not found in the current task snapshot.",
+            )
+        return {
+            "ok": True,
+            "thread_id": selected.thread_id,
+            "task_name": selected.title,
+            "event": event,
+        }
 
     def _selection_range(
         self, from_time: str | None, to_time: str | None

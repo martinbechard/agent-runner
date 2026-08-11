@@ -76,6 +76,16 @@ class FakeRuntime:
     def render_codex_rollout_markdown(self, run: str) -> str:
         return f"# {run}\n"
 
+    def query_codex_run_time_range(self, run: str, **kwargs) -> dict[str, object]:
+        return {"runtime_run": run, **kwargs}
+
+    def get_codex_run_event_details(
+        self, run: str, event_id: str
+    ) -> dict[str, object] | None:
+        if event_id == "evt_000000000000000000000000":
+            return None
+        return {"event_id": event_id, "runtime_run": run, "detail": "safe"}
+
 
 def _config(
     sessions_root: Path,
@@ -134,6 +144,78 @@ def test_exact_thread_selection_ignores_date_and_name_filters(tmp_path: Path) ->
     assert result["ok"] is True
     assert result["thread_id"] == "thread-1"
     assert runtime.build_calls == 1
+
+
+def test_time_range_query_builds_one_task_and_returns_structured_data(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
+    runtime = FakeRuntime([entry])
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    result = generator.query_time_range(
+        thread_id="thread-1",
+        from_time="2026-08-10T12:05:00Z",
+        to_time="2026-08-10T12:35:00Z",
+        bucket_minutes=5,
+        measure="output_tokens",
+        include_events=True,
+    )
+
+    assert result["ok"] is True
+    assert result["thread_id"] == "thread-1"
+    assert result["task_name"] == "Query task"
+    assert result["runtime_run"] == "thread-1"
+    assert result["bucket_minutes"] == 5
+    assert result["measure"] == "output_tokens"
+    assert result["include_events"] is True
+    assert runtime.build_calls == 1
+
+
+def test_time_range_query_rejects_unsupported_bucket_before_build(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
+    runtime = FakeRuntime([entry])
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    result = generator.query_time_range(thread_id="thread-1", bucket_minutes=2)
+
+    assert result["code"] == "REPORT_INVALID_REQUEST"
+    assert runtime.build_calls == 0
+
+
+def test_event_detail_query_returns_one_authoritative_event(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
+    runtime = FakeRuntime([entry])
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    result = generator.get_event_details(
+        thread_id="thread-1", event_id="evt_1234567890abcdef12345678"
+    )
+    missing = generator.get_event_details(
+        thread_id="thread-1", event_id="evt_000000000000000000000000"
+    )
+
+    assert result == {
+        "ok": True,
+        "thread_id": "thread-1",
+        "task_name": "Query task",
+        "event": {
+            "event_id": "evt_1234567890abcdef12345678",
+            "runtime_run": "thread-1",
+            "detail": "safe",
+        },
+    }
+    assert missing["code"] == "REPORT_EVENT_NOT_FOUND"
+    assert runtime.build_calls == 2
+
+
+def test_event_detail_rejects_malformed_id_before_build(tmp_path: Path) -> None:
+    entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
+    runtime = FakeRuntime([entry])
+    generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
+
+    result = generator.get_event_details(thread_id="thread-1", event_id="bad")
+
+    assert result["code"] == "REPORT_INVALID_REQUEST"
+    assert runtime.build_calls == 0
 
 
 def test_filtered_selection_is_start_inclusive_end_exclusive_and_all_names_match(

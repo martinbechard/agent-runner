@@ -2465,6 +2465,120 @@ def test_native_codex_heatmap_exec_preview_starts_with_parameters():
     ).startswith("exec: const p = await tools.update_plan")
 
 
+def test_native_codex_time_range_query_returns_bucketed_series_and_optional_events():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    wall_time = module.query_codex_run_time_range(
+        run,
+        from_time=run.wall_started_at,
+        to_time=run.wall_ended_at,
+        bucket_minutes=15,
+        measure="wall_time",
+        include_events=False,
+    )
+    reasoning = module.query_codex_run_time_range(
+        run,
+        from_time=run.wall_started_at,
+        to_time=run.wall_ended_at,
+        bucket_minutes=5,
+        measure="reasoning_tokens",
+        include_events=True,
+    )
+
+    assert wall_time["measure"] == {
+        "id": "wall_time",
+        "label": "Wall time",
+        "unit": "milliseconds",
+    }
+    assert wall_time["bucket_minutes"] == 15
+    assert wall_time["range"]["to_exclusive"] is True
+    assert wall_time["requested_range"] == wall_time["range"]
+    assert wall_time["buckets"]
+    assert all(series["kind"] == "activity" for series in wall_time["series"])
+    assert all(
+        len(series["values"]) == len(wall_time["buckets"])
+        for series in wall_time["series"]
+    )
+    assert "events" not in wall_time
+    assert reasoning["series"][0]["kind"] == "agent"
+    assert reasoning["series"][0]["label"] == "main"
+    assert reasoning["event_count"] == len(reasoning["events"])
+    assert reasoning["events_truncated"] is False
+    assert all(event["measure"] == "reasoning_tokens" for event in reasoning["events"])
+    event_ids = [event["event_id"] for event in reasoning["events"]]
+    assert len(event_ids) == len(set(event_ids))
+    assert all(event_id.startswith("evt_") for event_id in event_ids)
+    details = module.get_codex_run_event_details(run, event_ids[0])
+    assert details["event_id"] == event_ids[0]
+    assert details["kind"] == "model_response"
+    assert "usage" in details
+    assert "activities" in details
+    repeated = module.query_codex_run_time_range(
+        run,
+        from_time=run.wall_started_at,
+        to_time=run.wall_ended_at,
+        bucket_minutes=5,
+        measure="reasoning_tokens",
+        include_events=True,
+    )
+    assert [event["event_id"] for event in repeated["events"]] == event_ids
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("bucket_minutes", 2), ("measure", "processed_tokens")],
+)
+def test_native_codex_time_range_query_rejects_unsupported_dimensions(field, value):
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    arguments = {
+        "from_time": run.wall_started_at,
+        "to_time": run.wall_ended_at,
+        "bucket_minutes": 5,
+        "measure": "wall_time",
+        "include_events": False,
+    }
+    arguments[field] = value
+
+    with pytest.raises(ValueError, match=field):
+        module.query_codex_run_time_range(run, **arguments)
+
+
+def test_native_codex_time_range_query_rejects_non_overlapping_range():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    with pytest.raises(ValueError, match="does not overlap"):
+        module.query_codex_run_time_range(
+            run,
+            from_time="2020-01-01T00:00:00Z",
+            to_time="2020-01-01T01:00:00Z",
+        )
+
+
+def test_native_codex_event_detail_returns_none_for_unknown_id():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+
+    assert module.get_codex_run_event_details(run, "evt_unknown") is None
+
+
+def test_native_codex_event_detail_keeps_tool_context_secret_redacted():
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    payload = module._execution_heatmap_payload(run)
+
+    details = [
+        module.get_codex_run_event_details(run, interval["event_id"])
+        for interval in payload["intervals"]
+    ]
+    tool_event = next(detail for detail in details if detail.get("tool_context"))
+
+    assert tool_event["tool_context"]["tool_name"]
+    assert "PRIVATE-TOOL-PAYLOAD" not in repr(tool_event)
+
+
 def test_native_codex_report_uses_first_genuine_request_as_title():
     module = _load_module()
     run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)

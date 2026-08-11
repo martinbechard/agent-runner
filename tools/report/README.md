@@ -112,7 +112,8 @@ git push origin agent-report-vVERSION
 ## MCP server
 
 The platform wheel also installs `mcp-agent-report`, a FastMCP stdio server
-with one `generate_report` operation. The operation selects a Codex task by
+with `generate_report`, `query_time_range`, and `get_event_details` operations.
+`generate_report` selects a Codex task by
 exact thread ID or by an ISO 8601 half-open time range and case-insensitive task
 name substrings. It writes one coherent report snapshot using these stable
 filenames:
@@ -131,6 +132,32 @@ client, then the configured workspace root, then the server working directory.
 `output_path` is always a directory. Set `return_via_mcp` to return one complete
 HTML, Markdown, or JSON representation inline as well. Inline content is never
 truncated.
+
+`query_time_range` returns structured telemetry for one exact `thread_id`.
+Use optional ISO 8601 `from_time` and `to_time` values to restrict the task
+range. Offset-free values use the configured server timezone. Select a
+`bucket_minutes` value of 1, 5, 15, 30, or 60. Select one of these measures:
+
+- `wall_time`
+- `uncached_input_tokens`
+- `cached_input_tokens`
+- `output_tokens`
+- `reasoning_tokens`
+- `cost_usd`
+
+Wall-time queries return one series for each runtime activity. Token and cost
+queries return one series for each agent. Each series contains values aligned
+with the top-level `buckets` array. Set `include_events` to include event
+evidence from the selected range. Event responses are limited to 1,000 items.
+Use `event_count` and `events_truncated` to detect when a narrower query is
+required. Each event includes a deterministic opaque `event_id`.
+
+Pass the exact `thread_id` and an `event_id` to `get_event_details`. The tool
+rebuilds the current task snapshot and returns the full privacy-safe event
+record. Tool events can include bounded, secret-redacted arguments and results.
+Model events include usage, cost, timing, and available activity context. An ID
+can become unavailable if the underlying live task changes after the range
+query; repeat `query_time_range` to refresh the event IDs.
 
 Configure server-owned paths and limits in the MCP host environment:
 

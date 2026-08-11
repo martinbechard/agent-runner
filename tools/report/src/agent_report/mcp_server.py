@@ -1,9 +1,9 @@
 # Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 # AI attribution: Generated with AI assistance.
-# Responsibility: Expose agent report generation as one FastMCP operation.
+# Responsibility: Expose report generation and time-range queries through FastMCP.
 # Design: docs/design/components/CD-001-codex-rollout-metrics.md
 
-"""FastMCP server for local Codex agent report generation."""
+"""FastMCP server for local Codex reports and structured telemetry queries."""
 
 from __future__ import annotations
 
@@ -17,7 +17,9 @@ from fastmcp import Context, FastMCP
 
 from agent_report import cli
 from agent_report.mcp_report import (
+    BucketMinutes,
     ReportGenerator,
+    TimeRangeMeasure,
     load_server_config,
     validate_startup,
     workspace_root_from_uri,
@@ -56,13 +58,14 @@ async def _client_workspace_root(ctx: Context) -> Path | None:
 
 
 def create_server() -> FastMCP:
-    """Create the agent report MCP server and register its public operation."""
+    """Create the agent report MCP server and register its public operations."""
 
     server = FastMCP(
         "mcp-agent-report",
         instructions=(
-            "Generate a complete local report bundle for one Codex task, selected "
-            "by exact thread ID or by time and task-name filters."
+            "Generate a complete local report bundle or query bucketed execution "
+            "telemetry for one Codex task. Range events include IDs that can be "
+            "resolved through the event-detail operation."
         ),
         lifespan=_server_lifespan,
     )
@@ -98,6 +101,56 @@ def create_server() -> FastMCP:
                 return_via_mcp=return_via_mcp,
                 return_format=return_format,
                 workspace_root=workspace_root,
+            )
+
+    @server.tool
+    async def query_time_range(
+        ctx: Context,
+        thread_id: str,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        bucket_minutes: BucketMinutes = 5,
+        measure: TimeRangeMeasure = "wall_time",
+        include_events: bool = False,
+    ) -> dict[str, object]:
+        """Retrieve bucketed telemetry; included events have IDs for detail lookup."""
+
+        generator = ctx.lifespan_context["report_generator"]
+        report_lock = ctx.lifespan_context["report_lock"]
+        if not isinstance(generator, ReportGenerator):
+            raise TypeError("Agent report server did not initialize correctly")
+        if not isinstance(report_lock, asyncio.Lock):
+            raise TypeError("Agent report server did not initialize correctly")
+        async with report_lock:
+            return await asyncio.to_thread(
+                generator.query_time_range,
+                thread_id=thread_id,
+                from_time=from_time,
+                to_time=to_time,
+                bucket_minutes=bucket_minutes,
+                measure=measure,
+                include_events=include_events,
+            )
+
+    @server.tool
+    async def get_event_details(
+        ctx: Context,
+        thread_id: str,
+        event_id: str,
+    ) -> dict[str, object]:
+        """Retrieve the full privacy-safe record for an ID from query_time_range."""
+
+        generator = ctx.lifespan_context["report_generator"]
+        report_lock = ctx.lifespan_context["report_lock"]
+        if not isinstance(generator, ReportGenerator):
+            raise TypeError("Agent report server did not initialize correctly")
+        if not isinstance(report_lock, asyncio.Lock):
+            raise TypeError("Agent report server did not initialize correctly")
+        async with report_lock:
+            return await asyncio.to_thread(
+                generator.get_event_details,
+                thread_id=thread_id,
+                event_id=event_id,
             )
 
     return server

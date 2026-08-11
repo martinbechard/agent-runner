@@ -7510,6 +7510,39 @@ def _runtime_interval_preview(
     )
 
 
+def _time_range_event_id(kind: str, *parts: object) -> str:
+    """Return one deterministic opaque event identifier for a task snapshot."""
+
+    identity = json.dumps([kind, *parts], ensure_ascii=False, separators=(",", ":"))
+    return "evt_" + hashlib.sha256(identity.encode("utf-8")).hexdigest()[:24]
+
+
+def _runtime_interval_event_id(
+    interval: RuntimeStateInterval, interval_index: int
+) -> str:
+    return _time_range_event_id(
+        "runtime_interval",
+        interval_index,
+        interval.thread_id,
+        interval.turn_id,
+        interval.state,
+        interval.started_at,
+        interval.completed_at,
+    )
+
+
+def _response_event_id(thread: CodexThreadMetrics, response: ResponseUsage) -> str:
+    return _time_range_event_id(
+        "model_response",
+        thread.thread_id,
+        response.turn_id,
+        response.started_at,
+        response.completed_at,
+        response.source_path,
+        response.source_ordinal,
+    )
+
+
 def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
     """Return bounded runtime and response evidence for the offline heatmap."""
 
@@ -7539,12 +7572,13 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
     ]
     threads_by_id = {thread.thread_id: thread for thread in run.threads}
     intervals = []
-    for interval in run.runtime_intervals:
+    for interval_index, interval in enumerate(run.runtime_intervals):
         if not interval.started_at or not interval.completed_at:
             continue
         thread = threads_by_id.get(interval.thread_id)
         intervals.append(
             {
+                "event_id": _runtime_interval_event_id(interval, interval_index),
                 "state": interval.state,
                 "thread_id": interval.thread_id,
                 "turn_id": interval.turn_id or "",
@@ -7566,6 +7600,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
             response_effort = _response_effort(thread, response)
             responses.append(
                 {
+                    "event_id": _response_event_id(thread, response),
                     "thread_id": thread.thread_id,
                     "turn_id": response.turn_id or "",
                     "model": response.model,
@@ -7594,6 +7629,378 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
         "intervals": intervals,
         "responses": responses,
     }
+
+
+_TIME_RANGE_MEASURES = {
+    "wall_time": ("Wall time", "milliseconds"),
+    "uncached_input_tokens": ("Uncached input", "tokens"),
+    "cached_input_tokens": ("Cached input", "tokens"),
+    "output_tokens": ("Output", "tokens"),
+    "reasoning_tokens": ("Reasoning", "tokens"),
+    "cost_usd": ("Cost", "USD"),
+}
+_TIME_RANGE_BUCKET_MINUTES = {1, 5, 15, 30, 60}
+_TIME_RANGE_EVENT_LIMIT = 1_000
+_EVENT_ACTIVITY_LIMIT = 10
+_EVENT_ACTIVITY_TEXT_LIMIT = 1_000
+
+
+def query_codex_run_time_range(
+    run: CodexRunMetrics,
+    *,
+    from_time: str | None = None,
+    to_time: str | None = None,
+    bucket_minutes: int = 5,
+    measure: str = "wall_time",
+    include_events: bool = False,
+) -> dict[str, object]:
+    """Return bucketed execution metrics and optional bounded event evidence."""
+
+    if bucket_minutes not in _TIME_RANGE_BUCKET_MINUTES:
+        raise ValueError("bucket_minutes must be one of 1, 5, 15, 30, or 60")
+    if measure not in _TIME_RANGE_MEASURES:
+        raise ValueError(
+            "measure must be wall_time, uncached_input_tokens, "
+            "cached_input_tokens, output_tokens, reasoning_tokens, or cost_usd"
+        )
+    run_start = _parse_iso_datetime(run.wall_started_at)
+    run_end = _parse_iso_datetime(run.wall_ended_at)
+    if run_start is None or run_end is None or run_start >= run_end:
+        raise ValueError("task runtime range is unavailable")
+    query_start = _parse_iso_datetime(from_time) if from_time else run_start
+    query_end = _parse_iso_datetime(to_time) if to_time else run_end
+    if query_start is None:
+        raise ValueError("from_time must be an ISO 8601 timestamp")
+    if query_end is None:
+        raise ValueError("to_time must be an ISO 8601 timestamp")
+    if query_start >= query_end:
+        raise ValueError("from_time must be earlier than to_time")
+    requested_start = query_start
+    requested_end = query_end
+    query_start = max(query_start, run_start)
+    query_end = min(query_end, run_end)
+    if query_start >= query_end:
+        raise ValueError("requested time range does not overlap the task runtime")
+
+    payload = _execution_heatmap_payload(run)
+    bucket_width = timedelta(minutes=bucket_minutes)
+    buckets: list[tuple[datetime, datetime]] = []
+    bucket_start = query_start
+    while bucket_start < query_end:
+        bucket_end = min(query_end, bucket_start + bucket_width)
+        buckets.append((bucket_start, bucket_end))
+        bucket_start = bucket_end
+
+    if measure == "wall_time":
+        rows = [
+            {"id": state["id"], "label": state["label"], "kind": "activity"}
+            for state in payload["states"]
+        ]
+    else:
+        rows = [
+            {"id": agent["id"], "label": agent["label"], "kind": "agent"}
+            for agent in payload["agents"]
+        ]
+
+    def interval_value(row_id: str, start: datetime, end: datetime) -> int:
+        segments: list[tuple[datetime, datetime]] = []
+        for interval in payload["intervals"]:
+            if interval["state"] != row_id:
+                continue
+            interval_start = _parse_iso_datetime(interval["started_at"])
+            interval_end = _parse_iso_datetime(interval["ended_at"])
+            if interval_start is None or interval_end is None:
+                continue
+            overlap_start = max(start, interval_start)
+            overlap_end = min(end, interval_end)
+            if overlap_start < overlap_end:
+                segments.append((overlap_start, overlap_end))
+        if not segments:
+            return 0
+        segments.sort()
+        merged: list[tuple[datetime, datetime]] = [segments[0]]
+        for segment_start, segment_end in segments[1:]:
+            previous_start, previous_end = merged[-1]
+            if segment_start <= previous_end:
+                merged[-1] = (previous_start, max(previous_end, segment_end))
+            else:
+                merged.append((segment_start, segment_end))
+        return round(sum((end - start).total_seconds() * 1000 for start, end in merged))
+
+    def response_time(response: dict[str, object]) -> datetime | None:
+        return _parse_iso_datetime(
+            str(response.get("completed_at") or response.get("started_at") or "")
+        )
+
+    def response_value(response: dict[str, object]) -> int | float:
+        if measure == "cost_usd":
+            return float(response["cost_usd"])
+        return int(response["usage"][measure])
+
+    series = []
+    for row in rows:
+        values = []
+        for start, end in buckets:
+            if measure == "wall_time":
+                values.append(interval_value(str(row["id"]), start, end))
+            else:
+                values.append(
+                    sum(
+                        response_value(response)
+                        for response in payload["responses"]
+                        if response["thread_id"] == row["id"]
+                        and (occurred_at := response_time(response)) is not None
+                        and start <= occurred_at < end
+                    )
+                )
+        series.append({**row, "values": values})
+
+    label, unit = _TIME_RANGE_MEASURES[measure]
+    result: dict[str, object] = {
+        "measure": {"id": measure, "label": label, "unit": unit},
+        "bucket_minutes": bucket_minutes,
+        "range": {
+            "from": query_start.isoformat(),
+            "to": query_end.isoformat(),
+            "to_exclusive": True,
+        },
+        "requested_range": {
+            "from": requested_start.isoformat(),
+            "to": requested_end.isoformat(),
+            "to_exclusive": True,
+        },
+        "run_range": {
+            "from": run.wall_started_at,
+            "to": run.wall_ended_at,
+            "to_exclusive": True,
+        },
+        "buckets": [
+            {"from": start.isoformat(), "to": end.isoformat()} for start, end in buckets
+        ],
+        "series": series,
+    }
+    if not include_events:
+        return result
+
+    events: list[dict[str, object]] = []
+    if measure == "wall_time":
+        labels = {str(row["id"]): str(row["label"]) for row in rows}
+        for interval in payload["intervals"]:
+            interval_start = _parse_iso_datetime(interval["started_at"])
+            interval_end = _parse_iso_datetime(interval["ended_at"])
+            if interval_start is None or interval_end is None:
+                continue
+            overlap_start = max(query_start, interval_start)
+            overlap_end = min(query_end, interval_end)
+            if overlap_start >= overlap_end:
+                continue
+            events.append(
+                {
+                    "event_id": interval["event_id"],
+                    "series_id": interval["state"],
+                    "series_label": labels.get(interval["state"], interval["state"]),
+                    "measure": measure,
+                    "value": round((overlap_end - overlap_start).total_seconds() * 1000),
+                    "started_at": overlap_start.isoformat(),
+                    "ended_at": overlap_end.isoformat(),
+                    "thread_id": interval["thread_id"],
+                    "turn_id": interval["turn_id"],
+                    "label": interval["detail"] or labels.get(interval["state"], interval["state"]),
+                    "preview": interval["preview"],
+                }
+            )
+    else:
+        labels = {str(row["id"]): str(row["label"]) for row in rows}
+        for response in payload["responses"]:
+            occurred_at = response_time(response)
+            if occurred_at is None or not query_start <= occurred_at < query_end:
+                continue
+            model_label = response["model"] or "Model response"
+            if response["effort"]:
+                model_label += f" · effort {response['effort']}"
+            events.append(
+                {
+                    "event_id": response["event_id"],
+                    "series_id": response["thread_id"],
+                    "series_label": labels.get(response["thread_id"], response["thread_id"]),
+                    "measure": measure,
+                    "value": response_value(response),
+                    "occurred_at": occurred_at.isoformat(),
+                    "started_at": response["started_at"],
+                    "completed_at": response["completed_at"],
+                    "duration_ms": response["duration_ms"],
+                    "turn_id": response["turn_id"],
+                    "label": model_label,
+                    "preview": response["preview"],
+                }
+            )
+    events.sort(key=lambda event: str(event.get("started_at") or event.get("occurred_at")))
+    result["event_count"] = len(events)
+    result["events_truncated"] = len(events) > _TIME_RANGE_EVENT_LIMIT
+    result["events"] = events[:_TIME_RANGE_EVENT_LIMIT]
+    return result
+
+
+def _event_activities(
+    thread: CodexThreadMetrics,
+    turn_id: str | None,
+    started_at: str,
+    ended_at: str,
+) -> list[dict[str, object]]:
+    """Return bounded privacy-safe narrative context inside one event."""
+
+    start = _parse_iso_datetime(started_at)
+    end = _parse_iso_datetime(ended_at)
+    if start is None or end is None:
+        return []
+    activities = []
+    for activity in thread.activities:
+        occurred_at = _parse_iso_datetime(activity.event_timestamp)
+        if occurred_at is None or occurred_at < start or occurred_at > end:
+            continue
+        if turn_id and activity.turn_id != turn_id:
+            continue
+        activities.append(
+            {
+                "type": activity.activity_type,
+                "occurred_at": activity.event_timestamp,
+                "summary": _compact_display_text(activity.summary, _EVENT_ACTIVITY_TEXT_LIMIT),
+                "content": _compact_display_text(activity.content, _EVENT_ACTIVITY_TEXT_LIMIT),
+                "model": activity.model,
+            }
+        )
+    return activities[:_EVENT_ACTIVITY_LIMIT]
+
+
+def _event_tool_context(
+    thread: CodexThreadMetrics,
+    started_at: str,
+    ended_at: str,
+) -> dict[str, object] | None:
+    """Return the strongest overlapping privacy-safe tool record."""
+
+    candidates: list[tuple[int, str, ToolInterval | McpCallInterval]] = []
+    for tool in thread.tool_intervals:
+        overlap = _interval_overlap_ms(
+            started_at, ended_at, tool.started_at, tool.completed_at
+        )
+        if overlap:
+            candidates.append((overlap, "tool", tool))
+    for call in thread.mcp_calls:
+        overlap = _interval_overlap_ms(
+            started_at, ended_at, call.started_at, call.completed_at
+        )
+        if overlap:
+            candidates.append((overlap, "mcp", call))
+    if not candidates:
+        return None
+    _, kind, record = max(candidates, key=lambda item: item[0])
+    if kind == "tool" and isinstance(record, ToolInterval):
+        return {
+            "kind": "tool",
+            "tool_name": record.tool_name,
+            "started_at": record.started_at,
+            "ended_at": record.completed_at,
+            "duration_ms": record.duration_ms,
+            "argument_summary": record.argument_summary,
+            "argument_content": record.argument_content,
+            "result_summary": record.result_summary,
+            "result_content": record.result_content,
+            "model": record.model,
+        }
+    if isinstance(record, McpCallInterval):
+        return {
+            "kind": "mcp",
+            "server_name": record.server_name,
+            "tool_name": record.tool_name,
+            "call_id": record.call_id,
+            "started_at": record.started_at,
+            "ended_at": record.completed_at,
+            "duration_ms": record.duration_ms,
+            "succeeded": record.succeeded,
+            "argument_summary": record.argument_summary,
+            "argument_content": record.argument_content,
+            "result_summary": record.result_summary,
+            "result_content": record.result_content,
+            "model": record.model,
+        }
+    return None
+
+
+def get_codex_run_event_details(
+    run: CodexRunMetrics, event_id: str
+) -> dict[str, object] | None:
+    """Resolve one opaque event ID to its full privacy-safe task context."""
+
+    payload = _execution_heatmap_payload(run)
+    threads = {thread.thread_id: thread for thread in run.threads}
+    normalized_intervals = {
+        interval["event_id"]: interval for interval in payload["intervals"]
+    }
+    for interval_index, interval in enumerate(run.runtime_intervals):
+        if _runtime_interval_event_id(interval, interval_index) != event_id:
+            continue
+        normalized = normalized_intervals[event_id]
+        thread = threads.get(interval.thread_id)
+        details: dict[str, object] = {
+            "event_id": event_id,
+            "kind": "runtime_interval",
+            "state": interval.state,
+            "thread_id": interval.thread_id,
+            "turn_id": interval.turn_id or "",
+            "started_at": interval.started_at,
+            "ended_at": interval.completed_at,
+            "duration_ms": interval.duration_ms,
+            "detail": interval.detail,
+            "preview": normalized["preview"],
+            "derivation_method": interval.derivation_method,
+            "attribution_confidence": interval.attribution_confidence,
+        }
+        if thread is not None:
+            details["activities"] = _event_activities(
+                thread,
+                interval.turn_id,
+                interval.started_at,
+                interval.completed_at,
+            )
+            tool_context = _event_tool_context(
+                thread, interval.started_at, interval.completed_at
+            )
+            if tool_context is not None:
+                details["tool_context"] = tool_context
+        return details
+
+    normalized_responses = {
+        response["event_id"]: response for response in payload["responses"]
+    }
+    for thread in run.threads:
+        for response in thread.responses:
+            if _response_event_id(thread, response) != event_id:
+                continue
+            normalized = normalized_responses[event_id]
+            return {
+                "event_id": event_id,
+                "kind": "model_response",
+                "thread_id": thread.thread_id,
+                "turn_id": response.turn_id or "",
+                "started_at": normalized["started_at"],
+                "completed_at": normalized["completed_at"],
+                "duration_ms": response.duration_ms,
+                "model": response.model,
+                "effort": normalized["effort"],
+                "usage": normalized["usage"],
+                "cost_usd": normalized["cost_usd"],
+                "preview": normalized["preview"],
+                "timing_method": response.timing_method,
+                "timing_confidence": response.timing_confidence,
+                "activities": _event_activities(
+                    thread,
+                    response.turn_id,
+                    str(normalized["started_at"]),
+                    str(normalized["completed_at"]),
+                ),
+            }
+    return None
 
 
 def _render_execution_heatmap(run: CodexRunMetrics) -> str:
