@@ -23,7 +23,16 @@ def _single_wheel(path: Path) -> Path:
     return candidates[0]
 
 
-def verify_release_wheel(path: Path, expected_version: str) -> Path:
+PLATFORM_SUFFIXES = {
+    "linux-x64": "-linux_x86_64.whl",
+    "macos-arm64": "-macosx_11_0_arm64.whl",
+    "windows-x64": "-win_amd64.whl",
+}
+
+
+def verify_release_wheel(
+    path: Path, expected_version: str, expected_platform: str | None = None
+) -> Path:
     """Validate one platform wheel and return its resolved path."""
 
     wheel = _single_wheel(path).resolve()
@@ -35,6 +44,13 @@ def verify_release_wheel(path: Path, expected_version: str) -> Path:
         )
     if wheel.name.endswith("-any.whl"):
         raise ValueError(f"Release wheel must be platform-specific: {wheel.name}")
+    if expected_platform is not None:
+        expected_suffix = PLATFORM_SUFFIXES[expected_platform]
+        if not wheel.name.endswith(expected_suffix):
+            raise ValueError(
+                f"Wheel does not match {expected_platform}: {wheel.name}; "
+                f"expected suffix {expected_suffix}"
+            )
 
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
@@ -124,10 +140,17 @@ def main(argv: list[str] | None = None) -> int:
         required=True,
         help="Package version or agent-report-vVERSION release tag",
     )
+    parser.add_argument(
+        "--expected-platform",
+        choices=sorted(PLATFORM_SUFFIXES),
+        help="Required release target and exact wheel platform tag",
+    )
     args = parser.parse_args(argv)
     expected_version = args.expected_version.removeprefix("agent-report-v")
     try:
-        wheel = verify_release_wheel(args.path, expected_version)
+        wheel = verify_release_wheel(
+            args.path, expected_version, args.expected_platform
+        )
     except (OSError, ValueError, zipfile.BadZipFile) as error:
         parser.exit(1, f"Agent Report wheel verification failed: {error}\n")
     print(f"Verified Agent Report release wheel: {wheel}")

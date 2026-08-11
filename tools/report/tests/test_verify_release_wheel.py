@@ -68,3 +68,13 @@ def test_rejects_wheel_without_platform_engine(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="bundled agent-report-engine"):
         MODULE.verify_release_wheel(wheel, "0.7.0")
+
+
+def test_rejects_universal_macos_wheel_for_arm64_release(tmp_path: Path) -> None:
+    """Do not advertise Intel support when the bundled parser is ARM-only."""
+
+    wheel = tmp_path / "agent_report-0.7.0-py3-none-macosx_10_9_universal2.whl"
+    _write_wheel(wheel)
+
+    with pytest.raises(ValueError, match="does not match macos-arm64"):
+        MODULE.verify_release_wheel(wheel, "0.7.0", "macos-arm64")
