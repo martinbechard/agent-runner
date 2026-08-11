@@ -2387,6 +2387,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "function shiftDrilldown(direction)" in html
     assert "direction * current.minutes * 60000" in html
     assert 'grid.querySelector(".heatmap-column")' in html
+    assert "var selectedCellViewportOffset = null;" in html
+    assert "currentOffset - selectedCellViewportOffset" in html
+    assert 'drillIntoCell(metric, row, bucket, cell)' in html
     assert 'selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" })' in html
     assert 'inline:"center"' not in html
     assert "Math.max(240, heatmapScroll.clientWidth * .8)" not in html
@@ -2417,7 +2420,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
     assert "function renderDrilldownLevel(metric, row, trail)" in html
-    assert "function drillIntoCell(metric, row, bucket)" in html
+    assert "function drillIntoCell(metric, row, bucket, sourceCell)" in html
     assert "function stepBack()" in html
     assert "function visibleBucket(value, minutes)" in html
     assert 'grid.addEventListener("contextmenu"' in html

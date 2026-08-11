@@ -6990,6 +6990,7 @@ function initializeExecutionHeatmap(section) {
   var selectedMinutes = 5;
   var drilldownMinutes = [60, 30, 15, 5, 1];
   var selectedCell = null;
+  var selectedCellViewportOffset = null;
   var currentDrilldown = null;
   var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
   var agentLabels = new Map(data.agents.map(function(agent) { return [agent.id, agent.label]; }));
@@ -7266,7 +7267,8 @@ function initializeExecutionHeatmap(section) {
     eventList.replaceChildren();
     renderEvents(metric, row, current.bucket);
   }
-  function drillIntoCell(metric, row, bucket) {
+  function drillIntoCell(metric, row, bucket, sourceCell) {
+    selectedCellViewportOffset = sourceCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
     var existingTrail = currentDrilldown && currentDrilldown.metric === metric && currentDrilldown.row.id === row.id
       ? currentDrilldown.trail
       : [];
@@ -7320,7 +7322,7 @@ function initializeExecutionHeatmap(section) {
         cell.setAttribute("aria-pressed", isSelected ? "true" : "false");
         cell.textContent = formatValue(metric, value, row);
         cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
-        cell.addEventListener("click", function() { drillIntoCell(metric, row, bucket); });
+        cell.addEventListener("click", function() { drillIntoCell(metric, row, bucket, cell); });
         if (isSelected) selectedCell = cell;
         grid.appendChild(cell);
       });
@@ -7341,7 +7343,13 @@ function initializeExecutionHeatmap(section) {
     }
     status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · per-row scales · context uses full window";
     requestAnimationFrame(function() {
-      if (selectedCell) selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" });
+      if (selectedCell && selectedCellViewportOffset !== null) {
+        var currentOffset = selectedCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
+        heatmapScroll.scrollLeft += currentOffset - selectedCellViewportOffset;
+        selectedCellViewportOffset = null;
+      } else if (selectedCell) {
+        selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" });
+      }
       updateHeatmapScrollButtons();
     });
   }
