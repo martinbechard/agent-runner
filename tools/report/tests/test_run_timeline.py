@@ -1765,6 +1765,12 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
     assert first.reported_usage.output_tokens == 10
     assert first.reported_usage.reasoning_tokens == 2
     assert first.timing_confidence == "inferred"
+    inference_intervals = [
+        interval
+        for interval in run.runtime_intervals
+        if interval.state == "model_inference"
+    ]
+    assert inference_intervals[0].detail == "gpt-5.6-sol · effort high"
     assert thread.compactions[0].before_total_tokens == 50
     assert thread.compactions[0].after_total_tokens == 30
     assert thread.compactions[0].recorded is True
@@ -2360,6 +2366,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
     assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
+    assert 'data-heatmap-drilldown-path aria-label="Drilldown path"' in html
+    assert 'data-heatmap-drilldown-buckets role="group"' in html
     assert 'id="execution-heatmap-data"' in html
     assert "initializeExecutionHeatmap" in html
     assert 'aria-live="polite"' in html
@@ -2368,6 +2376,12 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
     assert 'metric === "wall_time" && row.id === "user_pause"' in html
     assert 'metric === "wall_time" ? "Activity" : "Agent"' in html
+    assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
+    assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
+    assert "function renderDrilldownLevel(metric, row, trail)" in html
+    assert "current.minutes === 15 ? 5 : current.minutes === 5 ? 1 : 0" in html
+    assert "Select a cell to drill from 15 to 5 to 1 minute" in html
+    assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
 
     payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
@@ -2388,6 +2402,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
         "output_tokens",
         "reasoning_tokens",
     }
+    assert "effort" in payload["responses"][0]
     assert all(response["cost_usd"] >= 0 for response in payload["responses"])
     assert any(response["cost_usd"] > 0 for response in payload["responses"])
     assert sum(response["cost_usd"] for response in payload["responses"]) == pytest.approx(

@@ -4095,6 +4095,16 @@ def _interval_overlap_ms(
     return max(0, round((end - start).total_seconds() * 1000))
 
 
+def _response_effort(thread: CodexThreadMetrics, response: ResponseUsage) -> str:
+    """Return direct response effort or a uniform thread-level fallback."""
+
+    return response.effort or (
+        thread.effort
+        if thread.effort and not thread.effort.startswith("mixed (")
+        else ""
+    )
+
+
 def _runtime_intervals_for_thread(
     thread: CodexThreadMetrics,
     *,
@@ -4106,6 +4116,15 @@ def _runtime_intervals_for_thread(
     candidates: list[tuple[str, str, str, str, str, str]] = []
     for response in thread.responses:
         if response.started_at and response.last_output_at and response.duration_ms > 0:
+            response_detail = response.model
+            response_effort = _response_effort(thread, response)
+            if response_effort:
+                effort_detail = f"effort {response_effort}"
+                response_detail = (
+                    f"{response_detail} · {effort_detail}"
+                    if response_detail
+                    else effort_detail
+                )
             candidates.append(
                 (
                     response.started_at,
@@ -4113,7 +4132,7 @@ def _runtime_intervals_for_thread(
                     "model_inference",
                     response.timing_method,
                     response.timing_confidence,
-                    response.model,
+                    response_detail,
                 )
             )
     for tool in thread.tool_intervals:
@@ -6927,6 +6946,13 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-drilldown { margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
 .heatmap-drilldown h3 { margin:0 0 4px; color:#263238; }
 .heatmap-drilldown-summary { margin:0; color:#455a64; font-size:.86em; }
+.heatmap-drilldown-path { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:9px; color:#607d8b; font-size:.78em; }
+.heatmap-drilldown-path button { padding:3px 6px; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:4px; cursor:pointer; font:600 1em var(--font-ui); }
+.heatmap-drilldown-path button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-drilldown-buckets { display:grid; grid-template-columns:repeat(auto-fit,minmax(94px,1fr)); gap:6px; margin-top:10px; }
+.heatmap-drilldown-bucket { border:1px solid rgba(144,164,174,.55); border-radius:5px; }
+.heatmap-drilldown-bucket-time, .heatmap-drilldown-bucket-value { display:block; }
+.heatmap-drilldown-bucket-time { margin-bottom:3px; font-size:.9em; }
 .heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
 .heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
 .heatmap-event-list code { color:#263238; }
@@ -6944,6 +6970,8 @@ function initializeExecutionHeatmap(section) {
   var status = section.querySelector("[data-heatmap-status]");
   var drilldownTitle = section.querySelector("#heatmap-drilldown-title");
   var drilldownSummary = section.querySelector("[data-heatmap-drilldown-summary]");
+  var drilldownPath = section.querySelector("[data-heatmap-drilldown-path]");
+  var drilldownBuckets = section.querySelector("[data-heatmap-drilldown-buckets]");
   var eventList = section.querySelector("[data-heatmap-event-list]");
   if (!dataElement || !grid || !metricSelect) return;
 
@@ -6966,6 +6994,9 @@ function initializeExecutionHeatmap(section) {
     if (value >= 1000000) return (value / 1000000).toFixed(value >= 10000000 ? 0 : 1) + "M";
     if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + "K";
     return Math.round(value).toLocaleString();
+  }
+  function rangeLabel(bucket) {
+    return timeFormatter.format(new Date(bucket.start)) + "–" + timeFormatter.format(new Date(bucket.end));
   }
   function duration(value) {
     if (value < 1000) return Math.round(value) + "ms";
@@ -7043,7 +7074,7 @@ function initializeExecutionHeatmap(section) {
         return {
           started_at:interval.started_at,
           label:interval.detail || stateLabels.get(interval.state) || interval.state,
-          detail:duration(interval.duration_ms) + " · " + interval.confidence
+          detail:duration(interval.duration_ms)
         };
       });
     }
@@ -7051,23 +7082,46 @@ function initializeExecutionHeatmap(section) {
       var occurredAt = responseTime(response);
       return response.thread_id === row.id && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) {
+      var modelLabel = response.model || "Model response";
+      if (response.effort) modelLabel += " · effort " + response.effort;
       return {
-        started_at:response.started_at || response.completed_at,
-        label:(response.model || "Model response") + " · " + formatValue(metric, responseValue(response, metric)) + " " + metric.replaceAll("_", " "),
-        detail:duration(response.duration_ms) + " · " + response.confidence
+        started_at:response.completed_at || response.started_at,
+        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric)) + " " + metric.replaceAll("_", " "),
+        detail:duration(response.duration_ms)
       };
     });
   }
-  function showDrilldown(metric, row, bucket, value, button) {
-    if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
-    selectedCell = button;
-    selectedCell.setAttribute("aria-pressed", "true");
-    var start = new Date(bucket.start);
-    var end = new Date(bucket.end);
-    var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
-    drilldownTitle.textContent = row.label + " · " + timeFormatter.format(start) + "–" + timeFormatter.format(end);
-    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, value) + ". Level 3 evidence is listed below.";
-    eventList.replaceChildren();
+  function childBuckets(parent, minutes) {
+    var width = minutes * 60000;
+    var values = [];
+    for (var start = parent.start; start < parent.end; start += width) {
+      values.push({ start:start, end:Math.min(parent.end, start + width) });
+    }
+    return values;
+  }
+  function renderDrilldownPath(metric, row, trail) {
+    drilldownPath.replaceChildren();
+    trail.forEach(function(item, index) {
+      if (index) drilldownPath.appendChild(document.createTextNode("›"));
+      var label = item.minutes + " min · " + rangeLabel(item.bucket);
+      if (index === trail.length - 1) {
+        var current = document.createElement("strong");
+        current.textContent = label;
+        drilldownPath.appendChild(current);
+        return;
+      }
+      var button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.setAttribute("aria-label", "Return to " + label);
+      button.addEventListener("click", function() {
+        renderDrilldownLevel(metric, row, trail.slice(0, index + 1));
+      });
+      drilldownPath.appendChild(button);
+    });
+  }
+  function renderEvents(metric, row, bucket) {
+    eventList.hidden = false;
     var events = matchingEvents(metric, row, bucket).sort(function(left, right) {
       return timestamp(left.started_at) - timestamp(right.started_at);
     });
@@ -7089,6 +7143,55 @@ function initializeExecutionHeatmap(section) {
       remainder.textContent = (events.length - 100).toLocaleString() + " additional events omitted from this view.";
       eventList.appendChild(remainder);
     }
+  }
+  function renderDrilldownLevel(metric, row, trail) {
+    var current = trail[trail.length - 1];
+    var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
+    var childMinutes = current.minutes === 15 ? 5 : current.minutes === 5 ? 1 : 0;
+    drilldownTitle.textContent = row.label + " · " + rangeLabel(current.bucket);
+    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value) + ".";
+    renderDrilldownPath(metric, row, trail);
+    drilldownBuckets.replaceChildren();
+    eventList.replaceChildren();
+    eventList.hidden = true;
+    if (!childMinutes) {
+      drilldownBuckets.hidden = true;
+      drilldownSummary.textContent += " Individual events are listed below.";
+      renderEvents(metric, row, current.bucket);
+      return;
+    }
+    drilldownSummary.textContent += " Select a " + childMinutes + "-minute bucket to continue.";
+    drilldownBuckets.hidden = false;
+    drilldownBuckets.setAttribute("aria-label", childMinutes + "-minute breakdown of " + row.label);
+    var children = childBuckets(current.bucket, childMinutes).map(function(bucket) {
+      return { bucket:bucket, value:cellValue(metric, row, bucket) };
+    });
+    var maximum = children.reduce(function(largest, child) { return Math.max(largest, child.value); }, 0);
+    children.forEach(function(child) {
+      var intensity = maximum ? child.value / maximum : 0;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "heatmap-cell heatmap-drilldown-bucket" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
+      button.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
+      button.setAttribute("aria-label", childMinutes + " minute bucket, " + fullTimeFormatter.format(new Date(child.bucket.start)) + ", " + metricLabel + " " + formatValue(metric, child.value));
+      var time = document.createElement("span");
+      time.className = "heatmap-drilldown-bucket-time";
+      time.textContent = timeFormatter.format(new Date(child.bucket.start));
+      var value = document.createElement("span");
+      value.className = "heatmap-drilldown-bucket-value";
+      value.textContent = formatValue(metric, child.value);
+      button.append(time, value);
+      button.addEventListener("click", function() {
+        renderDrilldownLevel(metric, row, trail.concat([{ bucket:child.bucket, minutes:childMinutes, value:child.value }]));
+      });
+      drilldownBuckets.appendChild(button);
+    });
+  }
+  function showDrilldown(metric, row, bucket, value, button) {
+    if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
+    selectedCell = button;
+    selectedCell.setAttribute("aria-pressed", "true");
+    renderDrilldownLevel(metric, row, [{ bucket:bucket, minutes:selectedMinutes, value:value }]);
   }
   function render() {
     var metric = metricSelect.value;
@@ -7136,8 +7239,12 @@ function initializeExecutionHeatmap(section) {
     grid.hidden = !emptyState.hidden;
     selectedCell = null;
     drilldownTitle.textContent = "Select a heatmap cell";
-    drilldownSummary.textContent = "Choose a cell to inspect its exact Level 3 intervals or model responses.";
+    drilldownSummary.textContent = "Choose a cell to inspect smaller buckets and individual events.";
+    drilldownPath.replaceChildren();
+    drilldownBuckets.replaceChildren();
+    drilldownBuckets.hidden = true;
     eventList.replaceChildren();
+    eventList.hidden = true;
     status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized within this view";
   }
   metricSelect.addEventListener("change", render);
@@ -7199,11 +7306,13 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
         for response in thread.responses:
             usage = _inference_call_usage(response)
             response_cost = _cost_for_response(thread, response)
+            response_effort = _response_effort(thread, response)
             responses.append(
                 {
                     "thread_id": thread.thread_id,
                     "turn_id": response.turn_id or "",
                     "model": response.model,
+                    "effort": response_effort,
                     "started_at": response.started_at or response.event_timestamp,
                     "completed_at": response.completed_at or response.event_timestamp,
                     "duration_ms": response.duration_ms,
@@ -7244,7 +7353,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="agents-heading"><h2>Execution heatmap</h2>'
         '<span class="evidence-badge">Recorded + inferred boundaries</span></div>'
         '<p class="execution-note">Compare time or response-attributed tokens across the run. '
-        'Time rows are Level 2 runtime states; select a cell to inspect its exact Level 3 evidence.</p>'
+        'Select a cell to drill from 15 to 5 to 1 minute, then inspect individual events.</p>'
         '<div class="heatmap-controls">'
         '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
         '<select id="heatmap-metric">'
@@ -7267,7 +7376,9 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '</div><div class="heatmap-drilldown">'
         '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
-        'Choose a cell to inspect its exact Level 3 intervals or model responses.</p>'
+        'Choose a cell to inspect smaller buckets and individual events.</p>'
+        '<nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav>'
+        '<div class="heatmap-drilldown-buckets" data-heatmap-drilldown-buckets role="group" aria-label="Drilldown buckets"></div>'
         '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
         f'<script type="application/json" id="execution-heatmap-data">{payload}</script>'
         '</section>'
