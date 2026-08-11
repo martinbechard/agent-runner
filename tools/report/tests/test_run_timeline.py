@@ -2344,6 +2344,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<option value="cached_input_tokens">Cached input</option>' in html
     assert '<option value="output_tokens">Output</option>' in html
     assert '<option value="reasoning_tokens">Reasoning</option>' in html
+    assert '<option value="cost_usd">Cost (USD)</option>' in html
     assert '<button type="button" data-heatmap-minutes="1">1 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
@@ -2351,6 +2352,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'id="execution-heatmap-data"' in html
     assert "initializeExecutionHeatmap" in html
     assert 'aria-live="polite"' in html
+    assert "--heatmap-color:198,40,40" in html
+    assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
+    assert "Cost follows the report's recorded or API-equivalent estimate method." in html
 
     payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
         "</script>", 1
@@ -2368,6 +2372,11 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
         "output_tokens",
         "reasoning_tokens",
     }
+    assert all(response["cost_usd"] >= 0 for response in payload["responses"])
+    assert any(response["cost_usd"] > 0 for response in payload["responses"])
+    assert sum(response["cost_usd"] for response in payload["responses"]) == pytest.approx(
+        run.cost.total_cost
+    )
     assert all(len(interval["detail"]) <= 160 for interval in payload["intervals"])
     assert "PRIVATE-TOOL-PAYLOAD" not in payload_text
 

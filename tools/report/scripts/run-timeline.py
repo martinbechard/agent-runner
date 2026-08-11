@@ -6906,9 +6906,9 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-corner { z-index:4; }
 .heatmap-column { top:0; z-index:3; min-width:72px; text-align:center; font-family:var(--font-code); }
 .heatmap-row-label { display:flex; align-items:center; min-width:170px; max-width:220px; white-space:normal; }
-.heatmap-cell { min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(37,99,166,var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
-.heatmap-cell:hover { box-shadow:inset 0 0 0 2px #2563a6; }
-.heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px #0d47a1; }
+.heatmap-cell { --heatmap-color:198,40,40; min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(var(--heatmap-color),var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
+.heatmap-cell:hover { box-shadow:inset 0 0 0 2px #b3261e; }
+.heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px #8e1b16; }
 .heatmap-empty { padding:16px; color:#607d8b; }
 .heatmap-status { margin-left:auto; color:#546e7a; font-family:var(--font-code); font-size:.78em; }
 .heatmap-drilldown { margin-top:10px; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
@@ -6961,6 +6961,19 @@ function initializeExecutionHeatmap(section) {
     var seconds = Math.round((value % 60000) / 1000);
     return minutes + "m " + seconds + "s";
   }
+  function currency(value) {
+    if (value === 0) return "$0.00";
+    if (value < .01) return "$" + value.toFixed(4);
+    return "$" + value.toFixed(2);
+  }
+  function responseValue(response, metric) {
+    return metric === "cost_usd" ? response.cost_usd : response.usage[metric];
+  }
+  function formatValue(metric, value) {
+    if (metric === "wall_time") return duration(value);
+    if (metric === "cost_usd") return currency(value);
+    return compact(value);
+  }
   function buckets() {
     var width = selectedMinutes * 60000;
     var runStart = timestamp(data.started_at);
@@ -7005,7 +7018,7 @@ function initializeExecutionHeatmap(section) {
     return data.responses.reduce(function(total, response) {
       var occurredAt = responseTime(response);
       return response.thread_id === row.id && occurredAt >= bucket.start && occurredAt < bucket.end
-        ? total + response.usage[metric]
+        ? total + responseValue(response, metric)
         : total;
     }, 0);
   }
@@ -7027,7 +7040,7 @@ function initializeExecutionHeatmap(section) {
     }).map(function(response) {
       return {
         started_at:response.started_at || response.completed_at,
-        label:(response.model || "Model response") + " · " + compact(response.usage[metric]) + " " + metric.replaceAll("_", " "),
+        label:(response.model || "Model response") + " · " + formatValue(metric, responseValue(response, metric)) + " " + metric.replaceAll("_", " "),
         detail:duration(response.duration_ms) + " · " + response.confidence
       };
     });
@@ -7040,7 +7053,7 @@ function initializeExecutionHeatmap(section) {
     var end = new Date(bucket.end);
     var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
     drilldownTitle.textContent = row.label + " · " + timeFormatter.format(start) + "–" + timeFormatter.format(end);
-    drilldownSummary.textContent = metricLabel + ": " + (metric === "wall_time" ? duration(value) : compact(value)) + ". Level 3 evidence is listed below.";
+    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, value) + ". Level 3 evidence is listed below.";
     eventList.replaceChildren();
     var events = matchingEvents(metric, row, bucket).sort(function(left, right) {
       return timestamp(left.started_at) - timestamp(right.started_at);
@@ -7100,7 +7113,7 @@ function initializeExecutionHeatmap(section) {
         cell.className = "heatmap-cell";
         cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
         cell.setAttribute("aria-pressed", "false");
-        cell.textContent = metric === "wall_time" ? duration(value) : compact(value);
+        cell.textContent = formatValue(metric, value);
         cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
         cell.addEventListener("click", function() { showDrilldown(metric, row, bucket, value, cell); });
         grid.appendChild(cell);
@@ -7172,6 +7185,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
     for thread in run.threads:
         for response in thread.responses:
             usage = _inference_call_usage(response)
+            response_cost = _cost_for_response(thread, response)
             responses.append(
                 {
                     "thread_id": thread.thread_id,
@@ -7181,6 +7195,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                     "completed_at": response.completed_at or response.event_timestamp,
                     "duration_ms": response.duration_ms,
                     "confidence": response.timing_confidence,
+                    "cost_usd": response_cost.total_cost or 0,
                     "usage": {
                         "uncached_input_tokens": usage.direct_input_tokens,
                         "cached_input_tokens": usage.cached_input_tokens,
@@ -7225,12 +7240,14 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<option value="cached_input_tokens">Cached input</option>'
         '<option value="output_tokens">Output</option>'
         '<option value="reasoning_tokens">Reasoning</option>'
+        '<option value="cost_usd">Cost (USD)</option>'
         '</select></div>'
         '<fieldset class="heatmap-granularity"><legend>Bucket size</legend>'
         '<button type="button" data-heatmap-minutes="1">1 min</button>'
         '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>'
         '<button type="button" data-heatmap-minutes="15">15 min</button>'
         '</fieldset><output class="heatmap-status" data-heatmap-status></output></div>'
+        '<p class="execution-note">Cost follows the report\'s recorded or API-equivalent estimate method.</p>'
         '<div class="heatmap-scroll" tabindex="0" aria-label="Scrollable execution heatmap">'
         '<div class="heatmap-grid" data-heatmap-grid></div>'
         '<p class="heatmap-empty" data-heatmap-empty hidden>No heatmap evidence is available.</p>'
