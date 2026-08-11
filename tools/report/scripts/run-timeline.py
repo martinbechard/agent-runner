@@ -7001,8 +7001,8 @@ function initializeExecutionHeatmap(section) {
     { id:"cached_input_tokens", label:"Cached input" },
     { id:"reasoning_tokens", label:"Reasoning" },
     { id:"output_tokens", label:"Output" },
-    { id:"average_context_tokens", source:"context_tokens", label:"Average context size", aggregation:"average", format:"context" },
-    { id:"maximum_context_tokens", source:"context_tokens", label:"Maximum context size", aggregation:"maximum", format:"context" },
+    { id:"average_context_tokens", source:"context_tokens", label:"Context size (avg)", aggregation:"average", format:"context" },
+    { id:"maximum_context_tokens", source:"context_tokens", label:"Context size (max)", aggregation:"maximum", format:"context" },
     { id:"cost_usd", label:"Cost", format:"currency" }
   ];
   var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });

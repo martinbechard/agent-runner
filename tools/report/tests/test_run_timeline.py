@@ -2410,8 +2410,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
     assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
     assert '{ id:"output_tokens", label:"Output" }' in html
-    assert '{ id:"average_context_tokens", source:"context_tokens", label:"Average context size", aggregation:"average", format:"context" }' in html
-    assert '{ id:"maximum_context_tokens", source:"context_tokens", label:"Maximum context size", aggregation:"maximum", format:"context" }' in html
+    assert '{ id:"average_context_tokens", source:"context_tokens", label:"Context size (avg)", aggregation:"average", format:"context" }' in html
+    assert '{ id:"maximum_context_tokens", source:"context_tokens", label:"Context size (max)", aggregation:"maximum", format:"context" }' in html
     assert '{ id:"cost_usd", label:"Cost", format:"currency" }' in html
     assert html.index('label:"Reasoning"') < html.index('label:"Output"')
     assert 'row.aggregation === "average"' in html
