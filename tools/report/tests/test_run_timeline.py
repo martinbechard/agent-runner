@@ -2405,6 +2405,10 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
     assert '{ id:"output_tokens", label:"Output" }' in html
     assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
+    assert "var rowMaximum = matrix[rowIndex].reduce" in html
+    assert "value / rowMaximum" in html
+    assert "normalized per row" in html
+    assert "normalized within this view" not in html
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
     assert "function renderDrilldownLevel(metric, row, trail)" in html

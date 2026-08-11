@@ -7282,9 +7282,6 @@ function initializeExecutionHeatmap(section) {
     var matrix = rowValues.map(function(row) {
       return bucketValues.map(function(bucket) { return cellValue(metric, row, bucket); });
     });
-    var maximum = matrix.reduce(function(largest, values) {
-      return values.reduce(function(rowLargest, value) { return Math.max(rowLargest, value); }, largest);
-    }, 0);
     selectedCell = null;
     grid.replaceChildren();
     grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
@@ -7300,13 +7297,14 @@ function initializeExecutionHeatmap(section) {
       grid.appendChild(heading);
     });
     rowValues.forEach(function(row, rowIndex) {
+      var rowMaximum = matrix[rowIndex].reduce(function(largest, value) { return Math.max(largest, value); }, 0);
       var label = document.createElement("div");
       label.className = "heatmap-row-label";
       label.textContent = row.label;
       grid.appendChild(label);
       bucketValues.forEach(function(bucket, bucketIndex) {
         var value = matrix[rowIndex][bucketIndex];
-        var intensity = maximum ? value / maximum : 0;
+        var intensity = rowMaximum ? value / rowMaximum : 0;
         var cell = document.createElement("button");
         cell.type = "button";
         cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
@@ -7337,7 +7335,7 @@ function initializeExecutionHeatmap(section) {
       eventList.replaceChildren();
       eventList.hidden = true;
     }
-    status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized within this view";
+    status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized per row";
     requestAnimationFrame(function() {
       if (selectedCell) selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" });
       updateHeatmapScrollButtons();
