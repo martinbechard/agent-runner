@@ -2383,15 +2383,12 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'data-heatmap-drilldown-step="-1"' in html
     assert 'data-heatmap-drilldown-step="1"' in html
     assert "function shiftDrilldown(direction)" in html
-    assert "function drilldownStepMinutes(current)" in html
-    assert "var stepMinutes = drilldownStepMinutes(current);" in html
-    assert "direction * stepMinutes * 60000" in html
-    assert "direction * current.minutes * 60000" not in html
+    assert "direction * current.minutes * 60000" in html
     assert 'grid.querySelector(".heatmap-column")' in html
     assert "Math.max(240, heatmapScroll.clientWidth * .8)" not in html
     assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
     assert 'data-heatmap-drilldown-path aria-label="Drilldown path"' in html
-    assert 'data-heatmap-drilldown-buckets role="group"' in html
+    assert "data-heatmap-drilldown-buckets" not in html
     assert 'id="execution-heatmap-data"' in html
     assert "initializeExecutionHeatmap" in html
     assert 'aria-live="polite"' in html
@@ -2403,12 +2400,18 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
     assert "function renderDrilldownLevel(metric, row, trail)" in html
-    assert "var childMinutes = drilldownMinutes[currentIndex + 1] || 0;" in html
-    assert "Select a cell to drill through smaller time buckets" in html
+    assert "function drillIntoCell(metric, row, bucket)" in html
+    assert "function stepBack()" in html
+    assert "function visibleBucket(value, minutes)" in html
+    assert 'grid.addEventListener("contextmenu"' in html
+    assert "renderEvents(metric, row, current.bucket);" in html
+    assert "Select a cell to zoom the top heatmap" in html
     assert "var drilldownMinutes = [60, 30, 15, 5, 1];" in html
     assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
+    assert ".heatmap-event-list li {" in html
+    assert "white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" in html
 
     payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
         "</script>", 1
@@ -2430,8 +2433,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     }
     assert "effort" in payload["responses"][0]
     assert "preview" in payload["responses"][0]
-    assert all(len(response["preview"]) <= 80 for response in payload["responses"])
-    assert all(len(interval["preview"]) <= 80 for interval in payload["intervals"])
+    assert all(len(response["preview"]) <= 150 for response in payload["responses"])
+    assert all(len(interval["preview"]) <= 150 for interval in payload["intervals"])
     assert all(response["cost_usd"] >= 0 for response in payload["responses"])
     assert any(response["cost_usd"] > 0 for response in payload["responses"])
     assert sum(response["cost_usd"] for response in payload["responses"]) == pytest.approx(
@@ -2439,6 +2442,24 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     )
     assert all(len(interval["detail"]) <= 160 for interval in payload["intervals"])
     assert "PRIVATE-TOOL-PAYLOAD" not in payload_text
+
+
+def test_native_codex_heatmap_exec_preview_starts_with_parameters():
+    module = _load_module()
+
+    preview = module._tool_activity_preview(
+        "exec",
+        'const r = await tools.exec_command({cmd:"uv run pytest -q",workdir:"/tmp"}); text(r.output)',
+        150,
+    )
+
+    assert preview == 'Execute {cmd:"uv run pytest -q",workdir:"/tmp"}'
+    assert "tools.exec_command" not in preview
+    assert module._tool_activity_preview(
+        "exec",
+        'const p = await tools.update_plan({plan:[]}); text(p)',
+        150,
+    ).startswith("exec: const p = await tools.update_plan")
 
 
 def test_native_codex_report_uses_first_genuine_request_as_title():

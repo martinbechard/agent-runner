@@ -6956,12 +6956,8 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-drilldown-path { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:9px; color:#607d8b; font-size:.78em; }
 .heatmap-drilldown-path button { padding:3px 6px; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:4px; cursor:pointer; font:600 1em var(--font-ui); }
 .heatmap-drilldown-path button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
-.heatmap-drilldown-buckets { display:grid; grid-template-columns:repeat(auto-fit,minmax(94px,1fr)); gap:6px; margin-top:10px; }
-.heatmap-drilldown-bucket { border:1px solid rgba(144,164,174,.55); border-radius:5px; }
-.heatmap-drilldown-bucket-time, .heatmap-drilldown-bucket-value { display:block; }
-.heatmap-drilldown-bucket-time { margin-bottom:3px; font-size:.9em; }
 .heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
-.heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
+.heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
 .heatmap-event-list code { color:#263238; }
 @media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame, .heatmap-drilldown-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
 """
@@ -6980,7 +6976,6 @@ function initializeExecutionHeatmap(section) {
   var drilldownTitle = section.querySelector("#heatmap-drilldown-title");
   var drilldownSummary = section.querySelector("[data-heatmap-drilldown-summary]");
   var drilldownPath = section.querySelector("[data-heatmap-drilldown-path]");
-  var drilldownBuckets = section.querySelector("[data-heatmap-drilldown-buckets]");
   var drilldownStepButtons = Array.from(section.querySelectorAll("[data-heatmap-drilldown-step]"));
   var eventList = section.querySelector("[data-heatmap-event-list]");
   if (!dataElement || !grid || !heatmapScroll || !metricSelect) return;
@@ -7110,33 +7105,47 @@ function initializeExecutionHeatmap(section) {
       };
     });
   }
-  function childBuckets(parent, minutes) {
-    var width = minutes * 60000;
-    var values = [];
-    for (var start = parent.start; start < parent.end; start += width) {
-      values.push({ start:start, end:Math.min(parent.end, start + width) });
-    }
-    return values;
-  }
   function alignedBucket(value, minutes) {
     var width = minutes * 60000;
     var start = Math.floor(value / width) * width;
     return { start:start, end:start + width };
   }
-  function drilldownTrailFor(metric, row, minutes, bucket) {
-    var trail = [];
-    function add(levelMinutes) {
-      var levelBucket = levelMinutes === minutes ? bucket : alignedBucket(bucket.start, levelMinutes);
-      trail.push({ bucket:levelBucket, minutes:levelMinutes, value:cellValue(metric, row, levelBucket) });
-    }
-    var selectedIndex = drilldownMinutes.indexOf(selectedMinutes);
-    var currentIndex = drilldownMinutes.indexOf(minutes);
-    drilldownMinutes.slice(selectedIndex, currentIndex + 1).forEach(add);
-    return trail;
+  function visibleBucket(value, minutes) {
+    return alignedBucket(Math.max(value, timestamp(data.started_at)), minutes);
   }
-  function drilldownStepMinutes(current) {
+  function trailItem(metric, row, minutes, bucket) {
+    return { bucket:bucket, minutes:minutes, value:cellValue(metric, row, bucket) };
+  }
+  function selectionTrail(metric, row, minutes, bucket, existingTrail) {
+    if (!existingTrail || !existingTrail.length) return [trailItem(metric, row, minutes, bucket)];
+    var existingIndex = existingTrail.findIndex(function(item) { return item.minutes === minutes; });
+    if (existingIndex >= 0) {
+      var restored = existingTrail.slice(0, existingIndex + 1);
+      restored[existingIndex] = trailItem(metric, row, minutes, bucket);
+      return restored;
+    }
+    var current = existingTrail[existingTrail.length - 1];
     var currentIndex = drilldownMinutes.indexOf(current.minutes);
-    return drilldownMinutes[currentIndex + 1] || current.minutes;
+    var targetIndex = drilldownMinutes.indexOf(minutes);
+    if (targetIndex > currentIndex) {
+      var extended = existingTrail.slice();
+      drilldownMinutes.slice(currentIndex + 1, targetIndex + 1).forEach(function(levelMinutes) {
+        extended.push(trailItem(metric, row, levelMinutes, visibleBucket(bucket.start, levelMinutes)));
+      });
+      return extended;
+    }
+    return [trailItem(metric, row, minutes, bucket)];
+  }
+  function setMinuteControl(minutes) {
+    selectedMinutes = minutes;
+    minuteButtons.forEach(function(button) {
+      button.setAttribute("aria-pressed", Number(button.dataset.heatmapMinutes) === minutes ? "true" : "false");
+    });
+  }
+  function selectDrilldown(metric, row, trail) {
+    currentDrilldown = { metric:metric, row:row, trail:trail };
+    setMinuteControl(trail[trail.length - 1].minutes);
+    render();
   }
   function updateDrilldownStepButtons() {
     drilldownStepButtons.forEach(function(button) {
@@ -7145,28 +7154,46 @@ function initializeExecutionHeatmap(section) {
         return;
       }
       var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
-      var stepMinutes = drilldownStepMinutes(current);
       var direction = Number(button.dataset.heatmapDrilldownStep);
-      var shiftedStart = current.bucket.start + direction * stepMinutes * 60000;
-      var shiftedEnd = current.bucket.end + direction * stepMinutes * 60000;
+      var shiftedStart = current.bucket.start + direction * current.minutes * 60000;
+      var shiftedEnd = current.bucket.end + direction * current.minutes * 60000;
       button.disabled = shiftedEnd <= timestamp(data.started_at) || shiftedStart >= timestamp(data.ended_at);
     });
   }
   function shiftDrilldown(direction) {
     if (!currentDrilldown) return;
     var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
-    var stepMinutes = drilldownStepMinutes(current);
     var shifted = {
-      start:current.bucket.start + direction * stepMinutes * 60000,
-      end:current.bucket.end + direction * stepMinutes * 60000
+      start:current.bucket.start + direction * current.minutes * 60000,
+      end:current.bucket.end + direction * current.minutes * 60000
     };
     if (shifted.end <= timestamp(data.started_at) || shifted.start >= timestamp(data.ended_at)) return;
-    if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
-    selectedCell = null;
-    renderDrilldownLevel(
+    var shiftedTrail = currentDrilldown.trail.map(function(item, index, trail) {
+      var bucket = index === trail.length - 1 ? shifted : alignedBucket(shifted.start, item.minutes);
+      return trailItem(currentDrilldown.metric, currentDrilldown.row, item.minutes, bucket);
+    });
+    selectDrilldown(
       currentDrilldown.metric,
       currentDrilldown.row,
-      drilldownTrailFor(currentDrilldown.metric, currentDrilldown.row, current.minutes, shifted)
+      shiftedTrail
+    );
+  }
+  function stepBack() {
+    if (!currentDrilldown) return;
+    var trail = currentDrilldown.trail;
+    if (trail.length > 1) {
+      selectDrilldown(currentDrilldown.metric, currentDrilldown.row, trail.slice(0, -1));
+      return;
+    }
+    var current = trail[0];
+    var currentIndex = drilldownMinutes.indexOf(current.minutes);
+    if (currentIndex <= 0) return;
+    var largerMinutes = drilldownMinutes[currentIndex - 1];
+    var largerBucket = alignedBucket(current.bucket.start, largerMinutes);
+    selectDrilldown(
+      currentDrilldown.metric,
+      currentDrilldown.row,
+      [trailItem(currentDrilldown.metric, currentDrilldown.row, largerMinutes, largerBucket)]
     );
   }
   function renderDrilldownPath(metric, row, trail) {
@@ -7185,7 +7212,7 @@ function initializeExecutionHeatmap(section) {
       button.textContent = label;
       button.setAttribute("aria-label", "Return to " + label);
       button.addEventListener("click", function() {
-        renderDrilldownLevel(metric, row, trail.slice(0, index + 1));
+        selectDrilldown(metric, row, trail.slice(0, index + 1));
       });
       drilldownPath.appendChild(button);
     });
@@ -7219,51 +7246,23 @@ function initializeExecutionHeatmap(section) {
     updateDrilldownStepButtons();
     var current = trail[trail.length - 1];
     var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
-    var currentIndex = drilldownMinutes.indexOf(current.minutes);
-    var childMinutes = drilldownMinutes[currentIndex + 1] || 0;
     drilldownTitle.textContent = row.label + " · " + rangeLabel(current.bucket);
-    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value) + ".";
+    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value) + ". Events in this period are listed below.";
     renderDrilldownPath(metric, row, trail);
-    drilldownBuckets.replaceChildren();
     eventList.replaceChildren();
-    eventList.hidden = true;
-    if (!childMinutes) {
-      drilldownBuckets.hidden = true;
-      drilldownSummary.textContent += " Individual events are listed below.";
-      renderEvents(metric, row, current.bucket);
-      return;
-    }
-    drilldownBuckets.hidden = false;
-    drilldownBuckets.setAttribute("aria-label", childMinutes + "-minute breakdown of " + row.label);
-    var children = childBuckets(current.bucket, childMinutes).map(function(bucket) {
-      return { bucket:bucket, value:cellValue(metric, row, bucket) };
-    });
-    var maximum = children.reduce(function(largest, child) { return Math.max(largest, child.value); }, 0);
-    children.forEach(function(child) {
-      var intensity = maximum ? child.value / maximum : 0;
-      var button = document.createElement("button");
-      button.type = "button";
-      button.className = "heatmap-cell heatmap-drilldown-bucket" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
-      button.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
-      button.setAttribute("aria-label", childMinutes + " minute bucket, " + fullTimeFormatter.format(new Date(child.bucket.start)) + ", " + metricLabel + " " + formatValue(metric, child.value));
-      var time = document.createElement("span");
-      time.className = "heatmap-drilldown-bucket-time";
-      time.textContent = timeFormatter.format(new Date(child.bucket.start));
-      var value = document.createElement("span");
-      value.className = "heatmap-drilldown-bucket-value";
-      value.textContent = formatValue(metric, child.value);
-      button.append(time, value);
-      button.addEventListener("click", function() {
-        renderDrilldownLevel(metric, row, trail.concat([{ bucket:child.bucket, minutes:childMinutes, value:child.value }]));
-      });
-      drilldownBuckets.appendChild(button);
-    });
+    renderEvents(metric, row, current.bucket);
   }
-  function showDrilldown(metric, row, bucket, value, button) {
-    if (selectedCell) selectedCell.setAttribute("aria-pressed", "false");
-    selectedCell = button;
-    selectedCell.setAttribute("aria-pressed", "true");
-    renderDrilldownLevel(metric, row, [{ bucket:bucket, minutes:selectedMinutes, value:value }]);
+  function drillIntoCell(metric, row, bucket) {
+    var existingTrail = currentDrilldown && currentDrilldown.metric === metric && currentDrilldown.row.id === row.id
+      ? currentDrilldown.trail
+      : [];
+    var trail = selectionTrail(metric, row, selectedMinutes, bucket, existingTrail);
+    var currentIndex = drilldownMinutes.indexOf(selectedMinutes);
+    var smallerMinutes = drilldownMinutes[currentIndex + 1];
+    if (smallerMinutes) {
+      trail = selectionTrail(metric, row, smallerMinutes, visibleBucket(bucket.start, smallerMinutes), trail);
+    }
+    selectDrilldown(metric, row, trail);
   }
   function render() {
     var metric = metricSelect.value;
@@ -7275,6 +7274,7 @@ function initializeExecutionHeatmap(section) {
     var maximum = matrix.reduce(function(largest, values) {
       return values.reduce(function(rowLargest, value) { return Math.max(rowLargest, value); }, largest);
     }, 0);
+    selectedCell = null;
     grid.replaceChildren();
     grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
     var corner = document.createElement("div");
@@ -7300,34 +7300,54 @@ function initializeExecutionHeatmap(section) {
         cell.type = "button";
         cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
         cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
-        cell.setAttribute("aria-pressed", "false");
+        var isSelected = currentDrilldown
+          && currentDrilldown.metric === metric
+          && currentDrilldown.row.id === row.id
+          && currentDrilldown.trail[currentDrilldown.trail.length - 1].bucket.start === bucket.start;
+        cell.setAttribute("aria-pressed", isSelected ? "true" : "false");
         cell.textContent = formatValue(metric, value);
         cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
-        cell.addEventListener("click", function() { showDrilldown(metric, row, bucket, value, cell); });
+        cell.addEventListener("click", function() { drillIntoCell(metric, row, bucket); });
+        if (isSelected) selectedCell = cell;
         grid.appendChild(cell);
       });
     });
     emptyState.hidden = rowValues.length > 0 && bucketValues.length > 0;
     grid.hidden = !emptyState.hidden;
-    selectedCell = null;
-    currentDrilldown = null;
-    updateDrilldownStepButtons();
-    drilldownTitle.textContent = "Select a heatmap cell";
-    drilldownSummary.textContent = "Choose a cell to inspect smaller buckets and individual events.";
-    drilldownPath.replaceChildren();
-    drilldownBuckets.replaceChildren();
-    drilldownBuckets.hidden = true;
-    eventList.replaceChildren();
-    eventList.hidden = true;
+    if (currentDrilldown && currentDrilldown.metric === metric) {
+      renderDrilldownLevel(metric, currentDrilldown.row, currentDrilldown.trail);
+    } else {
+      selectedCell = null;
+      currentDrilldown = null;
+      updateDrilldownStepButtons();
+      drilldownTitle.textContent = "Select a heatmap cell";
+      drilldownSummary.textContent = "Choose a cell to inspect its events and zoom the top heatmap.";
+      drilldownPath.replaceChildren();
+      eventList.replaceChildren();
+      eventList.hidden = true;
+    }
     status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized within this view";
-    requestAnimationFrame(updateHeatmapScrollButtons);
+    requestAnimationFrame(function() {
+      if (selectedCell) selectedCell.scrollIntoView({ block:"nearest", inline:"center" });
+      updateHeatmapScrollButtons();
+    });
   }
-  metricSelect.addEventListener("change", render);
+  metricSelect.addEventListener("change", function() {
+    currentDrilldown = null;
+    render();
+  });
   minuteButtons.forEach(function(button) {
     button.addEventListener("click", function() {
-      selectedMinutes = Number(button.dataset.heatmapMinutes);
-      minuteButtons.forEach(function(candidate) { candidate.setAttribute("aria-pressed", candidate === button ? "true" : "false"); });
-      render();
+      var minutes = Number(button.dataset.heatmapMinutes);
+      if (!currentDrilldown) {
+        setMinuteControl(minutes);
+        render();
+        return;
+      }
+      var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+      var bucket = visibleBucket(current.bucket.start, minutes);
+      var trail = selectionTrail(currentDrilldown.metric, currentDrilldown.row, minutes, bucket, currentDrilldown.trail);
+      selectDrilldown(currentDrilldown.metric, currentDrilldown.row, trail);
     });
   });
   scrollButtons.forEach(function(button) {
@@ -7343,16 +7363,32 @@ function initializeExecutionHeatmap(section) {
       shiftDrilldown(Number(button.dataset.heatmapDrilldownStep));
     });
   });
+  grid.addEventListener("contextmenu", function(event) {
+    if (!event.target.closest(".heatmap-cell")) return;
+    event.preventDefault();
+    stepBack();
+  });
   heatmapScroll.addEventListener("scroll", updateHeatmapScrollButtons, { passive:true });
   render();
 }
 """
 
 
+def _tool_activity_preview(tool_name: str, detail: str, limit: int = 150) -> str:
+    """Return a concise heatmap preview for one tool invocation."""
+
+    marker = "tools.exec_command("
+    if tool_name == "exec" and marker in detail:
+        parameters = detail.split(marker, 1)[1]
+        parameters = parameters.split("); text(", 1)[0]
+        return _compact_display_text(f"Execute {parameters}", limit)
+    return _compact_display_text(f"{tool_name}: {detail}", limit)
+
+
 def _response_activity_preview(
     thread: CodexThreadMetrics,
     response: ResponseUsage,
-    limit: int = 80,
+    limit: int = 150,
 ) -> str:
     """Return bounded sanitized narrative or initiated-tool context for a response."""
 
@@ -7391,7 +7427,9 @@ def _response_activity_preview(
             if response.turn_id and tool.turn_id != response.turn_id:
                 continue
             detail = tool.argument_summary or tool.result_summary or tool.tool_name
-            initiated_tools.append((tool_start, f"{tool.tool_name}: {detail}"))
+            initiated_tools.append(
+                (tool_start, _tool_activity_preview(tool.tool_name, detail, limit))
+            )
         for call in thread.mcp_calls:
             call_start = _parse_iso_datetime(call.started_at)
             if call_start is None or abs((call_start - response_end).total_seconds()) > 1:
@@ -7413,7 +7451,7 @@ def _response_activity_preview(
 def _runtime_interval_preview(
     thread: CodexThreadMetrics,
     interval: RuntimeStateInterval,
-    limit: int = 80,
+    limit: int = 150,
 ) -> str:
     """Return bounded sanitized context for one heatmap runtime interval."""
 
@@ -7453,7 +7491,7 @@ def _runtime_interval_preview(
         )
         if overlap:
             detail = tool.argument_summary or tool.result_summary or tool.tool_name
-            tools.append((overlap, f"{tool.tool_name}: {detail}"))
+            tools.append((overlap, _tool_activity_preview(tool.tool_name, detail, limit)))
     for call in thread.mcp_calls:
         overlap = _interval_overlap_ms(
             interval.started_at,
@@ -7573,7 +7611,7 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="agents-heading"><h2>Execution heatmap</h2>'
         '<span class="evidence-badge">Recorded + inferred boundaries</span></div>'
         '<p class="execution-note">Compare time or response-attributed tokens across the run. '
-        'Select a cell to drill through smaller time buckets, then inspect individual events.</p>'
+        'Select a cell to zoom the top heatmap and inspect events. Right-click a cell to step back.</p>'
         '<div class="heatmap-controls">'
         '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
         '<select id="heatmap-metric">'
@@ -7603,9 +7641,8 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<div class="heatmap-drilldown">'
         '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
-        'Choose a cell to inspect smaller buckets and individual events.</p>'
+        'Choose a cell to inspect its events and zoom the top heatmap.</p>'
         '<nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav>'
-        '<div class="heatmap-drilldown-buckets" data-heatmap-drilldown-buckets role="group" aria-label="Drilldown buckets"></div>'
         '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
         '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown bucket" disabled>→</button></div>'
         f'<script type="application/json" id="execution-heatmap-data">{payload}</script>'
