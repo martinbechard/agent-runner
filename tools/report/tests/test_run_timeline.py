@@ -1771,6 +1771,14 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
         if interval.state == "model_inference"
     ]
     assert inference_intervals[0].detail == "gpt-5.6-sol · effort high"
+    payload = module._execution_heatmap_payload(run)
+    inference_payload = next(
+        interval
+        for interval in payload["intervals"]
+        if interval["state"] == "model_inference"
+    )
+    assert inference_payload["preview"] == "bounded"
+    assert payload["responses"][0]["preview"] == "bounded"
     assert thread.compactions[0].before_total_tokens == 50
     assert thread.compactions[0].after_total_tokens == 30
     assert thread.compactions[0].recorded is True
@@ -2365,6 +2373,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<button type="button" data-heatmap-minutes="1">1 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
+    assert 'data-heatmap-scroll="left" aria-label="Scroll heatmap left"' in html
+    assert 'data-heatmap-scroll="right" aria-label="Scroll heatmap right"' in html
+    assert "heatmapScroll.scrollBy" in html
     assert 'id="heatmap-drilldown-title">Select a heatmap cell</h3>' in html
     assert 'data-heatmap-drilldown-path aria-label="Drilldown path"' in html
     assert 'data-heatmap-drilldown-buckets role="group"' in html
@@ -2381,6 +2392,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "function renderDrilldownLevel(metric, row, trail)" in html
     assert "current.minutes === 15 ? 5 : current.minutes === 5 ? 1 : 0" in html
     assert "Select a cell to drill from 15 to 5 to 1 minute" in html
+    assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
 
@@ -2403,6 +2415,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
         "reasoning_tokens",
     }
     assert "effort" in payload["responses"][0]
+    assert "preview" in payload["responses"][0]
+    assert all(len(response["preview"]) <= 80 for response in payload["responses"])
+    assert all(len(interval["preview"]) <= 80 for interval in payload["intervals"])
     assert all(response["cost_usd"] >= 0 for response in payload["responses"])
     assert any(response["cost_usd"] > 0 for response in payload["responses"])
     assert sum(response["cost_usd"] for response in payload["responses"]) == pytest.approx(

@@ -6930,7 +6930,12 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-granularity button { min-height:34px; padding:5px 10px; color:#455a64; background:#fff; border:1px solid #90a4ae; border-radius:5px; cursor:pointer; font:600 .8em var(--font-ui); }
 .heatmap-granularity button[aria-pressed="true"] { color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }
 .heatmap-control select:focus-visible, .heatmap-granularity button:focus-visible, .heatmap-cell:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
-.heatmap-scroll { overflow:auto; margin-top:8px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.heatmap-scroll-frame { display:grid; grid-template-columns:36px minmax(0,1fr) 36px; align-items:center; gap:6px; margin-top:8px; }
+.heatmap-scroll { min-width:0; overflow:auto; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.heatmap-scroll-button { width:36px; height:48px; padding:0; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:6px; cursor:pointer; font:700 1.3em var(--font-ui); }
+.heatmap-scroll-button:hover:not(:disabled) { color:#0d47a1; border-color:#2563a6; }
+.heatmap-scroll-button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-scroll-button:disabled { opacity:.35; cursor:default; }
 .heatmap-grid { display:grid; width:max-content; min-width:100%; align-items:stretch; }
 .heatmap-corner, .heatmap-column, .heatmap-row-label { position:sticky; z-index:2; box-sizing:border-box; padding:7px 8px; color:#455a64; background:#f5f7f8; border-right:1px solid #d7e0e5; border-bottom:1px solid #d7e0e5; font-size:.76em; font-weight:700; }
 .heatmap-corner, .heatmap-row-label { left:0; }
@@ -6956,7 +6961,7 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
 .heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
 .heatmap-event-list code { color:#263238; }
-@media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-row-label { min-width:140px; } }
+@media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
 """
 
 
@@ -6964,6 +6969,8 @@ _EXECUTION_HEATMAP_SCRIPT = r"""
 function initializeExecutionHeatmap(section) {
   var dataElement = section.querySelector("#execution-heatmap-data");
   var grid = section.querySelector("[data-heatmap-grid]");
+  var heatmapScroll = section.querySelector(".heatmap-scroll");
+  var scrollButtons = Array.from(section.querySelectorAll("[data-heatmap-scroll]"));
   var emptyState = section.querySelector("[data-heatmap-empty]");
   var metricSelect = section.querySelector("#heatmap-metric");
   var minuteButtons = Array.from(section.querySelectorAll("[data-heatmap-minutes]"));
@@ -6973,7 +6980,7 @@ function initializeExecutionHeatmap(section) {
   var drilldownPath = section.querySelector("[data-heatmap-drilldown-path]");
   var drilldownBuckets = section.querySelector("[data-heatmap-drilldown-buckets]");
   var eventList = section.querySelector("[data-heatmap-event-list]");
-  if (!dataElement || !grid || !metricSelect) return;
+  if (!dataElement || !grid || !heatmapScroll || !metricSelect) return;
 
   var data;
   try { data = JSON.parse(dataElement.textContent); }
@@ -7032,6 +7039,13 @@ function initializeExecutionHeatmap(section) {
   function responseTime(response) {
     return timestamp(response.completed_at || response.ended_at || response.started_at);
   }
+  function updateHeatmapScrollButtons() {
+    var atStart = heatmapScroll.scrollLeft <= 1;
+    var atEnd = heatmapScroll.scrollLeft + heatmapScroll.clientWidth >= heatmapScroll.scrollWidth - 1;
+    scrollButtons.forEach(function(button) {
+      button.disabled = button.dataset.heatmapScroll === "left" ? atStart : atEnd;
+    });
+  }
   function rows(metric) {
     if (metric === "wall_time") {
       return data.states.map(function(state) { return { id:state.id, label:state.label }; });
@@ -7074,7 +7088,7 @@ function initializeExecutionHeatmap(section) {
         return {
           started_at:interval.started_at,
           label:interval.detail || stateLabels.get(interval.state) || interval.state,
-          detail:duration(interval.duration_ms)
+          detail:duration(interval.duration_ms) + (interval.preview ? " · " + interval.preview : "")
         };
       });
     }
@@ -7087,7 +7101,7 @@ function initializeExecutionHeatmap(section) {
       return {
         started_at:response.completed_at || response.started_at,
         label:modelLabel + " · " + formatValue(metric, responseValue(response, metric)) + " " + metric.replaceAll("_", " "),
-        detail:duration(response.duration_ms)
+        detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
       };
     });
   }
@@ -7160,7 +7174,6 @@ function initializeExecutionHeatmap(section) {
       renderEvents(metric, row, current.bucket);
       return;
     }
-    drilldownSummary.textContent += " Select a " + childMinutes + "-minute bucket to continue.";
     drilldownBuckets.hidden = false;
     drilldownBuckets.setAttribute("aria-label", childMinutes + "-minute breakdown of " + row.label);
     var children = childBuckets(current.bucket, childMinutes).map(function(bucket) {
@@ -7246,6 +7259,7 @@ function initializeExecutionHeatmap(section) {
     eventList.replaceChildren();
     eventList.hidden = true;
     status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized within this view";
+    requestAnimationFrame(updateHeatmapScrollButtons);
   }
   metricSelect.addEventListener("change", render);
   minuteButtons.forEach(function(button) {
@@ -7255,9 +7269,139 @@ function initializeExecutionHeatmap(section) {
       render();
     });
   });
+  scrollButtons.forEach(function(button) {
+    button.addEventListener("click", function() {
+      var direction = button.dataset.heatmapScroll === "left" ? -1 : 1;
+      heatmapScroll.scrollBy({ left:direction * Math.max(240, heatmapScroll.clientWidth * .8), behavior:"smooth" });
+    });
+  });
+  heatmapScroll.addEventListener("scroll", updateHeatmapScrollButtons, { passive:true });
   render();
 }
 """
+
+
+def _response_activity_preview(
+    thread: CodexThreadMetrics,
+    response: ResponseUsage,
+    limit: int = 80,
+) -> str:
+    """Return bounded sanitized narrative or initiated-tool context for a response."""
+
+    started_at = _parse_iso_datetime(response.started_at)
+    ended_at = _parse_iso_datetime(response.last_output_at or response.completed_at)
+    matched_reasoning = False
+    if started_at is not None and ended_at is not None:
+        activities = sorted(
+            thread.activities,
+            key=lambda activity: (
+                _parse_iso_datetime(activity.event_timestamp)
+                or datetime.min.replace(tzinfo=timezone.utc),
+                activity.source_ordinal,
+            ),
+        )
+        for activity in activities:
+            if activity.activity_type not in {"reasoning", "output"}:
+                continue
+            if response.turn_id and activity.turn_id != response.turn_id:
+                continue
+            occurred_at = _parse_iso_datetime(activity.event_timestamp)
+            if occurred_at is None or occurred_at < started_at or occurred_at > ended_at:
+                continue
+            matched_reasoning = matched_reasoning or activity.activity_type == "reasoning"
+            preview = _compact_display_text(activity.content, limit)
+            if preview:
+                return preview
+
+    response_end = _parse_iso_datetime(response.last_output_at)
+    if response_end is not None:
+        initiated_tools: list[tuple[datetime, str]] = []
+        for tool in thread.tool_intervals:
+            tool_start = _parse_iso_datetime(tool.started_at)
+            if tool_start is None or abs((tool_start - response_end).total_seconds()) > 1:
+                continue
+            if response.turn_id and tool.turn_id != response.turn_id:
+                continue
+            detail = tool.argument_summary or tool.result_summary or tool.tool_name
+            initiated_tools.append((tool_start, f"{tool.tool_name}: {detail}"))
+        for call in thread.mcp_calls:
+            call_start = _parse_iso_datetime(call.started_at)
+            if call_start is None or abs((call_start - response_end).total_seconds()) > 1:
+                continue
+            if response.turn_id and call.turn_id != response.turn_id:
+                continue
+            name = f"{call.server_name}.{call.tool_name}"
+            detail = call.argument_summary or call.result_summary or name
+            initiated_tools.append((call_start, f"{name}: {detail}"))
+        if initiated_tools:
+            return _compact_display_text(
+                min(initiated_tools, key=lambda item: item[0])[1],
+                limit,
+            )
+
+    return "Internal reasoning (content unavailable)" if matched_reasoning else ""
+
+
+def _runtime_interval_preview(
+    thread: CodexThreadMetrics,
+    interval: RuntimeStateInterval,
+    limit: int = 80,
+) -> str:
+    """Return bounded sanitized context for one heatmap runtime interval."""
+
+    if interval.state == "model_inference":
+        responses = [
+            response
+            for response in thread.responses
+            if response.started_at
+            and (response.last_output_at or response.completed_at)
+            and _interval_overlap_ms(
+                interval.started_at,
+                interval.completed_at,
+                response.started_at,
+                response.last_output_at or response.completed_at,
+            )
+            > 0
+        ]
+        if responses:
+            response = max(
+                responses,
+                key=lambda item: _interval_overlap_ms(
+                    interval.started_at,
+                    interval.completed_at,
+                    item.started_at,
+                    item.last_output_at or item.completed_at,
+                ),
+            )
+            return _response_activity_preview(thread, response, limit)
+
+    tools: list[tuple[int, str]] = []
+    for tool in thread.tool_intervals:
+        overlap = _interval_overlap_ms(
+            interval.started_at,
+            interval.completed_at,
+            tool.started_at,
+            tool.completed_at,
+        )
+        if overlap:
+            detail = tool.argument_summary or tool.result_summary or tool.tool_name
+            tools.append((overlap, f"{tool.tool_name}: {detail}"))
+    for call in thread.mcp_calls:
+        overlap = _interval_overlap_ms(
+            interval.started_at,
+            interval.completed_at,
+            call.started_at,
+            call.completed_at,
+        )
+        if overlap:
+            name = f"{call.server_name}.{call.tool_name}"
+            detail = call.argument_summary or call.result_summary or name
+            tools.append((overlap, f"{name}: {detail}"))
+    return (
+        _compact_display_text(max(tools, key=lambda item: item[0])[1], limit)
+        if tools
+        else ""
+    )
 
 
 def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
@@ -7287,20 +7431,27 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
         {"id": thread.thread_id, "label": _heatmap_agent_label(thread)}
         for thread in run.threads
     ]
-    intervals = [
-        {
-            "state": interval.state,
-            "thread_id": interval.thread_id,
-            "turn_id": interval.turn_id or "",
-            "started_at": interval.started_at,
-            "ended_at": interval.completed_at,
-            "duration_ms": interval.duration_ms,
-            "confidence": interval.attribution_confidence,
-            "detail": _compact_display_text(interval.detail, 160),
-        }
-        for interval in run.runtime_intervals
-        if interval.started_at and interval.completed_at
-    ]
+    threads_by_id = {thread.thread_id: thread for thread in run.threads}
+    intervals = []
+    for interval in run.runtime_intervals:
+        if not interval.started_at or not interval.completed_at:
+            continue
+        thread = threads_by_id.get(interval.thread_id)
+        intervals.append(
+            {
+                "state": interval.state,
+                "thread_id": interval.thread_id,
+                "turn_id": interval.turn_id or "",
+                "started_at": interval.started_at,
+                "ended_at": interval.completed_at,
+                "duration_ms": interval.duration_ms,
+                "confidence": interval.attribution_confidence,
+                "detail": _compact_display_text(interval.detail, 160),
+                "preview": (
+                    _runtime_interval_preview(thread, interval) if thread else ""
+                ),
+            }
+        )
     responses = []
     for thread in run.threads:
         for response in thread.responses:
@@ -7318,6 +7469,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                     "duration_ms": response.duration_ms,
                     "confidence": response.timing_confidence,
                     "cost_usd": response_cost.total_cost or 0,
+                    "preview": _response_activity_preview(thread, response),
                     "usage": {
                         "uncached_input_tokens": usage.direct_input_tokens,
                         "cached_input_tokens": usage.cached_input_tokens,
@@ -7370,9 +7522,12 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<button type="button" data-heatmap-minutes="15">15 min</button>'
         '</fieldset><output class="heatmap-status" data-heatmap-status></output></div>'
         '<p class="execution-note">Cost follows the report\'s recorded or API-equivalent estimate method.</p>'
+        '<div class="heatmap-scroll-frame">'
+        '<button type="button" class="heatmap-scroll-button" data-heatmap-scroll="left" aria-label="Scroll heatmap left">←</button>'
         '<div class="heatmap-scroll" tabindex="0" aria-label="Scrollable execution heatmap">'
         '<div class="heatmap-grid" data-heatmap-grid></div>'
         '<p class="heatmap-empty" data-heatmap-empty hidden>No heatmap evidence is available.</p>'
+        '</div><button type="button" class="heatmap-scroll-button" data-heatmap-scroll="right" aria-label="Scroll heatmap right">→</button>'
         '</div><div class="heatmap-drilldown">'
         '<h3 id="heatmap-drilldown-title">Select a heatmap cell</h3>'
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
