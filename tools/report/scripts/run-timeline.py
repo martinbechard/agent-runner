@@ -6996,8 +6996,10 @@ function initializeExecutionHeatmap(section) {
   var tokenRows = [
     { id:"uncached_input_tokens", label:"Uncached input" },
     { id:"cached_input_tokens", label:"Cached input" },
+    { id:"reasoning_tokens", label:"Reasoning" },
     { id:"output_tokens", label:"Output" },
-    { id:"reasoning_tokens", label:"Reasoning" }
+    { id:"context_tokens", label:"Context size", aggregation:"maximum" },
+    { id:"cost_usd", label:"Cost", format:"currency" }
   ];
   var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
   var fullTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"medium" });
@@ -7024,12 +7026,11 @@ function initializeExecutionHeatmap(section) {
     return "$" + value.toFixed(2);
   }
   function responseValue(response, metric, row) {
-    if (metric === "cost_usd") return response.cost_usd;
-    return response.usage[metric === "tokens" ? row.id : metric];
+    return row.id === "cost_usd" ? response.cost_usd : response.usage[row.id];
   }
-  function formatValue(metric, value) {
+  function formatValue(metric, value, row) {
     if (metric === "wall_time") return duration(value);
-    if (metric === "cost_usd") return currency(value);
+    if (row && row.format === "currency") return currency(value);
     return compact(value);
   }
   function buckets() {
@@ -7081,13 +7082,15 @@ function initializeExecutionHeatmap(section) {
       });
       return total + mergedEnd - mergedStart;
     }
-    return data.responses.reduce(function(total, response) {
+    var values = data.responses.filter(function(response) {
       var occurredAt = responseTime(response);
       var matchesRow = metric === "tokens" || response.thread_id === row.id;
-      return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end
-        ? total + responseValue(response, metric, row)
-        : total;
-    }, 0);
+      return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
+    }).map(function(response) { return responseValue(response, metric, row); });
+    if (row.aggregation === "maximum") {
+      return values.reduce(function(largest, value) { return Math.max(largest, value); }, 0);
+    }
+    return values.reduce(function(total, value) { return total + value; }, 0);
   }
   function matchingEvents(metric, row, bucket) {
     if (metric === "wall_time") {
@@ -7111,7 +7114,7 @@ function initializeExecutionHeatmap(section) {
       if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
       return {
         started_at:response.completed_at || response.started_at,
-        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric, row)) + (metric === "tokens" ? " " + row.label.toLowerCase() : " " + metric.replaceAll("_", " ")),
+        label:modelLabel + " · " + formatValue(metric, responseValue(response, metric, row), row) + " " + row.label.toLowerCase(),
         detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
       };
     });
@@ -7256,9 +7259,9 @@ function initializeExecutionHeatmap(section) {
     currentDrilldown = { metric:metric, row:row, trail:trail };
     updateDrilldownStepButtons();
     var current = trail[trail.length - 1];
-    var metricLabel = metricSelect.options[metricSelect.selectedIndex].text;
+    var metricLabel = metric === "tokens" ? row.label : metricSelect.options[metricSelect.selectedIndex].text;
     drilldownTitle.textContent = row.label + " · " + rangeLabel(current.bucket);
-    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value) + ". Events in this period are listed below.";
+    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value, row) + ". Events in this period are listed below.";
     renderDrilldownPath(metric, row, trail);
     eventList.replaceChildren();
     renderEvents(metric, row, current.bucket);
@@ -7287,7 +7290,7 @@ function initializeExecutionHeatmap(section) {
     grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
     var corner = document.createElement("div");
     corner.className = "heatmap-corner";
-    corner.textContent = metric === "wall_time" ? "Activity" : metric === "tokens" ? "Token type" : "Agent";
+    corner.textContent = metric === "wall_time" ? "Activity" : "Measure";
     grid.appendChild(corner);
     bucketValues.forEach(function(bucket) {
       var heading = document.createElement("div");
@@ -7314,7 +7317,7 @@ function initializeExecutionHeatmap(section) {
           && currentDrilldown.row.id === row.id
           && currentDrilldown.trail[currentDrilldown.trail.length - 1].bucket.start === bucket.start;
         cell.setAttribute("aria-pressed", isSelected ? "true" : "false");
-        cell.textContent = formatValue(metric, value);
+        cell.textContent = formatValue(metric, value, row);
         cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent);
         cell.addEventListener("click", function() { drillIntoCell(metric, row, bucket); });
         if (isSelected) selectedCell = cell;
@@ -7627,6 +7630,7 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
                             0, usage.output_tokens - usage.reasoning_tokens
                         ),
                         "reasoning_tokens": usage.reasoning_tokens,
+                        "context_tokens": response.context_total_tokens,
                     },
                 }
             )
@@ -8032,7 +8036,6 @@ def _render_execution_heatmap(run: CodexRunMetrics) -> str:
         '<select id="heatmap-metric">'
         '<option value="wall_time">Wall time</option>'
         '<option value="tokens">Tokens</option>'
-        '<option value="cost_usd">Cost (USD)</option>'
         '</select></div>'
         '<fieldset class="heatmap-granularity"><legend>Bucket size</legend>'
         '<button type="button" data-heatmap-minutes="1">1 min</button>'

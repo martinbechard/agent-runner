@@ -2371,7 +2371,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<option value="cached_input_tokens">' not in html
     assert '<option value="output_tokens">' not in html
     assert '<option value="reasoning_tokens">' not in html
-    assert '<option value="cost_usd">Cost (USD)</option>' in html
+    assert '<option value="cost_usd">' not in html
     assert '<button type="button" data-heatmap-minutes="1">1 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
@@ -2400,11 +2400,15 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert ".heatmap-cell.is-inactive { --heatmap-color:37,99,166" in html
     assert "rgba(var(--heatmap-color),var(--heatmap-alpha,.06))" in html
     assert 'metric === "wall_time" && row.id === "user_pause"' in html
-    assert 'metric === "wall_time" ? "Activity" : metric === "tokens" ? "Token type" : "Agent"' in html
+    assert 'metric === "wall_time" ? "Activity" : "Measure"' in html
     assert '{ id:"uncached_input_tokens", label:"Uncached input" }' in html
     assert '{ id:"cached_input_tokens", label:"Cached input" }' in html
-    assert '{ id:"output_tokens", label:"Output" }' in html
     assert '{ id:"reasoning_tokens", label:"Reasoning" }' in html
+    assert '{ id:"output_tokens", label:"Output" }' in html
+    assert '{ id:"context_tokens", label:"Context size", aggregation:"maximum" }' in html
+    assert '{ id:"cost_usd", label:"Cost", format:"currency" }' in html
+    assert html.index('label:"Reasoning"') < html.index('label:"Output"')
+    assert 'row.aggregation === "maximum"' in html
     assert "var rowMaximum = matrix[rowIndex].reduce" in html
     assert "value / rowMaximum" in html
     assert "normalized per row" in html
@@ -2442,6 +2446,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
         "cached_input_tokens",
         "output_tokens",
         "reasoning_tokens",
+        "context_tokens",
     }
     assert "effort" in payload["responses"][0]
     assert "preview" in payload["responses"][0]
