@@ -307,6 +307,13 @@
 - **Tests location:** frontend tests beside or under `tests/` according to the selected frontend tooling; Rust command tests follow Cargo conventions under `src-tauri/`.
 - **Example:** `tools/report/desktop/src-tauri/src/lib.rs`
 
+### .github/workflows/
+- **Purpose:** GitHub Actions automation for repository CI, verified package builds, and release publication.
+- **Signals:** event-triggered jobs, runner matrices, artifact transfer, GitHub Release creation, repository-scoped automation that must run on GitHub-hosted infrastructure.
+- **Filename pattern:** descriptive lowercase kebab-case YAML such as `release-agent-report.yml`.
+- **Tests location:** validate workflow syntax and exercise reusable scripts through their owning tool's test tree.
+- **Example:** `.github/workflows/release-agent-report.yml`
+
 ### .codex/agents/
 - **Purpose:** Repository-local Codex custom agent definitions. Use this path for TOML agent files that define reusable Codex agents for this repository and are meant to be registered into the user's Codex agent directory.
 - **Signals:** Codex custom agent, `name =`, `description =`, `developer_instructions =`, `.toml` agent definition, reusable repo-local agent role, file meant to be linked or copied into `~/.codex/agents/`.
@@ -472,6 +479,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-08-10 — .github/workflows/ added — GitHub-hosted CI and release publication need a canonical automation path distinct from local scripts.
 - 2026-07-15 — docs/holding/ added — cross-repository proposals need a visible handoff location that the local backlog runner will not dispatch.
 - 2026-07-15 — docs/feature-backlog/ added — active project enhancements need a dispatchable queue separate from requirements, designs, and implementation plans.
 - 2026-04-24 — tools/backlog-runner/ added — backlog-runner is a sibling tool for backlog queue supervision and needs its own package, design, source, and test paths.

@@ -68,7 +68,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.4/agent_report-0.6.4-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.7.0/agent_report-0.7.0-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
@@ -81,6 +81,33 @@ python -m build --wheel
 
 The wheel build fails if Rust cannot build `agent-report-engine`; it never
 emits a Python-only package with different discovery behavior.
+
+### GitHub Release publication
+
+Agent Report wheels are published only through GitHub Releases. Pushing an
+`agent-report-vVERSION` tag runs `.github/workflows/release-agent-report.yml`.
+The tag must exactly match the version in `tools/report/pyproject.toml`.
+
+The workflow builds and tests one platform wheel on each supported target:
+
+- Linux x64
+- Windows x64
+- Apple Silicon macOS
+
+Every build compiles the Rust parser for its runner, verifies that the wheel is
+platform-specific, confirms that both report commands and all runtime resources
+are present, installs the completed wheel, and runs the report regression
+suite. The GitHub Release is created only after all three jobs pass. It contains
+the three wheels and a `SHA256SUMS` file. Intel macOS wheels and Python-only
+wheels are not published.
+
+After synchronizing all Agent Report version files and committing the release
+candidate, publish it with:
+
+```bash
+git tag agent-report-vVERSION
+git push origin agent-report-vVERSION
+```
 
 ## MCP server
 

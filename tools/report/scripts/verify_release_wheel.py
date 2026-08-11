@@ -1,0 +1,138 @@
+# Copyright (c) 2026 Martin.Bechard@DevConsult.ca
+# AI attribution: Generated with AI assistance.
+# Responsibility: Verify that one Agent Report release wheel is complete and platform-specific.
+# Design: docs/design/components/CD-001-codex-rollout-metrics.md
+
+"""Validate Agent Report wheel metadata, entry points, and native payload."""
+
+from __future__ import annotations
+
+import argparse
+import re
+import zipfile
+from email.parser import BytesParser
+from pathlib import Path
+
+
+def _single_wheel(path: Path) -> Path:
+    """Resolve one wheel file from a file or wheelhouse directory."""
+
+    candidates = [path] if path.is_file() else sorted(path.glob("*.whl"))
+    if len(candidates) != 1:
+        raise ValueError(f"Expected one wheel under {path}, found {len(candidates)}")
+    return candidates[0]
+
+
+def verify_release_wheel(path: Path, expected_version: str) -> Path:
+    """Validate one platform wheel and return its resolved path."""
+
+    wheel = _single_wheel(path).resolve()
+    if not re.fullmatch(r"\d+\.\d+\.\d+", expected_version):
+        raise ValueError(f"Invalid expected version: {expected_version}")
+    if not wheel.name.startswith(f"agent_report-{expected_version}-"):
+        raise ValueError(
+            f"Wheel filename does not contain version {expected_version}: {wheel.name}"
+        )
+    if wheel.name.endswith("-any.whl"):
+        raise ValueError(f"Release wheel must be platform-specific: {wheel.name}")
+
+    with zipfile.ZipFile(wheel) as archive:
+        names = archive.namelist()
+        metadata_names = [
+            name for name in names if name.endswith(".dist-info/METADATA")
+        ]
+        wheel_metadata_names = [
+            name for name in names if name.endswith(".dist-info/WHEEL")
+        ]
+        entry_point_names = [
+            name for name in names if name.endswith(".dist-info/entry_points.txt")
+        ]
+        if len(metadata_names) != 1 or len(wheel_metadata_names) != 1:
+            raise ValueError("Wheel must contain exactly one METADATA and WHEEL file")
+        if len(entry_point_names) != 1:
+            raise ValueError("Wheel must contain exactly one entry_points.txt file")
+
+        metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
+        if (
+            metadata["Name"] != "agent-report"
+            or metadata["Version"] != expected_version
+        ):
+            raise ValueError(
+                "Wheel metadata identity mismatch: "
+                f"{metadata['Name']} {metadata['Version']}"
+            )
+        wheel_metadata = archive.read(wheel_metadata_names[0]).decode("utf-8")
+        if "Root-Is-Purelib: false" not in wheel_metadata:
+            raise ValueError("Release wheel is incorrectly marked as pure Python")
+
+        entry_points = archive.read(entry_point_names[0]).decode("utf-8")
+        required_entry_points = {
+            "agent-report = agent_report.cli:main",
+            "agent-report-mcp = agent_report.mcp_server:main",
+        }
+        missing_entry_points = sorted(
+            value for value in required_entry_points if value not in entry_points
+        )
+        if missing_entry_points:
+            raise ValueError(
+                "Wheel is missing console entry points: "
+                + ", ".join(missing_entry_points)
+            )
+
+        windows_wheel = "-win_" in wheel.name
+        engine_name = (
+            "agent-report-engine.exe" if windows_wheel else "agent-report-engine"
+        )
+        engine_paths = [
+            name
+            for name in names
+            if name.endswith(f"/agent_report/native/{engine_name}")
+        ]
+        if len(engine_paths) != 1:
+            raise ValueError(
+                f"Wheel must contain exactly one bundled {engine_name}, found "
+                f"{len(engine_paths)}"
+            )
+        required_resources = (
+            "/agent_report/mcp_report.py",
+            "/agent_report/mcp_server.py",
+            "/share/agent-report/run-timeline.py",
+        )
+        missing_resources = [
+            resource
+            for resource in required_resources
+            if not any(name.endswith(resource) for name in names)
+        ]
+        if missing_resources:
+            raise ValueError(
+                "Wheel is missing runtime resources: " + ", ".join(missing_resources)
+            )
+    return wheel
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Run release-wheel validation from the command line."""
+
+    parser = argparse.ArgumentParser(
+        description="Verify one platform-specific Agent Report release wheel."
+    )
+    parser.add_argument(
+        "path", type=Path, help="Wheel file or directory containing one wheel"
+    )
+    parser.add_argument(
+        "--expected-version",
+        required=True,
+        help="Package version or agent-report-vVERSION release tag",
+    )
+    args = parser.parse_args(argv)
+    expected_version = args.expected_version.removeprefix("agent-report-v")
+    try:
+        wheel = verify_release_wheel(args.path, expected_version)
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        parser.exit(1, f"Agent Report wheel verification failed: {error}\n")
+    print(f"Verified Agent Report release wheel: {wheel}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
