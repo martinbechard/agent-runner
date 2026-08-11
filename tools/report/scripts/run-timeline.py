@@ -7301,13 +7301,14 @@ function initializeExecutionHeatmap(section) {
     });
     rowValues.forEach(function(row, rowIndex) {
       var rowMaximum = matrix[rowIndex].reduce(function(largest, value) { return Math.max(largest, value); }, 0);
+      var scaleMaximum = row.id === "context_tokens" ? data.context_capacity : rowMaximum;
       var label = document.createElement("div");
       label.className = "heatmap-row-label";
       label.textContent = row.label;
       grid.appendChild(label);
       bucketValues.forEach(function(bucket, bucketIndex) {
         var value = matrix[rowIndex][bucketIndex];
-        var intensity = rowMaximum ? value / rowMaximum : 0;
+        var intensity = scaleMaximum ? Math.min(1, value / scaleMaximum) : 0;
         var cell = document.createElement("button");
         cell.type = "button";
         cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "");
@@ -7338,7 +7339,7 @@ function initializeExecutionHeatmap(section) {
       eventList.replaceChildren();
       eventList.hidden = true;
     }
-    status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · normalized per row";
+    status.textContent = bucketValues.length + " buckets · " + rowValues.length + " rows · per-row scales · context uses full window";
     requestAnimationFrame(function() {
       if (selectedCell) selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" });
       updateHeatmapScrollButtons();
@@ -7637,6 +7638,14 @@ def _execution_heatmap_payload(run: CodexRunMetrics) -> dict[str, object]:
     return {
         "started_at": run.wall_started_at,
         "ended_at": run.wall_ended_at,
+        "context_capacity": max(
+            (
+                response.context_capacity
+                for thread in run.threads
+                for response in thread.responses
+            ),
+            default=run.context_summary.capacity,
+        ),
         "states": states,
         "agents": agents,
         "intervals": intervals,

@@ -2410,8 +2410,9 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert html.index('label:"Reasoning"') < html.index('label:"Output"')
     assert 'row.aggregation === "maximum"' in html
     assert "var rowMaximum = matrix[rowIndex].reduce" in html
-    assert "value / rowMaximum" in html
-    assert "normalized per row" in html
+    assert 'row.id === "context_tokens" ? data.context_capacity : rowMaximum' in html
+    assert "Math.min(1, value / scaleMaximum)" in html
+    assert "per-row scales · context uses full window" in html
     assert "normalized within this view" not in html
     assert 'duration(interval.duration_ms) + " · " + interval.confidence' not in html
     assert 'duration(response.duration_ms) + " · " + response.confidence' not in html
@@ -2435,6 +2436,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     payload = json.loads(payload_text)
     assert payload["started_at"] == run.wall_started_at
     assert payload["ended_at"] == run.wall_ended_at
+    assert payload["context_capacity"] == run.context_summary.capacity
     assert payload["states"]
     assert payload["agents"]
     assert payload["agents"][0]["label"] == "main"
