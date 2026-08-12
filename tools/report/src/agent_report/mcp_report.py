@@ -638,6 +638,129 @@ def _slice(
     return service_types.QuerySlice(tuple(selected), next_position)
 
 
+def _bounded_text(value: object, limit: int = 512) -> str:
+    """Return one compact privacy-safe display string within DTO limits."""
+
+    compact = " ".join(str(value or "").split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 1].rstrip() + "…"
+
+
+def _evidence_kind(value: object) -> service_types.EvidenceKind:
+    """Map detailed runtime provenance onto the shared epistemic vocabulary."""
+
+    normalized = str(value or "").casefold()
+    if normalized in {"measured", "direct", "recorded", "exact"}:
+        return "measured"
+    if normalized == "inferred":
+        return "inferred"
+    if normalized in {"", "unavailable"}:
+        return "unavailable"
+    return "derived"
+
+
+def _safe_argument_object(*values: object) -> dict[str, object]:
+    """Decode only an already-sanitized tool argument summary."""
+
+    for value in values:
+        if not isinstance(value, str) or not value:
+            continue
+        try:
+            parsed = json.loads(value)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(parsed, dict):
+            return cast(dict[str, object], parsed)
+    return {}
+
+
+def _resolve_agent_id(
+    target: object, source: object, threads: Mapping[str, object]
+) -> str | None:
+    if not isinstance(target, str) or not target.strip():
+        return None
+    normalized = target.strip().rstrip("/")
+    if normalized in threads:
+        return normalized
+    if normalized in {"root", "/root"}:
+        roots = [
+            thread_id
+            for thread_id, thread in threads.items()
+            if not getattr(thread, "parent_thread_id", "")
+        ]
+        return roots[0] if len(roots) == 1 else None
+    tail = normalized.rsplit("/", 1)[-1]
+    matches = []
+    for thread_id, thread in threads.items():
+        names = {
+            str(value).rstrip("/").rsplit("/", 1)[-1]
+            for value in (
+                thread_id,
+                getattr(thread, "agent_path", ""),
+                getattr(thread, "agent_nickname", ""),
+            )
+            if value
+        }
+        if tail in names:
+            matches.append(thread_id)
+    related = [
+        thread_id
+        for thread_id in matches
+        if getattr(threads[thread_id], "parent_thread_id", "")
+        == getattr(source, "thread_id", "")
+        or getattr(source, "parent_thread_id", "") == thread_id
+    ]
+    candidates = related or matches
+    return candidates[0] if len(candidates) == 1 else None
+
+
+def _delegated_root_id(
+    agent_id: str | None, threads: Mapping[str, object]
+) -> str | None:
+    current = agent_id
+    visited: set[str] = set()
+    while current in threads and current not in visited:
+        visited.add(cast(str, current))
+        parent = getattr(threads[cast(str, current)], "parent_thread_id", "")
+        if not parent or parent not in threads:
+            return cast(str, current)
+        current = parent
+    return agent_id
+
+
+def _coordination_row(
+    occurred_at: object,
+    operation: str,
+    work_item_id: str | None,
+    delegated_root_id: str | None,
+    agent_id: str | None,
+    related_agent_ids: tuple[str, ...],
+    summary: object,
+    evidence: service_types.EvidenceKind,
+    ordinal: object,
+) -> service_types.CoordinationRow:
+    occurred = _aware(occurred_at)
+    if occurred is None:
+        raise ValueError("coordination evidence requires a timestamp")
+    seed = (
+        f"{occurred.isoformat()}:{operation}:{work_item_id}:"
+        f"{delegated_root_id}:{agent_id}:{ordinal}"
+    )
+    return service_types.CoordinationRow(
+        "coord_" + hashlib.sha256(seed.encode()).hexdigest()[:24],
+        occurred,
+        work_item_id,
+        delegated_root_id,
+        agent_id,
+        related_agent_ids,
+        _bounded_text(operation, 128),
+        _bounded_text(summary),
+        evidence,
+        None,
+    )
+
+
 class _RuntimeQueries:
     def __init__(self, repository: event_cache.EventRepository) -> None:
         self._repository = repository
@@ -648,51 +771,141 @@ class _RuntimeQueries:
             (item for item in run.threads if item.thread_id == run.root_thread_id),
             run.threads[0],
         )
+        usage = run.usage_totals
+        context = run.context_summary
+        inference = run.inference_summary
+        claim_count = sum(
+            len(getattr(thread, "work_item_claim_events", ()))
+            for thread in run.threads
+        )
+
+        def metric(
+            metric_id: str,
+            label: str,
+            value: int | float | str | None,
+            unit: str | None,
+            evidence: service_types.EvidenceKind,
+            provenance: str,
+        ) -> service_types.MetricValue:
+            if isinstance(value, float):
+                displayed = f"{value:.2f}".rstrip("0").rstrip(".")
+            elif value is None:
+                displayed = "Unavailable"
+            else:
+                displayed = str(value)
+            return service_types.MetricValue(
+                metric_id, label, value, displayed, unit, evidence, provenance, None
+            )
+
+        cost = getattr(getattr(run, "cost", None), "total_cost", None)
+        cost_value = float(cost) if cost is not None else None
+        model_names = {
+            name
+            for thread in run.threads
+            for name in (getattr(thread, "model", None),)
+            if name
+        }
         metrics = (
             service_types.MetricGroup(
-                "overview",
-                "Overview",
-                (
-                    service_types.MetricValue(
-                        "turns",
-                        "Turns",
-                        sum(len(t.turns) for t in run.threads),
-                        str(sum(len(t.turns) for t in run.threads)),
-                        "turns",
-                        "measured",
-                        "rollout events",
-                        None,
-                    ),
-                    service_types.MetricValue(
-                        "agents",
-                        "Agents",
-                        len(run.threads),
-                        str(len(run.threads)),
-                        "agents",
-                        "derived",
-                        "included scope",
-                        None,
-                    ),
+                "overview", "Overview", (
+                    metric("agents", "Agents", len(run.threads), "agents", "derived", "included scope"),
+                    metric("turns", "Turns", sum(len(t.turns) for t in run.threads), "turns", "measured", "rollout events"),
+                    metric("wall_time", "Wall time", run.wall_time_ms, "ms", "measured", "run interval"),
+                    metric("peak_concurrency", "Peak concurrency", run.peak_concurrency, "agents", "derived", "run intervals"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "model", "Model usage", (
+                    metric("models", "Models", len(model_names), "models", "derived", "thread metadata"),
+                    metric("input_tokens", "Input tokens", usage.input_tokens, "tokens", "measured", "usage records"),
+                    metric("cached_input_tokens", "Cached input tokens", usage.cached_input_tokens, "tokens", "measured", "usage records"),
+                    metric("output_tokens", "Output tokens", usage.output_tokens, "tokens", "measured", "usage records"),
+                    metric("recorded_cost", "Recorded cost", cost_value, "USD", "measured" if cost_value is not None else "unavailable", "pricing records"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "context", "Context and compaction", (
+                    metric("current_tokens", "Current context", context.current_total_tokens, "tokens", _evidence_kind(context.evidence), "context snapshots"),
+                    metric("capacity", "Context capacity", context.capacity, "tokens", _evidence_kind(context.evidence), "context snapshots"),
+                    metric("remaining_tokens", "Remaining context", context.remaining_tokens, "tokens", _evidence_kind(context.evidence), "context snapshots"),
+                    metric("compactions", "Compactions", context.compaction_count, "compactions", _evidence_kind(context.evidence), "compaction records"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "inference", "Inference", (
+                    metric("calls", "Calls", inference.call_count, "calls", _evidence_kind(inference.evidence), "response usage"),
+                    metric("reasoning_tokens", "Reasoning tokens", inference.reasoning_tokens, "tokens", _evidence_kind(inference.evidence), "response usage"),
+                    metric("inference_time", "Inference time", inference.inference_time_ms, "ms", _evidence_kind(inference.evidence), "response intervals"),
+                    metric("decode_rate", "Decode rate", inference.decode_tokens_per_second, "tokens/s", _evidence_kind(inference.evidence), "response intervals"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "runtime", "Runtime", (
+                    metric("agent_time", "Agent time", run.agent_time_ms, "ms", "derived", "runtime intervals"),
+                    metric("active_time", "Active time", run.active_time_ms, "ms", "derived", "runtime intervals"),
+                    metric("tool_time", "Tool time", run.tool_time_ms, "ms", "measured", "tool intervals"),
+                    metric("critical_path", "Critical path", run.critical_path_ms, "ms", "derived", "runtime intervals"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "waits", "Waits", (
+                    metric("all_agents_waiting", "All agents waiting", run.all_agents_waiting_ms, "ms", "derived", "runtime intervals"),
+                    metric("waiting_states", "Waiting states", sum(1 for item in run.runtime_states if "wait" in item.state), "states", "derived", "runtime state summaries"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "work_items", "Work items", (
+                    metric("work_units", "Work units", len(run.work_units), "work units", "derived", "turn attribution"),
+                    metric("claim_segments", "Claim segments", len(run.work_item_segments), "segments", "measured", "claim records"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "claims", "Claims", (
+                    metric("claim_events", "Claim events", claim_count, "events", "measured", "claim records"),
+                ),
+            ),
+            service_types.MetricGroup(
+                "provenance", "Provenance", (
+                    metric("sources", "Sources", len(run.source_manifest), "sources", "measured", "source manifest"),
+                    metric("diagnostics", "Diagnostics", len(run.diagnostics), "diagnostics", "measured", "bounded diagnostics"),
+                    metric("parser_version", "Parser version", run.parser_version, None, "measured", "snapshot metadata"),
                 ),
             ),
         )
+        recent = tuple(
+            service_types.SignificantActivity(
+                str(item.event_id),
+                item.record.timestamp_utc,
+                item.record.summary_text or item.record.kind,
+                item.record.evidence_method.value,
+            )
+            for item in sorted(
+                self._stored_events(
+                    handle, service_types.EventFilters(), descending=True
+                ),
+                key=lambda value: (value.record.timestamp_utc, str(value.event_id)),
+                reverse=True,
+            )[:20]
+        )
+        range_start = _aware(run.wall_started_at)
+        range_end = _aware(run.wall_ended_at)
+        if range_start is None or range_end is None or range_start >= range_end:
+            observed = snapshot.observation_time.astimezone(timezone.utc)
+            range_start = observed - timedelta(microseconds=1)
+            range_end = observed
         return service_types.SummaryResult(
             snapshot.snapshot_id,
             snapshot.revision_id,
             root.task_title or run.run_label or "Agent Report",
-            None,
+            root.task_title or None,
             run.state,
             snapshot.scope,
             snapshot.observation_time,
             snapshot.mode,
-            service_types.TimeRange(
-                _aware(run.wall_started_at), _aware(run.wall_ended_at)
-            )
-            if _aware(run.wall_started_at) and _aware(run.wall_ended_at)
-            else None,
+            service_types.TimeRange(range_start, range_end),
             metrics,
-            ("Codex rollout",),
-            (),
+            ("normalized event cache", "Codex rollout aggregates"),
+            recent,
             snapshot.warnings,
         )
 
@@ -914,30 +1127,110 @@ class _RuntimeQueries:
         return float(value) if measure == "cost_usd" and value is not None else value
 
     def query_sequence(self, handle, request, after, cancellation):  # type: ignore[no-untyped-def]
-        events = self._stored_events(handle, request.filters.event_filters)
-        rows = [
-            service_types.SequenceRow(
-                str(item.event_id).replace("evt_", "seq_"),
-                None,
-                item.record.timestamp_utc,
-                item.record.agent_id,
-                item.record.agent_id,
-                None,
-                None,
-                item.record.kind,
-                item.record.summary_text or item.record.kind,
-                item.record.evidence_method.value,
-                str(item.event_id),
-                1,
-                request.filters.include_reasoning
-                and item.record.kind in {"reasoning", "assistant"},
-            )
-            for item in events
-            if request.filters.focus_agent_id is None
-            or item.record.agent_id == request.filters.focus_agent_id
-        ]
+        run = handle.run
+        threads = {thread.thread_id: thread for thread in run.threads}
+        labels = {
+            thread.thread_id: thread.agent_nickname
+            or thread.task_title
+            or thread.thread_id
+            for thread in run.threads
+        }
+        raw_rows: list[service_types.SequenceRow] = []
+
+        def add_row(
+            occurred_at: object,
+            kind: str,
+            source: str | None,
+            target: str | None,
+            summary: str,
+            evidence: service_types.EvidenceKind,
+            ordinal: object,
+            event_id: str | None = None,
+            reasoning_available: bool = False,
+        ) -> None:
+            occurred = _aware(occurred_at)
+            if occurred is None:
+                return
+            seed = f"{occurred.isoformat()}:{kind}:{source}:{target}:{ordinal}"
+            raw_rows.append(service_types.SequenceRow(
+                "seq_" + hashlib.sha256(seed.encode()).hexdigest()[:24], None,
+                occurred, source, labels.get(source or ""), target,
+                labels.get(target or ""), kind, _bounded_text(summary), evidence,
+                event_id, 1, reasoning_available,
+            ))
+
+        for thread in run.threads:
+            parent = thread.parent_thread_id or None
+            if parent in threads:
+                add_row(thread.started_at, "spawn", parent, thread.thread_id,
+                        f"Spawned {labels[thread.thread_id]}", "derived", 0)
+            for tool in thread.tool_intervals:
+                kind = {"send_message": "message", "followup_task": "followup", "interrupt_agent": "interrupt"}.get(tool.tool_name)
+                if kind is None:
+                    continue
+                arguments = _safe_argument_object(tool.argument_summary, tool.argument_content)
+                target = _resolve_agent_id(arguments.get("target"), thread, threads)
+                if target is None or target == thread.thread_id:
+                    continue
+                message = arguments.get("message")
+                summary = kind.replace("_", " ").title()
+                if isinstance(message, str) and message.strip():
+                    summary = f"{summary}: {message}"
+                add_row(tool.started_at, kind, thread.thread_id, target, summary,
+                        "measured", tool.source_start_ordinal)
+            if parent in threads:
+                for turn in thread.turns:
+                    if turn.outcome != "active" and turn.completed_at:
+                        kind = turn.outcome if turn.outcome in {"aborted", "failed"} else "complete"
+                        add_row(turn.completed_at, kind, thread.thread_id, parent,
+                                f"Turn {turn.outcome}", "measured", turn.source_ordinal)
+
+        if request.filters.include_reasoning:
+            for item in self._stored_events(handle, request.filters.event_filters):
+                if item.record.kind not in {"reasoning", "assistant"}:
+                    continue
+                add_row(item.record.timestamp_utc, item.record.kind,
+                        item.record.agent_id, item.record.agent_id,
+                        item.record.summary_text or item.record.kind,
+                        item.record.evidence_method.value, item.record.source_ordinal,
+                        str(item.event_id), True)
+
+        event_filters = request.filters.event_filters
+        rows = [row for row in raw_rows if (
+            (request.filters.focus_agent_id is None or request.filters.focus_agent_id in {row.from_agent_id, row.to_agent_id})
+            and (not event_filters.agent_ids or any(agent in event_filters.agent_ids for agent in (row.from_agent_id, row.to_agent_id) if agent))
+            and (not event_filters.kinds or row.kind in event_filters.kinds)
+            and (event_filters.from_time is None or row.occurred_at >= event_filters.from_time)
+            and (event_filters.to_time is None or row.occurred_at < event_filters.to_time)
+        )]
         rows.sort(key=lambda row: row.sequence_id)
-        rows.sort(key=lambda row: row.occurred_at)
+        rows.sort(key=lambda row: row.occurred_at, reverse=request.sort.direction == "descending")
+        if request.filters.grouping == "repeated_messages":
+            collapsed: list[service_types.SequenceRow] = []
+            for row in rows:
+                if collapsed and (
+                    row.kind in {"message", "followup"}
+                    and (
+                        collapsed[-1].from_agent_id,
+                        collapsed[-1].to_agent_id,
+                        collapsed[-1].kind,
+                        collapsed[-1].summary,
+                    )
+                    == (row.from_agent_id, row.to_agent_id, row.kind, row.summary)
+                ):
+                    previous = collapsed[-1]
+                    collapsed[-1] = service_types.SequenceRow(
+                        previous.sequence_id, previous.group_id, previous.occurred_at,
+                        previous.from_agent_id, previous.from_agent_label,
+                        previous.to_agent_id, previous.to_agent_label, previous.kind,
+                        previous.summary, previous.evidence, previous.event_id,
+                        previous.repeat_count + row.repeat_count,
+                        previous.reasoning_available or row.reasoning_available,
+                    )
+                else:
+                    collapsed.append(row)
+            rows = collapsed
+        groups = self._sequence_groups(rows, request.filters.grouping, threads)
         sliced = _slice(cast(list[object], rows), after, request.page_size)
         page = service_types.PageResult(
             request.snapshot_id,
@@ -949,10 +1242,73 @@ class _RuntimeQueries:
             request.page_size,
             sliced.next_position,
         )
-        return service_types.SequenceResult(page, ())
+        return service_types.SequenceResult(page, groups)
 
     def query_coordination(self, handle, request, after, cancellation):  # type: ignore[no-untyped-def]
-        return service_types.QuerySlice((), None)
+        run = handle.run
+        rows: list[service_types.CoordinationRow] = []
+        threads = {thread.thread_id: thread for thread in run.threads}
+        for thread in run.threads:
+            parent = thread.parent_thread_id or None
+            if parent in threads:
+                rows.append(_coordination_row(
+                    thread.started_at, "delegate", None,
+                    _delegated_root_id(parent, threads), parent, (thread.thread_id,),
+                    f"Delegated {thread.task_title or thread.thread_id}", "derived", 0,
+                ))
+            for event in getattr(thread, "work_item_claim_events", ()):
+                rows.append(_coordination_row(
+                    event.event_timestamp, event.operation, event.work_item_id,
+                    event.root_task_id or None, event.thread_id or thread.thread_id,
+                    tuple(value for value in (event.agent,) if value and value != event.thread_id),
+                    event.activity or event.disposition or event.outcome or event.operation,
+                    "measured", event.source_ordinal,
+                ))
+            for activity in thread.activities:
+                if activity.activity_type != "decision" or not activity.summary:
+                    continue
+                rows.append(_coordination_row(
+                    activity.event_timestamp, "decision", None,
+                    _delegated_root_id(thread.thread_id, threads), thread.thread_id,
+                    (), activity.summary, "inferred", activity.source_ordinal,
+                ))
+        filters = request.filters
+        rows = [row for row in rows if (
+            (filters.work_item_id is None or row.work_item_id == filters.work_item_id)
+            and (filters.delegated_root_id is None or row.delegated_root_id == filters.delegated_root_id)
+            and (filters.agent_id is None or filters.agent_id == row.agent_id or filters.agent_id in row.related_agent_ids)
+            and (filters.operation is None or row.operation == filters.operation)
+            and (filters.evidence is None or row.evidence == filters.evidence)
+        )]
+        rows.sort(key=lambda row: row.coordination_id)
+        rows.sort(key=lambda row: row.occurred_at, reverse=request.sort.direction == "descending")
+        return cast(service_types.QuerySlice[service_types.CoordinationRow], _slice(cast(list[object], rows), after, request.page_size))
+
+    @staticmethod
+    def _sequence_groups(rows, grouping, threads):  # type: ignore[no-untyped-def]
+        if grouping == "none":
+            return ()
+        group_labels: dict[str, str] = {}
+        updated: list[service_types.SequenceRow] = []
+        for row in rows:
+            if grouping == "agent":
+                key = row.from_agent_id or row.to_agent_id or "unassigned"
+            elif grouping == "delegation":
+                key = _delegated_root_id(row.to_agent_id or row.from_agent_id, threads) or "unassigned"
+            else:
+                key = f"{row.from_agent_id}:{row.to_agent_id}:{row.kind}:{row.summary}"
+            group_id = "grp_" + hashlib.sha256(key.encode()).hexdigest()[:24]
+            label = getattr(threads.get(key), "task_title", None) or key
+            group_labels[group_id] = _bounded_text(label)
+            updated.append(service_types.SequenceRow(
+                row.sequence_id, group_id, row.occurred_at, row.from_agent_id,
+                row.from_agent_label, row.to_agent_id, row.to_agent_label, row.kind,
+                row.summary, row.evidence, row.event_id, row.repeat_count,
+                row.reasoning_available,
+            ))
+        rows[:] = updated
+        return tuple(service_types.SequenceGroup(group_id, None, 0, label, True)
+                     for group_id, label in sorted(group_labels.items()))
 
     def get_event_details(self, handle, event_id, cancellation):  # type: ignore[no-untyped-def]
         try:

@@ -8,6 +8,7 @@ from __future__ import annotations
 import os
 import stat
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 from types import SimpleNamespace
 from zoneinfo import ZoneInfo
@@ -908,3 +909,236 @@ def test_runtime_discovery_returns_typed_not_found_failure(tmp_path: Path) -> No
     assert captured.value.kind == "not_found"
     assert captured.value.safe_message == "The selected report task was not found."
     assert captured.value.recoverable is True
+
+
+def _runtime_query_run() -> SimpleNamespace:
+    usage = SimpleNamespace(
+        input_tokens=120,
+        cached_input_tokens=40,
+        uncached_input_tokens=80,
+        output_tokens=30,
+        reasoning_tokens=10,
+        processed_tokens=150,
+    )
+    root = SimpleNamespace(
+        thread_id="agent-root",
+        parent_thread_id="",
+        agent_nickname="Root",
+        agent_role="orchestrator",
+        agent_path="/root",
+        task_title="Deliver the report",
+        model="gpt-5",
+        started_at="2026-08-12T12:00:00Z",
+        last_observed_at="2026-08-12T12:10:00Z",
+        terminal_state="active",
+        turns=[],
+        activities=[],
+        tool_intervals=[
+            SimpleNamespace(
+                tool_name="send_message",
+                started_at="2026-08-12T12:02:00Z",
+                argument_summary='{"target":"agent-child","message":"Review ready"}',
+                argument_content="",
+                source_start_ordinal=2,
+            )
+        ],
+        mcp_calls=[],
+        model_name="gpt-5",
+        token_totals=usage,
+        recorded_cost_usd=Decimal("1.25"),
+        context_snapshots=[],
+        compactions=[],
+        work_item_claim_events=[
+            SimpleNamespace(
+                operation="claim",
+                event_timestamp="2026-08-12T12:03:00Z",
+                work_item_id="work-1",
+                claim_id="claim-1",
+                activity="Implement query semantics",
+                disposition="active",
+                blocker_reference="",
+                agent="agent-root",
+                root_task_id="root-task-1",
+                outcome="accepted",
+                thread_id="agent-root",
+                source_ordinal=3,
+                transport="mcp",
+            )
+        ],
+    )
+    child = SimpleNamespace(
+        thread_id="agent-child",
+        parent_thread_id="agent-root",
+        agent_nickname="Reviewer",
+        agent_role="reviewer",
+        agent_path="/root/reviewer",
+        task_title="Review report",
+        model="gpt-5-mini",
+        started_at="2026-08-12T12:01:00Z",
+        last_observed_at="2026-08-12T12:08:00Z",
+        terminal_state="complete",
+        turns=[SimpleNamespace(outcome="complete", completed_at="2026-08-12T12:08:00Z", source_ordinal=8)],
+        activities=[],
+        tool_intervals=[],
+        mcp_calls=[],
+        token_totals=usage,
+        recorded_cost_usd=Decimal("0.25"),
+        context_snapshots=[],
+        compactions=[],
+        work_item_claim_events=[],
+    )
+    return SimpleNamespace(
+        root_thread_id="agent-root",
+        run_label="Agent Report",
+        state="live",
+        observed_at="2026-08-12T12:10:00Z",
+        wall_started_at="2026-08-12T12:00:00Z",
+        wall_ended_at="2026-08-12T12:10:00Z",
+        wall_time_ms=600_000,
+        agent_time_ms=900_000,
+        active_time_ms=500_000,
+        tool_time_ms=20_000,
+        critical_path_ms=550_000,
+        peak_concurrency=2,
+        usage_totals=usage,
+        threads=[root, child],
+        work_units=[SimpleNamespace(work_unit_id="work-1")],
+        work_item_segments=[SimpleNamespace(work_item_id="work-1")],
+        phase_lanes=[],
+        cost=SimpleNamespace(total_cost=Decimal("1.50"), status="recorded"),
+        diagnostics=[],
+        parser_version="parser-v1",
+        source_manifest=[SimpleNamespace(path="private", size_bytes=1)],
+        context_summary=SimpleNamespace(
+            current_total_tokens=90,
+            capacity=200,
+            remaining_tokens=110,
+            occupancy_percent=45.0,
+            compaction_count=1,
+            evidence="measured",
+        ),
+        inference_summary=SimpleNamespace(
+            call_count=2,
+            output_tokens=30,
+            reasoning_tokens=10,
+            inference_time_ms=4_000,
+            decode_tokens_per_second=7.5,
+            evidence="measured",
+        ),
+        runtime_states=[SimpleNamespace(state="working", agent_time_ms=500_000, run_time_ms=400_000)],
+        all_agents_waiting_ms=50_000,
+    )
+
+
+class _RuntimeQueryRepository:
+    def query_events(self, _query):  # type: ignore[no-untyped-def]
+        return SimpleNamespace(items=())
+
+
+def _runtime_query_handle() -> SimpleNamespace:
+    return SimpleNamespace(
+        run=_runtime_query_run(),
+        cache_snapshot_id="cache-snapshot",
+        public_snapshot_id="snap_1234567890abcdef12345678",
+        revision_id="revision-1",
+    )
+
+
+def test_runtime_summary_exposes_every_fr03_metric_group_from_normalized_run() -> None:
+    queries = report_module._RuntimeQueries(_RuntimeQueryRepository())  # type: ignore[arg-type]
+    snapshot = SimpleNamespace(
+        snapshot_id="snap_1234567890abcdef12345678",
+        revision_id="revision-1",
+        scope=service_types.ReportScope("agent-root", True, False),
+        observation_time=datetime(2026, 8, 12, 12, 10, tzinfo=timezone.utc),
+        mode="live",
+        warnings=(),
+    )
+
+    result = queries.get_summary(_runtime_query_handle(), snapshot, None)
+
+    assert tuple(group.group_id for group in result.metric_groups) == (
+        "overview", "model", "context", "inference", "runtime", "waits",
+        "work_items", "claims", "provenance",
+    )
+    assert next(group for group in result.metric_groups if group.group_id == "claims").metrics[0].value == 1
+    assert all("private" not in metric.formatted_value for group in result.metric_groups for metric in group.metrics)
+
+
+def test_runtime_summary_uses_observation_bound_for_empty_run_without_wall_times() -> None:
+    queries = report_module._RuntimeQueries(_RuntimeQueryRepository())  # type: ignore[arg-type]
+    handle = _runtime_query_handle()
+    handle.run.wall_started_at = ""
+    handle.run.wall_ended_at = ""
+    handle.run.threads[0].started_at = ""
+    handle.run.threads[0].last_observed_at = ""
+    handle.run.threads[1].started_at = ""
+    handle.run.threads[1].last_observed_at = ""
+    snapshot = SimpleNamespace(
+        snapshot_id="snap_1234567890abcdef12345678",
+        revision_id="revision-1",
+        scope=service_types.ReportScope("agent-root", True, False),
+        observation_time=datetime(2026, 8, 12, 12, 10, tzinfo=timezone.utc),
+        mode="live",
+        warnings=(),
+    )
+
+    result = queries.get_summary(handle, snapshot, None)
+
+    assert result.time_range == service_types.TimeRange(
+        datetime(2026, 8, 12, 12, 9, 59, 999999, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 12, 10, tzinfo=timezone.utc),
+    )
+
+
+def test_runtime_sequence_uses_normalized_relationship_and_message_evidence() -> None:
+    queries = report_module._RuntimeQueries(_RuntimeQueryRepository())  # type: ignore[arg-type]
+    request = service_types.SequenceQueryRequest(
+        "snap_1234567890abcdef12345678",
+        filters=service_types.SequenceFilters(grouping="delegation"),
+    )
+
+    result = queries.query_sequence(_runtime_query_handle(), request, None, None)
+
+    assert [(row.kind, row.from_agent_id, row.to_agent_id) for row in result.page.items] == [
+        ("spawn", "agent-root", "agent-child"),
+        ("message", "agent-root", "agent-child"),
+        ("complete", "agent-child", "agent-root"),
+    ]
+    assert result.groups
+    assert all(row.group_id == result.groups[0].group_id for row in result.page.items)
+
+
+def test_runtime_sequence_collapses_repeated_messages_with_exact_repeat_count() -> None:
+    queries = report_module._RuntimeQueries(_RuntimeQueryRepository())  # type: ignore[arg-type]
+    handle = _runtime_query_handle()
+    duplicate = SimpleNamespace(**vars(handle.run.threads[0].tool_intervals[0]))
+    duplicate.started_at = "2026-08-12T12:02:30Z"
+    duplicate.source_start_ordinal = 4
+    handle.run.threads[0].tool_intervals.append(duplicate)
+    request = service_types.SequenceQueryRequest(
+        "snap_1234567890abcdef12345678",
+        filters=service_types.SequenceFilters(grouping="repeated_messages"),
+    )
+
+    result = queries.query_sequence(handle, request, None, None)
+
+    messages = [row for row in result.page.items if row.kind == "message"]
+    assert len(messages) == 1
+    assert messages[0].repeat_count == 2
+
+
+def test_runtime_coordination_returns_filtered_claim_and_delegation_evidence() -> None:
+    queries = report_module._RuntimeQueries(_RuntimeQueryRepository())  # type: ignore[arg-type]
+    request = service_types.CoordinationQueryRequest(
+        "snap_1234567890abcdef12345678",
+        filters=service_types.CoordinationFilters(work_item_id="work-1", evidence="measured"),
+    )
+
+    result = queries.query_coordination(_runtime_query_handle(), request, None, None)
+
+    assert len(result.items) == 1
+    assert result.items[0].operation == "claim"
+    assert result.items[0].work_item_id == "work-1"
+    assert result.items[0].delegated_root_id == "root-task-1"
+    assert result.items[0].evidence == "measured"
