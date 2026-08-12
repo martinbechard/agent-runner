@@ -22,6 +22,7 @@ import {
   normalizeWorkerCount,
   parseAgentPageDto,
   parseCoordinationPageDto,
+  parseCloseSnapshotResultDto,
   parseDesktopDefaults,
   parseDiscoveryProgress,
   parseEventDetailDto,
@@ -33,6 +34,7 @@ import {
   parseReportErrorDto,
   parseReportGenerationProgress,
   parseReportSummaryDto,
+  parseRefreshSnapshotResultDto,
   parseRootReferences,
   parseSearchResponse,
   parseSequencePageDto,
@@ -42,15 +44,33 @@ import {
 } from "./contracts";
 
 const agentFilters: AgentFiltersDto = { query: "", state: null };
-const agentSort: AgentSortDto = { key: "lastActivityAt", direction: "descending", tieBreakKey: "agentId", tieBreakDirection: "ascending" };
+const agentSort: AgentSortDto = { key: "last_activity_at", direction: "descending", tieBreakKey: "agent_id", tieBreakDirection: "ascending" };
 const turnFilters: TurnFiltersDto = { agentId: null, state: null };
-const turnSort: TurnSortDto = { key: "startedAt", direction: "ascending", tieBreakKey: "turnId", tieBreakDirection: "ascending" };
+const turnSort: TurnSortDto = { key: "started_at", direction: "ascending", tieBreakKey: "turn_id", tieBreakDirection: "ascending" };
 const eventFilters: EventFiltersDto = { agentId: null, turnId: null, kind: null, fromTime: null, toTime: null };
-const eventSort: EventSortDto = { key: "occurredAt", direction: "ascending", tieBreakKey: "eventId", tieBreakDirection: "ascending" };
+const eventSort: EventSortDto = { key: "occurred_at", direction: "ascending", tieBreakKey: "event_id", tieBreakDirection: "ascending" };
 const sequenceFilters: SequenceFiltersDto = { focusAgentId: null, eventKinds: [], grouping: "none", includeReasoning: false };
-const sequenceSort: SequenceSortDto = { key: "occurredAt", direction: "ascending", tieBreakKey: "sequenceId", tieBreakDirection: "ascending" };
+const sequenceSort: SequenceSortDto = { key: "occurred_at", direction: "ascending", tieBreakKey: "sequence_id", tieBreakDirection: "ascending" };
 const coordinationFilters: CoordinationFiltersDto = { workItemId: null, delegatedRootId: null, agentId: null, operation: null, evidence: null };
-const coordinationSort: CoordinationSortDto = { key: "occurredAt", direction: "ascending", tieBreakKey: "coordinationId", tieBreakDirection: "ascending" };
+const coordinationSort: CoordinationSortDto = { key: "occurred_at", direction: "ascending", tieBreakKey: "coordination_id", tieBreakDirection: "ascending" };
+
+const warnings = [{ code: "PARTIAL_SOURCE", message: "One source was unavailable." }];
+
+const snapshot = {
+  protocolVersion: 1,
+  snapshotId: "snapshot-1",
+  revision: "revision-1",
+  rootThreadId: "thread-1",
+  includeChildren: true,
+  includeCollaborators: false,
+  sourceRevision: "source-revision-1",
+  parserVersion: "1",
+  pricingDigest: "a".repeat(64),
+  formatterDigest: "b".repeat(64),
+  observationTime: "2026-08-12T12:00:00Z",
+  mode: "live",
+  warnings,
+} as const;
 
 function page(operation: string, filters: unknown, sort: unknown, items: readonly unknown[]) {
   return { snapshotId: "snapshot-1", revision: "revision-1", operation, items, appliedFilters: filters, appliedSort: sort, pageSize: 100, nextCursor: null };
@@ -85,17 +105,40 @@ describe("catalog boundary contracts", () => {
 });
 
 describe("snapshot and summary contracts", () => {
+  it.each([
+    "REPORT_CANCELLED",
+    "REPORT_CURSOR_CONFLICT",
+    "REPORT_DISCOVERY_FAILED",
+    "REPORT_EVENT_NOT_FOUND",
+    "REPORT_EXPORT_FAILED",
+    "REPORT_GENERATION_FAILED",
+    "REPORT_INTERNAL_ERROR",
+    "REPORT_INVALID_REQUEST",
+    "REPORT_NOT_FOUND",
+    "REPORT_PRIVACY_FAILED",
+    "REPORT_SCOPE_CONFLICT",
+    "REPORT_SNAPSHOT_CONFLICT",
+    "REPORT_SNAPSHOT_NOT_FOUND",
+    "REPORT_WRITE_FAILED",
+    "REPORT_PROTOCOL_ERROR",
+    "REPORT_UNAVAILABLE",
+  ] as const)("accepts the shared report error code %s", (code) => {
+    expect(parseReportErrorDto({ code, message: "Safe error.", operationId: null, recoverable: false, currentSourceRevision: null, preflightRequired: false, restartFromFirstPage: false }).code).toBe(code);
+  });
+
   it("accepts complete errors, preflight, snapshot, and summary records", () => {
-    expect(parseReportErrorDto({ code: "REPORT_CURSOR_CONFLICT", message: "Restart from the first page.", operationId: "operation-1", recoverable: true, currentRevision: "revision-2", preflightRequired: false, restartFromFirstPage: true }).code).toBe("REPORT_CURSOR_CONFLICT");
-    expect(parsePreflightReportDto({ preflightToken: "preflight-1", rootThreadId: "thread-1", includeChildren: true, includeCollaborators: false, sourceRevision: "source-revision-1", logCount: 2, totalBytes: 2048, childCount: 1, collaboratorCount: 0, cachedFileCount: 1, changedFileCount: 1, knownEventCount: 12, warnings: [] }).knownEventCount).toBe(12);
-    expect(parseSnapshotMetadataDto({ protocolVersion: 1, snapshotId: "snapshot-1", revision: "revision-1", rootThreadId: "thread-1", includeChildren: true, includeCollaborators: false, sourceRevisionDigest: "digest-1", parserVersion: "1", pricingVersion: "1", formatterVersion: "1", observedAt: "2026-08-12T12:00:00Z", live: true, warnings: [] }).live).toBe(true);
-    expect(parseReportSummaryDto({ snapshotId: "snapshot-1", revision: "revision-1", title: "Run", goal: null, state: "complete", scopeLabel: "Root and children", observedAt: "2026-08-12T12:00:00Z", live: true, timeRange: { fromTime: "2026-08-12T11:00:00Z", toTime: "2026-08-12T13:00:00Z" }, metricGroups: [{ id: "overview", label: "Overview", metrics: [{ id: "events", label: "Events", value: "12", evidence: "measured", description: null }] }], recentActivity: [{ eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", label: "Completed", evidence: "measured" }], warnings: [] }).metricGroups[0]?.id).toBe("overview");
+    expect(parseReportErrorDto({ code: "REPORT_CURSOR_CONFLICT", message: "Restart from the first page.", operationId: "operation-1", recoverable: true, currentSourceRevision: "source-revision-2", preflightRequired: false, restartFromFirstPage: true }).currentSourceRevision).toBe("source-revision-2");
+    expect(parseReportErrorDto({ code: "REPORT_PRIVACY_FAILED", message: "Privacy validation failed.", operationId: null, recoverable: false, currentSourceRevision: null, preflightRequired: false, restartFromFirstPage: false }).code).toBe("REPORT_PRIVACY_FAILED");
+    expect(parsePreflightReportDto({ preflightToken: "preflight-1", rootThreadId: "thread-1", includeChildren: true, includeCollaborators: false, sourceRevision: "source-revision-1", logCount: 2, totalBytes: 2048, childCount: 1, collaboratorCount: 0, cachedFileCount: 1, changedFileCount: 1, knownEventCount: 12, warnings }).warnings).toEqual(warnings);
+    expect(parseSnapshotMetadataDto(snapshot)).toMatchObject({ sourceRevision: "source-revision-1", pricingDigest: "a".repeat(64), formatterDigest: "b".repeat(64), observationTime: "2026-08-12T12:00:00Z", mode: "live" });
+    expect(parseReportSummaryDto({ snapshotId: "snapshot-1", revision: "revision-1", title: "Run", goal: null, state: "complete", scopeLabel: "Root and children", observedAt: "2026-08-12T12:00:00Z", live: true, timeRange: { fromTime: "2026-08-12T11:00:00Z", toTime: "2026-08-12T13:00:00Z" }, metricGroups: [{ groupId: "work_items", label: "Work items", metrics: [{ metricId: "events", label: "Events", displayValue: "12", evidence: "measured", description: null }] }], recentActivity: [{ eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", label: "Completed", evidence: "measured" }], warnings }).metricGroups[0]?.groupId).toBe("work_items");
   });
 
   it("rejects invalid variants, instants, counts, and unbounded warnings", () => {
-    expect(() => parseReportErrorDto({ code: "UNKNOWN", message: "x", operationId: null, recoverable: false, currentRevision: null, preflightRequired: false, restartFromFirstPage: false })).toThrow("unknown variant");
+    expect(() => parseReportErrorDto({ code: "UNKNOWN", message: "x", operationId: null, recoverable: false, currentSourceRevision: null, preflightRequired: false, restartFromFirstPage: false })).toThrow("unknown variant");
     expect(() => parsePreflightReportDto({ preflightToken: "p", rootThreadId: "t", includeChildren: false, includeCollaborators: false, sourceRevision: "r", logCount: -1, totalBytes: 0, childCount: 0, collaboratorCount: 0, cachedFileCount: 0, changedFileCount: 0, knownEventCount: null, warnings: [] })).toThrow("non-negative integer");
-    expect(() => parseSnapshotMetadataDto({ protocolVersion: 1, snapshotId: "s", revision: "r", rootThreadId: "t", includeChildren: false, includeCollaborators: false, sourceRevisionDigest: "d", parserVersion: "1", pricingVersion: "1", formatterVersion: "1", observedAt: "invalid", live: false, warnings: [] })).toThrow("ISO instant");
+    expect(() => parseSnapshotMetadataDto({ ...snapshot, observationTime: "invalid" })).toThrow("ISO instant");
+    expect(() => parsePreflightReportDto({ preflightToken: "p", rootThreadId: "t", includeChildren: false, includeCollaborators: false, sourceRevision: "r", logCount: 0, totalBytes: 0, childCount: 0, collaboratorCount: 0, cachedFileCount: 0, changedFileCount: 0, knownEventCount: null, warnings: ["not structured"] })).toThrow();
   });
 });
 
@@ -107,7 +150,7 @@ describe("paged workspace contracts", () => {
 
   it("accepts chronological event, sequence, and coordination pages", () => {
     expect(parseEventPageDto(page("list_events", eventFilters, eventSort, [{ eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", agentId: "agent-1", turnId: "turn-1", kind: "tool", label: "Ran tests", evidence: "measured", sourceRef: "source-1", hasDetail: true }]), { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_events", filters: eventFilters, sort: eventSort }).items[0]?.sourceRef).toBe("source-1");
-    expect(parseSequencePageDto({ ...page("query_sequence", sequenceFilters, sequenceSort, [{ sequenceId: "sequence-1", groupId: "group-1", occurredAt: "2026-08-12T12:00:00Z", fromAgentId: "agent-1", fromAgentLabel: "Coder", toAgentId: "agent-2", toAgentLabel: "Reviewer", kind: "message", label: "Review", evidence: "measured", eventId: "event-1", repeatCount: 1, reasoningAvailable: false }]), groups: [{ groupId: "group-1", parentGroupId: null, depth: 0, label: "Root", collapsible: true }] }, { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_sequence", filters: sequenceFilters, sort: sequenceSort }).groups).toHaveLength(1);
+    expect(parseSequencePageDto({ page: page("query_sequence", sequenceFilters, sequenceSort, [{ sequenceId: "sequence-1", groupId: "group-1", occurredAt: "2026-08-12T12:00:00Z", fromAgentId: "agent-1", fromAgentLabel: "Coder", toAgentId: "agent-2", toAgentLabel: "Reviewer", kind: "message", label: "Review", evidence: "measured", eventId: "event-1", repeatCount: 1, reasoningAvailable: false }]), groups: [{ groupId: "group-1", parentGroupId: null, depth: 0, label: "Root", collapsible: true }] }, { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_sequence", filters: sequenceFilters, sort: sequenceSort }).groups).toHaveLength(1);
     expect(parseCoordinationPageDto(page("query_coordination", coordinationFilters, coordinationSort, [{ coordinationId: "coordination-1", occurredAt: "2026-08-12T12:00:00Z", workItemId: "item-1", delegatedRootId: null, agentId: "agent-1", operation: "claim", label: "Claimed", evidence: "inferred", eventId: "event-1" }]), { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_coordination", filters: coordinationFilters, sort: coordinationSort }).items[0]?.evidence).toBe("inferred");
   });
 
@@ -118,26 +161,31 @@ describe("paged workspace contracts", () => {
       { eventId: "event-2", occurredAt: "2026-08-12T12:01:00Z", agentId: null, turnId: null, kind: "message", label: "Second", evidence: "measured", sourceRef: null, hasDetail: false },
       { eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", agentId: null, turnId: null, kind: "message", label: "First", evidence: "measured", sourceRef: null, hasDetail: false },
     ]), { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_events", filters: eventFilters, sort: eventSort })).toThrow("chronological");
-    expect(() => parseSequencePageDto({ ...page("query_sequence", sequenceFilters, sequenceSort, []), groups: [{ groupId: "group-1", parentGroupId: "missing", depth: 1, label: "Child", collapsible: true }] }, { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_sequence", filters: sequenceFilters, sort: sequenceSort })).toThrow("hierarchy");
+    expect(() => parseSequencePageDto({ page: page("query_sequence", sequenceFilters, sequenceSort, []), groups: [{ groupId: "group-1", parentGroupId: "missing", depth: 1, label: "Child", collapsible: true }] }, { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_sequence", filters: sequenceFilters, sort: sequenceSort })).toThrow("hierarchy");
   });
 });
 
 describe("heatmap, detail, export, and progress contracts", () => {
   it("accepts bounded heatmap, detail, export, and matching progress results", () => {
-    const expectedHeatmap = { snapshotId: "snapshot-1", revision: "revision-1", fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z", measure: "activity", groupBy: "agent" as const, requestedResolutionMinutes: 5 as const, maximumRows: 100 };
-    expect(parseHeatmapResultDto({ ...expectedHeatmap, actualResolutionMinutes: 5, omittedRowCount: 0, rowOrder: "activity-descending-id-ascending", totalCellCount: 1, rows: [{ rowId: "agent-1", label: "Coder", scale: { minimum: 0, maximum: 2, colorSemantic: "sequential-nonnegative", basis: "visible-row-maximum" }, cells: [{ startTime: "2026-08-12T12:00:00Z", endTime: "2026-08-12T12:05:00Z", value: 2, count: 1, evidence: "measured", primaryLabel: "2 events", secondaryLabel: null }] }], provenance: ["Recorded events"] }, expectedHeatmap).totalCellCount).toBe(1);
+    const expectedHeatmap = { snapshotId: "snapshot-1", revision: "revision-1", fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z", measure: "wall_time" as const, groupBy: "agent" as const, requestedResolutionMinutes: 5 as const, maximumRows: 100 };
+    expect(parseHeatmapResultDto({ ...expectedHeatmap, actualResolutionMinutes: 5, omittedRowCount: 0, rowOrder: "activity_descending_id_ascending", totalCellCount: 1, rows: [{ rowId: "agent-1", label: "Coder", scale: { minimum: 0, maximum: 2, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" }, cells: [{ startTime: "2026-08-12T12:00:00Z", endTime: "2026-08-12T12:05:00Z", value: 2, count: 1, evidence: "measured", primaryLabel: "2 events", secondaryLabel: null }] }], provenance: ["Recorded events"] }, expectedHeatmap).totalCellCount).toBe(1);
     expect(parseEventDetailDto({ snapshotId: "snapshot-1", revision: "revision-1", eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", kind: "tool", title: "Test run", evidence: "measured", provenance: ["Event log"], summary: null, disclosures: [{ label: "Output", content: "18 tests passed", redacted: false }], sourceRef: "source-1" }).disclosures[0]?.content).toBe("18 tests passed");
-    expect(parseExportSnapshotResultDto({ snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "agent-report", mode: "directory", fileCount: 4, byteCount: 2048, warnings: [], omissions: [] }, { snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" }).exportId).toBe("export-1");
+    expect(parseExportSnapshotResultDto({ operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "agent-report", mode: "directory", manifestSha256: "c".repeat(64), fileCount: 4, totalByteCount: 2048, warnings, omissions: [] }, { operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" })).toMatchObject({ exportId: "export-1", totalByteCount: 2048 });
+    expect(parseRefreshSnapshotResultDto({ changed: false, snapshot }, "snapshot-1")).toEqual({ changed: false, snapshot });
+    expect(parseCloseSnapshotResultDto({ snapshotId: "snapshot-1", closed: true }, "snapshot-1")).toEqual({ snapshotId: "snapshot-1", closed: true });
     expect(parseWorkspaceProgressDto({ protocolVersion: 1, operationId: "operation-1", operation: "export_snapshot", snapshotId: "snapshot-1", phase: "rendering", completed: 2, total: 4, message: "Rendering pages" }, "operation-1", "export_snapshot").completed).toBe(2);
   });
 
   it("rejects heatmap overflow, export paths, progress mismatch, and disclosure overflow", () => {
-    const expected = { snapshotId: "snapshot-1", revision: "revision-1", fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z", measure: "activity", groupBy: "agent" as const, requestedResolutionMinutes: 5 as const, maximumRows: 100 };
+    const expected = { snapshotId: "snapshot-1", revision: "revision-1", fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z", measure: "wall_time" as const, groupBy: "agent" as const, requestedResolutionMinutes: 5 as const, maximumRows: 100 };
     const cells = Array.from({ length: 2_001 }, (_, index) => ({ startTime: `2026-08-12T12:${String(index % 60).padStart(2, "0")}:00Z`, endTime: "2026-08-12T13:00:00Z", value: 1, count: 1, evidence: "measured", primaryLabel: "1", secondaryLabel: null }));
-    expect(() => parseHeatmapResultDto({ ...expected, actualResolutionMinutes: 5, omittedRowCount: 0, rowOrder: "activity-descending-id-ascending", totalCellCount: 2_001, rows: [{ rowId: "agent-1", label: "Coder", scale: { minimum: 0, maximum: 1, colorSemantic: "sequential-nonnegative", basis: "visible-row-maximum" }, cells }], provenance: [] }, expected)).toThrow();
-    expect(() => parseExportSnapshotResultDto({ snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "report", mode: "directory", fileCount: 1, byteCount: 1, warnings: [], omissions: [], outputPath: "hidden" }, { snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" })).toThrow("forbidden");
+    expect(() => parseHeatmapResultDto({ ...expected, actualResolutionMinutes: 5, omittedRowCount: 0, rowOrder: "activity_descending_id_ascending", totalCellCount: 2_001, rows: [{ rowId: "agent-1", label: "Coder", scale: { minimum: 0, maximum: 1, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" }, cells }], provenance: [] }, expected)).toThrow();
+    expect(() => parseExportSnapshotResultDto({ operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "report", mode: "directory", manifestSha256: null, fileCount: 1, totalByteCount: 1, warnings: [], omissions: [], outputPath: "hidden" }, { operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" })).toThrow("forbidden");
     expect(() => parseWorkspaceProgressDto({ protocolVersion: 1, operationId: "wrong", operation: "export_snapshot", snapshotId: null, phase: "x", completed: 0, total: null, message: "x" }, "operation-1", "export_snapshot")).toThrow("identity");
     expect(() => parseEventDetailDto({ snapshotId: "snapshot-1", revision: "revision-1", eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", kind: "tool", title: "Test", evidence: "measured", provenance: [], summary: null, disclosures: [{ label: "Output", content: "x".repeat(16_385), redacted: false }], sourceRef: null })).toThrow("client limit");
+    expect(() => parseExportSnapshotResultDto({ operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "report", mode: "directory", manifestSha256: null, fileCount: 1, byteCount: 1, warnings: [], omissions: [] }, { operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" })).toThrow();
+    expect(() => parseRefreshSnapshotResultDto({ changed: false, snapshot, revision: "unexpected" }, "snapshot-1")).toThrow("unexpected");
+    expect(() => parseCloseSnapshotResultDto({ snapshotId: "snapshot-1", closed: true, revision: "unexpected" }, "snapshot-1")).toThrow("unexpected");
   });
 
   it("accepts bounded legacy worker progress only as adjacent catalog progress", () => {
@@ -154,10 +202,10 @@ describe("recursive privacy enforcement", () => {
     { rawRollout: "redacted" },
     { arbitraryPath: "redacted" },
   ])("rejects forbidden keys without exposing values", (extra) => {
-    expect(() => parseReportErrorDto({ code: "REPORT_PROTOCOL_ERROR", message: "Safe", operationId: null, recoverable: false, currentRevision: null, preflightRequired: false, restartFromFirstPage: false, ...extra })).toThrow(/forbidden/);
+    expect(() => parseReportErrorDto({ code: "REPORT_PROTOCOL_ERROR", message: "Safe", operationId: null, recoverable: false, currentSourceRevision: null, preflightRequired: false, restartFromFirstPage: false, ...extra })).toThrow(/forbidden/);
   });
 
   it.each(["/private/log", "\\\\server\\share", "C:\\private\\log", "file:///private/log"])("rejects path-shaped values: %s", (message) => {
-    expect(() => parseReportErrorDto({ code: "REPORT_PROTOCOL_ERROR", message, operationId: null, recoverable: false, currentRevision: null, preflightRequired: false, restartFromFirstPage: false })).toThrow("path-shaped");
+    expect(() => parseReportErrorDto({ code: "REPORT_PROTOCOL_ERROR", message, operationId: null, recoverable: false, currentSourceRevision: null, preflightRequired: false, restartFromFirstPage: false })).toThrow("path-shaped");
   });
 });

@@ -3,7 +3,7 @@
 // Responsibility: Verify the Dynamic Workspace controller and its pure presentation rules.
 // Design: docs/design/components/CD-005-agent-report-dynamic-workspace.md
 
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import {
   DEFAULT_OVERSCAN_ROWS,
@@ -12,13 +12,18 @@ import {
   MAX_CURSOR_HISTORY,
   MAX_HEATMAP_ROWS,
   MAX_PAGE_SIZE,
-  MAX_TIME_BUCKETS,
+  MAX_HEATMAP_CELLS,
   SURFACE_DEFINITIONS,
   WORKSPACE_COMMANDS,
   computeVirtualWindow,
   formatLocalInstant,
   heatmapResolutionLabel,
+  newOperationId,
 } from "./report-workspace";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 describe("ReportWorkspaceController", () => {
   it("publishes the accepted bounded defaults and native command names", () => {
@@ -26,7 +31,7 @@ describe("ReportWorkspaceController", () => {
       DEFAULT_PAGE_SIZE,
       MAX_PAGE_SIZE,
       MAX_CURSOR_HISTORY,
-      MAX_TIME_BUCKETS,
+      MAX_HEATMAP_CELLS,
       MAX_HEATMAP_ROWS,
       DEFAULT_ROW_HEIGHT_PX,
       DEFAULT_OVERSCAN_ROWS,
@@ -34,7 +39,7 @@ describe("ReportWorkspaceController", () => {
       DEFAULT_PAGE_SIZE: 100,
       MAX_PAGE_SIZE: 500,
       MAX_CURSOR_HISTORY: 100,
-      MAX_TIME_BUCKETS: 2_000,
+      MAX_HEATMAP_CELLS: 2_000,
       MAX_HEATMAP_ROWS: 200,
       DEFAULT_ROW_HEIGHT_PX: 44,
       DEFAULT_OVERSCAN_ROWS: 8,
@@ -58,6 +63,30 @@ describe("ReportWorkspaceController", () => {
       openDiagnosticLog: "open_diagnostic_log",
       reopenExport: "reopen_export",
     });
+  });
+
+  it("creates lowercase cryptographic 96-bit operation identities", () => {
+    const getRandomValues = vi.fn((values: Uint8Array) => {
+      values.set([0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x10, 0x32, 0x54, 0x76]);
+      return values;
+    });
+    vi.stubGlobal("crypto", { getRandomValues });
+
+    expect(newOperationId()).toBe("op_0123456789abcdef10325476");
+    expect(getRandomValues).toHaveBeenCalledOnce();
+    expect(getRandomValues.mock.calls[0]?.[0]).toHaveLength(12);
+  });
+
+  it("does not return the reserved all-zero operation identity", () => {
+    let call = 0;
+    vi.stubGlobal("crypto", {
+      getRandomValues(values: Uint8Array) {
+        if (call++ > 0) values[11] = 1;
+        return values;
+      },
+    });
+
+    expect(newOperationId()).toBe("op_000000000000000000000001");
   });
 
   it("binds every stable surface to an accessible definition", () => {

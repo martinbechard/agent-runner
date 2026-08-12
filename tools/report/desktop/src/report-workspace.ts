@@ -29,6 +29,7 @@ import {
   type TurnSortDto,
   parseAgentPageDto,
   parseCoordinationPageDto,
+  parseCloseSnapshotResultDto,
   parseEventDetailDto,
   parseEventPageDto,
   parseExportSnapshotResultDto,
@@ -36,6 +37,7 @@ import {
   parsePreflightReportDto,
   parseReportErrorDto,
   parseReportSummaryDto,
+  parseRefreshSnapshotResultDto,
   parseSequencePageDto,
   parseSnapshotMetadataDto,
   parseTurnPageDto,
@@ -45,7 +47,7 @@ import {
 export const DEFAULT_PAGE_SIZE = 100;
 export const MAX_PAGE_SIZE = 500;
 export const MAX_CURSOR_HISTORY = 100;
-export const MAX_TIME_BUCKETS = 2_000;
+export const MAX_HEATMAP_CELLS = 2_000;
 export const MAX_HEATMAP_ROWS = 200;
 export const DEFAULT_ROW_HEIGHT_PX = 44;
 export const DEFAULT_OVERSCAN_ROWS = 8;
@@ -272,15 +274,15 @@ const NAVIGATION_SURFACES = (Object.keys(SURFACE_DEFINITIONS) as WorkspaceSurfac
 );
 
 const AGENT_FILTERS: AgentFiltersDto = Object.freeze({ query: "", state: null });
-const AGENT_SORT: AgentSortDto = Object.freeze({ key: "lastActivityAt", direction: "descending", tieBreakKey: "agentId", tieBreakDirection: "ascending" });
+const AGENT_SORT: AgentSortDto = Object.freeze({ key: "last_activity_at", direction: "descending", tieBreakKey: "agent_id", tieBreakDirection: "ascending" });
 const TURN_FILTERS: TurnFiltersDto = Object.freeze({ agentId: null, state: null });
-const TURN_SORT: TurnSortDto = Object.freeze({ key: "startedAt", direction: "ascending", tieBreakKey: "turnId", tieBreakDirection: "ascending" });
+const TURN_SORT: TurnSortDto = Object.freeze({ key: "started_at", direction: "ascending", tieBreakKey: "turn_id", tieBreakDirection: "ascending" });
 const EVENT_FILTERS: EventFiltersDto = Object.freeze({ agentId: null, turnId: null, kind: null, fromTime: null, toTime: null });
-const EVENT_SORT: EventSortDto = Object.freeze({ key: "occurredAt", direction: "ascending", tieBreakKey: "eventId", tieBreakDirection: "ascending" });
+const EVENT_SORT: EventSortDto = Object.freeze({ key: "occurred_at", direction: "ascending", tieBreakKey: "event_id", tieBreakDirection: "ascending" });
 const SEQUENCE_FILTERS: SequenceFiltersDto = Object.freeze({ focusAgentId: null, eventKinds: Object.freeze([]), grouping: "none", includeReasoning: false });
-const SEQUENCE_SORT: SequenceSortDto = Object.freeze({ key: "occurredAt", direction: "ascending", tieBreakKey: "sequenceId", tieBreakDirection: "ascending" });
+const SEQUENCE_SORT: SequenceSortDto = Object.freeze({ key: "occurred_at", direction: "ascending", tieBreakKey: "sequence_id", tieBreakDirection: "ascending" });
 const COORDINATION_FILTERS: CoordinationFiltersDto = Object.freeze({ workItemId: null, delegatedRootId: null, agentId: null, operation: null, evidence: null });
-const COORDINATION_SORT: CoordinationSortDto = Object.freeze({ key: "occurredAt", direction: "ascending", tieBreakKey: "coordinationId", tieBreakDirection: "ascending" });
+const COORDINATION_SORT: CoordinationSortDto = Object.freeze({ key: "occurred_at", direction: "ascending", tieBreakKey: "coordination_id", tieBreakDirection: "ascending" });
 
 const EMPTY_WINDOW: VirtualWindow = Object.freeze({ startIndex: 0, endIndexExclusive: 0, offsetTopPx: 0, totalHeightPx: 0 });
 
@@ -358,6 +360,15 @@ export function heatmapResolutionLabel(requestedMinutes: number, actualMinutes: 
   return actualMinutes === requestedMinutes ? "" : `Showing ${actualMinutes}-minute buckets; requested ${requestedMinutes}-minute buckets.`;
 }
 
+/** Create one unpredictable operation identity without using process or clock state. */
+export function newOperationId(): string {
+  let bytes: Uint8Array;
+  do {
+    bytes = globalThis.crypto.getRandomValues(new Uint8Array(12));
+  } while (bytes.every((value) => value === 0));
+  return `op_${[...bytes].map((value) => value.toString(16).padStart(2, "0")).join("")}`;
+}
+
 function valueFrom<T>(loadState: LoadState<T>): T | null {
   switch (loadState.kind) {
     case "ready": case "empty": case "stale": return loadState.value;
@@ -367,7 +378,7 @@ function valueFrom<T>(loadState: LoadState<T>): T | null {
 }
 
 function protocolError(message: string): ReportErrorDto {
-  return { code: "REPORT_PROTOCOL_ERROR", message, operationId: null, recoverable: true, currentRevision: null, preflightRequired: false, restartFromFirstPage: false };
+  return { code: "REPORT_PROTOCOL_ERROR", message, operationId: null, recoverable: true, currentSourceRevision: null, preflightRequired: false, restartFromFirstPage: false };
 }
 
 function safeError(value: unknown): ReportErrorDto {
@@ -417,6 +428,23 @@ function staleLoadState<T>(loadState: LoadState<T>, reason: string): LoadState<T
   return value === null ? loadState : Object.freeze({ kind: "stale", value, reason });
 }
 
+function clearStaleLoadState<T>(loadState: LoadState<T>, empty: boolean): LoadState<T> {
+  return loadState.kind === "stale" ? loadStateFor(loadState.value, empty) : loadState;
+}
+
+function clearStalePagers(pagers: WorkspaceState["pagers"]): WorkspaceState["pagers"] {
+  let result = pagers;
+  for (const name of ["agents", "turns", "events", "sequence", "coordination"] as const) {
+    const pager = result[name];
+    const page = valueFrom(pager.page);
+    result = replacePager(result, name, {
+      ...pager,
+      page: clearStaleLoadState(pager.page, page?.items.length === 0),
+    });
+  }
+  return result;
+}
+
 function metricGroupsFor(surfaceId: WorkspaceSurfaceId): readonly SummaryMetricGroupId[] {
   switch (surfaceId) {
     case "summary": return ["overview"];
@@ -424,7 +452,7 @@ function metricGroupsFor(surfaceId: WorkspaceSurfaceId): readonly SummaryMetricG
     case "context": return ["context"];
     case "inference": return ["inference"];
     case "runtime-waits": return ["runtime", "waits"];
-    case "work-items-claims": return ["work-items", "claims"];
+    case "work-items-claims": return ["work_items", "claims"];
     case "provenance": return ["provenance"];
     default: return [];
   }
@@ -476,18 +504,18 @@ function renderSummary(summary: ReportSummaryDto, groups: readonly SummaryMetric
   const selectedGroups = groups.length === 0
     ? summary.metricGroups
     : summary.metricGroups.filter(
-        (group: ReportSummaryDto["metricGroups"][number]) => groups.includes(group.id),
+        (group: ReportSummaryDto["metricGroups"][number]) => groups.includes(group.groupId),
       );
   if (selectedGroups.length === 0) article.append(textElement("p", "Metrics are unavailable for this view."));
   for (const group of selectedGroups) {
     const section = document.createElement("section");
     section.append(textElement("h4", group.label));
     const list = document.createElement("dl");
-    for (const metric of group.metrics) list.append(textElement("dt", metric.label), textElement("dd", `${metric.value} (${metric.evidence})`));
+    for (const metric of group.metrics) list.append(textElement("dt", metric.label), textElement("dd", `${metric.displayValue} (${metric.evidence})`));
     section.append(list);
     article.append(section);
   }
-  for (const warning of summary.warnings) article.append(textElement("p", `Warning: ${warning}`));
+  for (const warning of summary.warnings) article.append(textElement("p", `Warning ${warning.code}: ${warning.message}`));
   if (groups.length === 0 || groups.includes("overview")) {
     const list = document.createElement("ol");
     for (const activity of summary.recentActivity) {
@@ -657,12 +685,10 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
   assertElements(elements);
   let state = initialState();
   let disposed = false;
-  let operationSerial = 0;
   let cancelRequestedFor: string | null = null;
   let selectionTrigger: HTMLElement | null = null;
   let detailTrigger: HTMLElement | null = null;
   let frameHandle: number | null = null;
-  const now = options.now ?? Date.now;
   const requestFrame = options.requestAnimationFrame ?? window.requestAnimationFrame.bind(window);
   const cancelFrame = options.cancelAnimationFrame ?? window.cancelAnimationFrame.bind(window);
 
@@ -681,9 +707,8 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
   }
 
   function nextOperation(operation: WorkspaceOperationName): { id: string; sequence: number } {
-    operationSerial += 1;
     const sequence = state.requestSequence + 1;
-    const id = `workspace-${Math.trunc(now())}-${operationSerial}`;
+    const id = newOperationId();
     cancelRequestedFor = null;
     commit({ requestSequence: sequence, activeOperationId: id, activeOperation: operation });
     return { id, sequence };
@@ -798,7 +823,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       if (name === "agents") parsed = parseAgentPageDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, operation: "list_agents", filters: AGENT_FILTERS, sort: AGENT_SORT });
       else if (name === "turns") parsed = parseTurnPageDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, operation: "list_turns", filters: TURN_FILTERS, sort: TURN_SORT });
       else if (name === "events") parsed = parseEventPageDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, operation: "list_events", filters: eventFilters, sort: EVENT_SORT });
-      else if (name === "sequence") parsed = parseSequencePageDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, operation: "query_sequence", filters: SEQUENCE_FILTERS, sort: SEQUENCE_SORT });
+      else if (name === "sequence") parsed = parseSequencePageDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, operation: "query_sequence", filters: SEQUENCE_FILTERS, sort: SEQUENCE_SORT }).page;
       else parsed = parseCoordinationPageDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, operation: "query_coordination", filters: COORDINATION_FILTERS, sort: COORDINATION_SORT });
       if (!isCurrent(operation.sequence, operation.id)) return;
       const virtualWindow = computeVirtualWindow({ itemCount: parsed.items.length, rowHeightPx: DEFAULT_ROW_HEIGHT_PX, scrollTopPx: elements.viewRegion.scrollTop, viewportHeightPx: elements.viewRegion.clientHeight, overscanRows: DEFAULT_OVERSCAN_ROWS });
@@ -813,7 +838,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     const snapshot = state.snapshot;
     const summary = valueFrom(state.summary);
     if (snapshot === null || summary === null) return;
-    const requestBinding = { snapshotId: snapshot.snapshotId, fromTime: summary.timeRange.fromTime, toTime: summary.timeRange.toTime, measure: "activity", groupBy: "agent" as HeatmapGroupBy, requestedResolutionMinutes: 5 as HeatmapRequestedResolutionMinutes, maximumRows: 100 };
+    const requestBinding = { snapshotId: snapshot.snapshotId, fromTime: summary.timeRange.fromTime, toTime: summary.timeRange.toTime, measure: "wall_time" as const, groupBy: "agent" as HeatmapGroupBy, requestedResolutionMinutes: 5 as HeatmapRequestedResolutionMinutes, maximumRows: 100 };
     const previous = valueFrom(state.timeSeries);
     if (previous?.revision === snapshot.revision && previous.fromTime === requestBinding.fromTime && previous.toTime === requestBinding.toTime && previous.measure === requestBinding.measure && previous.groupBy === requestBinding.groupBy && previous.requestedResolutionMinutes === requestBinding.requestedResolutionMinutes && previous.maximumRows === requestBinding.maximumRows) return;
     const operation = nextOperation("query_time_range");
@@ -1002,7 +1027,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
           summaryHost.replaceChildren(
             textElement("p", `${result.logCount} logs; ${result.totalBytes} bytes; ${result.knownEventCount ?? "unknown"} known events.`),
             textElement("p", `${result.childCount} children; ${result.collaboratorCount} collaborators; ${result.changedFileCount} changed files; ${result.cachedFileCount} cached files.`),
-            ...result.warnings.map((warning: string) => textElement("p", `Warning: ${warning}`)),
+            ...result.warnings.map((warning) => textElement("p", `Warning ${warning.code}: ${warning.message}`)),
           );
         }
         const continueButton = elements.preflightDialog.querySelector<HTMLButtonElement>(
@@ -1034,9 +1059,16 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       const operation = nextOperation("open_snapshot");
       commit({ lifecycle: "opening" });
       try {
-        const snapshot = parseSnapshotMetadataDto(await invoke(WORKSPACE_COMMANDS.openSnapshot, { operationId: operation.id, preflightToken: preflight.preflightToken, sourceRevision: preflight.sourceRevision }));
+        const snapshot = parseSnapshotMetadataDto(await invoke(WORKSPACE_COMMANDS.openSnapshot, {
+          operationId: operation.id,
+          rootThreadId: preflight.rootThreadId,
+          includeChildren: preflight.includeChildren,
+          includeCollaborators: preflight.includeCollaborators,
+          preflightToken: preflight.preflightToken,
+          sourceRevision: preflight.sourceRevision,
+        }));
         if (!isCurrent(operation.sequence, operation.id)) return;
-        if (snapshot.rootThreadId !== preflight.rootThreadId) throw new Error("Snapshot root does not match the preflight root.");
+        if (snapshot.rootThreadId !== preflight.rootThreadId || snapshot.includeChildren !== preflight.includeChildren || snapshot.includeCollaborators !== preflight.includeCollaborators || snapshot.sourceRevision !== preflight.sourceRevision) throw new Error("Snapshot scope does not match the accepted preflight.");
         commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, snapshot, preflight: Object.freeze({ kind: "not-requested" }), route: Object.freeze({ kind: "snapshot", snapshotId: snapshot.snapshotId, surface: "summary" }) });
         await loadSummary(true);
       } catch (error) {
@@ -1100,16 +1132,22 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     },
     async refreshSnapshot() {
       const snapshot = state.snapshot;
-      if (disposed || snapshot === null || !snapshot.live || state.activeOperationId !== null) return;
+      if (disposed || snapshot === null || snapshot.mode !== "live" || state.activeOperationId !== null) return;
       const operation = nextOperation("refresh_snapshot");
       commit({ lifecycle: "refreshing" });
       try {
-        const refreshed = parseSnapshotMetadataDto(await invoke(WORKSPACE_COMMANDS.refreshSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId }));
+        const refreshResult = parseRefreshSnapshotResultDto(await invoke(WORKSPACE_COMMANDS.refreshSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId }), snapshot.snapshotId);
         if (!isCurrent(operation.sequence, operation.id)) return;
-        if (refreshed.snapshotId !== snapshot.snapshotId) throw new Error("Refresh returned a different snapshot identity.");
+        const refreshed = refreshResult.snapshot;
         const revisionChanged = refreshed.revision !== snapshot.revision;
+        if (refreshResult.changed !== revisionChanged) throw new Error("Refresh change status does not match its snapshot revision.");
         const activeSurface = state.route.kind === "snapshot" ? state.route.surface : "summary";
-        commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, snapshot: refreshed, ...(revisionChanged ? { summary: Object.freeze({ kind: "not-requested" as const }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" as const }), detail: Object.freeze({ kind: "not-requested" as const }) } : {}) });
+        commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, snapshot: refreshed, ...(revisionChanged ? { summary: Object.freeze({ kind: "not-requested" as const }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" as const }), detail: Object.freeze({ kind: "not-requested" as const }) } : {
+          summary: clearStaleLoadState(state.summary, false),
+          pagers: clearStalePagers(state.pagers),
+          timeSeries: clearStaleLoadState(state.timeSeries, valueFrom(state.timeSeries)?.rows.length === 0),
+          detail: clearStaleLoadState(state.detail, false),
+        }) });
         if (revisionChanged) await loadSurface(activeSurface, false);
       } catch (error) {
         if (!isCurrent(operation.sequence, operation.id)) return;
@@ -1147,7 +1185,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
           commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, exportState: previous === null ? Object.freeze({ kind: "not-requested" }) : loadStateFor(previous, false) });
           return;
         }
-        const result = parseExportSnapshotResultDto(raw, { snapshotId: snapshot.snapshotId, revision: snapshot.revision, mode });
+        const result = parseExportSnapshotResultDto(raw, { operationId: operation.id, snapshotId: snapshot.snapshotId, revision: snapshot.revision, mode });
         commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, exportState: loadStateFor(result, false) });
       } catch (error) { fail(operation.sequence, operation.id, "exportState", error, "ready"); }
     },
@@ -1207,14 +1245,17 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       const snapshot = state.snapshot;
       if (disposed || snapshot === null) return;
       const operation = nextOperation("close_snapshot");
-      try { await invoke(WORKSPACE_COMMANDS.closeSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId }); }
-      catch { elements.statusRegion.textContent = "The snapshot closed locally; native cleanup could not be confirmed."; }
-      finally {
-        if (!disposed) {
-          state = Object.freeze({ ...initialState(), lifecycle: "closed", requestSequence: state.requestSequence + 1 });
-          scheduleRender();
-          if (selectionTrigger?.isConnected) selectionTrigger.focus();
-        }
+      try {
+        const result = parseCloseSnapshotResultDto(await invoke(WORKSPACE_COMMANDS.closeSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId }), snapshot.snapshotId);
+        if (!isCurrent(operation.sequence, operation.id)) return;
+        if (!result.closed) throw new Error("The native snapshot remained open.");
+        state = Object.freeze({ ...initialState(), lifecycle: "closed", requestSequence: state.requestSequence + 1 });
+        scheduleRender();
+        if (selectionTrigger?.isConnected) selectionTrigger.focus();
+      } catch (error) {
+        if (!isCurrent(operation.sequence, operation.id)) return;
+        commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null });
+        elements.statusRegion.textContent = safeError(error).message;
       }
     },
     getState() { return state; },

@@ -236,6 +236,11 @@ function formatTimestamp(timestamp: string): string {
     : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(instant);
 }
 
+function renderWorkspaceObservation(): void {
+  const snapshot = workspace.getState().snapshot;
+  if (snapshot !== null) workspaceObservation.textContent = `${snapshot.mode === "live" ? "Live" : "Sealed"}; observed ${formatTimestamp(snapshot.observationTime)}.`;
+}
+
 function stat(value: string, label: string): HTMLElement {
   const wrapper = document.createElement("span");
   const strong = document.createElement("strong");
@@ -527,8 +532,7 @@ openLastExportButton.addEventListener("click", () => void openLastExport());
 openDiagnosticLogButton.addEventListener("click", () => void openDiagnosticLog());
 reviewScopeButton.addEventListener("click", () => void reviewSelectedScope());
 element<HTMLButtonElement>("report-preflight-continue").addEventListener("click", () => void workspace.openSnapshot().then(() => {
-  const snapshot = workspace.getState().snapshot;
-  if (snapshot !== null) workspaceObservation.textContent = `${snapshot.live ? "Live" : "Sealed"}; observed ${formatTimestamp(snapshot.observedAt)}.`;
+  renderWorkspaceObservation();
 }));
 element<HTMLButtonElement>("report-preflight-change").addEventListener("click", () => workspace.changeScope());
 element<HTMLButtonElement>("report-preflight-cancel").addEventListener("click", () => workspace.changeScope());
@@ -536,7 +540,9 @@ workspaceElements.preflightDialog.addEventListener("cancel", (event) => {
   event.preventDefault();
   workspace.changeScope();
 });
-element<HTMLButtonElement>("report-refresh").addEventListener("click", () => void workspace.refreshSnapshot());
+element<HTMLButtonElement>("report-refresh").addEventListener("click", () => void workspace.refreshSnapshot().then(() => {
+  renderWorkspaceObservation();
+}));
 element<HTMLButtonElement>("report-export-directory").addEventListener("click", () => void workspace.exportSnapshot());
 element<HTMLButtonElement>("report-export-summary").addEventListener("click", () => void workspace.exportSnapshot("summary"));
 element<HTMLButtonElement>("report-open-diagnostics").addEventListener("click", () => void openDiagnosticLog());

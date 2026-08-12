@@ -114,24 +114,34 @@ export type ReportOperationName =
 export type EvidenceLabel = "measured" | "derived" | "inferred" | "unavailable" | "estimated";
 
 export type ReportErrorCode =
+  | "REPORT_CANCELLED"
+  | "REPORT_CURSOR_CONFLICT"
+  | "REPORT_DISCOVERY_FAILED"
+  | "REPORT_EVENT_NOT_FOUND"
+  | "REPORT_EXPORT_FAILED"
+  | "REPORT_GENERATION_FAILED"
+  | "REPORT_INTERNAL_ERROR"
   | "REPORT_INVALID_REQUEST"
+  | "REPORT_NOT_FOUND"
+  | "REPORT_PRIVACY_FAILED"
   | "REPORT_SCOPE_CONFLICT"
   | "REPORT_SNAPSHOT_CONFLICT"
-  | "REPORT_CURSOR_CONFLICT"
-  | "REPORT_EVENT_NOT_FOUND"
-  | "REPORT_NOT_FOUND"
-  | "REPORT_CANCELLED"
-  | "REPORT_DISCOVERY_FAILED"
-  | "REPORT_EXPORT_FAILED"
+  | "REPORT_SNAPSHOT_NOT_FOUND"
+  | "REPORT_WRITE_FAILED"
   | "REPORT_PROTOCOL_ERROR"
   | "REPORT_UNAVAILABLE";
+
+export interface WarningRecordDto {
+  readonly code: string;
+  readonly message: string;
+}
 
 export interface ReportErrorDto {
   readonly code: ReportErrorCode;
   readonly message: string;
   readonly operationId: string | null;
   readonly recoverable: boolean;
-  readonly currentRevision: string | null;
+  readonly currentSourceRevision: string | null;
   readonly preflightRequired: boolean;
   readonly restartFromFirstPage: boolean;
 }
@@ -156,10 +166,13 @@ export interface PreflightReportDto {
   readonly cachedFileCount: number;
   readonly changedFileCount: number;
   readonly knownEventCount: number | null;
-  readonly warnings: readonly string[];
+  readonly warnings: readonly WarningRecordDto[];
 }
 
 export interface OpenSnapshotRequestDto extends WorkspaceOperationRequestDto {
+  readonly rootThreadId: string;
+  readonly includeChildren: boolean;
+  readonly includeCollaborators: boolean;
   readonly preflightToken: string;
   readonly sourceRevision: string;
 }
@@ -171,28 +184,28 @@ export interface SnapshotMetadataDto {
   readonly rootThreadId: string;
   readonly includeChildren: boolean;
   readonly includeCollaborators: boolean;
-  readonly sourceRevisionDigest: string;
+  readonly sourceRevision: string;
   readonly parserVersion: string;
-  readonly pricingVersion: string;
-  readonly formatterVersion: string;
-  readonly observedAt: string;
-  readonly live: boolean;
-  readonly warnings: readonly string[];
+  readonly pricingDigest: string;
+  readonly formatterDigest: string;
+  readonly observationTime: string;
+  readonly mode: "live" | "sealed";
+  readonly warnings: readonly WarningRecordDto[];
 }
 
 export type SummaryMetricGroupId =
   | "overview" | "model" | "context" | "inference" | "runtime"
-  | "waits" | "work-items" | "claims" | "provenance";
+  | "waits" | "work_items" | "claims" | "provenance";
 
 export interface SummaryMetricDto {
-  readonly id: string;
+  readonly metricId: string;
   readonly label: string;
-  readonly value: string;
+  readonly displayValue: string;
   readonly evidence: EvidenceLabel;
   readonly description: string | null;
 }
 export interface SummaryMetricGroupDto {
-  readonly id: SummaryMetricGroupId;
+  readonly groupId: SummaryMetricGroupId;
   readonly label: string;
   readonly metrics: readonly SummaryMetricDto[];
 }
@@ -215,7 +228,7 @@ export interface ReportSummaryDto {
   readonly timeRange: ReportTimeRangeDto;
   readonly metricGroups: readonly SummaryMetricGroupDto[];
   readonly recentActivity: readonly SignificantActivityDto[];
-  readonly warnings: readonly string[];
+  readonly warnings: readonly WarningRecordDto[];
 }
 
 export type SortDirection = "ascending" | "descending";
@@ -252,8 +265,8 @@ export interface ExpectedPageBinding<F, S, O extends CursorPageOperation> {
 }
 
 export interface AgentFiltersDto { readonly query: string; readonly state: string | null }
-export interface AgentSortDto extends StableSortDto<"lastActivityAt" | "startedAt" | "agentId"> {
-  readonly tieBreakKey: "agentId";
+export interface AgentSortDto extends StableSortDto<"last_activity_at" | "started_at" | "agent_id"> {
+  readonly tieBreakKey: "agent_id";
   readonly tieBreakDirection: "ascending";
 }
 export interface AgentRowDto {
@@ -267,8 +280,8 @@ export interface AgentRowDto {
   readonly eventCount: number;
 }
 export interface TurnFiltersDto { readonly agentId: string | null; readonly state: string | null }
-export interface TurnSortDto extends StableSortDto<"startedAt" | "endedAt" | "turnId"> {
-  readonly tieBreakKey: "turnId";
+export interface TurnSortDto extends StableSortDto<"started_at" | "ended_at" | "turn_id"> {
+  readonly tieBreakKey: "turn_id";
   readonly tieBreakDirection: "ascending";
 }
 export interface TurnRowDto {
@@ -287,8 +300,8 @@ export interface EventFiltersDto {
   readonly fromTime: string | null;
   readonly toTime: string | null;
 }
-export interface EventSortDto extends StableSortDto<"occurredAt" | "eventId"> {
-  readonly tieBreakKey: "eventId";
+export interface EventSortDto extends StableSortDto<"occurred_at" | "event_id"> {
+  readonly tieBreakKey: "event_id";
   readonly tieBreakDirection: "ascending";
 }
 export interface EventRowDto {
@@ -303,15 +316,22 @@ export interface EventRowDto {
   readonly hasDetail: boolean;
 }
 
-export type HeatmapGroupBy = "agent" | "event-kind" | "work-item";
-export type HeatmapColorSemantic = "sequential-nonnegative" | "diverging-signed";
+export type HeatmapGroupBy = "agent" | "event_kind" | "work_item";
+export type HeatmapColorSemantic = "sequential_nonnegative" | "diverging_signed";
 export type HeatmapRequestedResolutionMinutes = 1 | 5 | 15 | 30 | 60;
-export type HeatmapScaleBasis = "visible-row-maximum" | "context-window-capacity";
+export type HeatmapScaleBasis = "visible_row_maximum" | "context_window_capacity";
+export type TimeMeasure =
+  | "wall_time"
+  | "uncached_input_tokens"
+  | "cached_input_tokens"
+  | "output_tokens"
+  | "reasoning_tokens"
+  | "cost_usd";
 export interface HeatmapRequestDto extends WorkspaceOperationRequestDto {
   readonly snapshotId: string;
   readonly fromTime: string;
   readonly toTime: string;
-  readonly measure: string;
+  readonly measure: TimeMeasure;
   readonly groupBy: HeatmapGroupBy;
   readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
   readonly maximumRows: number;
@@ -340,7 +360,7 @@ export interface HeatmapRowDto {
 export interface HeatmapResultDto {
   readonly snapshotId: string;
   readonly revision: string;
-  readonly measure: string;
+  readonly measure: TimeMeasure;
   readonly groupBy: HeatmapGroupBy;
   readonly fromTime: string;
   readonly toTime: string;
@@ -348,7 +368,7 @@ export interface HeatmapResultDto {
   readonly actualResolutionMinutes: number;
   readonly maximumRows: number;
   readonly omittedRowCount: number;
-  readonly rowOrder: "activity-descending-id-ascending";
+  readonly rowOrder: "activity_descending_id_ascending";
   readonly totalCellCount: number;
   readonly rows: readonly HeatmapRowDto[];
   readonly provenance: readonly string[];
@@ -357,11 +377,12 @@ export interface HeatmapResultDto {
 export interface SequenceFiltersDto {
   readonly focusAgentId: string | null;
   readonly eventKinds: readonly string[];
-  readonly grouping: "none" | "repeated-messages";
+  readonly grouping: "none" | "repeated_messages" | "delegation" | "agent";
   readonly includeReasoning: boolean;
 }
-export interface SequenceSortDto extends StableSortDto<"occurredAt" | "sequenceId"> {
-  readonly tieBreakKey: "sequenceId";
+export interface SequenceSortDto extends StableSortDto<"occurred_at" | "sequence_id"> {
+  readonly direction: "ascending";
+  readonly tieBreakKey: "sequence_id";
   readonly tieBreakDirection: "ascending";
 }
 export interface SequenceGroupDto {
@@ -386,8 +407,10 @@ export interface SequenceRowDto {
   readonly repeatCount: number;
   readonly reasoningAvailable: boolean;
 }
-export interface SequencePageDto extends CursorPageDto<SequenceRowDto, SequenceFiltersDto, SequenceSortDto> {
-  readonly operation: "query_sequence";
+export interface SequencePageDto {
+  readonly page: CursorPageDto<SequenceRowDto, SequenceFiltersDto, SequenceSortDto> & {
+    readonly operation: "query_sequence";
+  };
   readonly groups: readonly SequenceGroupDto[];
 }
 
@@ -398,8 +421,9 @@ export interface CoordinationFiltersDto {
   readonly operation: string | null;
   readonly evidence: EvidenceLabel | null;
 }
-export interface CoordinationSortDto extends StableSortDto<"occurredAt" | "coordinationId"> {
-  readonly tieBreakKey: "coordinationId";
+export interface CoordinationSortDto extends StableSortDto<"occurred_at" | "coordination_id"> {
+  readonly direction: "ascending";
+  readonly tieBreakKey: "coordination_id";
   readonly tieBreakDirection: "ascending";
 }
 export interface CoordinationRowDto {
@@ -439,15 +463,25 @@ export interface ExportSnapshotRequestDto extends WorkspaceOperationRequestDto {
 }
 export interface ExportOmissionDto { readonly section: string; readonly reason: string; readonly recovery: string }
 export interface ExportSnapshotResultDto {
+  readonly operationId: string;
   readonly snapshotId: string;
   readonly revision: string;
   readonly exportId: string;
   readonly displayName: string;
   readonly mode: ExportMode;
+  readonly manifestSha256: string | null;
   readonly fileCount: number;
-  readonly byteCount: number;
-  readonly warnings: readonly string[];
+  readonly totalByteCount: number;
+  readonly warnings: readonly WarningRecordDto[];
   readonly omissions: readonly ExportOmissionDto[];
+}
+export interface RefreshSnapshotResultDto {
+  readonly changed: boolean;
+  readonly snapshot: SnapshotMetadataDto;
+}
+export interface CloseSnapshotResultDto {
+  readonly snapshotId: string;
+  readonly closed: boolean;
 }
 export interface WorkspaceProgressDto {
   readonly protocolVersion: number;
@@ -544,11 +578,30 @@ function opaque(source: Record<string, unknown>, key: string, label: string): st
   return text(source, key, label);
 }
 
+function digest(source: Record<string, unknown>, key: string, label: string): string {
+  const value = text(source, key, label);
+  if (!/^[0-9a-f]{64}$/u.test(value)) throw new Error(`${label}.${key} is not a lowercase SHA-256 digest`);
+  return value;
+}
+
+function nullableDigest(source: Record<string, unknown>, key: string, label: string): string | null {
+  return source[key] === null ? null : digest(source, key, label);
+}
+
 function stringArray(value: unknown, label: string, maximum = MAX_WARNING_COUNT): readonly string[] {
   if (!Array.isArray(value) || value.length > maximum) throw new Error(`${label} is not a bounded string array`);
   return value.map((item, index) => {
     if (typeof item !== "string" || item.length > MAX_TEXT_LENGTH) throw new Error(`${label}[${index}] is not bounded text`);
     return item;
+  });
+}
+
+function warningArray(value: unknown, label: string): readonly WarningRecordDto[] {
+  if (!Array.isArray(value) || value.length > MAX_WARNING_COUNT) throw new Error(`${label} is not a bounded warning array`);
+  return value.map((item, index) => {
+    const warningLabel = `${label}[${index}]`;
+    const warning = exact(item, warningLabel, ["code", "message"]);
+    return { code: text(warning, "code", warningLabel), message: text(warning, "message", warningLabel) };
   });
 }
 
@@ -712,13 +765,13 @@ export function parseExportResult(value: unknown): ExportResult {
 export function parseReportErrorDto(value: unknown): ReportErrorDto {
   scanBoundary(value);
   const result = record(value, "report error");
-  const code = oneOf(result.code, ["REPORT_INVALID_REQUEST", "REPORT_SCOPE_CONFLICT", "REPORT_SNAPSHOT_CONFLICT", "REPORT_CURSOR_CONFLICT", "REPORT_EVENT_NOT_FOUND", "REPORT_NOT_FOUND", "REPORT_CANCELLED", "REPORT_DISCOVERY_FAILED", "REPORT_EXPORT_FAILED", "REPORT_PROTOCOL_ERROR", "REPORT_UNAVAILABLE"] as const, "report error.code");
+  const code = oneOf(result.code, ["REPORT_CANCELLED", "REPORT_CURSOR_CONFLICT", "REPORT_DISCOVERY_FAILED", "REPORT_EVENT_NOT_FOUND", "REPORT_EXPORT_FAILED", "REPORT_GENERATION_FAILED", "REPORT_INTERNAL_ERROR", "REPORT_INVALID_REQUEST", "REPORT_NOT_FOUND", "REPORT_PRIVACY_FAILED", "REPORT_SCOPE_CONFLICT", "REPORT_SNAPSHOT_CONFLICT", "REPORT_SNAPSHOT_NOT_FOUND", "REPORT_WRITE_FAILED", "REPORT_PROTOCOL_ERROR", "REPORT_UNAVAILABLE"] as const, "report error.code");
   return {
     code,
     message: text(result, "message", "report error"),
     operationId: result.operationId === null ? null : opaque(result, "operationId", "report error"),
     recoverable: bool(result, "recoverable", "report error"),
-    currentRevision: result.currentRevision === null ? null : opaque(result, "currentRevision", "report error"),
+    currentSourceRevision: result.currentSourceRevision === null ? null : opaque(result, "currentSourceRevision", "report error"),
     preflightRequired: bool(result, "preflightRequired", "report error"),
     restartFromFirstPage: bool(result, "restartFromFirstPage", "report error"),
   };
@@ -732,7 +785,7 @@ export function parsePreflightReportDto(value: unknown): PreflightReportDto {
     includeChildren: bool(result, "includeChildren", "preflight report"), includeCollaborators: bool(result, "includeCollaborators", "preflight report"),
     sourceRevision: opaque(result, "sourceRevision", "preflight report"), logCount: count(result, "logCount", "preflight report"), totalBytes: count(result, "totalBytes", "preflight report"),
     childCount: count(result, "childCount", "preflight report"), collaboratorCount: count(result, "collaboratorCount", "preflight report"), cachedFileCount: count(result, "cachedFileCount", "preflight report"), changedFileCount: count(result, "changedFileCount", "preflight report"),
-    knownEventCount: nullableCount(result, "knownEventCount", "preflight report"), warnings: stringArray(result.warnings, "preflight report.warnings"),
+    knownEventCount: nullableCount(result, "knownEventCount", "preflight report"), warnings: warningArray(result.warnings, "preflight report.warnings"),
   };
 }
 
@@ -741,13 +794,13 @@ export function parseSnapshotMetadataDto(value: unknown): SnapshotMetadataDto {
   const result = record(value, "snapshot metadata");
   return {
     protocolVersion: count(result, "protocolVersion", "snapshot metadata"), snapshotId: opaque(result, "snapshotId", "snapshot metadata"), revision: opaque(result, "revision", "snapshot metadata"), rootThreadId: opaque(result, "rootThreadId", "snapshot metadata"),
-    includeChildren: bool(result, "includeChildren", "snapshot metadata"), includeCollaborators: bool(result, "includeCollaborators", "snapshot metadata"), sourceRevisionDigest: opaque(result, "sourceRevisionDigest", "snapshot metadata"), parserVersion: text(result, "parserVersion", "snapshot metadata"), pricingVersion: text(result, "pricingVersion", "snapshot metadata"), formatterVersion: text(result, "formatterVersion", "snapshot metadata"), observedAt: instant(result, "observedAt", "snapshot metadata"), live: bool(result, "live", "snapshot metadata"), warnings: stringArray(result.warnings, "snapshot metadata.warnings"),
+    includeChildren: bool(result, "includeChildren", "snapshot metadata"), includeCollaborators: bool(result, "includeCollaborators", "snapshot metadata"), sourceRevision: opaque(result, "sourceRevision", "snapshot metadata"), parserVersion: text(result, "parserVersion", "snapshot metadata"), pricingDigest: digest(result, "pricingDigest", "snapshot metadata"), formatterDigest: digest(result, "formatterDigest", "snapshot metadata"), observationTime: instant(result, "observationTime", "snapshot metadata"), mode: oneOf(result.mode, ["live", "sealed"] as const, "snapshot metadata.mode"), warnings: warningArray(result.warnings, "snapshot metadata.warnings"),
   };
 }
 
 function parseMetric(value: unknown, label: string): SummaryMetricDto {
-  const result = exact(value, label, ["id", "label", "value", "evidence", "description"]);
-  return { id: opaque(result, "id", label), label: text(result, "label", label), value: text(result, "value", label), evidence: evidence(result.evidence, `${label}.evidence`), description: nullableText(result, "description", label) };
+  const result = exact(value, label, ["metricId", "label", "displayValue", "evidence", "description"]);
+  return { metricId: opaque(result, "metricId", label), label: text(result, "label", label), displayValue: text(result, "displayValue", label), evidence: evidence(result.evidence, `${label}.evidence`), description: nullableText(result, "description", label) };
 }
 
 export function parseReportSummaryDto(value: unknown): ReportSummaryDto {
@@ -757,9 +810,9 @@ export function parseReportSummaryDto(value: unknown): ReportSummaryDto {
   const timeRange = exact(result.timeRange, "report summary.timeRange", ["fromTime", "toTime"]);
   const groups = result.metricGroups.map((item, index): SummaryMetricGroupDto => {
     const label = `report summary.metricGroups[${index}]`;
-    const group = exact(item, label, ["id", "label", "metrics"]);
+    const group = exact(item, label, ["groupId", "label", "metrics"]);
     if (!Array.isArray(group.metrics)) throw new Error(`${label}.metrics is not an array`);
-    return { id: oneOf(group.id, ["overview", "model", "context", "inference", "runtime", "waits", "work-items", "claims", "provenance"] as const, `${label}.id`), label: text(group, "label", label), metrics: group.metrics.map((metric, metricIndex) => parseMetric(metric, `${label}.metrics[${metricIndex}]`)) };
+    return { groupId: oneOf(group.groupId, ["overview", "model", "context", "inference", "runtime", "waits", "work_items", "claims", "provenance"] as const, `${label}.groupId`), label: text(group, "label", label), metrics: group.metrics.map((metric, metricIndex) => parseMetric(metric, `${label}.metrics[${metricIndex}]`)) };
   });
   const recentActivity = result.recentActivity.map((item, index): SignificantActivityDto => {
     const label = `report summary.recentActivity[${index}]`;
@@ -768,7 +821,7 @@ export function parseReportSummaryDto(value: unknown): ReportSummaryDto {
   });
   return {
     snapshotId: opaque(result, "snapshotId", "report summary"), revision: opaque(result, "revision", "report summary"), title: text(result, "title", "report summary"), goal: nullableText(result, "goal", "report summary"), state: text(result, "state", "report summary"), scopeLabel: text(result, "scopeLabel", "report summary"), observedAt: instant(result, "observedAt", "report summary"), live: bool(result, "live", "report summary"),
-    timeRange: { fromTime: instant(timeRange, "fromTime", "report summary.timeRange"), toTime: instant(timeRange, "toTime", "report summary.timeRange") }, metricGroups: groups, recentActivity, warnings: stringArray(result.warnings, "report summary.warnings"),
+    timeRange: { fromTime: instant(timeRange, "fromTime", "report summary.timeRange"), toTime: instant(timeRange, "toTime", "report summary.timeRange") }, metricGroups: groups, recentActivity, warnings: warningArray(result.warnings, "report summary.warnings"),
   };
 }
 
@@ -811,17 +864,18 @@ export function parseEventPageDto(value: unknown, expected: ExpectedPageBinding<
     const label = `list_events page.items[${index}]`; const row = exact(item, label, ["eventId", "occurredAt", "agentId", "turnId", "kind", "label", "evidence", "sourceRef", "hasDetail"]);
     return { eventId: opaque(row, "eventId", label), occurredAt: instant(row, "occurredAt", label), agentId: parseNullableOpaque(row.agentId, "agentId", row, label), turnId: parseNullableOpaque(row.turnId, "turnId", row, label), kind: text(row, "kind", label), label: text(row, "label", label), evidence: evidence(row.evidence, `${label}.evidence`), sourceRef: parseNullableOpaque(row.sourceRef, "sourceRef", row, label), hasDetail: bool(row, "hasDetail", label) };
   });
-  if (expected.sort.key === "occurredAt" && expected.sort.direction === "ascending") chronological(page.items, (item) => item.occurredAt, (item) => item.eventId, "list_events page.items");
+  if (expected.sort.key === "occurred_at" && expected.sort.direction === "ascending") chronological(page.items, (item) => item.occurredAt, (item) => item.eventId, "list_events page.items");
   return page;
 }
 
 export function parseSequencePageDto(value: unknown, expected: ExpectedPageBinding<SequenceFiltersDto, SequenceSortDto, "query_sequence">): SequencePageDto {
-  const base = parsePageBase(value, expected, (item, index): SequenceRowDto => {
+  scanBoundary(value);
+  const root = exact(value, "query_sequence result", ["page", "groups"]);
+  const page = parsePageBase(root.page, expected, (item, index): SequenceRowDto => {
     const label = `query_sequence page.items[${index}]`; const row = exact(item, label, ["sequenceId", "groupId", "occurredAt", "fromAgentId", "fromAgentLabel", "toAgentId", "toAgentLabel", "kind", "label", "evidence", "eventId", "repeatCount", "reasoningAvailable"]);
     const repeatCount = count(row, "repeatCount", label); if (repeatCount < 1) throw new Error(`${label}.repeatCount must be positive`);
     return { sequenceId: opaque(row, "sequenceId", label), groupId: parseNullableOpaque(row.groupId, "groupId", row, label), occurredAt: instant(row, "occurredAt", label), fromAgentId: parseNullableOpaque(row.fromAgentId, "fromAgentId", row, label), fromAgentLabel: nullableText(row, "fromAgentLabel", label), toAgentId: parseNullableOpaque(row.toAgentId, "toAgentId", row, label), toAgentLabel: nullableText(row, "toAgentLabel", label), kind: text(row, "kind", label), label: text(row, "label", label), evidence: evidence(row.evidence, `${label}.evidence`), eventId: parseNullableOpaque(row.eventId, "eventId", row, label), repeatCount, reasoningAvailable: bool(row, "reasoningAvailable", label) };
   });
-  const root = record(value, "query_sequence page");
   if (!Array.isArray(root.groups) || root.groups.length > MAX_SEQUENCE_GROUPS) throw new Error("query_sequence page.groups is not bounded");
   const groups = root.groups.map((item, index): SequenceGroupDto => {
     const label = `query_sequence page.groups[${index}]`; const group = exact(item, label, ["groupId", "parentGroupId", "depth", "label", "collapsible"]);
@@ -836,9 +890,9 @@ export function parseSequencePageDto(value: unknown, expected: ExpectedPageBindi
       while (cursor !== undefined) { if (visited.has(cursor.groupId)) throw new Error("query_sequence page.groups contains a cycle"); visited.add(cursor.groupId); cursor = cursor.parentGroupId === null ? undefined : byId.get(cursor.parentGroupId); }
     } else if (group.depth !== 0) throw new Error("query_sequence page root group has nonzero depth");
   }
-  if (base.items.some((row) => row.groupId !== null && !byId.has(row.groupId))) throw new Error("query_sequence page row references an unknown group");
-  chronological(base.items, (item) => item.occurredAt, (item) => item.sequenceId, "query_sequence page.items");
-  return { ...base, operation: "query_sequence", groups };
+  if (page.items.some((row) => row.groupId !== null && !byId.has(row.groupId))) throw new Error("query_sequence page row references an unknown group");
+  chronological(page.items, (item) => item.occurredAt, (item) => item.sequenceId, "query_sequence page.items");
+  return { page: { ...page, operation: "query_sequence" }, groups };
 }
 
 export function parseCoordinationPageDto(value: unknown, expected: ExpectedPageBinding<CoordinationFiltersDto, CoordinationSortDto, "query_coordination">): CoordinationPageDto {
@@ -859,8 +913,8 @@ export function parseHeatmapResultDto(value: unknown, expected: Readonly<Pick<He
   if (!Number.isInteger(actualResolutionMinutes) || actualResolutionMinutes < expected.requestedResolutionMinutes) throw new Error("heatmap result.actualResolutionMinutes is invalid");
   const rows = result.rows.map((item, rowIndex): HeatmapRowDto => {
     const label = `heatmap result.rows[${rowIndex}]`; const row = exact(item, label, ["rowId", "label", "scale", "cells"]); const scale = exact(row.scale, `${label}.scale`, ["minimum", "maximum", "colorSemantic", "basis"]);
-    const minimum = finite(scale, "minimum", `${label}.scale`); const maximum = finite(scale, "maximum", `${label}.scale`); const colorSemantic = oneOf(scale.colorSemantic, ["sequential-nonnegative", "diverging-signed"] as const, `${label}.scale.colorSemantic`); const basis = oneOf(scale.basis, ["visible-row-maximum", "context-window-capacity"] as const, `${label}.scale.basis`);
-    if (minimum > maximum || (colorSemantic === "sequential-nonnegative" && minimum < 0) || (colorSemantic === "diverging-signed" && (minimum > 0 || maximum < 0))) throw new Error(`${label}.scale has an invalid domain`);
+    const minimum = finite(scale, "minimum", `${label}.scale`); const maximum = finite(scale, "maximum", `${label}.scale`); const colorSemantic = oneOf(scale.colorSemantic, ["sequential_nonnegative", "diverging_signed"] as const, `${label}.scale.colorSemantic`); const basis = oneOf(scale.basis, ["visible_row_maximum", "context_window_capacity"] as const, `${label}.scale.basis`);
+    if (minimum > maximum || (colorSemantic === "sequential_nonnegative" && minimum < 0) || (colorSemantic === "diverging_signed" && (minimum > 0 || maximum < 0))) throw new Error(`${label}.scale has an invalid domain`);
     if (!Array.isArray(row.cells)) throw new Error(`${label}.cells is not an array`);
     const cells = row.cells.map((cellValue, cellIndex): HeatmapCellDto => {
       const cellLabel = `${label}.cells[${cellIndex}]`; const cell = exact(cellValue, cellLabel, ["startTime", "endTime", "value", "count", "evidence", "primaryLabel", "secondaryLabel"]); const startTime = instant(cell, "startTime", cellLabel); const endTime = instant(cell, "endTime", cellLabel); if (startTime >= endTime || startTime < expected.fromTime || endTime > expected.toTime) throw new Error(`${cellLabel} is outside the requested half-open range`);
@@ -874,7 +928,7 @@ export function parseHeatmapResultDto(value: unknown, expected: Readonly<Pick<He
   if (totalCellCount !== actualCount || totalCellCount > MAX_HEATMAP_CELLS) throw new Error("heatmap result.totalCellCount is invalid");
   const durationMinutes = (Date.parse(expected.toTime) - Date.parse(expected.fromTime)) / 60_000;
   if (rows.length > 0 && Math.ceil(durationMinutes / actualResolutionMinutes) * rows.length > MAX_HEATMAP_CELLS) throw new Error("heatmap result.actualResolutionMinutes does not satisfy coarsening");
-  return { snapshotId: expected.snapshotId, revision: expected.revision, measure: expected.measure, groupBy: expected.groupBy, fromTime: expected.fromTime, toTime: expected.toTime, requestedResolutionMinutes: expected.requestedResolutionMinutes, actualResolutionMinutes, maximumRows: expected.maximumRows, omittedRowCount: count(result, "omittedRowCount", "heatmap result"), rowOrder: oneOf(result.rowOrder, ["activity-descending-id-ascending"] as const, "heatmap result.rowOrder"), totalCellCount, rows, provenance: stringArray(result.provenance, "heatmap result.provenance", MAX_WARNING_COUNT) };
+  return { snapshotId: expected.snapshotId, revision: expected.revision, measure: expected.measure, groupBy: expected.groupBy, fromTime: expected.fromTime, toTime: expected.toTime, requestedResolutionMinutes: expected.requestedResolutionMinutes, actualResolutionMinutes, maximumRows: expected.maximumRows, omittedRowCount: count(result, "omittedRowCount", "heatmap result"), rowOrder: oneOf(result.rowOrder, ["activity_descending_id_ascending"] as const, "heatmap result.rowOrder"), totalCellCount, rows, provenance: stringArray(result.provenance, "heatmap result.provenance", MAX_WARNING_COUNT) };
 }
 
 export function parseEventDetailDto(value: unknown): EventDetailDto {
@@ -888,14 +942,29 @@ export function parseEventDetailDto(value: unknown): EventDetailDto {
   return { snapshotId: opaque(result, "snapshotId", "event detail"), revision: opaque(result, "revision", "event detail"), eventId: opaque(result, "eventId", "event detail"), occurredAt: instant(result, "occurredAt", "event detail"), kind: text(result, "kind", "event detail"), title: text(result, "title", "event detail"), evidence: evidence(result.evidence, "event detail.evidence"), provenance: stringArray(result.provenance, "event detail.provenance"), summary: nullableText(result, "summary", "event detail"), disclosures, sourceRef: parseNullableOpaque(result.sourceRef, "sourceRef", result, "event detail") };
 }
 
-export function parseExportSnapshotResultDto(value: unknown, expected: Readonly<Pick<ExportSnapshotRequestDto, "snapshotId" | "mode">> & { readonly revision: string }): ExportSnapshotResultDto {
+export function parseExportSnapshotResultDto(value: unknown, expected: Readonly<Pick<ExportSnapshotRequestDto, "operationId" | "snapshotId" | "mode">> & { readonly revision: string }): ExportSnapshotResultDto {
   scanBoundary(value);
   const result = record(value, "export snapshot result");
-  if (result.snapshotId !== expected.snapshotId || result.revision !== expected.revision || result.mode !== expected.mode) throw new Error("export snapshot result does not match the active request");
+  if (result.operationId !== expected.operationId || result.snapshotId !== expected.snapshotId || result.revision !== expected.revision || result.mode !== expected.mode) throw new Error("export snapshot result does not match the active request");
   if (!Array.isArray(result.omissions)) throw new Error("export snapshot result.omissions is not an array");
   const exportId = opaque(result, "exportId", "export snapshot result"); const displayName = text(result, "displayName", "export snapshot result");
   if (/[\\/]|^[A-Za-z][A-Za-z0-9+.-]*:/.test(displayName) || displayName === exportId) throw new Error("export snapshot result.displayName is not a bounded non-authority label");
-  return { snapshotId: expected.snapshotId, revision: expected.revision, exportId, displayName, mode: expected.mode, fileCount: count(result, "fileCount", "export snapshot result"), byteCount: count(result, "byteCount", "export snapshot result"), warnings: stringArray(result.warnings, "export snapshot result.warnings"), omissions: result.omissions.map((item, index) => { const label = `export snapshot result.omissions[${index}]`; const omission = exact(item, label, ["section", "reason", "recovery"]); return { section: text(omission, "section", label), reason: text(omission, "reason", label), recovery: text(omission, "recovery", label) }; }) };
+  return { operationId: expected.operationId, snapshotId: expected.snapshotId, revision: expected.revision, exportId, displayName, mode: expected.mode, manifestSha256: nullableDigest(result, "manifestSha256", "export snapshot result"), fileCount: count(result, "fileCount", "export snapshot result"), totalByteCount: count(result, "totalByteCount", "export snapshot result"), warnings: warningArray(result.warnings, "export snapshot result.warnings"), omissions: result.omissions.map((item, index) => { const label = `export snapshot result.omissions[${index}]`; const omission = exact(item, label, ["section", "reason", "recovery"]); return { section: text(omission, "section", label), reason: text(omission, "reason", label), recovery: text(omission, "recovery", label) }; }) };
+}
+
+export function parseRefreshSnapshotResultDto(value: unknown, expectedSnapshotId: string): RefreshSnapshotResultDto {
+  scanBoundary(value);
+  const result = exact(value, "refresh snapshot result", ["changed", "snapshot"]);
+  const snapshot = parseSnapshotMetadataDto(result.snapshot);
+  if (snapshot.snapshotId !== expectedSnapshotId) throw new Error("refresh snapshot result does not match the active snapshot");
+  return { changed: bool(result, "changed", "refresh snapshot result"), snapshot };
+}
+
+export function parseCloseSnapshotResultDto(value: unknown, expectedSnapshotId: string): CloseSnapshotResultDto {
+  scanBoundary(value);
+  const result = exact(value, "close snapshot result", ["snapshotId", "closed"]);
+  if (result.snapshotId !== expectedSnapshotId) throw new Error("close snapshot result does not match the active snapshot");
+  return { snapshotId: expectedSnapshotId, closed: bool(result, "closed", "close snapshot result") };
 }
 
 export function parseWorkspaceProgressDto(value: unknown, expectedOperationId: string, expectedOperation: ReportOperationName): WorkspaceProgressDto {
