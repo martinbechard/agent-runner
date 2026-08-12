@@ -53,8 +53,8 @@ static OPAQUE_REFERENCE_COUNTER: AtomicU64 = AtomicU64::new(1);
 const DIAGNOSTIC_LOG_FILENAME: &str = "agent-report.log";
 const DIAGNOSTIC_LOG_PREVIOUS_FILENAME: &str = "agent-report.previous.log";
 const DIAGNOSTIC_LOG_MAX_BYTES: u64 = 5 * 1024 * 1024;
-const DIAGNOSTIC_MESSAGE_MAX_CHARS: usize = 16 * 1024;
 const REPORT_PROGRESS_EVENT: &str = "report-operation-progress";
+const MAX_SOURCE_REFERENCES: usize = 65_536;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -113,6 +113,8 @@ struct NativeReportState {
     active_roots: Mutex<Vec<PathBuf>>,
     source_keys: Mutex<HashMap<String, PathBuf>>,
     source_refs: Mutex<HashMap<(String, String), PathBuf>>,
+    source_refs_by_key: Mutex<HashMap<(String, String), String>>,
+    snapshot_revisions: Mutex<HashMap<String, String>>,
     exports: Mutex<HashMap<String, PathBuf>>,
     supervisor: Mutex<Option<(Vec<PathBuf>, Arc<WorkerSupervisor>)>>,
 }
@@ -149,26 +151,54 @@ impl OperationObserver for TauriOperationObserver {
     }
 }
 
-fn bounded_diagnostic_message(message: &str) -> String {
-    let sanitized = message.replace('\0', "�");
-    let mut characters = sanitized.chars();
-    let bounded = characters
-        .by_ref()
-        .take(DIAGNOSTIC_MESSAGE_MAX_CHARS)
-        .collect::<String>();
-    if characters.next().is_some() {
-        format!("{bounded}… [truncated]")
-    } else {
-        bounded
+fn fixed_diagnostic_message(event: &str) -> &'static str {
+    match event {
+        "app_started" => "Agent Report started.",
+        "panic" => "Agent Report stopped unexpectedly.",
+        "diagnostic_log_created" => "Diagnostic log created on demand.",
+        "sequence_popup_allowed" => "Allowed the generated sequence companion window.",
+        "sequence_popup_denied" => "Denied an unauthorized report popup.",
+        "view_parent_report" => "Unable to forward a parent report request.",
+        "search_rollouts" => "Native rollout search failed.",
+        "export_catalog" => "Native catalog export failed.",
+        "generate_report" => "Classic report generation failed.",
+        "open_report_window" => "Unable to open the selected report window.",
+        "open_diagnostic_log" => "Unable to open the diagnostic log.",
+        "report_worker_operation" => "A report worker operation failed.",
+        "worker.startup_failed" => "Worker startup failed.",
+        "worker.invalid_input" => "Worker input validation failed.",
+        "worker.service_contract" => "Worker service contract failed.",
+        "worker.internal_failure" => "Worker execution failed.",
+        "worker.output_failed" => "Worker protocol output failed.",
+        "worker.shutdown_failed" => "Worker shutdown failed.",
+        "worker.stderr_rejected" => "Worker diagnostic input was rejected.",
+        "worker.stderr_limit_reached" => "Worker diagnostic limit was reached.",
+        _ if event.starts_with("webview.") => "The webview reported an operation failure.",
+        _ => "A native operation failed.",
     }
 }
 
-fn append_diagnostic_entry(
-    log_path: &Path,
-    level: &str,
-    event: &str,
-    message: &str,
-) -> Result<(), String> {
+#[cfg(unix)]
+fn secure_diagnostic_file_permissions(path: &Path) -> Result<(), String> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600))
+        .map_err(|error| format!("unable to secure diagnostic log permissions: {error}"))
+}
+
+#[cfg(windows)]
+fn secure_diagnostic_file_permissions(_path: &Path) -> Result<(), String> {
+    // Windows diagnostic files inherit the per-user app-log directory ACL. Native
+    // Windows packaging tests must verify that other local users cannot read it.
+    Ok(())
+}
+
+#[cfg(not(any(unix, windows)))]
+fn secure_diagnostic_file_permissions(_path: &Path) -> Result<(), String> {
+    Ok(())
+}
+
+fn append_diagnostic_entry(log_path: &Path, level: &str, event: &str) -> Result<(), String> {
     let _guard = DIAGNOSTIC_WRITE_LOCK
         .lock()
         .map_err(|_| "diagnostic log writer lock is unavailable".to_owned())?;
@@ -178,6 +208,7 @@ fn append_diagnostic_entry(
     fs::create_dir_all(parent)
         .map_err(|error| format!("unable to create diagnostic log folder: {error}"))?;
     if fs::metadata(log_path).is_ok_and(|metadata| metadata.len() >= DIAGNOSTIC_LOG_MAX_BYTES) {
+        secure_diagnostic_file_permissions(log_path)?;
         let previous_path = log_path.with_file_name(DIAGNOSTIC_LOG_PREVIOUS_FILENAME);
         match fs::remove_file(&previous_path) {
             Ok(()) => {}
@@ -196,13 +227,19 @@ fn append_diagnostic_entry(
             .to_rfc3339_opts(SecondsFormat::Millis, true),
         "level": level,
         "event": event,
-        "message": bounded_diagnostic_message(message),
+        "message": fixed_diagnostic_message(event),
     });
-    let mut log = OpenOptions::new()
-        .create(true)
-        .append(true)
+    let mut options = OpenOptions::new();
+    options.create(true).append(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut log = options
         .open(log_path)
         .map_err(|error| format!("unable to open diagnostic log: {error}"))?;
+    secure_diagnostic_file_permissions(log_path)?;
     serde_json::to_writer(&mut log, &entry)
         .map_err(|error| format!("unable to serialize diagnostic entry: {error}"))?;
     log.write_all(b"\n")
@@ -217,13 +254,8 @@ fn diagnostic_log_path(app: &AppHandle) -> Result<PathBuf, String> {
         .map_err(|error| format!("unable to resolve diagnostic log folder: {error}"))
 }
 
-fn record_diagnostic(
-    app: &AppHandle,
-    level: &str,
-    event: &str,
-    message: &str,
-) -> Result<(), String> {
-    append_diagnostic_entry(&diagnostic_log_path(app)?, level, event, message)
+fn record_diagnostic(app: &AppHandle, level: &str, event: &str) -> Result<(), String> {
+    append_diagnostic_entry(&diagnostic_log_path(app)?, level, event)
 }
 
 fn record_failed_result<T>(
@@ -231,23 +263,18 @@ fn record_failed_result<T>(
     event: &str,
     result: Result<T, String>,
 ) -> Result<T, String> {
-    if let Err(error) = &result {
-        let _ = record_diagnostic(app, "error", event, error);
+    if result.is_err() {
+        let _ = record_diagnostic(app, "error", event);
     }
     result
 }
 
 fn initialize_diagnostics(app: &AppHandle) -> Result<(), String> {
     let log_path = diagnostic_log_path(app)?;
-    append_diagnostic_entry(
-        &log_path,
-        "info",
-        "app_started",
-        &format!("Agent Report {} started", env!("CARGO_PKG_VERSION")),
-    )?;
+    append_diagnostic_entry(&log_path, "info", "app_started")?;
     let previous_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |panic_info| {
-        let _ = append_diagnostic_entry(&log_path, "error", "panic", &panic_info.to_string());
+        let _ = append_diagnostic_entry(&log_path, "error", "panic");
         previous_hook(panic_info);
     }));
     Ok(())
@@ -549,6 +576,118 @@ fn wire_request(
     })
 }
 
+fn register_snapshot_revision(
+    state: &NativeReportState,
+    snapshot_id: &str,
+    revision: &str,
+) -> Result<(), NativeReportError> {
+    let mut revisions = state.snapshot_revisions.lock().map_err(|_| {
+        NativeReportError::protocol("The snapshot revision registry is unavailable.", None)
+    })?;
+    if !revisions.contains_key(snapshot_id) && revisions.len() >= MAX_SOURCE_REFERENCES {
+        return Err(NativeReportError::new(
+            "REPORT_UNAVAILABLE",
+            "The native source registry reached its safety limit.",
+            None,
+            true,
+        ));
+    }
+    revisions.insert(snapshot_id.to_owned(), revision.to_owned());
+    Ok(())
+}
+
+fn register_snapshot_source_ref(
+    state: &NativeReportState,
+    snapshot_id: &str,
+    source_key: &str,
+    path: PathBuf,
+) -> Result<String, NativeReportError> {
+    let key = (snapshot_id.to_owned(), source_key.to_owned());
+    let mut reverse = state
+        .source_refs_by_key
+        .lock()
+        .map_err(|_| NativeReportError::protocol("The source registry is unavailable.", None))?;
+    if let Some(source_ref) = reverse.get(&key) {
+        return Ok(source_ref.clone());
+    }
+    let mut references = state
+        .source_refs
+        .lock()
+        .map_err(|_| NativeReportError::protocol("The source registry is unavailable.", None))?;
+    if references.len() >= MAX_SOURCE_REFERENCES {
+        return Err(NativeReportError::new(
+            "REPORT_UNAVAILABLE",
+            "The native source registry reached its safety limit.",
+            None,
+            true,
+        ));
+    }
+    let source_ref = opaque_reference("source");
+    references.insert((snapshot_id.to_owned(), source_ref.clone()), path);
+    reverse.insert(key, source_ref.clone());
+    Ok(source_ref)
+}
+
+fn invalidate_snapshot_sources(
+    state: &NativeReportState,
+    snapshot_id: &str,
+) -> Result<(), NativeReportError> {
+    state
+        .source_refs_by_key
+        .lock()
+        .map_err(|_| NativeReportError::protocol("The source registry is unavailable.", None))?
+        .retain(|(registered_snapshot, _), _| registered_snapshot != snapshot_id);
+    state
+        .source_refs
+        .lock()
+        .map_err(|_| NativeReportError::protocol("The source registry is unavailable.", None))?
+        .retain(|(registered_snapshot, _), _| registered_snapshot != snapshot_id);
+    state
+        .snapshot_revisions
+        .lock()
+        .map_err(|_| {
+            NativeReportError::protocol("The snapshot revision registry is unavailable.", None)
+        })?
+        .remove(snapshot_id);
+    Ok(())
+}
+
+fn resolve_snapshot_source_ref(
+    state: &NativeReportState,
+    snapshot_id: &str,
+    source_ref: &str,
+) -> Result<PathBuf, NativeReportError> {
+    if !state
+        .snapshot_revisions
+        .lock()
+        .map_err(|_| {
+            NativeReportError::protocol("The snapshot revision registry is unavailable.", None)
+        })?
+        .contains_key(snapshot_id)
+    {
+        return Err(NativeReportError::new(
+            "REPORT_NOT_FOUND",
+            "The selected source is no longer available.",
+            None,
+            true,
+        ));
+    }
+    state
+        .source_refs
+        .lock()
+        .map_err(|_| NativeReportError::protocol("The source registry is unavailable.", None))?
+        .get(&(snapshot_id.to_owned(), source_ref.to_owned()))
+        .cloned()
+        .ok_or_else(|| {
+            NativeReportError::new(
+                "REPORT_NOT_FOUND",
+                "The selected source is no longer available.",
+                None,
+                true,
+            )
+        })
+}
+
 fn project_source_keys(
     value: &mut Value,
     snapshot_id: &str,
@@ -582,17 +721,8 @@ fn project_source_keys(
                                     None,
                                 )
                             })?;
-                        let source_ref = opaque_reference("source");
-                        state
-                            .source_refs
-                            .lock()
-                            .map_err(|_| {
-                                NativeReportError::protocol(
-                                    "The source registry is unavailable.",
-                                    None,
-                                )
-                            })?
-                            .insert((snapshot_id.to_owned(), source_ref.clone()), path);
+                        let source_ref =
+                            register_snapshot_source_ref(state, snapshot_id, &source_key, path)?;
                         Value::String(source_ref)
                     }
                     _ => {
@@ -802,7 +932,22 @@ fn project_worker_result(
     state: &NativeReportState,
 ) -> Result<Value, NativeReportError> {
     match operation {
-        "open_snapshot" => result = snapshot_projection(result)?,
+        "open_snapshot" => {
+            result = snapshot_projection(result)?;
+            let snapshot_id = result
+                .get("snapshot_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The snapshot result is invalid.", None)
+                })?;
+            let revision = result
+                .get("revision")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The snapshot result is invalid.", None)
+                })?;
+            register_snapshot_revision(state, snapshot_id, revision)?;
+        }
         "get_summary" => {
             let revision = result.remove("revision_id").ok_or_else(|| {
                 NativeReportError::protocol("The summary result is invalid.", None)
@@ -884,18 +1029,49 @@ fn project_worker_result(
             result.insert("revision".to_owned(), revision);
         }
         "refresh_snapshot" => {
+            let changed = result
+                .get("changed")
+                .and_then(Value::as_bool)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The refresh result is invalid.", None)
+                })?;
             let snapshot = result
                 .remove("snapshot")
                 .and_then(|value| value.as_object().cloned())
                 .ok_or_else(|| {
                     NativeReportError::protocol("The refresh result is invalid.", None)
                 })?;
-            result.insert(
-                "snapshot".to_owned(),
-                Value::Object(snapshot_projection(snapshot)?),
-            );
+            let snapshot = snapshot_projection(snapshot)?;
+            let snapshot_id = snapshot
+                .get("snapshot_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The refresh result is invalid.", None)
+                })?;
+            let revision = snapshot
+                .get("revision")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The refresh result is invalid.", None)
+                })?;
+            if changed {
+                invalidate_snapshot_sources(state, snapshot_id)?;
+            }
+            register_snapshot_revision(state, snapshot_id, revision)?;
+            result.insert("snapshot".to_owned(), Value::Object(snapshot));
         }
-        "close_snapshot" | "preflight_report" => {}
+        "close_snapshot" => {
+            if result.get("closed").and_then(Value::as_bool) == Some(true) {
+                let snapshot_id = result
+                    .get("snapshot_id")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| {
+                        NativeReportError::protocol("The close result is invalid.", None)
+                    })?;
+                invalidate_snapshot_sources(state, snapshot_id)?;
+            }
+        }
+        "preflight_report" => {}
         _ => {
             return Err(NativeReportError::protocol(
                 "The report operation is unsupported.",
@@ -1045,17 +1221,7 @@ fn worker_supervisor_config(
     let diagnostic_app = app.clone();
     let diagnostic_sink: Arc<dyn Fn(SanitizedDiagnostic) + Send + Sync> =
         Arc::new(move |diagnostic| {
-            let detail = match (
-                diagnostic.operation_id.as_deref(),
-                diagnostic.code.as_deref(),
-            ) {
-                (Some(operation_id), Some(code)) => {
-                    format!("{} [{code}; {operation_id}]", diagnostic.message)
-                }
-                (_, Some(code)) => format!("{} [{code}]", diagnostic.message),
-                _ => diagnostic.message.to_owned(),
-            };
-            let _ = record_diagnostic(&diagnostic_app, diagnostic.level, diagnostic.event, &detail);
+            let _ = record_diagnostic(&diagnostic_app, diagnostic.level, diagnostic.event);
         });
     Ok(WorkerSupervisorConfig {
         max_in_flight: 4,
@@ -1079,6 +1245,16 @@ fn worker_supervisor_config(
         },
         diagnostic_sink: Some(diagnostic_sink),
     })
+}
+
+fn worker_launch_arguments() -> Vec<OsString> {
+    vec![
+        OsString::from("--agent-report-worker"),
+        OsString::from("--max-in-flight"),
+        OsString::from("4"),
+        OsString::from("--protocol-version"),
+        OsString::from(WORKER_PROTOCOL_VERSION.to_string()),
+    ]
 }
 
 fn supervisor_error(
@@ -1126,13 +1302,7 @@ fn ensure_supervisor(
     let executable = worker_executable()?;
     let launch = WorkerLaunchSpec {
         executable,
-        arguments: vec![
-            OsString::from("worker"),
-            OsString::from("--max-in-flight"),
-            OsString::from("4"),
-            OsString::from("--protocol-version"),
-            OsString::from(WORKER_PROTOCOL_VERSION.to_string()),
-        ],
+        arguments: worker_launch_arguments(),
         environment: BTreeMap::new(),
     };
     let supervisor = WorkerSupervisor::spawn(launch, worker_supervisor_config(app, roots.clone())?)
@@ -1190,13 +1360,8 @@ async fn execute_worker_request(
             true,
         )
     })?
-    .inspect_err(|error| {
-        let _ = record_diagnostic(
-            &diagnostic_app,
-            "error",
-            "report_worker_operation",
-            &format!("{}: {}", error.code, error.message),
-        );
+    .inspect_err(|_error| {
+        let _ = record_diagnostic(&diagnostic_app, "error", "report_worker_operation");
     })
 }
 
@@ -1445,20 +1610,7 @@ fn open_source_location(
     let request = request_object(&request)?;
     let snapshot_id = required_string(request, "snapshotId", None)?;
     let source_ref = required_string(request, "sourceRef", None)?;
-    let source = state
-        .source_refs
-        .lock()
-        .map_err(|_| NativeReportError::protocol("The source registry is unavailable.", None))?
-        .get(&(snapshot_id.to_owned(), source_ref.to_owned()))
-        .cloned()
-        .ok_or_else(|| {
-            NativeReportError::new(
-                "REPORT_NOT_FOUND",
-                "The selected source is no longer available.",
-                None,
-                true,
-            )
-        })?;
+    let source = resolve_snapshot_source_ref(&state, snapshot_id, source_ref)?;
     app.shell()
         .open(source.to_string_lossy().into_owned(), None)
         .map_err(|_| {
@@ -1935,12 +2087,13 @@ fn project_catalog_response(
             .lock()
             .map_err(|_| "source registry is unavailable".to_owned())?
             .insert(source_key, path.clone());
-        let source_ref = opaque_reference("catalog_source");
-        state
-            .source_refs
-            .lock()
-            .map_err(|_| "source registry is unavailable".to_owned())?
-            .insert(("catalog".to_owned(), source_ref.clone()), path.clone());
+        let source_ref = register_snapshot_source_ref(
+            state,
+            "catalog",
+            &source_key_for_path(&path)?,
+            path.clone(),
+        )
+        .map_err(|error| error.message)?;
         entries.push(CatalogEntryDto {
             thread_id: entry.thread_id.clone(),
             parent_thread_id: entry.parent_thread_id.clone(),
@@ -2470,13 +2623,8 @@ async fn open_report_window(
                 let Some(request) = parent_report_request(navigation_url) else {
                     return true;
                 };
-                if let Err(error) = navigation_app.emit("view-parent-report", request) {
-                    let _ = record_diagnostic(
-                        &navigation_app,
-                        "error",
-                        "view_parent_report",
-                        &format!("unable to forward parent report request: {error}"),
-                    );
+                if navigation_app.emit("view-parent-report", request).is_err() {
+                    let _ = record_diagnostic(&navigation_app, "error", "view_parent_report");
                 }
                 false
             })
@@ -2490,7 +2638,6 @@ async fn open_report_window(
                     } else {
                         "sequence_popup_denied"
                     },
-                    popup_url.as_str(),
                 );
                 if allowed {
                     NewWindowResponse::Allow
@@ -2506,7 +2653,7 @@ async fn open_report_window(
 }
 
 #[tauri::command]
-fn record_client_error(app: AppHandle, context: String, message: String) -> Result<(), String> {
+fn record_client_error(app: AppHandle, context: String, _message: String) -> Result<(), String> {
     let event = context
         .chars()
         .take(64)
@@ -2518,7 +2665,7 @@ fn record_client_error(app: AppHandle, context: String, message: String) -> Resu
             }
         })
         .collect::<String>();
-    record_diagnostic(&app, "error", &format!("webview.{event}"), &message)
+    record_diagnostic(&app, "error", &format!("webview.{event}"))
 }
 
 #[tauri::command]
@@ -2529,12 +2676,7 @@ fn record_client_error(app: AppHandle, context: String, message: String) -> Resu
 fn open_diagnostic_log(app: AppHandle) -> Result<(), String> {
     let log_path = diagnostic_log_path(&app)?;
     if !log_path.is_file() {
-        append_diagnostic_entry(
-            &log_path,
-            "info",
-            "diagnostic_log_created",
-            "Diagnostic log created on demand",
-        )?;
+        append_diagnostic_entry(&log_path, "info", "diagnostic_log_created")?;
     }
     let result = app
         .shell()
@@ -2602,9 +2744,96 @@ mod tests {
     #[cfg(unix)]
     use super::terminate_process_tree;
     use super::{
-        DIAGNOSTIC_LOG_MAX_BYTES, GenerateReportRequest, append_diagnostic_entry,
-        full_report_arguments, parent_report_request, renderer_override, wire_request,
+        DIAGNOSTIC_LOG_MAX_BYTES, GenerateReportRequest, NativeReportState,
+        append_diagnostic_entry, full_report_arguments, parent_report_request,
+        project_worker_result, register_snapshot_revision, register_snapshot_source_ref,
+        renderer_override, resolve_snapshot_source_ref, wire_request, worker_launch_arguments,
     };
+
+    fn state_with_source_reference(directory: &TempDir) -> (NativeReportState, String, String) {
+        let state = NativeReportState::default();
+        let snapshot_id = "snap_46b9630e96ce4dc5a678a517".to_owned();
+        register_snapshot_revision(&state, &snapshot_id, "revision-1")
+            .expect("register snapshot revision");
+        let source_ref = register_snapshot_source_ref(
+            &state,
+            &snapshot_id,
+            "source-key-1",
+            directory.path().join("rollout.jsonl"),
+        )
+        .expect("register source reference");
+        (state, snapshot_id, source_ref)
+    }
+
+    #[test]
+    fn open_source_location_rejects_a_reference_after_snapshot_close() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let (state, snapshot_id, source_ref) = state_with_source_reference(&directory);
+
+        project_worker_result(
+            "close_snapshot",
+            serde_json::json!({"snapshot_id":snapshot_id.clone(),"closed":true})
+                .as_object()
+                .expect("close result object")
+                .clone(),
+            &state,
+        )
+        .expect("project close result");
+
+        assert!(resolve_snapshot_source_ref(&state, &snapshot_id, &source_ref).is_err());
+        assert!(
+            state
+                .source_refs
+                .lock()
+                .expect("source registry")
+                .is_empty()
+        );
+        assert!(
+            state
+                .source_refs_by_key
+                .lock()
+                .expect("reverse source registry")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn open_source_location_rejects_an_old_reference_after_changed_refresh() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let (state, snapshot_id, source_ref) = state_with_source_reference(&directory);
+
+        project_worker_result(
+            "refresh_snapshot",
+            serde_json::json!({
+                "changed": true,
+                "snapshot": {
+                    "snapshot_id": snapshot_id.clone(),
+                    "revision_id": "revision-2",
+                    "scope": {
+                        "root_thread_id": "root-thread",
+                        "include_children": false,
+                        "include_collaborators": false
+                    }
+                }
+            })
+            .as_object()
+            .expect("refresh result object")
+            .clone(),
+            &state,
+        )
+        .expect("project refresh result");
+
+        assert!(resolve_snapshot_source_ref(&state, &snapshot_id, &source_ref).is_err());
+        assert_eq!(
+            state
+                .snapshot_revisions
+                .lock()
+                .expect("snapshot revision registry")
+                .get(&snapshot_id)
+                .map(String::as_str),
+            Some("revision-2"),
+        );
+    }
 
     #[test]
     fn translates_every_workspace_command_to_the_explicit_worker_shape() {
@@ -2706,6 +2935,20 @@ mod tests {
     }
 
     #[test]
+    fn launches_the_reserved_worker_entrypoint_without_colliding_with_classic_cli_input() {
+        assert_eq!(
+            worker_launch_arguments(),
+            vec![
+                OsString::from("--agent-report-worker"),
+                OsString::from("--max-in-flight"),
+                OsString::from("4"),
+                OsString::from("--protocol-version"),
+                OsString::from("1"),
+            ]
+        );
+    }
+
+    #[test]
     fn appends_structured_diagnostics_and_rotates_a_full_log() {
         let directory = TempDir::new().expect("create temporary directory");
         let log_path = directory.path().join("agent-report.log");
@@ -2713,13 +2956,8 @@ mod tests {
         fs::write(&log_path, vec![b'x'; DIAGNOSTIC_LOG_MAX_BYTES as usize])
             .expect("seed a full diagnostic log");
 
-        append_diagnostic_entry(
-            &log_path,
-            "error",
-            "generate_report",
-            "renderer failed\nwith a quoted \"detail\"",
-        )
-        .expect("append diagnostic entry");
+        append_diagnostic_entry(&log_path, "error", "generate_report")
+            .expect("append diagnostic entry");
 
         assert_eq!(
             fs::metadata(previous_path)
@@ -2727,19 +2965,62 @@ mod tests {
                 .len(),
             DIAGNOSTIC_LOG_MAX_BYTES,
         );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(
+                fs::metadata(directory.path().join("agent-report.previous.log"))
+                    .expect("read rotated diagnostic metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+            );
+        }
         let line = fs::read_to_string(log_path).expect("read current diagnostic log");
         let entry: Value = serde_json::from_str(line.trim()).expect("parse diagnostic JSON line");
         assert_eq!(entry["level"], "error");
         assert_eq!(entry["event"], "generate_report");
-        assert_eq!(
-            entry["message"],
-            "renderer failed\nwith a quoted \"detail\""
-        );
+        assert_eq!(entry["message"], "Classic report generation failed.");
+        assert!(!line.contains(directory.path().to_string_lossy().as_ref()));
         assert!(
             entry["timestamp"]
                 .as_str()
                 .is_some_and(|value| value.ends_with('Z'))
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn diagnostic_logs_are_readable_and_writable_only_by_the_current_user() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let directory = TempDir::new().expect("create temporary directory");
+        let log_path = directory.path().join("agent-report.log");
+
+        append_diagnostic_entry(&log_path, "warning", "sequence_popup_denied")
+            .expect("append diagnostic entry");
+
+        assert_eq!(
+            fs::metadata(log_path)
+                .expect("read diagnostic metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn diagnostic_logs_use_the_per_user_app_directory_acl_on_windows() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let log_path = directory.path().join("agent-report.log");
+
+        append_diagnostic_entry(&log_path, "warning", "sequence_popup_denied")
+            .expect("append diagnostic entry using the inherited directory ACL");
+
+        assert!(log_path.is_file());
     }
 
     #[test]
