@@ -425,6 +425,25 @@ export function describeBoundaryError(value: unknown): string {
   return detail === null ? `The report response was invalid. ${recovery}` : `The report response was invalid: ${detail}. ${recovery}`;
 }
 
+export interface ReportErrorRecovery {
+  readonly label: "Retry" | "First page" | null;
+  readonly message: string;
+}
+
+/** Resolve structured recovery flags without weakening service authority. */
+export function reportErrorRecovery(error: ReportErrorDto): ReportErrorRecovery {
+  if (error.restartFromFirstPage) return Object.freeze({ label: "First page", message: "Return to the first page and try again." });
+  if (error.preflightRequired) return Object.freeze({ label: null, message: "Review the report scope again before retrying." });
+  if (error.recoverable) return Object.freeze({ label: "Retry", message: "Retry this action. If the problem continues, open Diagnostics." });
+  return Object.freeze({ label: null, message: "Open Diagnostics for more information." });
+}
+
+/** Describe a bounded opaque export result for the report surface. */
+export function describeExportResult(result: Readonly<Pick<ExportSnapshotResultDto, "displayName" | "mode" | "fileCount" | "totalByteCount">>): string {
+  const mode = result.mode === "directory" ? "complete directory" : "bounded summary";
+  return `${result.displayName} · ${mode} · ${result.fileCount.toLocaleString()} files · ${result.totalByteCount.toLocaleString()} bytes`;
+}
+
 /** Create one unpredictable operation identity without using process or clock state. */
 export function newOperationId(): string {
   let bytes: Uint8Array;
@@ -542,18 +561,11 @@ function renderLoadState<T>(host: HTMLElement, loadState: LoadState<T>, renderVa
       alert.className = "report-error";
       alert.dataset.errorCode = loadState.error.code;
       alert.append(textElement("strong", `${loadState.error.code}: ${loadState.error.message}`));
-      const recovery = loadState.error.code === "REPORT_PROTOCOL_ERROR"
-        ? null
-        : loadState.error.restartFromFirstPage
-        ? "Return to the first page and try again."
-        : loadState.error.preflightRequired
-          ? "Review the report scope again before retrying."
-          : loadState.error.recoverable
-            ? "Retry this action. If the problem continues, open Diagnostics."
-            : "Open Diagnostics for more information.";
-      if (recovery !== null) alert.append(textElement("p", recovery));
-      if (retry !== undefined && loadState.error.recoverable) {
-        const retryButton = textElement("button", loadState.error.restartFromFirstPage ? "First page" : "Retry") as HTMLButtonElement;
+      const recovery = reportErrorRecovery(loadState.error);
+      const recoveryMessage = loadState.error.code === "REPORT_PROTOCOL_ERROR" ? null : recovery.message;
+      if (recoveryMessage !== null) alert.append(textElement("p", recoveryMessage));
+      if (retry !== undefined && recovery.label !== null) {
+        const retryButton = textElement("button", recovery.label) as HTMLButtonElement;
         retryButton.type = "button";
         retryButton.addEventListener("click", retry);
         alert.append(retryButton);
@@ -1000,6 +1012,57 @@ function renderDetail(detail: EventDetailDto): Node {
   return article;
 }
 
+interface ExportRenderActions {
+  reopen(exportId: string): void;
+  retry(): void;
+}
+
+function renderExportState(loadState: LoadState<ExportSnapshotResultDto>, reopenError: ReportErrorDto | null, actions: ExportRenderActions): Node | null {
+  if (loadState.kind === "not-requested" && reopenError === null) return null;
+  const section = document.createElement("section");
+  section.className = "report-export-state state-panel";
+  section.setAttribute("aria-label", "Latest report export");
+  const previous = valueFrom(loadState);
+  if (previous !== null) {
+    section.append(textElement("strong", `Export ready: ${describeExportResult(previous)}.`));
+    const reopen = textElement("button", "Reopen export") as HTMLButtonElement;
+    reopen.type = "button";
+    reopen.addEventListener("click", () => actions.reopen(previous.exportId));
+    section.append(reopen);
+    for (const warning of previous.warnings) section.append(textElement("p", `Warning ${warning.code}: ${warning.message}`));
+    for (const omission of previous.omissions) section.append(textElement("p", `${omission.section} omitted: ${omission.reason} ${omission.recovery}`));
+  }
+  if (loadState.kind === "loading") {
+    section.setAttribute("aria-busy", "true");
+    section.append(textElement("p", "Preparing the selected report export…"));
+  } else if (loadState.kind === "cancelled") {
+    section.append(textElement("p", "Export cancelled; no new export was published."));
+  } else if (loadState.kind === "error") {
+    const alert = document.createElement("div");
+    alert.setAttribute("role", "alert");
+    alert.append(textElement("strong", `${loadState.error.code}: ${loadState.error.message}`));
+    const recovery = reportErrorRecovery(loadState.error);
+    alert.append(textElement("p", recovery.message));
+    if (recovery.label !== null) {
+      const retry = textElement("button", recovery.label) as HTMLButtonElement;
+      retry.type = "button";
+      retry.addEventListener("click", actions.retry);
+      alert.append(retry);
+    }
+    section.append(alert);
+  }
+  if (reopenError !== null) {
+    const alert = document.createElement("div");
+    alert.setAttribute("role", "alert");
+    alert.append(
+      textElement("strong", `${reopenError.code}: ${reopenError.message}`),
+      textElement("p", "This retained export could not be opened. Export the report again if it is no longer available."),
+    );
+    section.append(alert);
+  }
+  return section;
+}
+
 function assertElements(elements: WorkspaceElements): void {
   for (const [name, element] of Object.entries(elements)) {
     if (typeof element !== "object" || element === null || typeof element.addEventListener !== "function" || typeof element.replaceChildren !== "function") {
@@ -1018,6 +1081,8 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
   let detailTrigger: HTMLElement | null = null;
   let frameHandle: number | null = null;
   let heatmapPresentation: HeatmapPresentationState | null = null;
+  let lastRequestedExportMode: ExportMode = "directory";
+  let reopenExportError: ReportErrorDto | null = null;
   const requestFrame = options.requestAnimationFrame ?? window.requestAnimationFrame.bind(window);
   const cancelFrame = options.cancelAnimationFrame ?? window.cancelAnimationFrame.bind(window);
 
@@ -1104,15 +1169,16 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       includeCollaborators: false,
     });
     heatmapPresentation = null;
+    reopenExportError = null;
     state = Object.freeze({ ...initialState(), lifecycle: "selected", route: Object.freeze({ kind: "preflight", rootThreadId: normalized.rootThreadId }), selection: normalized, requestSequence: state.requestSequence + 1 });
     scheduleRender();
   }
 
-  async function loadSummary(focusHeading: boolean): Promise<void> {
+  async function loadSummary(focusHeading: boolean, force = false): Promise<void> {
     const snapshot = state.snapshot;
     if (snapshot === null) return;
     const existing = valueFrom(state.summary);
-    if (existing?.snapshotId === snapshot.snapshotId && existing.revision === snapshot.revision) {
+    if (!force && existing?.snapshotId === snapshot.snapshotId && existing.revision === snapshot.revision) {
       if (focusHeading) elements.viewHeading.focus();
       return;
     }
@@ -1317,6 +1383,12 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     };
   }
 
+  function retryPage(name: PagerName): void {
+    const pager = state.pagers[name];
+    const restart = pager.page.kind === "error" && pager.page.error.restartFromFirstPage;
+    void loadPage(name, restart ? null : pager.currentCursor, restart ? [] : pager.previousCursors);
+  }
+
   function render(): void {
     const route = state.route;
     const inWorkspace = route.kind === "snapshot";
@@ -1357,6 +1429,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         state.summary,
         (value) => renderSummary(value, metricGroupsFor(route.surface)),
         definition.emptyMessage,
+        () => { void loadSummary(false, true); },
       );
       renderLoadState(
         evidenceHost,
@@ -1367,10 +1440,11 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
           pageActions(state.pagers.coordination),
         ),
         "No matching work-item or claim evidence is available.",
+        () => retryPage("coordination"),
       );
       elements.viewRegion.replaceChildren(metricsHost, evidenceHost);
     } else if (metricGroupsFor(route.surface).length > 0 || route.surface === "summary") {
-      renderLoadState(elements.viewRegion, state.summary, (value) => renderSummary(value, metricGroupsFor(route.surface)), definition.emptyMessage);
+      renderLoadState(elements.viewRegion, state.summary, (value) => renderSummary(value, metricGroupsFor(route.surface)), definition.emptyMessage, () => { void loadSummary(false, true); });
     } else if (route.surface === "heatmap") {
       const summary = valueFrom(state.summary);
       renderLoadState(
@@ -1411,8 +1485,14 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
           pageActions(state.pagers[pagerName]),
         ),
         definition.emptyMessage,
+        () => retryPage(pagerName),
       );
     }
+    const exportPresentation = renderExportState(state.exportState, reopenExportError, {
+      reopen(exportId) { void controller.reopenExport(exportId); },
+      retry() { void controller.exportSnapshot(lastRequestedExportMode); },
+    });
+    if (exportPresentation !== null) elements.viewRegion.append(exportPresentation);
     const heatmap = route.surface === "heatmap" ? valueFrom(state.timeSeries) : null;
     const resolutionStatus = heatmap === null ? "" : heatmapResolutionLabel(heatmap.requestedResolutionMinutes, heatmap.actualResolutionMinutes);
     elements.statusRegion.textContent = busy
@@ -1456,6 +1536,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     updateScope(includeChildren, includeCollaborators) {
       if (disposed || state.selection === null) return;
       heatmapPresentation = null;
+      reopenExportError = null;
       commit({ lifecycle: "selected", selection: Object.freeze({ ...state.selection, includeChildren, includeCollaborators }), preflight: Object.freeze({ kind: "not-requested" }), snapshot: null, summary: Object.freeze({ kind: "not-requested" }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" }), detail: Object.freeze({ kind: "not-requested" }) });
     },
     async preflight() {
@@ -1623,6 +1704,8 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       const snapshot = state.snapshot;
       if (disposed || snapshot === null) return;
       if (mode !== "directory" && mode !== "summary") throw new Error("Export mode must be directory or summary.");
+      lastRequestedExportMode = mode;
+      reopenExportError = null;
       const previous = valueFrom(state.exportState);
       const operation = nextOperation("export_snapshot");
       commit({ lifecycle: "exporting", exportState: Object.freeze({ kind: "loading", previous, operationId: operation.id }) });
@@ -1630,7 +1713,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         const raw = await invoke(WORKSPACE_COMMANDS.exportSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId, mode });
         if (!isCurrent(operation.sequence, operation.id)) return;
         if (raw === null) {
-          commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, exportState: previous === null ? Object.freeze({ kind: "not-requested" }) : loadStateFor(previous, false) });
+          commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, exportState: Object.freeze({ kind: "cancelled", previous, operationId: operation.id }) });
           return;
         }
         const result = parseExportSnapshotResultDto(raw, { operationId: operation.id, snapshotId: snapshot.snapshotId, revision: snapshot.revision, mode });
@@ -1639,7 +1722,18 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     },
     async reopenExport(exportId) {
       if (disposed) return;
-      await invoke(WORKSPACE_COMMANDS.reopenExport, { exportId: requireOpaqueId(exportId, "exportId") });
+      const normalizedExportId = requireOpaqueId(exportId, "exportId");
+      reopenExportError = null;
+      elements.statusRegion.textContent = "Opening the retained report export.";
+      try {
+        await invoke(WORKSPACE_COMMANDS.reopenExport, { exportId: normalizedExportId });
+        if (disposed) return;
+        elements.statusRegion.textContent = "Opened the retained report export.";
+      } catch (error) {
+        if (disposed) return;
+        reopenExportError = safeError(error);
+        scheduleRender();
+      }
     },
     async openDetail(eventId, trigger) {
       const snapshot = state.snapshot;
@@ -1681,7 +1775,26 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         closeButton.textContent = "Close detail";
         closeButton.addEventListener("click", () => controller.closeDetail());
         elements.detailDialog.append(closeButton);
-      } catch (error) { fail(operation.sequence, operation.id, "detail", error, "ready"); }
+      } catch (error) {
+        if (!isCurrent(operation.sequence, operation.id)) return;
+        const reportError = safeError(error);
+        fail(operation.sequence, operation.id, "detail", error, "ready");
+        const heading = textElement("h2", "Event detail unavailable");
+        heading.id = "report-detail-heading";
+        heading.dataset.dialogHeading = "";
+        heading.tabIndex = -1;
+        const alert = document.createElement("div");
+        alert.setAttribute("role", "alert");
+        alert.append(textElement("strong", `${reportError.code}: ${reportError.message}`), textElement("p", reportErrorRecovery(reportError).message));
+        const retry = textElement("button", "Retry") as HTMLButtonElement;
+        retry.type = "button";
+        retry.addEventListener("click", () => { void controller.openDetail(normalizedEventId, trigger); });
+        const close = textElement("button", "Close detail") as HTMLButtonElement;
+        close.type = "button";
+        close.addEventListener("click", () => controller.closeDetail());
+        elements.detailDialog.replaceChildren(heading, alert, retry, close);
+        heading.focus();
+      }
     },
     closeDetail() {
       if (disposed) return;
@@ -1698,6 +1811,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         if (!isCurrent(operation.sequence, operation.id)) return;
         if (!result.closed) throw new Error("The native snapshot remained open.");
         heatmapPresentation = null;
+        reopenExportError = null;
         state = Object.freeze({ ...initialState(), lifecycle: "closed", requestSequence: state.requestSequence + 1 });
         scheduleRender();
         if (selectionTrigger?.isConnected) selectionTrigger.focus();
@@ -1720,6 +1834,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       frameHandle = null;
       state = Object.freeze({ ...state, lifecycle: "closed", activeOperationId: null, activeOperation: null, requestSequence: state.requestSequence + 1 });
       heatmapPresentation = null;
+      reopenExportError = null;
       selectionTrigger = null;
       detailTrigger = null;
     },

@@ -365,6 +365,11 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .heatmap-row-legend { width: 250px; flex: 0 0 250px; padding: 8px; color: var(--ink-muted); background: #f6f8f9; border: 1px solid #d5dee3; font-size: 0.66rem; line-height: 1.4; }
 .report-error p { margin: 5px 0 0; }
 .report-error button { margin-top: 8px; padding: 6px 10px; color: #fff; background: var(--slate); border: 1px solid var(--slate-deep); border-radius: 4px; cursor: pointer; }
+.report-export-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; }
+.report-export-state > p,
+.report-export-state [role="alert"] p { width: 100%; margin: 0; }
+.report-export-state button { padding: 6px 10px; color: var(--signal); background: var(--paper); border: 1px solid currentColor; border-radius: 4px; cursor: pointer; }
+.report-export-state [role="alert"] { width: 100%; padding-top: 8px; border-top: 1px solid #d7b6b1; }
 
 .sequence-ledger { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; }
 .sequence-ledger tr { border-left: 3px solid var(--signal); background: #edf3f6; }

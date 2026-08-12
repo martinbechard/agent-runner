@@ -17,11 +17,13 @@ import {
   WORKSPACE_COMMANDS,
   computeVirtualWindow,
   describeBoundaryError,
+  describeExportResult,
   formatLocalInstant,
   heatmapCellPresentation,
   heatmapResolutionLabel,
   nextHeatmapResolution,
   newOperationId,
+  reportErrorRecovery,
   shiftHeatmapRange,
 } from "./report-workspace";
 
@@ -273,6 +275,32 @@ describe("boundary errors", () => {
     expect(describeBoundaryError(new Error("invalid record at /private/operator/log.jsonl"))).toBe(
       "The report response was invalid. Retry this view. If the problem continues, open Diagnostics.",
     );
+  });
+
+  it("maps structured recovery flags to one explicit operator action", () => {
+    const base = {
+      code: "REPORT_UNAVAILABLE" as const,
+      message: "Unavailable",
+      operationId: null,
+      recoverable: true,
+      currentSourceRevision: null,
+      preflightRequired: false,
+      restartFromFirstPage: false,
+    };
+    expect(reportErrorRecovery({ ...base, restartFromFirstPage: true })).toEqual({ label: "First page", message: "Return to the first page and try again." });
+    expect(reportErrorRecovery({ ...base, preflightRequired: true })).toEqual({ label: null, message: "Review the report scope again before retrying." });
+    expect(reportErrorRecovery({ ...base, recoverable: false })).toEqual({ label: null, message: "Open Diagnostics for more information." });
+  });
+});
+
+describe("export presentation", () => {
+  it("describes a successful opaque export without revealing authority", () => {
+    expect(describeExportResult({
+      displayName: "agent-report-2026-08-12",
+      mode: "directory",
+      fileCount: 14,
+      totalByteCount: 12_345,
+    })).toBe("agent-report-2026-08-12 · complete directory · 14 files · 12,345 bytes");
   });
 });
 
