@@ -98,8 +98,11 @@ def main(argv: list[str] | None = None) -> int:
     if arguments and arguments[0] == "--agent-report-worker":
         from importlib.metadata import version
 
-        from . import report_worker
-        from .mcp_report import create_production_application_service
+        # PyInstaller executes this file as a top-level script, so package-relative
+        # imports fail in the bundled Tauri sidecar even though they work from the
+        # installed ``agent-report`` console entry point.
+        from agent_report import report_worker
+        from agent_report.mcp_report import create_production_application_service
 
         worker_arguments = arguments[1:]
         parser = argparse.ArgumentParser(add_help=False)

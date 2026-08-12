@@ -915,7 +915,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     }
     renderNavigation();
     if (!inWorkspace) {
-      elements.statusRegion.textContent = state.lifecycle === "no-selection" ? "Select a run to review." : "Review the selected report scope.";
+      elements.statusRegion.textContent = state.lifecycle === "no-selection" ? "Select a run to view." : "Choose what to include in the report.";
       return;
     }
     if (route.kind !== "snapshot") return;
