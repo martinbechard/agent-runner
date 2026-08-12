@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import timezone
 from pathlib import Path
 
 import pytest
@@ -13,6 +14,8 @@ import pytest
 pytest.importorskip("fastmcp")
 
 from agent_report.mcp_server import _client_workspace_root, mcp
+from agent_report import mcp_server as server_module
+from agent_report.mcp_report import ReportGenerator, ReportServerConfig
 from fastmcp import Client, Context, FastMCP
 
 
@@ -118,3 +121,36 @@ def test_client_workspace_root_uses_advertised_local_file_root(tmp_path: Path) -
             assert result.data == str(tmp_path.resolve())
 
     asyncio.run(call_tool())
+
+
+def test_server_lifespan_does_not_open_snapshot_cache_for_classic_tools(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Keep classic MCP startup available when additive cache creation would fail."""
+
+    runtime = object()
+    config = ReportServerConfig(
+        (tmp_path,), tmp_path / "reports", timezone.utc, "UTC", 65_536
+    )
+    calls: list[str] = []
+    monkeypatch.setattr(server_module, "load_server_config", lambda: config)
+    monkeypatch.setattr(server_module.cli, "_load_report_module", lambda: runtime)
+    monkeypatch.setattr(
+        server_module.cli, "_native_engine_path", lambda: tmp_path / "engine"
+    )
+    monkeypatch.setattr(server_module, "validate_startup", lambda *_args: None)
+
+    def unavailable_service(*_args, **_kwargs):  # type: ignore[no-untyped-def]
+        calls.append("create")
+        raise OSError("cache is unwritable")
+
+    monkeypatch.setattr(
+        server_module, "create_production_application_service", unavailable_service
+    )
+
+    async def inspect_lifespan() -> None:
+        async with server_module._server_lifespan(FastMCP("test")) as state:
+            assert isinstance(state["report_generator"], ReportGenerator)
+            assert calls == []
+
+    asyncio.run(inspect_lifespan())

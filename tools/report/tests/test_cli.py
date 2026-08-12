@@ -81,7 +81,7 @@ def test_non_codex_backend_keeps_the_existing_runtime_entrypoint(
     assert calls == [[str(tmp_path), "--output", str(tmp_path / "report.html")]]
 
 
-def test_worker_subcommand_composes_the_injected_application_service(
+def test_internal_worker_switch_composes_the_injected_application_service(
     monkeypatch,
 ) -> None:
     """Launch the packaged JSONL worker with its production service factory seam."""
@@ -104,7 +104,15 @@ def test_worker_subcommand_composes_the_injected_application_service(
     monkeypatch.setattr(cli, "_load_report_module", lambda: runtime)
     monkeypatch.setattr(report_worker, "create_worker_runtime", create)
 
-    result = cli.main(["worker", "--max-in-flight", "6", "--protocol-version", "1"])
+    result = cli.main(
+        [
+            "--agent-report-worker",
+            "--max-in-flight",
+            "6",
+            "--protocol-version",
+            "1",
+        ]
+    )
 
     assert result == 9
     config = captured["config"]
@@ -112,6 +120,21 @@ def test_worker_subcommand_composes_the_injected_application_service(
     assert config.max_in_flight == 6
     assert config.protocol_version == 1
     assert callable(captured["service_factory"])
+
+
+def test_worker_positional_path_keeps_classic_runtime(monkeypatch) -> None:
+    """Do not reserve a valid classic positional path named worker."""
+
+    calls: list[list[str]] = []
+    runtime = SimpleNamespace(
+        main=lambda arguments: calls.append(arguments) or 5,
+        _is_native_codex_rollout=lambda _path: False,
+    )
+    monkeypatch.setattr(cli, "_configure_bundled_engine", lambda: None)
+    monkeypatch.setattr(cli, "_load_report_module", lambda: runtime)
+
+    assert cli.main(["worker"]) == 5
+    assert calls == [["worker"]]
 
 
 def test_codex_automation_requires_explicit_streamlined_mode(

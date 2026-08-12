@@ -39,11 +39,12 @@ async def _server_lifespan(_server: FastMCP) -> AsyncIterator[dict[str, object]]
     config = load_server_config()
     runtime = cli._load_report_module()
     validate_startup(runtime, cli._native_engine_path())
-    application_service = create_production_application_service(
-        runtime, application_service_config(runtime, config.session_roots)
-    )
     generator = ReportGenerator(
-        runtime, config, application_service=application_service
+        runtime,
+        config,
+        application_service_factory=lambda: create_production_application_service(
+            runtime, application_service_config(runtime, config.session_roots)
+        ),
     )
     try:
         yield {
@@ -450,14 +451,16 @@ def create_server() -> FastMCP:
     ) -> dict[str, object]:
         """Publish an open snapshot to an MCP-authorized target."""
 
+        workspace_root = await _client_workspace_root(ctx)
         return await snapshot_call(
             ctx,
-            "export_snapshot",
+            "export_snapshot_for_mcp",
             snapshot_id=snapshot_id,
             target=target,
             replace=replace,
             report_mode=report_mode,
             include_sqlite_archive=include_sqlite_archive,
+            workspace_root=workspace_root,
         )
 
     @server.tool

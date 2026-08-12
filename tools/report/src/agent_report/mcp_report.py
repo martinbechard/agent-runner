@@ -12,7 +12,9 @@ import re
 import secrets
 import hashlib
 import shutil
+import stat
 import tempfile
+import threading
 from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
@@ -52,6 +54,166 @@ BucketMinutes = Literal[1, 5, 15, 30, 60]
 RUN_CACHE_FRESH_SECONDS = 60.0
 NORMALIZATION_VERSION = "agent-report-service-v1"
 _CURRENT_OPERATION_ID: ContextVar[str] = ContextVar("agent_report_operation_id")
+_CURRENT_OUTPUT_ROOT: ContextVar[Path | None] = ContextVar(
+    "agent_report_output_root", default=None
+)
+_STAGING_NAME = re.compile(r"\.agent-report-export-[0-9a-f]{32}\Z")
+
+
+class _OutputAuthorizationError(ValueError):
+    """Reject an MCP publication target without disclosing host path details."""
+
+
+def _is_symlink_or_reparse(metadata: os.stat_result) -> bool:
+    attributes = getattr(metadata, "st_file_attributes", 0)
+    reparse_flag = getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)
+    return stat.S_ISLNK(metadata.st_mode) or bool(attributes & reparse_flag)
+
+
+def _canonical_output_root(root: Path) -> Path:
+    try:
+        canonical = root.expanduser().resolve(strict=True)
+        metadata = canonical.lstat()
+    except OSError as error:
+        raise _OutputAuthorizationError(
+            "The authorized report output root is unavailable."
+        ) from error
+    if _is_symlink_or_reparse(metadata) or not stat.S_ISDIR(metadata.st_mode):
+        raise _OutputAuthorizationError(
+            "The authorized report output root is not a regular directory."
+        )
+    return canonical
+
+
+def _authorized_output_target(
+    selected: Path,
+    root: Path,
+    *,
+    require_existing_parent: bool,
+) -> tuple[Path, Path]:
+    """Bind an MCP target lexically beneath a canonical symlink-free root."""
+
+    canonical_root = _canonical_output_root(root)
+    expanded = selected.expanduser()
+    candidate = Path(
+        os.path.abspath(
+            os.fspath(expanded if expanded.is_absolute() else canonical_root / expanded)
+        )
+    )
+    try:
+        relative = candidate.relative_to(canonical_root)
+    except ValueError as error:
+        raise _OutputAuthorizationError(
+            "The report output target is outside the authorized workspace root."
+        ) from error
+    current = canonical_root
+    missing_seen = False
+    for index, part in enumerate(relative.parts):
+        current = current / part
+        try:
+            metadata = current.lstat()
+        except FileNotFoundError:
+            missing_seen = True
+            continue
+        except OSError as error:
+            raise _OutputAuthorizationError(
+                "The report output target cannot be safely validated."
+            ) from error
+        if missing_seen or _is_symlink_or_reparse(metadata):
+            raise _OutputAuthorizationError(
+                "The report output target contains a symbolic-link component."
+            )
+        if index < len(relative.parts) - 1 and not stat.S_ISDIR(metadata.st_mode):
+            raise _OutputAuthorizationError(
+                "A report output target ancestor is not a directory."
+            )
+    if require_existing_parent:
+        try:
+            parent_metadata = candidate.parent.lstat()
+        except OSError as error:
+            raise _OutputAuthorizationError(
+                "The report output target requires an existing authorized parent."
+            ) from error
+        if _is_symlink_or_reparse(parent_metadata) or not stat.S_ISDIR(
+            parent_metadata.st_mode
+        ):
+            raise _OutputAuthorizationError(
+                "The report output target parent is not a regular directory."
+            )
+    return canonical_root, candidate
+
+
+def _open_authorized_directory(root: Path, directory: Path) -> int | None:
+    """Create and open a target directory without following path components."""
+
+    relative = directory.relative_to(root)
+    directory_flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+    no_follow = getattr(os, "O_NOFOLLOW", 0)
+    if os.open not in os.supports_dir_fd or os.mkdir not in os.supports_dir_fd:
+        directory.mkdir(parents=True, exist_ok=True)
+        _authorized_output_target(directory, root, require_existing_parent=True)
+        return None
+    descriptor = os.open(root, directory_flags | no_follow)
+    try:
+        for part in relative.parts:
+            try:
+                os.mkdir(part, mode=0o700, dir_fd=descriptor)
+            except FileExistsError:
+                pass
+            metadata = os.stat(part, dir_fd=descriptor, follow_symlinks=False)
+            if _is_symlink_or_reparse(metadata) or not stat.S_ISDIR(metadata.st_mode):
+                raise _OutputAuthorizationError(
+                    "The report output directory contains an unsafe component."
+                )
+            next_descriptor = os.open(
+                part, directory_flags | no_follow, dir_fd=descriptor
+            )
+            os.close(descriptor)
+            descriptor = next_descriptor
+        return descriptor
+    except BaseException:
+        os.close(descriptor)
+        raise
+
+
+def _write_authorized_file(
+    directory: Path, directory_descriptor: int | None, name: str, content: str
+) -> Path:
+    """Write one classic artifact with a no-follow leaf check."""
+
+    payload = content.encode("utf-8")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    if directory_descriptor is None:
+        path = directory / name
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            pass
+        else:
+            if _is_symlink_or_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
+                raise _OutputAuthorizationError(
+                    "A report output artifact is not a regular file."
+                )
+        descriptor = os.open(path, flags, 0o600)
+    else:
+        try:
+            metadata = os.stat(name, dir_fd=directory_descriptor, follow_symlinks=False)
+        except FileNotFoundError:
+            pass
+        else:
+            if _is_symlink_or_reparse(metadata) or not stat.S_ISREG(metadata.st_mode):
+                raise _OutputAuthorizationError(
+                    "A report output artifact is not a regular file."
+                )
+        descriptor = os.open(name, flags, 0o600, dir_fd=directory_descriptor)
+    try:
+        with os.fdopen(descriptor, "wb", closefd=False) as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+    return directory / name
 
 
 def _digest_file(path: Path) -> str:
@@ -107,6 +269,7 @@ class _StagedExport:
     mode: service_types.ExportMode
     stage_id: str
     surface: service_types.AutomationSurface
+    authorized_root: Path | None
     source: Path
     result: static_export.ExportResult
 
@@ -810,20 +973,106 @@ class _RuntimeQueries:
 
 
 class _FilesystemPublication:
-    def __init__(self, surface: Literal["tauri", "cli", "mcp"]) -> None:
+    def __init__(
+        self,
+        surface: Literal["tauri", "cli", "mcp"],
+        *,
+        authorized_root: Path | None = None,
+    ) -> None:
         self._surface = surface
+        self._authorized_root = authorized_root
+        self._bindings: dict[
+            str, tuple[Path, int, int, str, tuple[int, int, int] | None]
+        ] = {}
+        self._authorized_parents: set[Path] = set()
 
     def authorize(
         self, request: static_export.ExportRequest
     ) -> static_export.PublicationPlan:
-        target = request.requested_target.resolve()
-        target.parent.mkdir(parents=True, exist_ok=True)
-        staging = Path(
-            tempfile.mkdtemp(prefix=static_export.STAGING_PREFIX, dir=target.parent)
+        if self._authorized_root is not None:
+            try:
+                _root, target = _authorized_output_target(
+                    request.requested_target,
+                    self._authorized_root,
+                    require_existing_parent=True,
+                )
+            except _OutputAuthorizationError as error:
+                raise service_types.PublicationFailure(
+                    "unauthorized_target", str(error), False
+                ) from error
+        else:
+            target = request.requested_target.resolve()
+            target.parent.mkdir(parents=True, exist_ok=True)
+        parent_metadata = target.parent.lstat()
+        if _is_symlink_or_reparse(parent_metadata) or not stat.S_ISDIR(
+            parent_metadata.st_mode
+        ):
+            raise service_types.PublicationFailure(
+                "unauthorized_target",
+                "The report output parent is not a regular directory.",
+                False,
+            )
+        target_metadata: os.stat_result | None
+        try:
+            target_metadata = target.lstat()
+        except FileNotFoundError:
+            target_metadata = None
+        if target_metadata is not None:
+            expected_directory = request.mode is static_export.ExportMode.DIRECTORY
+            valid_kind = (
+                stat.S_ISDIR(target_metadata.st_mode)
+                if expected_directory
+                else stat.S_ISREG(target_metadata.st_mode)
+            )
+            if _is_symlink_or_reparse(target_metadata) or not valid_kind:
+                raise service_types.PublicationFailure(
+                    "unauthorized_target",
+                    "The existing report output target has an incompatible type.",
+                    False,
+                )
+            if not request.replace:
+                raise service_types.PublicationFailure(
+                    "replace_required",
+                    "The report output target already exists and replacement was not authorized.",
+                    True,
+                )
+            if expected_directory:
+                raise service_types.PublicationFailure(
+                    "write",
+                    "Atomic replacement of an existing report directory is unavailable.",
+                    True,
+                )
+        token = secrets.token_hex(16)
+        staging = target.parent / f"{static_export.STAGING_PREFIX}{token}"
+        os.mkdir(staging, mode=0o700)
+        staging_metadata = staging.lstat()
+        if (
+            _is_symlink_or_reparse(staging_metadata)
+            or not stat.S_ISDIR(staging_metadata.st_mode)
+            or stat.S_IMODE(staging_metadata.st_mode) != 0o700
+            or staging_metadata.st_dev != parent_metadata.st_dev
+        ):
+            self._remove_staging(staging, target.parent)
+            raise service_types.PublicationFailure(
+                "write", "The report staging directory failed validation.", False
+            )
+        self._bindings[token] = (
+            target.parent,
+            parent_metadata.st_dev,
+            parent_metadata.st_ino,
+            target.name,
+            (
+                target_metadata.st_dev,
+                target_metadata.st_ino,
+                target_metadata.st_mode,
+            )
+            if target_metadata is not None
+            else None,
         )
+        self._authorized_parents.add(target.parent)
         return static_export.PublicationPlan(
             self._surface,
-            secrets.token_hex(16),
+            token,
             request.requested_target,
             target,
             staging,
@@ -835,32 +1084,125 @@ class _FilesystemPublication:
         )
 
     def publish(self, plan, staged_entry, expected_relative_paths):  # type: ignore[no-untyped-def]
+        del expected_relative_paths
         target = plan.absolute_target
-        if target.exists():
-            if not plan.replace:
-                raise service_types.PublicationFailure("replace_required")
-            backup = target.with_name(f".{target.name}.backup-{secrets.token_hex(6)}")
-            os.replace(target, backup)
-            try:
-                os.replace(staged_entry, target)
-            except BaseException:
-                os.replace(backup, target)
-                raise
-            if backup.is_dir():
-                shutil.rmtree(backup)
-            else:
-                backup.unlink()
-        else:
-            os.replace(staged_entry, target)
-        if plan.staging_directory.exists():
-            shutil.rmtree(plan.staging_directory)
+        self._revalidate(plan)
+        staged_metadata = staged_entry.lstat()
+        if _is_symlink_or_reparse(staged_metadata):
+            raise service_types.PublicationFailure(
+                "write", "The staged report artifact failed validation.", False
+            )
+        os.replace(staged_entry, target)
+        self._fsync_parent(target.parent)
+        self._remove_staging(plan.staging_directory, target.parent)
+        self._bindings.pop(plan.authority_token, None)
         return target
 
     def discard(self, plan):  # type: ignore[no-untyped-def]
-        shutil.rmtree(plan.staging_directory, ignore_errors=True)
+        binding = self._bindings.pop(plan.authority_token, None)
+        if binding is not None:
+            self._remove_staging(plan.staging_directory, binding[0])
 
     def cleanup_stale(self, *, older_than):  # type: ignore[no-untyped-def]
-        return ()
+        removed: list[Path] = []
+        cutoff = older_than.timestamp()
+        for parent in tuple(self._authorized_parents):
+            try:
+                candidates = tuple(parent.iterdir())
+            except OSError:
+                continue
+            for candidate in candidates:
+                if not _STAGING_NAME.fullmatch(candidate.name):
+                    continue
+                try:
+                    metadata = candidate.lstat()
+                except OSError:
+                    continue
+                if (
+                    _is_symlink_or_reparse(metadata)
+                    or not stat.S_ISDIR(metadata.st_mode)
+                    or metadata.st_mtime >= cutoff
+                ):
+                    continue
+                if self._remove_staging(candidate, parent):
+                    removed.append(candidate)
+        return tuple(removed)
+
+    def _revalidate(self, plan: static_export.PublicationPlan) -> None:
+        target = plan.absolute_target
+        binding = self._bindings.get(plan.authority_token)
+        if binding is None:
+            raise service_types.PublicationFailure(
+                "unauthorized_target",
+                "The report publication authority expired.",
+                False,
+            )
+        parent, device, inode, name, target_identity = binding
+        metadata = parent.lstat()
+        if (
+            _is_symlink_or_reparse(metadata)
+            or metadata.st_dev != device
+            or metadata.st_ino != inode
+            or target.name != name
+            or target.parent != parent
+        ):
+            raise service_types.PublicationFailure(
+                "unauthorized_target",
+                "The report output authority changed before publication.",
+                False,
+            )
+        try:
+            target_metadata = target.lstat()
+        except FileNotFoundError:
+            current_identity = None
+        else:
+            if _is_symlink_or_reparse(target_metadata):
+                raise service_types.PublicationFailure(
+                    "unauthorized_target",
+                    "The report output target changed before publication.",
+                    False,
+                )
+            current_identity = (
+                target_metadata.st_dev,
+                target_metadata.st_ino,
+                target_metadata.st_mode,
+            )
+        if current_identity != target_identity:
+            raise service_types.PublicationFailure(
+                "unauthorized_target",
+                "The report output target changed before publication.",
+                False,
+            )
+
+    @staticmethod
+    def _remove_staging(path: Path, parent: Path) -> bool:
+        if path.parent != parent or not _STAGING_NAME.fullmatch(path.name):
+            return False
+        try:
+            metadata = path.lstat()
+        except FileNotFoundError:
+            return False
+        if _is_symlink_or_reparse(metadata) or not stat.S_ISDIR(metadata.st_mode):
+            return False
+        shutil.rmtree(path)
+        return True
+
+    @staticmethod
+    def _fsync_parent(parent: Path) -> None:
+        flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
+        try:
+            descriptor = os.open(parent, flags | getattr(os, "O_NOFOLLOW", 0))
+        except OSError:
+            return
+        try:
+            try:
+                os.fsync(descriptor)
+            except OSError:
+                # The target is already visible. The current publication contract
+                # cannot represent a post-commit durability warning.
+                pass
+        finally:
+            os.close(descriptor)
 
 
 class _ExporterAdapter:
@@ -894,6 +1236,7 @@ class _ExporterAdapter:
             request.mode,
             secrets.token_hex(16),
             request.surface,
+            _CURRENT_OUTPUT_ROOT.get(),
             result.published_target,
             result,
         )
@@ -914,7 +1257,9 @@ class _PublisherAdapter:
     def publish(self, staged, target, replace, cancellation):  # type: ignore[no-untyped-def]
         result = staged.result
         scratch = staged.source.parent
-        publication = _FilesystemPublication(staged.surface)
+        publication = _FilesystemPublication(
+            staged.surface, authorized_root=staged.authorized_root
+        )
         try:
             published = publication.publish(
                 publication.authorize(
@@ -1160,7 +1505,7 @@ def create_production_application_service(
         ),
         repository_adapter,
         _RuntimeQueries(repository),
-            _ExporterAdapter(config),
+        _ExporterAdapter(config),
         _PublisherAdapter(),
         _Clock(),
         _Ids(repository_adapter),
@@ -1357,7 +1702,14 @@ class ReportGenerator:
         config: ReportServerConfig,
         *,
         application_service: service_types.ApplicationService | None = None,
+        application_service_factory: (
+            Callable[[], service_types.ApplicationService] | None
+        ) = None,
     ) -> None:
+        if application_service is not None and application_service_factory is not None:
+            raise ValueError(
+                "Provide either an application service or its lazy factory, not both."
+            )
         self._runtime = runtime
         self._config = config
         self._run_cache: dict[
@@ -1367,6 +1719,8 @@ class ReportGenerator:
             tuple[list[TaskCandidate], list[Path], str | None, float] | None
         ) = None
         self._application_service = application_service
+        self._application_service_factory = application_service_factory
+        self._application_service_lock = threading.Lock()
 
     def close(self) -> None:
         """Release process-local snapshot and repository resources."""
@@ -1384,6 +1738,10 @@ class ReportGenerator:
         return context
 
     def _service(self) -> service_types.ApplicationService:
+        if self._application_service is None and self._application_service_factory:
+            with self._application_service_lock:
+                if self._application_service is None:
+                    self._application_service = self._application_service_factory()
         if self._application_service is None:
             raise RuntimeError("The snapshot application service is unavailable")
         return self._application_service
@@ -1729,13 +2087,44 @@ class ReportGenerator:
     ) -> dict[str, object]:
         """Publish an open snapshot through the shared MCP exporter."""
 
-        return self._export_snapshot(
+        return self.export_snapshot_for_mcp(
             snapshot_id=snapshot_id,
-            surface="mcp",
             target=target,
             replace=replace,
             report_mode=report_mode,
             include_sqlite_archive=include_sqlite_archive,
+            workspace_root=None,
+            cancelled=cancelled,
+        )
+
+    def export_snapshot_for_mcp(
+        self,
+        *,
+        snapshot_id: str,
+        target: str,
+        replace: bool = False,
+        report_mode: Literal["directory", "summary"] | None = None,
+        include_sqlite_archive: bool = False,
+        workspace_root: Path | None,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Authorize one snapshot export beneath the effective MCP workspace."""
+
+        root = workspace_root or self._config.workspace_root or Path.cwd()
+        try:
+            authorized_root, authorized_target = _authorized_output_target(
+                Path(target), root, require_existing_parent=True
+            )
+        except _OutputAuthorizationError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+        return self._export_snapshot(
+            snapshot_id=snapshot_id,
+            surface="mcp",
+            target=str(authorized_target),
+            replace=replace,
+            report_mode=report_mode,
+            include_sqlite_archive=include_sqlite_archive,
+            authorized_root=authorized_root,
             cancelled=cancelled,
         )
 
@@ -1748,21 +2137,26 @@ class ReportGenerator:
         replace: bool,
         report_mode: Literal["directory", "summary"] | None,
         include_sqlite_archive: bool = False,
+        authorized_root: Path | None = None,
         cancelled: Callable[[], bool] | None = None,
     ) -> dict[str, object]:
-        result = self._service().export_snapshot(
-            self._operation_context(),
-            service_types.ExportSnapshotRequest(
-                snapshot_id,
-                surface,
-                Path(target).expanduser().resolve(),
-                replace,
-                report_mode,
-                include_sqlite_archive,
-            ),
-            cancellation=_CallableCancellation(cancelled),
-        )
-        return self._service_result(result)
+        token = _CURRENT_OUTPUT_ROOT.set(authorized_root)
+        try:
+            result = self._service().export_snapshot(
+                self._operation_context(),
+                service_types.ExportSnapshotRequest(
+                    snapshot_id,
+                    surface,
+                    Path(target).expanduser().resolve(),
+                    replace,
+                    report_mode,
+                    include_sqlite_archive,
+                ),
+                cancellation=_CallableCancellation(cancelled),
+            )
+            return self._service_result(result)
+        finally:
+            _CURRENT_OUTPUT_ROOT.reset(token)
 
     def close_snapshot(self, *, snapshot_id: str) -> dict[str, object]:
         """Close one process-local snapshot and release its read handle."""
@@ -1829,15 +2223,20 @@ class ReportGenerator:
         except (OSError, RuntimeError, ValueError) as error:
             return self._error("REPORT_GENERATION_FAILED", str(error))
 
-        base_workspace = (
-            workspace_root or self._config.workspace_root or Path.cwd().resolve()
-        )
-        report_directory = self._resolve_output_directory(output_path, base_workspace)
+        base_workspace = workspace_root or self._config.workspace_root or Path.cwd()
+        try:
+            authorized_root, report_directory = self._resolve_output_directory(
+                output_path, base_workspace, enforce_root=True
+            )
+        except _OutputAuthorizationError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
         written_files: dict[str, str] = {}
         warnings: list[dict[str, str]] = []
         try:
-            written_files = self._write_bundle(report_directory, representations)
-        except OSError as error:
+            written_files = self._write_bundle(
+                report_directory, representations, authorized_root=authorized_root
+            )
+        except (OSError, _OutputAuthorizationError) as error:
             message = f"Unable to write report bundle to {report_directory}: {error}"
             if not return_via_mcp:
                 return self._error("REPORT_WRITE_FAILED", message)
@@ -1931,10 +2330,10 @@ class ReportGenerator:
         if not opened.get("ok"):
             return opened
         snapshot_id = cast(str, opened["snapshot_id"])
-        base_workspace = (
-            workspace_root or self._config.workspace_root or Path.cwd().resolve()
+        base_workspace = workspace_root or self._config.workspace_root or Path.cwd()
+        _ignored_root, target = self._resolve_output_directory(
+            output_path, base_workspace, enforce_root=False
         )
-        target = self._resolve_output_directory(output_path, base_workspace)
         mode = report_mode or "directory"
         if mode == "summary" and output_path is None:
             target = target / "report.html"
@@ -2284,27 +2683,49 @@ class ReportGenerator:
         return matches[0]
 
     def _resolve_output_directory(
-        self, output_path: str | None, workspace_root: Path
-    ) -> Path:
+        self,
+        output_path: str | None,
+        workspace_root: Path,
+        *,
+        enforce_root: bool = True,
+    ) -> tuple[Path, Path]:
         selected = (
             Path(output_path).expanduser()
             if output_path is not None
             else self._config.default_output
         )
+        if enforce_root:
+            return _authorized_output_target(
+                selected, workspace_root, require_existing_parent=False
+            )
         if not selected.is_absolute():
             selected = workspace_root / selected
-        return selected.resolve()
+        return workspace_root, selected.resolve()
 
     def _write_bundle(
-        self, directory: Path, representations: Mapping[str, str]
+        self,
+        directory: Path,
+        representations: Mapping[str, str],
+        *,
+        authorized_root: Path,
     ) -> dict[str, str]:
-        directory.mkdir(parents=True, exist_ok=True)
-        paths = {
-            key: directory / filename for key, filename in REPORT_FILENAMES.items()
-        }
-        for key, path in paths.items():
-            path.write_text(representations[key], encoding="utf-8")
-        return {key: str(path.resolve()) for key, path in paths.items()}
+        root, target = _authorized_output_target(
+            directory, authorized_root, require_existing_parent=False
+        )
+        descriptor = _open_authorized_directory(root, target)
+        try:
+            paths = {
+                key: _write_authorized_file(
+                    target, descriptor, filename, representations[key]
+                )
+                for key, filename in REPORT_FILENAMES.items()
+            }
+            if descriptor is not None:
+                os.fsync(descriptor)
+        finally:
+            if descriptor is not None:
+                os.close(descriptor)
+        return {key: str(path) for key, path in paths.items()}
 
     @staticmethod
     def _error(code: str, message: str) -> dict[str, object]:

@@ -95,7 +95,7 @@ def main(argv: list[str] | None = None) -> int:
     _configure_bundled_engine()
     arguments = list(sys.argv[1:] if argv is None else argv)
     runtime = _load_report_module()
-    if arguments and arguments[0] == "worker":
+    if arguments and arguments[0] == "--agent-report-worker":
         from importlib.metadata import version
 
         from . import report_worker

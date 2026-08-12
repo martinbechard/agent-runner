@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import os
+import stat
 from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -13,6 +14,8 @@ from zoneinfo import ZoneInfo
 
 import pytest
 from agent_report import application_service as service_types
+from agent_report import mcp_report as report_module
+from agent_report import static_export
 from agent_report.mcp_report import (
     ReportGenerator,
     ReportServerConfig,
@@ -531,6 +534,232 @@ def test_filesystem_failure_is_fatal_without_inline_delivery(tmp_path: Path) -> 
     )
 
     assert result["code"] == "REPORT_WRITE_FAILED"
+
+
+@pytest.mark.parametrize("output_path", ["../escape", "/tmp/outside-agent-report"])
+def test_classic_report_rejects_output_outside_authorized_workspace(
+    tmp_path: Path, output_path: str
+) -> None:
+    """Reject lexical traversal and absolute targets outside the MCP workspace."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    entry = _entry(tmp_path, "thread-1", "Secure task", "2026-08-10T12:00:00+00:00")
+    generator = ReportGenerator(FakeRuntime([entry]), _config(tmp_path, Path("bundle")))
+
+    result = generator.generate_report(
+        thread_id="thread-1", output_path=output_path, workspace_root=workspace
+    )
+
+    assert result["code"] == "REPORT_INVALID_REQUEST"
+
+
+def test_classic_report_rejects_symlink_ancestor_and_leaf(
+    tmp_path: Path,
+) -> None:
+    """Never follow a symlink component while publishing the classic bundle."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+    entry = _entry(tmp_path, "thread-1", "Secure task", "2026-08-10T12:00:00+00:00")
+    generator = ReportGenerator(FakeRuntime([entry]), _config(tmp_path, Path("bundle")))
+
+    ancestor = generator.generate_report(
+        thread_id="thread-1", output_path="linked/report", workspace_root=workspace
+    )
+    report = workspace / "report"
+    report.mkdir()
+    protected = outside / "protected.html"
+    protected.write_text("unchanged", encoding="utf-8")
+    (report / "report.html").symlink_to(protected)
+    leaf = generator.generate_report(
+        thread_id="thread-1", output_path="report", workspace_root=workspace
+    )
+
+    assert ancestor["code"] == "REPORT_INVALID_REQUEST"
+    assert leaf["code"] == "REPORT_WRITE_FAILED"
+    assert protected.read_text(encoding="utf-8") == "unchanged"
+
+
+def test_snapshot_export_rejects_outside_and_symlink_targets_before_service(
+    tmp_path: Path,
+) -> None:
+    """Apply the same MCP workspace authority before snapshot export dispatch."""
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (workspace / "linked").symlink_to(outside, target_is_directory=True)
+
+    class Service:
+        def export_snapshot(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            raise AssertionError("unauthorized target reached the application service")
+
+        def close(self) -> None:
+            pass
+
+    generator = ReportGenerator(
+        FakeRuntime([]),
+        _config(tmp_path, Path("bundle")),
+        application_service=Service(),  # type: ignore[arg-type]
+    )
+
+    outside_result = generator.export_snapshot_for_mcp(
+        snapshot_id="snap_1234567890abcdef12345678",
+        target=str(outside / "report"),
+        workspace_root=workspace,
+    )
+    symlink_result = generator.export_snapshot_for_mcp(
+        snapshot_id="snap_1234567890abcdef12345678",
+        target="linked/report",
+        workspace_root=workspace,
+    )
+
+    assert outside_result["code"] == "REPORT_INVALID_REQUEST"
+    assert symlink_result["code"] == "REPORT_INVALID_REQUEST"
+
+
+def test_classic_generation_does_not_initialize_lazy_snapshot_service(
+    tmp_path: Path,
+) -> None:
+    """Keep classic MCP generation available when the cache cannot initialize."""
+
+    entry = _entry(tmp_path, "thread-1", "Classic task", "2026-08-10T12:00:00+00:00")
+
+    def unavailable_service() -> service_types.ApplicationService:
+        raise OSError("cache is unwritable")
+
+    generator = ReportGenerator(
+        FakeRuntime([entry]),
+        _config(tmp_path, Path("bundle")),
+        application_service_factory=unavailable_service,
+    )
+
+    result = generator.generate_report(thread_id="thread-1", workspace_root=tmp_path)
+
+    assert result["ok"] is True
+
+
+def _publication_request(
+    target: Path,
+    mode: static_export.ExportMode = static_export.ExportMode.SUMMARY,
+    *,
+    replace_target: bool = False,
+) -> static_export.ExportRequest:
+    return static_export.ExportRequest(
+        "op_1234567890abcdef12345678",
+        "snap_1234567890abcdef12345678",
+        "revision",
+        mode,
+        target,
+        replace_target,
+    )
+
+
+def test_publication_staging_is_exact_private_and_same_device(tmp_path: Path) -> None:
+    publication = report_module._FilesystemPublication("mcp", authorized_root=tmp_path)
+
+    plan = publication.authorize(_publication_request(tmp_path / "summary.html"))
+
+    metadata = plan.staging_directory.lstat()
+    assert report_module._STAGING_NAME.fullmatch(plan.staging_directory.name)
+    assert stat.S_IMODE(metadata.st_mode) == 0o700
+    assert metadata.st_dev == tmp_path.lstat().st_dev
+    publication.discard(plan)
+
+
+def test_summary_replace_is_one_atomic_replace_without_backup(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    target = tmp_path / "summary.html"
+    target.write_text("old", encoding="utf-8")
+    publication = report_module._FilesystemPublication("mcp", authorized_root=tmp_path)
+    plan = publication.authorize(_publication_request(target, replace_target=True))
+    staged = plan.staging_directory / "summary.html"
+    staged.write_text("new", encoding="utf-8")
+    calls: list[tuple[Path, Path]] = []
+    real_replace = os.replace
+
+    def observed_replace(source, destination):  # type: ignore[no-untyped-def]
+        calls.append((Path(source), Path(destination)))
+        real_replace(source, destination)
+
+    monkeypatch.setattr(report_module.os, "replace", observed_replace)
+
+    assert publication.publish(plan, staged, ()) == target
+    assert calls == [(staged, target)]
+    assert target.read_text(encoding="utf-8") == "new"
+    assert not any("backup" in path.name for path in tmp_path.iterdir())
+
+
+def test_existing_directory_replace_is_rejected_before_staging(tmp_path: Path) -> None:
+    target = tmp_path / "report"
+    target.mkdir()
+    publication = report_module._FilesystemPublication("mcp", authorized_root=tmp_path)
+
+    with pytest.raises(service_types.PublicationFailure, match="Atomic replacement"):
+        publication.authorize(
+            _publication_request(
+                target,
+                static_export.ExportMode.DIRECTORY,
+                replace_target=True,
+            )
+        )
+
+    assert not any(
+        report_module._STAGING_NAME.fullmatch(path.name) for path in tmp_path.iterdir()
+    )
+
+
+def test_publication_revalidation_rejects_target_swap(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    target = tmp_path / "summary.html"
+    publication = report_module._FilesystemPublication("mcp", authorized_root=tmp_path)
+    plan = publication.authorize(_publication_request(target))
+    staged = plan.staging_directory / "summary.html"
+    staged.write_text("new", encoding="utf-8")
+    target.symlink_to(outside / "escaped.html")
+
+    with pytest.raises(service_types.PublicationFailure, match="changed"):
+        publication.publish(plan, staged, ())
+
+    assert not (outside / "escaped.html").exists()
+    target.unlink()
+    publication.discard(plan)
+
+
+def test_stale_cleanup_removes_only_exact_old_owned_staging(
+    tmp_path: Path,
+) -> None:
+    publication = report_module._FilesystemPublication("mcp", authorized_root=tmp_path)
+    plan = publication.authorize(_publication_request(tmp_path / "summary.html"))
+    publication.discard(plan)
+    old = tmp_path / f"{static_export.STAGING_PREFIX}{'a' * 32}"
+    old.mkdir(mode=0o700)
+    malformed = tmp_path / f"{static_export.STAGING_PREFIX}not-owned"
+    malformed.mkdir()
+    fresh = tmp_path / f"{static_export.STAGING_PREFIX}{'b' * 32}"
+    fresh.mkdir(mode=0o700)
+    staging_file = tmp_path / f"{static_export.STAGING_PREFIX}{'c' * 32}"
+    staging_file.write_text("keep", encoding="utf-8")
+    legacy_backup = tmp_path / ".summary.html.backup-abcdef123456"
+    legacy_backup.write_text("keep", encoding="utf-8")
+    old_timestamp = datetime(2026, 1, 1, tzinfo=timezone.utc).timestamp()
+    os.utime(old, (old_timestamp, old_timestamp))
+
+    removed = publication.cleanup_stale(
+        older_than=datetime(2026, 2, 1, tzinfo=timezone.utc)
+    )
+
+    assert removed == (old,)
+    assert not old.exists()
+    assert malformed.exists() and fresh.exists() and staging_file.exists()
+    assert legacy_backup.exists()
 
 
 def test_startup_validation_forces_and_probes_bundled_engine(
