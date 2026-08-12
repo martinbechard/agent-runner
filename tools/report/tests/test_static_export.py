@@ -32,6 +32,7 @@ from agent_report.static_export import (
     ExportRequest,
     ExportScope,
     ExportState,
+    ExportWarningRecord,
     HeatmapCellExport,
     ManifestFile,
     MetricExport,
@@ -214,7 +215,10 @@ def make_model(
         run_state="completed",
         metrics=metrics,
         recent_activity=tuple(f"activity-{index}: inferred" for index in range(activity_count)),
-        warnings=("sanitized warning", "sanitized warning"),
+        warnings=(
+            ExportWarningRecord("REPORT_SOURCE_WARNING", "sanitized warning"),
+            ExportWarningRecord("REPORT_SOURCE_WARNING", "sanitized warning"),
+        ),
     )
     agents = tuple(
         AgentExportRow(
@@ -377,6 +381,13 @@ def test_export_summary_is_self_contained_and_at_most_two_mibibytes(tmp_path: Pa
     assert result.manifest_sha256 is None
 
 
+def test_export_summary_result_reports_one_file_and_exact_total_byte_count(tmp_path: Path) -> None:
+    target, result, _ = export_to(tmp_path, mode=ExportMode.SUMMARY)
+
+    assert result.file_count == 1
+    assert result.total_byte_count == len(target.read_bytes())
+
+
 def test_export_summary_omits_sections_in_stable_priority_and_lists_each_omission(tmp_path: Path) -> None:
     model = make_model(activity_count=5_000, agent_count=1_000)
     target, result, _ = export_to(
@@ -446,6 +457,55 @@ def test_export_directory_manifest_is_canonical_and_every_payload_digest_matches
     assert result.manifest_sha256 == hashlib.sha256(raw).hexdigest()
 
 
+def test_export_directory_result_reports_exact_file_and_total_byte_counts(tmp_path: Path) -> None:
+    target, result, _ = export_to(tmp_path)
+    published_files = tuple(path for path in target.rglob("*") if path.is_file())
+
+    assert result.file_count == len(published_files)
+    assert result.total_byte_count == sum(len(path.read_bytes()) for path in published_files)
+
+
+def test_export_warnings_and_errors_are_structured_records(tmp_path: Path) -> None:
+    target, result, _ = export_to(tmp_path)
+    warning = ExportWarningRecord("REPORT_SOURCE_WARNING", "sanitized warning")
+
+    assert result.warnings == (warning,)
+    assert result.omissions == ()
+    assert json.loads((target / "manifest.json").read_text())["warnings"] == [
+        {"code": warning.code, "message": warning.message}
+    ]
+
+    error = StaticExportError.from_code(
+        "REPORT_TOO_LARGE_FOR_MCP",
+        "The complete export exceeds the MCP response limit.",
+        operation_id="operation-1",
+        actual_bytes=20,
+        maximum_bytes=10,
+        written_files=("summary.html",),
+        warnings=(warning,),
+    ).error
+    assert error.code == "REPORT_TOO_LARGE_FOR_MCP"
+    assert error.actual_bytes == 20 and error.maximum_bytes == 10
+    assert error.written_files == ("summary.html",)
+    assert error.warnings == (warning,)
+
+    model = make_model()
+    invalid_model = replace(
+        model,
+        summary=replace(model.summary, warnings=("unstructured",)),  # type: ignore[arg-type]
+    )
+    publication = RecordingPublication(tmp_path)
+    with pytest.raises(StaticExportError) as caught:
+        StaticExporter().export(
+            invalid_model,
+            make_request(tmp_path / "invalid-report"),
+            publication,
+            NeverCancelled(),
+        )
+    assert caught.value.error.code == "REPORT_INVALID_REQUEST"
+    assert publication.authorize_calls == 0
+
+
 def test_export_directory_opens_from_file_url_with_network_disabled(tmp_path: Path) -> None:
     target, _, _ = export_to(tmp_path)
     assert "Privacy-safe task" in urlopen((target / "index.html").as_uri()).read().decode()  # noqa: S310 - file URI only
@@ -479,7 +539,8 @@ def test_export_directory_optional_sqlite_uses_archive_writer_for_exact_snapshot
     )
     assert writer.provenance == make_model().provenance
     assert (target / "report.sqlite").read_bytes().startswith(b"SQLite format 3")
-    assert PurePosixPath("report.sqlite") in result.written_files
+    assert (target / "report.sqlite").is_file()
+    assert result.file_count == sum(1 for path in target.rglob("*") if path.is_file())
 
 
 @pytest.mark.parametrize(
@@ -743,7 +804,9 @@ def test_live_export_records_observation_and_warning_without_claiming_sealed_sta
     manifest = json.loads((target / "manifest.json").read_text())
     assert manifest["snapshot_state"] == "live"
     assert manifest["observed_at"] == "2026-08-12T15:00:04Z"
-    assert result.warnings == ("sanitized warning",)
+    assert result.warnings == (
+        ExportWarningRecord("REPORT_SOURCE_WARNING", "sanitized warning"),
+    )
     index = (target / "index.html").read_text()
     assert "sanitized warning" in index and "state live" in index
 

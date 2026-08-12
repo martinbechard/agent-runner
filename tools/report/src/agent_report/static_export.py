@@ -147,13 +147,21 @@ class MetricExport:
 
 
 @dataclass(frozen=True, slots=True)
+class ExportWarningRecord:
+    """Carry one privacy-bounded warning across export surfaces."""
+
+    code: str
+    message: str
+
+
+@dataclass(frozen=True, slots=True)
 class SummaryExport:
     title: str
     goal: str | None
     run_state: str
     metrics: tuple[MetricExport, ...]
     recent_activity: tuple[str, ...]
-    warnings: tuple[str, ...]
+    warnings: tuple[ExportWarningRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -385,7 +393,7 @@ class ExportManifest:
     formatter_digest: str
     files: tuple[ManifestFile, ...]
     omissions: tuple[ManifestOmission, ...]
-    warnings: tuple[str, ...]
+    warnings: tuple[ExportWarningRecord, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -405,8 +413,9 @@ class ExportResult:
     mode: ExportMode
     published_target: Path
     manifest_sha256: str | None
-    written_files: tuple[PurePosixPath, ...]
-    warnings: tuple[str, ...]
+    file_count: int
+    total_byte_count: int
+    warnings: tuple[ExportWarningRecord, ...]
     omissions: tuple[ManifestOmission, ...]
 
 
@@ -424,7 +433,7 @@ class ExportErrorRecord:
     actual_bytes: int | None = None
     maximum_bytes: int | None = None
     written_files: tuple[str, ...] = ()
-    warnings: tuple[str, ...] = ()
+    warnings: tuple[ExportWarningRecord, ...] = ()
     commit_strategy: str | None = None
 
 
@@ -451,7 +460,7 @@ class StaticExportError(RuntimeError):
         actual_bytes: int | None = None,
         maximum_bytes: int | None = None,
         written_files: tuple[str, ...] = (),
-        warnings: tuple[str, ...] = (),
+        warnings: tuple[ExportWarningRecord, ...] = (),
         commit_strategy: str | None = None,
     ) -> StaticExportError:
         return cls(
@@ -573,6 +582,17 @@ def _validate_request(model: CodexExportModel, request: ExportRequest) -> None:
     )
     if any(type(value) is not tuple for value in exact_tuples):
         _fail("REPORT_INVALID_REQUEST", "Exporter collections must use exact immutable tuple contracts.", operation_id=request.operation_id)
+    if any(
+        type(warning) is not ExportWarningRecord
+        or type(warning.code) is not str
+        or type(warning.message) is not str
+        for warning in model.summary.warnings
+    ):
+        _fail(
+            "REPORT_INVALID_REQUEST",
+            "Export warnings must use structured code and message records.",
+            operation_id=request.operation_id,
+        )
     _validate_snapshot_binding(model, request)
 
 
@@ -647,8 +667,14 @@ def _iso_utc(value: datetime) -> str:
     return value.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
-def _deduplicate(values: tuple[str, ...]) -> tuple[str, ...]:
+def _deduplicate(
+    values: tuple[ExportWarningRecord, ...],
+) -> tuple[ExportWarningRecord, ...]:
     return tuple(dict.fromkeys(values))
+
+
+def _warning_text(warning: ExportWarningRecord) -> str:
+    return f"{warning.code}: {warning.message}"
 
 
 def _escape(value: str) -> str:
@@ -671,7 +697,10 @@ def _summary_document(
         )
         for metric in summary.metrics
     )
-    warnings = "".join(f'<li class="warning">{_escape(value)}</li>' for value in _deduplicate(summary.warnings)) or "<li>None</li>"
+    warnings = "".join(
+        f'<li class="warning">{_escape(_warning_text(warning))}</li>'
+        for warning in _deduplicate(summary.warnings)
+    ) or "<li>None</li>"
     optional = ""
     if "recent_activity" in included:
         items = "".join(
@@ -928,7 +957,10 @@ def _render_report_markdown(model: CodexExportModel) -> bytes:
     for metric in model.summary.metrics:
         lines.extend((f"- {metric.label}: {metric.display_value}", f"  - Evidence: `{metric.evidence}`"))
     lines.extend(("", "## Warnings", ""))
-    lines.extend(f"- {warning}" for warning in _deduplicate(model.summary.warnings))
+    lines.extend(
+        f"- {_warning_text(warning)}"
+        for warning in _deduplicate(model.summary.warnings)
+    )
     lines.extend(("", "## Recent activity", ""))
     lines.extend(f"- {activity}" for activity in model.summary.recent_activity)
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -1032,8 +1064,8 @@ def _render_index(model: CodexExportModel) -> bytes:
     provenance = model.provenance
     metrics = "".join(f'<li>{_escape(metric.label)}: {_escape(metric.display_value)} ({_escape(metric.evidence)})</li>' for metric in model.summary.metrics)
     warnings = "".join(
-        f'<li class="warning">{_escape(value)}</li>'
-        for value in _deduplicate(model.summary.warnings)
+        f'<li class="warning">{_escape(_warning_text(warning))}</li>'
+        for warning in _deduplicate(model.summary.warnings)
     ) or "<li>None</li>"
     body = f"""<p class="state">Snapshot {_escape(provenance.snapshot_id)}, revision {_escape(provenance.revision)}, state {_escape(provenance.state.value)}.</p>
 <p>Observed {_escape(_iso_utc(provenance.observed_at))}. Children: {str(provenance.scope.include_children).lower()}; collaborators: {str(provenance.scope.include_collaborators).lower()}.</p>
@@ -1171,7 +1203,7 @@ def _build_manifest(
     provenance: SnapshotProvenance,
     files: tuple[ManifestFile, ...],
     omissions: tuple[ManifestOmission, ...],
-    warnings: tuple[str, ...],
+    warnings: tuple[ExportWarningRecord, ...],
 ) -> ExportManifest:
     return ExportManifest(
         manifest_version=MANIFEST_VERSION,
@@ -1215,7 +1247,7 @@ def _manifest_bytes(manifest: ExportManifest) -> bytes:
             for item in manifest.files
         ],
         "omissions": [asdict(item) for item in manifest.omissions],
-        "warnings": list(manifest.warnings),
+        "warnings": [asdict(item) for item in manifest.warnings],
     }
     return (json.dumps(payload, ensure_ascii=False, separators=(",", ":"), sort_keys=True) + "\n").encode("utf-8")
 
@@ -1339,6 +1371,39 @@ def _verify_summary(payload: bytes, maximum: int, operation_id: str) -> None:
         _fail("REPORT_EXPORT_INTEGRITY_FAILED", "The summary is not self-contained.", operation_id=operation_id)
 
 
+def _published_counts(
+    target: Path,
+    mode: ExportMode,
+    operation_id: str,
+) -> tuple[int, int]:
+    """Count final published bytes without disclosing artifact paths on failure."""
+
+    try:
+        if target.is_symlink():
+            raise OSError("published target is a symbolic link")
+        if mode is ExportMode.SUMMARY:
+            if not target.is_file():
+                raise OSError("published summary is not a regular file")
+            return 1, len(target.read_bytes())
+        if not target.is_dir():
+            raise OSError("published directory is not a directory")
+        files: list[Path] = []
+        for path in target.rglob("*"):
+            if path.is_symlink():
+                raise OSError("published artifact contains a symbolic link")
+            if path.is_file():
+                files.append(path)
+            elif not path.is_dir():
+                raise OSError("published artifact contains a non-regular entry")
+        return len(files), sum(len(path.read_bytes()) for path in files)
+    except OSError as exc:
+        raise StaticExportError.from_code(
+            "REPORT_EXPORT_PUBLICATION_FAILED",
+            "The published artifact could not be counted safely.",
+            operation_id=operation_id,
+        ) from exc
+
+
 class StaticExporter:
     """Render one coherent Codex snapshot and hand it to one publisher."""
 
@@ -1399,7 +1464,6 @@ class StaticExporter:
                 _check_cancelled(cancellation, request.operation_id)
                 _verify_summary(staged_entry.read_bytes(), request.summary_max_bytes, request.operation_id)
                 expected_paths = payload_paths
-                written_files = payload_paths
             else:
                 staged_entry = plan.staging_directory
                 payload_paths = _render_directory(
@@ -1422,7 +1486,6 @@ class StaticExporter:
                 _check_cancelled(cancellation, request.operation_id)
                 _verify_staged_directory(staged_entry, manifest)
                 expected_paths = tuple(sorted((*payload_paths, PurePosixPath("manifest.json")), key=PurePosixPath.as_posix))
-                written_files = expected_paths
 
             _check_cancelled(cancellation, request.operation_id)
             phase = ExportState.PUBLISHING
@@ -1441,6 +1504,11 @@ class StaticExporter:
                 ) from exc
             if published_target != plan.absolute_target:
                 _fail("REPORT_EXPORT_PUBLICATION_FAILED", "The publisher returned a different target.", operation_id=request.operation_id, target=str(request.requested_target), commit_strategy=plan.commit_strategy)
+            file_count, total_byte_count = _published_counts(
+                published_target,
+                request.mode,
+                request.operation_id,
+            )
             _emit_progress(progress, request.operation_id, ExportState.PUBLISHED, 100, 100, "Static export published.")
             return ExportResult(
                 operation_id=request.operation_id,
@@ -1449,7 +1517,8 @@ class StaticExporter:
                 mode=request.mode,
                 published_target=published_target,
                 manifest_sha256=manifest_sha256,
-                written_files=written_files,
+                file_count=file_count,
+                total_byte_count=total_byte_count,
                 warnings=warnings,
                 omissions=omissions,
             )
