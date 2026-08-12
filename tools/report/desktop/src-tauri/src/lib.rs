@@ -95,8 +95,37 @@ impl NativeReportError {
 
 impl From<StructuredError> for NativeReportError {
     fn from(error: StructuredError) -> Self {
+        let code = match error.code.as_str() {
+            "REPORT_CANCELLED"
+            | "REPORT_CURSOR_CONFLICT"
+            | "REPORT_DISCOVERY_FAILED"
+            | "REPORT_EVENT_NOT_FOUND"
+            | "REPORT_EXPORT_FAILED"
+            | "REPORT_GENERATION_FAILED"
+            | "REPORT_INTERNAL_ERROR"
+            | "REPORT_INVALID_REQUEST"
+            | "REPORT_NOT_FOUND"
+            | "REPORT_PRIVACY_FAILED"
+            | "REPORT_SCOPE_CONFLICT"
+            | "REPORT_SNAPSHOT_CONFLICT"
+            | "REPORT_SNAPSHOT_NOT_FOUND"
+            | "REPORT_PROTOCOL_ERROR"
+            | "REPORT_UNAVAILABLE"
+            | "REPORT_WRITE_FAILED" => error.code,
+            "REPORT_WORKER_BUSY"
+            | "REPORT_WORKER_PROTOCOL_MISMATCH"
+            | "REPORT_WORKER_STARTUP_FAILED" => "REPORT_UNAVAILABLE".to_owned(),
+            "REPORT_WORKER_INTERNAL" => "REPORT_INTERNAL_ERROR".to_owned(),
+            "REPORT_DUPLICATE_OPERATION"
+            | "REPORT_WORKER_INVALID_ENVELOPE"
+            | "REPORT_WORKER_INVALID_JSON"
+            | "REPORT_WORKER_RESULT_TOO_LARGE"
+            | "REPORT_WORKER_SERVICE_CONTRACT"
+            | "REPORT_WORKER_UNKNOWN_OPERATION" => "REPORT_PROTOCOL_ERROR".to_owned(),
+            _ => "REPORT_INTERNAL_ERROR".to_owned(),
+        };
         Self {
-            code: error.code,
+            code,
             message: error.message,
             operation_id: error.operation_id,
             recoverable: error.recoverable,
@@ -2785,11 +2814,425 @@ mod tests {
     #[cfg(unix)]
     use super::terminate_process_tree;
     use super::{
-        DIAGNOSTIC_LOG_MAX_BYTES, GenerateReportRequest, NativeReportState,
-        append_diagnostic_entry, full_report_arguments, parent_report_request,
-        project_worker_result, register_snapshot_revision, register_snapshot_source_ref,
-        renderer_override, resolve_snapshot_source_ref, wire_request, worker_launch_arguments,
+        DIAGNOSTIC_LOG_MAX_BYTES, GenerateReportRequest, NativeReportError, NativeReportState,
+        StructuredError, append_diagnostic_entry, full_report_arguments, parent_report_request,
+        project_export_result, project_worker_result, register_snapshot_revision,
+        register_snapshot_source_ref, renderer_override, resolve_snapshot_source_ref, wire_request,
+        worker_launch_arguments,
     };
+
+    fn assert_exact_keys(value: &Value, expected: &[&str]) {
+        let mut actual = value
+            .as_object()
+            .expect("projected value is an object")
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        let mut expected = expected.to_vec();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+
+    fn python_snapshot_result(snapshot_id: &str) -> Value {
+        serde_json::json!({
+            "protocol_version": 1,
+            "snapshot_id": snapshot_id,
+            "revision_id": "revision-1",
+            "scope": {"root_thread_id":"root","include_children":true,"include_collaborators":false},
+            "source_revision": "source-revision-1",
+            "parser_version": "1.20.0",
+            "pricing_version": "2026-07-14",
+            "pricing_digest": "1111111111111111111111111111111111111111111111111111111111111111",
+            "formatter_version": "1",
+            "formatter_digest": "2222222222222222222222222222222222222222222222222222222222222222",
+            "observation_time": "2026-08-12T15:00:00Z",
+            "mode": "live",
+            "warnings": []
+        })
+    }
+
+    #[test]
+    fn projects_representative_python_results_for_every_dynamic_operation() {
+        let directory = TempDir::new().expect("create temporary directory");
+        let source_path = directory.path().join("rollout.jsonl");
+        fs::write(&source_path, "{}").expect("create source fixture");
+        let state = NativeReportState::default();
+        state
+            .source_keys
+            .lock()
+            .expect("source key registry")
+            .insert("source-1".to_owned(), source_path);
+        let snapshot_id = "snap_46b9630e96ce4dc5a678a517";
+        let project = |operation: &str, value: Value| {
+            project_worker_result(
+                operation,
+                value.as_object().expect("Python result object").clone(),
+                &state,
+            )
+            .unwrap_or_else(|error| panic!("{operation}: {}", error.message))
+        };
+
+        let preflight = project(
+            "preflight_report",
+            serde_json::json!({
+                "preflight_token":"token","root_thread_id":"root","include_children":true,
+                "include_collaborators":false,"source_revision":"source-revision-1","log_count":1,
+                "total_bytes":2,"child_count":3,"collaborator_count":4,"cached_file_count":5,
+                "changed_file_count":6,"known_event_count":null,"warnings":[]
+            }),
+        );
+        assert_exact_keys(
+            &preflight,
+            &[
+                "preflightToken",
+                "rootThreadId",
+                "includeChildren",
+                "includeCollaborators",
+                "sourceRevision",
+                "logCount",
+                "totalBytes",
+                "childCount",
+                "collaboratorCount",
+                "cachedFileCount",
+                "changedFileCount",
+                "knownEventCount",
+                "warnings",
+            ],
+        );
+
+        let snapshot = project("open_snapshot", python_snapshot_result(snapshot_id));
+        assert_exact_keys(
+            &snapshot,
+            &[
+                "protocolVersion",
+                "snapshotId",
+                "revision",
+                "rootThreadId",
+                "includeChildren",
+                "includeCollaborators",
+                "sourceRevision",
+                "parserVersion",
+                "pricingDigest",
+                "formatterDigest",
+                "observationTime",
+                "mode",
+                "warnings",
+            ],
+        );
+
+        let summary = project(
+            "get_summary",
+            serde_json::json!({
+                "snapshot_id":snapshot_id,"revision_id":"revision-1","title":"Report","goal":null,
+                "state":"ready","scope":{"root_thread_id":"root","include_children":true,"include_collaborators":false},
+                "observed_at":"2026-08-12T15:00:00Z","mode":"live",
+                "time_range":{"from_time":"2026-08-12T14:00:00Z","to_time":"2026-08-12T15:00:00Z"},
+                "metric_groups":[{"group_id":"overview","label":"Overview","metrics":[{"metric_id":"events","label":"Events","value":1,"formatted_value":"1","unit":"count","evidence":"measured","provenance":"normalized","description":null}]}],
+                "provenance":["normalized"],"recent_activity":[{"event_id":"event-1","occurred_at":"2026-08-12T15:00:00Z","label":"Completed","evidence":"measured"}],"warnings":[]
+            }),
+        );
+        assert_exact_keys(
+            &summary,
+            &[
+                "snapshotId",
+                "revision",
+                "title",
+                "goal",
+                "state",
+                "scopeLabel",
+                "observedAt",
+                "live",
+                "timeRange",
+                "metricGroups",
+                "recentActivity",
+                "warnings",
+            ],
+        );
+        assert_exact_keys(
+            &summary["metricGroups"][0]["metrics"][0],
+            &[
+                "metricId",
+                "label",
+                "displayValue",
+                "evidence",
+                "description",
+            ],
+        );
+
+        let page_base = |operation: &str, items: Value, filters: Value, sort: Value| {
+            serde_json::json!({
+                "snapshot_id":snapshot_id,"revision_id":"revision-1","operation":operation,
+                "items":items,"applied_filters":filters,"applied_sort":sort,"page_size":25,"next_cursor":null
+            })
+        };
+        let stable_sort = |key: &str, tie: &str| serde_json::json!({"key":key,"direction":"ascending","tie_break_key":tie,"tie_break_direction":"ascending"});
+
+        let agents = project(
+            "list_agents",
+            page_base(
+                "list_agents",
+                serde_json::json!([{"agent_id":"agent","parent_agent_id":null,"nickname":null,"role":"worker","state":"done","started_at":"2026-08-12T15:00:00Z","ended_at":null,"last_activity_at":"2026-08-12T15:00:00Z","turn_count":1,"event_count":2,"evidence":"measured"}]),
+                serde_json::json!({"query":"","agent_ids":[],"roles":[],"states":[]}),
+                stable_sort("started_at", "agent_id"),
+            ),
+        );
+        assert_exact_keys(
+            &agents,
+            &[
+                "snapshotId",
+                "revision",
+                "operation",
+                "items",
+                "appliedFilters",
+                "appliedSort",
+                "pageSize",
+                "nextCursor",
+            ],
+        );
+        assert_exact_keys(
+            &agents["items"][0],
+            &[
+                "agentId",
+                "nickname",
+                "role",
+                "state",
+                "startedAt",
+                "lastActivityAt",
+                "turnCount",
+                "eventCount",
+            ],
+        );
+
+        let turns = project(
+            "list_turns",
+            page_base(
+                "list_turns",
+                serde_json::json!([{"turn_id":"turn","agent_id":"agent","started_at":"2026-08-12T15:00:00Z","ended_at":null,"state":"done","event_count":1,"summary":null,"evidence":"measured"}]),
+                serde_json::json!({"turn_ids":[],"agent_ids":[],"states":[],"from_time":null,"to_time":null}),
+                stable_sort("started_at", "turn_id"),
+            ),
+        );
+        assert_exact_keys(
+            &turns["items"][0],
+            &[
+                "turnId",
+                "agentId",
+                "startedAt",
+                "endedAt",
+                "state",
+                "eventCount",
+                "summary",
+            ],
+        );
+
+        let events = project(
+            "list_events",
+            page_base(
+                "list_events",
+                serde_json::json!([{"event_id":"event-1","occurred_at":"2026-08-12T15:00:00Z","agent_id":"agent","turn_id":"turn","kind":"message","summary":"Safe","evidence":"measured","source_key":"source-1","has_detail":true}]),
+                serde_json::json!({"event_ids":[],"agent_ids":[],"turn_ids":[],"kinds":[],"from_time":null,"to_time":null}),
+                stable_sort("occurred_at", "event_id"),
+            ),
+        );
+        assert_exact_keys(
+            &events["items"][0],
+            &[
+                "eventId",
+                "occurredAt",
+                "agentId",
+                "turnId",
+                "kind",
+                "label",
+                "evidence",
+                "sourceRef",
+                "hasDetail",
+            ],
+        );
+
+        let heatmap = project(
+            "query_time_range",
+            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","measure":"wall_time","group_by":"agent","from_time":"2026-08-12T14:00:00Z","to_time":"2026-08-12T15:00:00Z","requested_resolution_minutes":5,"actual_resolution_minutes":5,"maximum_rows":25,"omitted_row_count":0,"row_order":"activity_descending_id_ascending","total_cell_count":1,"rows":[{"row_id":"agent","label":"Agent","scale":{"minimum":0,"maximum":1,"color_semantic":"sequential_nonnegative","basis":"visible_row_maximum"},"cells":[{"start_time":"2026-08-12T14:00:00Z","end_time":"2026-08-12T15:00:00Z","value":1,"count":1,"evidence":"measured","primary_label":"1","secondary_label":null}]}],"provenance":["normalized"]}),
+        );
+        assert_exact_keys(
+            &heatmap,
+            &[
+                "snapshotId",
+                "revision",
+                "measure",
+                "groupBy",
+                "fromTime",
+                "toTime",
+                "requestedResolutionMinutes",
+                "actualResolutionMinutes",
+                "maximumRows",
+                "omittedRowCount",
+                "rowOrder",
+                "totalCellCount",
+                "rows",
+                "provenance",
+            ],
+        );
+
+        let sequence = project(
+            "query_sequence",
+            serde_json::json!({"page":page_base("query_sequence",serde_json::json!([{"sequence_id":"sequence","group_id":"group","occurred_at":"2026-08-12T15:00:00Z","from_agent_id":"agent","from_agent_label":"Agent","to_agent_id":null,"to_agent_label":null,"kind":"delegation","summary":"Safe","evidence":"derived","event_id":"event-1","repeat_count":1,"reasoning_available":true}]),serde_json::json!({"focus_agent_id":null,"event_filters":{"event_ids":[],"agent_ids":[],"turn_ids":[],"kinds":[],"from_time":null,"to_time":null},"grouping":"agent","include_reasoning":true}),stable_sort("occurred_at","sequence_id")),"groups":[{"group_id":"group","parent_group_id":null,"depth":0,"label":"Group","collapsible":true}]}),
+        );
+        assert_exact_keys(&sequence, &["page", "groups"]);
+        assert_exact_keys(
+            &sequence["page"]["items"][0],
+            &[
+                "sequenceId",
+                "groupId",
+                "occurredAt",
+                "fromAgentId",
+                "fromAgentLabel",
+                "toAgentId",
+                "toAgentLabel",
+                "kind",
+                "label",
+                "evidence",
+                "eventId",
+                "repeatCount",
+                "reasoningAvailable",
+            ],
+        );
+
+        let coordination = project(
+            "query_coordination",
+            page_base(
+                "query_coordination",
+                serde_json::json!([{"coordination_id":"coordination","occurred_at":"2026-08-12T15:00:00Z","work_item_id":"work","delegated_root_id":"root","agent_id":"agent","related_agent_ids":["other"],"operation":"claim","summary":"Safe","evidence":"derived","event_id":"event-1"}]),
+                serde_json::json!({"work_item_id":null,"delegated_root_id":null,"agent_id":null,"operation":null,"evidence":null}),
+                stable_sort("occurred_at", "coordination_id"),
+            ),
+        );
+        assert_exact_keys(
+            &coordination["items"][0],
+            &[
+                "coordinationId",
+                "occurredAt",
+                "workItemId",
+                "delegatedRootId",
+                "agentId",
+                "operation",
+                "label",
+                "evidence",
+                "eventId",
+            ],
+        );
+
+        let detail = project(
+            "get_event_details",
+            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","event_id":"event-1","occurred_at":"2026-08-12T15:00:00Z","kind":"message","title":"Safe","evidence":"measured","provenance":["normalized"],"summary":null,"disclosures":[{"label":"Message","content":"Safe","redacted":false}],"source_key":"source-1"}),
+        );
+        assert_exact_keys(
+            &detail,
+            &[
+                "snapshotId",
+                "revision",
+                "eventId",
+                "occurredAt",
+                "kind",
+                "title",
+                "evidence",
+                "provenance",
+                "summary",
+                "disclosures",
+                "sourceRef",
+            ],
+        );
+
+        let refreshed = project(
+            "refresh_snapshot",
+            serde_json::json!({"changed":false,"snapshot":python_snapshot_result(snapshot_id)}),
+        );
+        assert_exact_keys(&refreshed, &["changed", "snapshot"]);
+        assert_exact_keys(
+            &refreshed["snapshot"],
+            &[
+                "protocolVersion",
+                "snapshotId",
+                "revision",
+                "rootThreadId",
+                "includeChildren",
+                "includeCollaborators",
+                "sourceRevision",
+                "parserVersion",
+                "pricingDigest",
+                "formatterDigest",
+                "observationTime",
+                "mode",
+                "warnings",
+            ],
+        );
+
+        let closed = project(
+            "close_snapshot",
+            serde_json::json!({"snapshot_id":snapshot_id,"closed":false}),
+        );
+        assert_exact_keys(&closed, &["snapshotId", "closed"]);
+
+        let export_dir = directory.path().join("export");
+        fs::create_dir(&export_dir).expect("create export fixture");
+        let exported = project_export_result(serde_json::json!({"operation_id":"op_75ffcf97671b4ccbaf96790c","snapshot_id":snapshot_id,"revision_id":"revision-1","mode":"directory","published_target":export_dir,"manifest_sha256":null,"file_count":2,"total_byte_count":100,"warnings":[],"omissions":[]}).as_object().expect("export result object").clone(), &state).expect("project export result");
+        assert_exact_keys(
+            &exported,
+            &[
+                "operationId",
+                "snapshotId",
+                "revision",
+                "mode",
+                "manifestSha256",
+                "fileCount",
+                "totalByteCount",
+                "warnings",
+                "omissions",
+                "exportId",
+                "displayName",
+            ],
+        );
+    }
+
+    #[test]
+    fn maps_every_worker_specific_error_to_an_accepted_frontend_code_losslessly() {
+        let cases = [
+            ("REPORT_WORKER_BUSY", "REPORT_UNAVAILABLE"),
+            ("REPORT_WORKER_PROTOCOL_MISMATCH", "REPORT_UNAVAILABLE"),
+            ("REPORT_WORKER_STARTUP_FAILED", "REPORT_UNAVAILABLE"),
+            ("REPORT_WORKER_INTERNAL", "REPORT_INTERNAL_ERROR"),
+            ("REPORT_DUPLICATE_OPERATION", "REPORT_PROTOCOL_ERROR"),
+            ("REPORT_WORKER_INVALID_ENVELOPE", "REPORT_PROTOCOL_ERROR"),
+            ("REPORT_WORKER_INVALID_JSON", "REPORT_PROTOCOL_ERROR"),
+            ("REPORT_WORKER_RESULT_TOO_LARGE", "REPORT_PROTOCOL_ERROR"),
+            ("REPORT_WORKER_SERVICE_CONTRACT", "REPORT_PROTOCOL_ERROR"),
+            ("REPORT_WORKER_UNKNOWN_OPERATION", "REPORT_PROTOCOL_ERROR"),
+        ];
+        for (worker_code, frontend_code) in cases {
+            let projected = NativeReportError::from(StructuredError {
+                code: worker_code.to_owned(),
+                message: "Safe worker failure".to_owned(),
+                operation_id: Some("op_75ffcf97671b4ccbaf96790c".to_owned()),
+                recoverable: true,
+                current_source_revision: Some("revision-2".to_owned()),
+                preflight_required: true,
+                restart_from_first_page: true,
+            });
+            assert_eq!(projected.code, frontend_code);
+            assert_eq!(projected.message, "Safe worker failure");
+            assert_eq!(
+                projected.operation_id.as_deref(),
+                Some("op_75ffcf97671b4ccbaf96790c")
+            );
+            assert_eq!(
+                projected.current_source_revision.as_deref(),
+                Some("revision-2")
+            );
+            assert!(projected.recoverable);
+            assert!(projected.preflight_required);
+            assert!(projected.restart_from_first_page);
+        }
+    }
 
     fn state_with_source_reference(directory: &TempDir) -> (NativeReportState, String, String) {
         let state = NativeReportState::default();
