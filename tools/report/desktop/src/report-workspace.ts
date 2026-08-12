@@ -17,6 +17,7 @@ import {
   type HeatmapGroupBy,
   type HeatmapRequestedResolutionMinutes,
   type HeatmapResultDto,
+  type HeatmapScaleDto,
   type PreflightReportDto,
   type ReportErrorDto,
   type ReportOperationName,
@@ -27,6 +28,7 @@ import {
   type SummaryMetricGroupId,
   type TurnFiltersDto,
   type TurnSortDto,
+  type TimeMeasure,
   parseAgentPageDto,
   parseCoordinationPageDto,
   parseCloseSnapshotResultDto,
@@ -360,6 +362,69 @@ export function heatmapResolutionLabel(requestedMinutes: number, actualMinutes: 
   return actualMinutes === requestedMinutes ? "" : `Showing ${actualMinutes}-minute buckets; requested ${requestedMinutes}-minute buckets.`;
 }
 
+export interface HeatmapRange {
+  readonly fromTime: string;
+  readonly toTime: string;
+}
+
+export interface HeatmapCellPresentation {
+  readonly tone: "sequential" | "negative" | "neutral" | "positive" | "midpoint" | "unavailable";
+  readonly intensity: number;
+  readonly label: "low" | "midpoint" | "high" | "negative" | "neutral" | "positive" | "unavailable";
+}
+
+const HEATMAP_RESOLUTIONS = Object.freeze([1, 5, 15, 30, 60] as const);
+
+/** Move a half-open heatmap range by one returned service bucket. */
+export function shiftHeatmapRange(range: HeatmapRange, bucketMinutes: number, direction: "previous" | "next"): HeatmapRange {
+  const from = new Date(range.fromTime);
+  const to = new Date(range.toTime);
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) throw new Error("Heatmap range must contain ordered ISO instants.");
+  if (!Number.isSafeInteger(bucketMinutes) || bucketMinutes < 1) throw new Error("Heatmap bucket size must be a positive whole minute.");
+  const offset = bucketMinutes * 60_000 * (direction === "previous" ? -1 : 1);
+  return Object.freeze({ fromTime: new Date(from.getTime() + offset).toISOString(), toTime: new Date(to.getTime() + offset).toISOString() });
+}
+
+/** Select the adjacent accepted service resolution for a zoom action. */
+export function nextHeatmapResolution(current: HeatmapRequestedResolutionMinutes, direction: "in" | "out"): HeatmapRequestedResolutionMinutes {
+  const index = HEATMAP_RESOLUTIONS.indexOf(current);
+  if (index < 0) throw new Error("Heatmap resolution is not supported.");
+  const nextIndex = Math.max(0, Math.min(HEATMAP_RESOLUTIONS.length - 1, index + (direction === "in" ? -1 : 1)));
+  return HEATMAP_RESOLUTIONS[nextIndex] ?? current;
+}
+
+/** Map one value against only its returned row domain. */
+export function heatmapCellPresentation(scale: HeatmapScaleDto, value: number | null): HeatmapCellPresentation {
+  if (value === null) return Object.freeze({ tone: "unavailable", intensity: 0, label: "unavailable" });
+  if (scale.minimum === scale.maximum) return Object.freeze({ tone: "midpoint", intensity: 0.5, label: "midpoint" });
+  if (scale.colorSemantic === "sequential_nonnegative") {
+    const intensity = Math.max(0, Math.min(1, (value - scale.minimum) / (scale.maximum - scale.minimum)));
+    return Object.freeze({ tone: "sequential", intensity, label: intensity < 1 / 3 ? "low" : intensity > 2 / 3 ? "high" : "midpoint" });
+  }
+  if (value < 0) return Object.freeze({ tone: "negative", intensity: Math.max(0, Math.min(1, value / scale.minimum)), label: "negative" });
+  if (value > 0) return Object.freeze({ tone: "positive", intensity: Math.max(0, Math.min(1, value / scale.maximum)), label: "positive" });
+  return Object.freeze({ tone: "neutral", intensity: 0, label: "neutral" });
+}
+
+function safeBoundaryDetail(value: unknown): string | null {
+  if (!(value instanceof Error)) return null;
+  const detail = value.message.trim();
+  if (
+    detail === ""
+    || detail.length > 512
+    || /(?:^|\s)(?:[A-Za-z]:[\\/]|[\\/]|file:)/iu.test(detail)
+    || /(?:api[_ -]?key|authorization|bearer|password|private[_ -]?key|secret|ciphertext)/iu.test(detail)
+  ) return null;
+  return detail;
+}
+
+/** Convert a rejected response into safe, actionable report wording. */
+export function describeBoundaryError(value: unknown): string {
+  const detail = safeBoundaryDetail(value);
+  const recovery = "Retry this view. If the problem continues, open Diagnostics.";
+  return detail === null ? `The report response was invalid. ${recovery}` : `The report response was invalid: ${detail}. ${recovery}`;
+}
+
 /** Create one unpredictable operation identity without using process or clock state. */
 export function newOperationId(): string {
   let bytes: Uint8Array;
@@ -383,7 +448,7 @@ function protocolError(message: string): ReportErrorDto {
 
 function safeError(value: unknown): ReportErrorDto {
   try { return parseReportErrorDto(value); }
-  catch { return protocolError("The operation result failed boundary validation."); }
+  catch { return protocolError(describeBoundaryError(value)); }
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -458,7 +523,7 @@ function metricGroupsFor(surfaceId: WorkspaceSurfaceId): readonly SummaryMetricG
   }
 }
 
-function renderLoadState<T>(host: HTMLElement, loadState: LoadState<T>, renderValue: (value: T) => Node, emptyMessage: string): void {
+function renderLoadState<T>(host: HTMLElement, loadState: LoadState<T>, renderValue: (value: T) => Node, emptyMessage: string, retry?: () => void): void {
   const previous = valueFrom(loadState);
   host.replaceChildren();
   if (previous !== null) host.append(renderValue(previous));
@@ -472,9 +537,27 @@ function renderLoadState<T>(host: HTMLElement, loadState: LoadState<T>, renderVa
     if (loadState.kind === "stale") host.append(document.createTextNode(` Stale: ${loadState.reason}`));
     if (loadState.kind === "cancelled") host.append(document.createTextNode(" Operation cancelled."));
     if (loadState.kind === "error") {
-      const alert = document.createElement("p");
+      const alert = document.createElement("div");
       alert.setAttribute("role", "alert");
-      alert.textContent = `${loadState.error.code}: ${loadState.error.message}`;
+      alert.className = "report-error";
+      alert.dataset.errorCode = loadState.error.code;
+      alert.append(textElement("strong", `${loadState.error.code}: ${loadState.error.message}`));
+      const recovery = loadState.error.code === "REPORT_PROTOCOL_ERROR"
+        ? null
+        : loadState.error.restartFromFirstPage
+        ? "Return to the first page and try again."
+        : loadState.error.preflightRequired
+          ? "Review the report scope again before retrying."
+          : loadState.error.recoverable
+            ? "Retry this action. If the problem continues, open Diagnostics."
+            : "Open Diagnostics for more information.";
+      if (recovery !== null) alert.append(textElement("p", recovery));
+      if (retry !== undefined && loadState.error.recoverable) {
+        const retryButton = textElement("button", loadState.error.restartFromFirstPage ? "First page" : "Retry") as HTMLButtonElement;
+        retryButton.type = "button";
+        retryButton.addEventListener("click", retry);
+        alert.append(retryButton);
+      }
       host.append(alert);
     }
   }
@@ -633,26 +716,271 @@ function renderPage(
   return fragment;
 }
 
-function renderHeatmap(result: HeatmapResultDto): Node {
+interface HeatmapSelection {
+  readonly rowId: string;
+  readonly rowLabel: string;
+  readonly startTime: string;
+  readonly endTime: string;
+  readonly primaryLabel: string;
+  readonly secondaryLabel: string | null;
+  readonly evidence: string;
+  readonly count: number;
+}
+
+interface HeatmapPresentationState {
+  readonly range: HeatmapRange;
+  readonly history: readonly HeatmapRange[];
+  readonly selected: HeatmapSelection | null;
+  readonly measure: TimeMeasure;
+  readonly groupBy: HeatmapGroupBy;
+  readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
+  readonly maximumRows: number;
+}
+
+interface HeatmapRenderActions {
+  select(selection: HeatmapSelection): void;
+  drillIn(selection: HeatmapSelection): void;
+  stepBack(): void;
+  restoreHistory(index: number): void;
+  pan(direction: "previous" | "next"): void;
+  zoom(direction: "in" | "out"): void;
+  setMeasure(measure: TimeMeasure): void;
+  setGroupBy(groupBy: HeatmapGroupBy): void;
+  setResolution(resolution: HeatmapRequestedResolutionMinutes): void;
+  setMaximumRows(maximumRows: number): void;
+}
+
+const HEATMAP_MEASURES: readonly Readonly<{ value: TimeMeasure; label: string }>[] = Object.freeze([
+  { value: "wall_time", label: "Wall time" },
+  { value: "uncached_input_tokens", label: "Uncached input tokens" },
+  { value: "cached_input_tokens", label: "Cached input tokens" },
+  { value: "output_tokens", label: "Output tokens" },
+  { value: "reasoning_tokens", label: "Reasoning tokens" },
+  { value: "cost_usd", label: "Cost (USD)" },
+]);
+
+const HEATMAP_GROUPS: readonly Readonly<{ value: HeatmapGroupBy; label: string }>[] = Object.freeze([
+  { value: "agent", label: "Agent" },
+  { value: "event_kind", label: "Event kind" },
+  { value: "work_item", label: "Work item" },
+]);
+
+function heatmapRangeLabel(range: HeatmapRange): string {
+  return `${formatLocalInstant(range.fromTime)} to ${formatLocalInstant(range.toTime)}`;
+}
+
+function heatmapSelectionFor(row: HeatmapResultDto["rows"][number], cell: HeatmapResultDto["rows"][number]["cells"][number]): HeatmapSelection {
+  return Object.freeze({
+    rowId: row.rowId,
+    rowLabel: row.label,
+    startTime: cell.startTime,
+    endTime: cell.endTime,
+    primaryLabel: cell.primaryLabel,
+    secondaryLabel: cell.secondaryLabel,
+    evidence: cell.evidence,
+    count: cell.count,
+  });
+}
+
+function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentationState, actions: HeatmapRenderActions): Node {
   const section = document.createElement("section");
+  section.className = "heatmap-panel";
+
+  const controls = document.createElement("div");
+  controls.className = "heatmap-controls";
+  controls.setAttribute("aria-label", "Heatmap controls");
+  const previous = textElement("button", "Previous bucket") as HTMLButtonElement;
+  previous.type = "button";
+  previous.addEventListener("click", () => actions.pan("previous"));
+  const next = textElement("button", "Next bucket") as HTMLButtonElement;
+  next.type = "button";
+  next.addEventListener("click", () => actions.pan("next"));
+  const zoomIn = textElement("button", "Zoom in") as HTMLButtonElement;
+  zoomIn.type = "button";
+  zoomIn.disabled = presentation.requestedResolutionMinutes === HEATMAP_RESOLUTIONS[0];
+  zoomIn.addEventListener("click", () => actions.zoom("in"));
+  const zoomOut = textElement("button", "Zoom out") as HTMLButtonElement;
+  zoomOut.type = "button";
+  zoomOut.disabled = presentation.requestedResolutionMinutes === HEATMAP_RESOLUTIONS[HEATMAP_RESOLUTIONS.length - 1];
+  zoomOut.addEventListener("click", () => actions.zoom("out"));
+  const drillIn = textElement("button", "Drill in") as HTMLButtonElement;
+  drillIn.type = "button";
+  drillIn.disabled = presentation.selected === null;
+  drillIn.addEventListener("click", () => { if (presentation.selected !== null) actions.drillIn(presentation.selected); });
+  const stepBack = textElement("button", "Step back") as HTMLButtonElement;
+  stepBack.type = "button";
+  stepBack.disabled = presentation.history.length === 0;
+  stepBack.addEventListener("click", actions.stepBack);
+  controls.append(previous, next, zoomIn, zoomOut, drillIn, stepBack);
+
+  const settings = document.createElement("div");
+  settings.className = "heatmap-settings";
+  function selectControl<T extends string>(id: string, labelText: string, values: readonly Readonly<{ value: T; label: string }>[], selected: T, onChange: (value: T) => void): HTMLLabelElement {
+    const label = document.createElement("label");
+    label.htmlFor = id;
+    label.append(textElement("span", labelText));
+    const select = document.createElement("select");
+    select.id = id;
+    for (const item of values) {
+      const option = document.createElement("option");
+      option.value = item.value;
+      option.textContent = item.label;
+      option.selected = item.value === selected;
+      select.append(option);
+    }
+    select.addEventListener("change", () => onChange(select.value as T));
+    label.append(select);
+    return label;
+  }
+  settings.append(
+    selectControl("heatmap-metric", "Measure", HEATMAP_MEASURES, presentation.measure, actions.setMeasure),
+    selectControl("heatmap-group-by", "Group by", HEATMAP_GROUPS, presentation.groupBy, actions.setGroupBy),
+  );
+  const period = document.createElement("fieldset");
+  period.className = "heatmap-granularity";
+  period.append(textElement("legend", "Period"));
+  for (const value of HEATMAP_RESOLUTIONS) {
+    const button = textElement("button", value === 60 ? "1 hour" : `${value} min`) as HTMLButtonElement;
+    button.type = "button";
+    button.dataset.heatmapMinutes = String(value);
+    button.setAttribute("aria-pressed", String(value === presentation.requestedResolutionMinutes));
+    button.addEventListener("click", () => actions.setResolution(value));
+    period.append(button);
+  }
+  settings.append(period);
+  const rowsLabel = document.createElement("label");
+  rowsLabel.htmlFor = "heatmap-maximum-rows";
+  rowsLabel.append(textElement("span", "Maximum rows"));
+  const rowsInput = document.createElement("input");
+  rowsInput.id = "heatmap-maximum-rows";
+  rowsInput.type = "number";
+  rowsInput.min = "1";
+  rowsInput.max = String(MAX_HEATMAP_ROWS);
+  rowsInput.step = "1";
+  rowsInput.value = String(presentation.maximumRows);
+  rowsInput.addEventListener("change", () => actions.setMaximumRows(Number(rowsInput.value)));
+  rowsLabel.append(rowsInput);
+  settings.append(rowsLabel);
+  section.append(controls, settings);
+  const instructions = textElement("p", "Select a cell to inspect its evidence. Double-click to drill in; use Step back or the context menu to return.");
+  instructions.className = "heatmap-instructions";
+  section.append(instructions);
+
+  const breadcrumb = document.createElement("nav");
+  breadcrumb.className = "heatmap-breadcrumbs";
+  breadcrumb.setAttribute("aria-label", "Heatmap range history");
+  presentation.history.forEach((range, index) => {
+    const button = textElement("button", index === 0 ? "Initial range" : `Range ${index + 1}`) as HTMLButtonElement;
+    button.type = "button";
+    button.title = heatmapRangeLabel(range);
+    button.addEventListener("click", () => actions.restoreHistory(index));
+    breadcrumb.append(button, document.createTextNode(" / "));
+  });
+  const currentRange = textElement("span", heatmapRangeLabel(presentation.range));
+  currentRange.setAttribute("aria-current", "location");
+  breadcrumb.append(currentRange);
+  section.append(breadcrumb);
+
   const resolution = heatmapResolutionLabel(result.requestedResolutionMinutes, result.actualResolutionMinutes);
-  if (resolution !== "") section.append(textElement("p", resolution));
+  const rangeSummary = textElement("p", `${result.actualResolutionMinutes}-minute buckets · ${result.totalCellCount} cells · end time exclusive.`);
+  rangeSummary.className = "heatmap-range-summary";
+  section.append(rangeSummary);
+  if (resolution !== "") {
+    const resolutionNote = textElement("p", resolution);
+    resolutionNote.className = "heatmap-resolution-note";
+    section.append(resolutionNote);
+  }
   if (result.omittedRowCount > 0) section.append(textElement("p", `Showing ${result.rows.length} rows; ${result.omittedRowCount} lower-activity rows omitted.`));
+  if (presentation.selected !== null) {
+    const selected = textElement("p", `Selected ${presentation.selected.rowLabel}, ${heatmapRangeLabel({ fromTime: presentation.selected.startTime, toTime: presentation.selected.endTime })}: ${presentation.selected.primaryLabel}${presentation.selected.secondaryLabel === null ? "" : `; ${presentation.selected.secondaryLabel}`}; evidence ${presentation.selected.evidence}; count ${presentation.selected.count}.`);
+    selected.className = "heatmap-selection";
+    selected.setAttribute("role", "status");
+    section.append(selected);
+  }
   const grid = document.createElement("div");
   grid.className = "heatmap-grid";
   grid.setAttribute("role", "grid");
-  for (const row of result.rows) {
+  grid.setAttribute("aria-label", `Activity heatmap grouped by ${result.groupBy.replaceAll("_", " ")}`);
+  const timeRow = document.createElement("div");
+  timeRow.className = "heatmap-time-row";
+  timeRow.setAttribute("role", "row");
+  const corner = textElement("span", "Row / time");
+  corner.setAttribute("role", "columnheader");
+  timeRow.append(corner);
+  for (const cell of result.rows[0]?.cells ?? []) {
+    const heading = document.createElement("time");
+    heading.setAttribute("role", "columnheader");
+    heading.dateTime = cell.startTime;
+    heading.textContent = formatLocalInstant(cell.startTime);
+    heading.title = `${formatLocalInstant(cell.startTime)} to ${formatLocalInstant(cell.endTime)}`;
+    timeRow.append(heading);
+  }
+  grid.append(timeRow);
+  for (const [rowIndex, row] of result.rows.entries()) {
     const rowElement = document.createElement("div");
     rowElement.setAttribute("role", "row");
     rowElement.setAttribute("aria-label", `${row.label}; ${row.scale.colorSemantic}`);
-    for (const cell of row.cells) {
+    const label = textElement("div", row.label);
+    label.className = "heatmap-row-label";
+    label.setAttribute("role", "rowheader");
+    rowElement.append(label);
+    for (const [columnIndex, cell] of row.cells.entries()) {
+      const selection = heatmapSelectionFor(row, cell);
+      const isSelected = presentation.selected?.rowId === selection.rowId && presentation.selected.startTime === selection.startTime;
+      const cellPresentation = heatmapCellPresentation(row.scale, cell.value);
       const button = document.createElement("button");
       button.type = "button";
       button.setAttribute("role", "gridcell");
-      button.textContent = `${cell.primaryLabel}${cell.secondaryLabel === null ? "" : `; ${cell.secondaryLabel}`} (${cell.evidence}, count ${cell.count})`;
-      button.setAttribute("aria-label", `${row.label}; ${cell.startTime} to ${cell.endTime}; ${button.textContent}`);
+      button.className = `heatmap-cell is-${cellPresentation.tone}`;
+      button.dataset.rowIndex = String(rowIndex);
+      button.dataset.columnIndex = String(columnIndex);
+      button.dataset.scaleBasis = row.scale.basis;
+      button.dataset.colorSemantic = row.scale.colorSemantic;
+      button.dataset.intensity = cellPresentation.intensity.toFixed(3);
+      button.style.setProperty("--heatmap-intensity", cellPresentation.intensity.toFixed(3));
+      button.style.setProperty("--heatmap-lightness", `${94 - cellPresentation.intensity * 38}%`);
+      button.tabIndex = rowIndex === 0 && columnIndex === 0 ? 0 : -1;
+      button.setAttribute("aria-selected", String(isSelected));
+      const value = textElement("strong", cell.primaryLabel);
+      const metadata = textElement("span", `${cell.secondaryLabel === null ? "" : `${cell.secondaryLabel} · `}${cell.evidence} · count ${cell.count} · ${cellPresentation.label}`);
+      button.append(value, metadata);
+      button.setAttribute("aria-label", `${row.label}; ${formatLocalInstant(cell.startTime)} to ${formatLocalInstant(cell.endTime)}; ${cell.primaryLabel}; ${cell.secondaryLabel ?? "no secondary value"}; count ${cell.count}; evidence ${cell.evidence}; ${cellPresentation.label}; ${isSelected ? "selected" : "not selected"}`);
+      button.addEventListener("click", () => actions.select(selection));
+      button.addEventListener("dblclick", () => actions.drillIn(selection));
+      button.addEventListener("contextmenu", (event) => { event.preventDefault(); actions.stepBack(); });
+      button.addEventListener("keydown", (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          actions.select(selection);
+          return;
+        }
+        let targetRow = rowIndex;
+        let targetColumn = columnIndex;
+        if (event.key === "ArrowLeft") targetColumn -= 1;
+        else if (event.key === "ArrowRight") targetColumn += 1;
+        else if (event.key === "ArrowUp") targetRow -= 1;
+        else if (event.key === "ArrowDown") targetRow += 1;
+        else if (event.key === "Home") targetColumn = 0;
+        else if (event.key === "End") targetColumn = row.cells.length - 1;
+        else return;
+        event.preventDefault();
+        const target = [...grid.querySelectorAll<HTMLButtonElement>('[role="gridcell"]')].find(
+          (candidate) => candidate.dataset.rowIndex === String(targetRow) && candidate.dataset.columnIndex === String(targetColumn),
+        );
+        if (target !== undefined) {
+          grid.querySelectorAll<HTMLButtonElement>('[role="gridcell"]').forEach((candidate) => { candidate.tabIndex = candidate === target ? 0 : -1; });
+          target.focus();
+        }
+      });
       rowElement.append(button);
     }
+    const legend = document.createElement("div");
+    legend.className = "heatmap-row-legend";
+    const midpoint = row.scale.minimum === row.scale.maximum
+      ? row.scale.minimum
+      : row.scale.colorSemantic === "diverging_signed" ? 0 : (row.scale.minimum + row.scale.maximum) / 2;
+    legend.textContent = `${row.scale.colorSemantic.replaceAll("_", " ")} · ${row.scale.basis.replaceAll("_", " ")} · minimum ${row.scale.minimum} · midpoint ${midpoint} · maximum ${row.scale.maximum} · unavailable`;
+    rowElement.append(legend);
     grid.append(rowElement);
   }
   section.append(grid);
@@ -689,6 +1017,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
   let selectionTrigger: HTMLElement | null = null;
   let detailTrigger: HTMLElement | null = null;
   let frameHandle: number | null = null;
+  let heatmapPresentation: HeatmapPresentationState | null = null;
   const requestFrame = options.requestAnimationFrame ?? window.requestAnimationFrame.bind(window);
   const cancelFrame = options.cancelAnimationFrame ?? window.cancelAnimationFrame.bind(window);
 
@@ -774,6 +1103,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       includeChildren: false,
       includeCollaborators: false,
     });
+    heatmapPresentation = null;
     state = Object.freeze({ ...initialState(), lifecycle: "selected", route: Object.freeze({ kind: "preflight", rootThreadId: normalized.rootThreadId }), selection: normalized, requestSequence: state.requestSequence + 1 });
     scheduleRender();
   }
@@ -834,13 +1164,36 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     } catch (error) { fail(operation.sequence, operation.id, name, error, "ready"); }
   }
 
-  async function loadHeatmap(): Promise<void> {
+  function currentHeatmapPresentation(summary: ReportSummaryDto): HeatmapPresentationState {
+    if (heatmapPresentation !== null) return heatmapPresentation;
+    heatmapPresentation = Object.freeze({
+      range: Object.freeze({ ...summary.timeRange }),
+      history: Object.freeze([]),
+      selected: null,
+      measure: "wall_time",
+      groupBy: "agent",
+      requestedResolutionMinutes: 5,
+      maximumRows: 100,
+    });
+    return heatmapPresentation;
+  }
+
+  async function loadHeatmap(force = false): Promise<void> {
     const snapshot = state.snapshot;
     const summary = valueFrom(state.summary);
     if (snapshot === null || summary === null) return;
-    const requestBinding = { snapshotId: snapshot.snapshotId, fromTime: summary.timeRange.fromTime, toTime: summary.timeRange.toTime, measure: "wall_time" as const, groupBy: "agent" as HeatmapGroupBy, requestedResolutionMinutes: 5 as HeatmapRequestedResolutionMinutes, maximumRows: 100 };
+    const presentation = currentHeatmapPresentation(summary);
+    const requestBinding = {
+      snapshotId: snapshot.snapshotId,
+      fromTime: presentation.range.fromTime,
+      toTime: presentation.range.toTime,
+      measure: presentation.measure,
+      groupBy: presentation.groupBy,
+      requestedResolutionMinutes: presentation.requestedResolutionMinutes,
+      maximumRows: presentation.maximumRows,
+    };
     const previous = valueFrom(state.timeSeries);
-    if (previous?.revision === snapshot.revision && previous.fromTime === requestBinding.fromTime && previous.toTime === requestBinding.toTime && previous.measure === requestBinding.measure && previous.groupBy === requestBinding.groupBy && previous.requestedResolutionMinutes === requestBinding.requestedResolutionMinutes && previous.maximumRows === requestBinding.maximumRows) return;
+    if (!force && previous?.revision === snapshot.revision && previous.fromTime === requestBinding.fromTime && previous.toTime === requestBinding.toTime && previous.measure === requestBinding.measure && previous.groupBy === requestBinding.groupBy && previous.requestedResolutionMinutes === requestBinding.requestedResolutionMinutes && previous.maximumRows === requestBinding.maximumRows) return;
     const operation = nextOperation("query_time_range");
     commit({ lifecycle: "querying", timeSeries: Object.freeze({ kind: "loading", previous, operationId: operation.id }) });
     try {
@@ -848,6 +1201,79 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       if (!isCurrent(operation.sequence, operation.id)) return;
       commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, timeSeries: loadStateFor(result, result.rows.length === 0) });
     } catch (error) { fail(operation.sequence, operation.id, "timeSeries", error, "ready"); }
+  }
+
+  function updateHeatmapPresentation(patch: Partial<HeatmapPresentationState>): void {
+    const summary = valueFrom(state.summary);
+    if (summary === null) return;
+    heatmapPresentation = Object.freeze({ ...currentHeatmapPresentation(summary), ...patch });
+    scheduleRender();
+  }
+
+  function rememberHeatmapRange(range: HeatmapRange, presentation: HeatmapPresentationState): readonly HeatmapRange[] {
+    return Object.freeze([...presentation.history, Object.freeze({ ...range })].slice(-MAX_CURSOR_HISTORY));
+  }
+
+  function queryHeatmapWith(patch: Partial<HeatmapPresentationState>): void {
+    updateHeatmapPresentation(patch);
+    void loadHeatmap(true);
+  }
+
+  function heatmapActions(): HeatmapRenderActions {
+    return {
+      select(selected) { updateHeatmapPresentation({ selected: Object.freeze({ ...selected }) }); },
+      drillIn(selected) {
+        const presentation = heatmapPresentation;
+        if (presentation === null) return;
+        queryHeatmapWith({
+          range: Object.freeze({ fromTime: selected.startTime, toTime: selected.endTime }),
+          history: rememberHeatmapRange(presentation.range, presentation),
+          selected: null,
+        });
+      },
+      stepBack() {
+        const presentation = heatmapPresentation;
+        if (presentation === null || presentation.history.length === 0) return;
+        const history = [...presentation.history];
+        const range = history.pop();
+        if (range !== undefined) queryHeatmapWith({ range, history: Object.freeze(history), selected: null });
+      },
+      restoreHistory(index) {
+        const presentation = heatmapPresentation;
+        const range = presentation?.history[index];
+        if (presentation === null || range === undefined) return;
+        queryHeatmapWith({ range, history: Object.freeze(presentation.history.slice(0, index)), selected: null });
+      },
+      pan(direction) {
+        const presentation = heatmapPresentation;
+        const result = valueFrom(state.timeSeries);
+        if (presentation === null || result === null) return;
+        queryHeatmapWith({
+          range: shiftHeatmapRange(presentation.range, result.actualResolutionMinutes, direction),
+          history: rememberHeatmapRange(presentation.range, presentation),
+          selected: null,
+        });
+      },
+      zoom(direction) {
+        const presentation = heatmapPresentation;
+        if (presentation === null) return;
+        const resolution = nextHeatmapResolution(presentation.requestedResolutionMinutes, direction);
+        if (resolution !== presentation.requestedResolutionMinutes) queryHeatmapWith({ requestedResolutionMinutes: resolution, selected: null });
+      },
+      setMeasure(measure) {
+        if (HEATMAP_MEASURES.some((item) => item.value === measure)) queryHeatmapWith({ measure, selected: null });
+      },
+      setGroupBy(groupBy) {
+        if (HEATMAP_GROUPS.some((item) => item.value === groupBy)) queryHeatmapWith({ groupBy, selected: null });
+      },
+      setResolution(requestedResolutionMinutes) {
+        if (HEATMAP_RESOLUTIONS.includes(requestedResolutionMinutes)) queryHeatmapWith({ requestedResolutionMinutes, selected: null });
+      },
+      setMaximumRows(maximumRows) {
+        if (Number.isSafeInteger(maximumRows) && maximumRows >= 1 && maximumRows <= MAX_HEATMAP_ROWS) queryHeatmapWith({ maximumRows, selected: null });
+        else elements.statusRegion.textContent = `Maximum rows must be between 1 and ${MAX_HEATMAP_ROWS}.`;
+      },
+    };
   }
 
   async function loadSurface(surfaceId: WorkspaceSurfaceId, focusHeading: boolean): Promise<void> {
@@ -945,7 +1371,24 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       elements.viewRegion.replaceChildren(metricsHost, evidenceHost);
     } else if (metricGroupsFor(route.surface).length > 0 || route.surface === "summary") {
       renderLoadState(elements.viewRegion, state.summary, (value) => renderSummary(value, metricGroupsFor(route.surface)), definition.emptyMessage);
-    } else if (route.surface === "heatmap") renderLoadState(elements.viewRegion, state.timeSeries, renderHeatmap, definition.emptyMessage);
+    } else if (route.surface === "heatmap") {
+      const summary = valueFrom(state.summary);
+      renderLoadState(
+        elements.viewRegion,
+        state.timeSeries,
+        (value) => renderHeatmap(value, summary === null ? {
+          range: Object.freeze({ fromTime: value.fromTime, toTime: value.toTime }),
+          history: Object.freeze([]),
+          selected: null,
+          measure: value.measure,
+          groupBy: value.groupBy,
+          requestedResolutionMinutes: value.requestedResolutionMinutes,
+          maximumRows: value.maximumRows,
+        } : currentHeatmapPresentation(summary), heatmapActions()),
+        definition.emptyMessage,
+        () => { void loadHeatmap(true); },
+      );
+    }
     else {
       const pagerName = pagerForSurface(route.surface);
       if (route.surface === "diagnostics") {
@@ -970,7 +1413,11 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         definition.emptyMessage,
       );
     }
-    elements.statusRegion.textContent = busy ? `Loading ${definition.label}.` : `${definition.label} ready.`;
+    const heatmap = route.surface === "heatmap" ? valueFrom(state.timeSeries) : null;
+    const resolutionStatus = heatmap === null ? "" : heatmapResolutionLabel(heatmap.requestedResolutionMinutes, heatmap.actualResolutionMinutes);
+    elements.statusRegion.textContent = busy
+      ? `Loading ${definition.label}.`
+      : resolutionStatus === "" ? `${definition.label} ready.` : `${definition.label} ready. ${resolutionStatus}`;
   }
 
   function onNavigationKeydown(event: KeyboardEvent): void {
@@ -1008,6 +1455,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     },
     updateScope(includeChildren, includeCollaborators) {
       if (disposed || state.selection === null) return;
+      heatmapPresentation = null;
       commit({ lifecycle: "selected", selection: Object.freeze({ ...state.selection, includeChildren, includeCollaborators }), preflight: Object.freeze({ kind: "not-requested" }), snapshot: null, summary: Object.freeze({ kind: "not-requested" }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" }), detail: Object.freeze({ kind: "not-requested" }) });
     },
     async preflight() {
@@ -1249,6 +1697,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         const result = parseCloseSnapshotResultDto(await invoke(WORKSPACE_COMMANDS.closeSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId }), snapshot.snapshotId);
         if (!isCurrent(operation.sequence, operation.id)) return;
         if (!result.closed) throw new Error("The native snapshot remained open.");
+        heatmapPresentation = null;
         state = Object.freeze({ ...initialState(), lifecycle: "closed", requestSequence: state.requestSequence + 1 });
         scheduleRender();
         if (selectionTrigger?.isConnected) selectionTrigger.focus();
@@ -1270,6 +1719,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       if (frameHandle !== null) cancelFrame(frameHandle);
       frameHandle = null;
       state = Object.freeze({ ...state, lifecycle: "closed", activeOperationId: null, activeOperation: null, requestSequence: state.requestSequence + 1 });
+      heatmapPresentation = null;
       selectionTrigger = null;
       detailTrigger = null;
     },

@@ -16,9 +16,13 @@ import {
   SURFACE_DEFINITIONS,
   WORKSPACE_COMMANDS,
   computeVirtualWindow,
+  describeBoundaryError,
   formatLocalInstant,
+  heatmapCellPresentation,
   heatmapResolutionLabel,
+  nextHeatmapResolution,
   newOperationId,
+  shiftHeatmapRange,
 } from "./report-workspace";
 
 afterEach(() => {
@@ -206,6 +210,69 @@ describe("heatmap bounds", () => {
     );
     expect(() => heatmapResolutionLabel(0, 5)).toThrow("positive finite");
     expect(() => heatmapResolutionLabel(5, Number.NaN)).toThrow("positive finite");
+  });
+
+  it("moves a half-open range by one actual bucket without changing its duration", () => {
+    expect(shiftHeatmapRange(
+      { fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z" },
+      17,
+      "next",
+    )).toEqual({
+      fromTime: "2026-08-12T12:17:00.000Z",
+      toTime: "2026-08-12T13:17:00.000Z",
+    });
+    expect(shiftHeatmapRange(
+      { fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z" },
+      5,
+      "previous",
+    )).toEqual({
+      fromTime: "2026-08-12T11:55:00.000Z",
+      toTime: "2026-08-12T12:55:00.000Z",
+    });
+  });
+
+  it("zooms only through the accepted requested resolutions", () => {
+    expect(nextHeatmapResolution(15, "in")).toBe(5);
+    expect(nextHeatmapResolution(15, "out")).toBe(30);
+    expect(nextHeatmapResolution(1, "in")).toBe(1);
+    expect(nextHeatmapResolution(60, "out")).toBe(60);
+  });
+
+  it("uses each row domain independently and preserves non-color semantics", () => {
+    expect(heatmapCellPresentation(
+      { minimum: 0, maximum: 10, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" },
+      5,
+    )).toEqual({ tone: "sequential", intensity: 0.5, label: "midpoint" });
+    expect(heatmapCellPresentation(
+      { minimum: 0, maximum: 100, colorSemantic: "sequential_nonnegative", basis: "context_window_capacity" },
+      5,
+    )).toEqual({ tone: "sequential", intensity: 0.05, label: "low" });
+    expect(heatmapCellPresentation(
+      { minimum: -20, maximum: 80, colorSemantic: "diverging_signed", basis: "visible_row_maximum" },
+      -10,
+    )).toEqual({ tone: "negative", intensity: 0.5, label: "negative" });
+    expect(heatmapCellPresentation(
+      { minimum: 3, maximum: 3, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" },
+      3,
+    )).toEqual({ tone: "midpoint", intensity: 0.5, label: "midpoint" });
+    expect(heatmapCellPresentation(
+      { minimum: 0, maximum: 10, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" },
+      null,
+    )).toEqual({ tone: "unavailable", intensity: 0, label: "unavailable" });
+  });
+});
+
+describe("boundary errors", () => {
+  it("retains safe parser detail and gives the operator a recovery action", () => {
+    expect(describeBoundaryError(new Error("heatmap result.totalCellCount does not match its rows"))).toBe(
+      "The report response was invalid: heatmap result.totalCellCount does not match its rows. Retry this view. If the problem continues, open Diagnostics.",
+    );
+  });
+
+  it("does not expose path-shaped exception detail", () => {
+    expect(describeBoundaryError(new Error("invalid record at /private/operator/log.jsonl"))).toBe(
+      "The report response was invalid. Retry this view. If the problem continues, open Diagnostics.",
+    );
   });
 });
 

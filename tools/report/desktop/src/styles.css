@@ -302,9 +302,69 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .workspace-table button { padding: 6px 9px; color: var(--signal); background: transparent; border: 1px solid currentColor; border-radius: 3px; cursor: pointer; }
 .workspace-page-actions button:disabled { color: var(--ink-muted); }
 
-.heatmap-grid { display: grid; gap: 8px; overflow-x: auto; }
-.heatmap-grid [role="row"] { display: flex; gap: 4px; min-width: max-content; }
-.heatmap-grid [role="gridcell"] { min-width: 110px; padding: 9px; color: var(--ink); background: #d9eaf0; border: 1px solid #8dafbd; }
+.heatmap-panel { display: grid; gap: 12px; }
+.heatmap-controls,
+.heatmap-settings { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+.heatmap-controls button,
+.heatmap-breadcrumbs button,
+.heatmap-granularity button,
+.heatmap-settings select,
+.heatmap-settings input {
+  min-height: 36px;
+  padding: 7px 9px;
+  color: var(--slate);
+  background: var(--paper);
+  border: 1px solid #8da2b0;
+  border-radius: 4px;
+}
+.heatmap-controls button,
+.heatmap-breadcrumbs button,
+.heatmap-granularity button { cursor: pointer; }
+.heatmap-controls button:disabled { color: var(--ink-muted); cursor: default; opacity: 0.65; }
+.heatmap-settings label { display: grid; gap: 4px; color: var(--ink-muted); font-size: 0.72rem; font-weight: 650; }
+.heatmap-settings input { width: 88px; }
+.heatmap-granularity { display: flex; gap: 4px; margin: 0; padding: 0; border: 0; }
+.heatmap-granularity legend { margin-bottom: 4px; color: var(--ink-muted); font-size: 0.72rem; font-weight: 650; }
+.heatmap-granularity button[aria-pressed="true"] { color: #fff; background: var(--slate); border-color: var(--slate-deep); }
+.heatmap-breadcrumbs { color: var(--ink-muted); font-size: 0.74rem; }
+.heatmap-breadcrumbs button { min-height: 30px; padding: 4px 7px; color: var(--signal); background: transparent; border-color: transparent; text-decoration: underline; }
+.heatmap-range-summary,
+.heatmap-resolution-note,
+.heatmap-instructions,
+.heatmap-selection { margin: 0; color: var(--ink-muted); font-size: 0.78rem; }
+.heatmap-selection { padding: 8px 10px; color: var(--slate); background: #fff5d8; border-left: 3px solid var(--amber); }
+.heatmap-grid { display: grid; gap: 7px; overflow-x: auto; padding-bottom: 5px; }
+.heatmap-grid [role="row"] { display: flex; align-items: stretch; gap: 4px; min-width: max-content; }
+.heatmap-time-row [role="columnheader"],
+.heatmap-row-label { width: 180px; flex: 0 0 180px; padding: 8px; color: var(--slate); background: #edf1f4; border: 1px solid #c7d2d9; font-size: 0.72rem; font-weight: 700; }
+.heatmap-time-row time { width: 122px !important; flex-basis: 122px !important; font-weight: 600 !important; }
+.heatmap-grid [role="gridcell"] {
+  width: 122px;
+  min-width: 122px;
+  min-height: 66px;
+  display: grid;
+  align-content: space-between;
+  gap: 5px;
+  padding: 8px;
+  color: var(--ink);
+  text-align: left;
+  background: #d9eaf0;
+  border: 1px solid #8dafbd;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.heatmap-grid [role="gridcell"] strong { font-size: 0.82rem; }
+.heatmap-grid [role="gridcell"] span { font-size: 0.64rem; line-height: 1.3; }
+.heatmap-grid [role="gridcell"].is-sequential { background: hsl(195 42% var(--heatmap-lightness)); }
+.heatmap-grid [role="gridcell"].is-negative { background: hsl(9 55% var(--heatmap-lightness)); }
+.heatmap-grid [role="gridcell"].is-positive { background: hsl(164 42% var(--heatmap-lightness)); }
+.heatmap-grid [role="gridcell"].is-neutral,
+.heatmap-grid [role="gridcell"].is-midpoint { background: #dce3e7; }
+.heatmap-grid [role="gridcell"].is-unavailable { color: var(--ink-muted); background: repeating-linear-gradient(135deg, #f2f4f5 0 7px, #e1e6e9 7px 14px); }
+.heatmap-grid [role="gridcell"][aria-selected="true"] { outline: 3px solid var(--amber); outline-offset: 1px; }
+.heatmap-row-legend { width: 250px; flex: 0 0 250px; padding: 8px; color: var(--ink-muted); background: #f6f8f9; border: 1px solid #d5dee3; font-size: 0.66rem; line-height: 1.4; }
+.report-error p { margin: 5px 0 0; }
+.report-error button { margin-top: 8px; padding: 6px 10px; color: #fff; background: var(--slate); border: 1px solid var(--slate-deep); border-radius: 4px; cursor: pointer; }
 
 .sequence-ledger { display: grid; gap: 6px; margin: 12px 0 0; padding: 0; }
 .sequence-ledger tr { border-left: 3px solid var(--signal); background: #edf3f6; }
