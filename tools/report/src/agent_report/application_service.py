@@ -26,7 +26,11 @@ from typing import Final, Generic, Literal, Protocol, TypeVar, cast
 PROTOCOL_VERSION: Final[int] = 1
 DEFAULT_PAGE_SIZE: Final[int] = 100
 MAX_PAGE_SIZE: Final[int] = 500
-MAX_TIME_BUCKETS: Final[int] = 2_000
+MAX_HEATMAP_CELLS: Final[int] = 2_000
+# Retained as an import-compatible name for callers that used the original
+# narrow time-series contract. Protocol version 1 applies the same ceiling to
+# the canonical grouped heatmap.
+MAX_TIME_BUCKETS: Final[int] = MAX_HEATMAP_CELLS
 MAX_ID_BYTES: Final[int] = 256
 MAX_FILTER_VALUES: Final[int] = 500
 MAX_TEXT_BYTES: Final[int] = 4_096
@@ -60,6 +64,15 @@ SnapshotMode = Literal["live", "sealed"]
 ExportMode = Literal["directory", "summary"]
 AutomationSurface = Literal["tauri", "cli", "mcp"]
 SequenceGrouping = Literal["none", "repeated_messages", "delegation", "agent"]
+SortDirection = Literal["ascending", "descending"]
+AgentSortKey = Literal["last_activity_at", "started_at", "agent_id"]
+TurnSortKey = Literal["started_at", "ended_at", "turn_id"]
+EventSortKey = Literal["occurred_at", "event_id"]
+SequenceSortKey = Literal["occurred_at", "sequence_id"]
+CoordinationSortKey = Literal["occurred_at", "coordination_id"]
+HeatmapGroupBy = Literal["agent", "event_kind", "work_item"]
+HeatmapColorSemantic = Literal["sequential_nonnegative", "diverging_signed"]
+HeatmapScaleBasis = Literal["visible_row_maximum", "context_window_capacity"]
 TimeMeasure = Literal[
     "wall_time",
     "uncached_input_tokens",
@@ -86,8 +99,23 @@ _TIME_MEASURES: Final[frozenset[str]] = frozenset(
 _GROUPINGS: Final[frozenset[str]] = frozenset(
     {"none", "repeated_messages", "delegation", "agent"}
 )
+_SORT_DIRECTIONS: Final[frozenset[str]] = frozenset({"ascending", "descending"})
+_AGENT_SORT_KEYS: Final[frozenset[str]] = frozenset(
+    {"last_activity_at", "started_at", "agent_id"}
+)
+_TURN_SORT_KEYS: Final[frozenset[str]] = frozenset(
+    {"started_at", "ended_at", "turn_id"}
+)
+_EVENT_SORT_KEYS: Final[frozenset[str]] = frozenset({"occurred_at", "event_id"})
+_SEQUENCE_SORT_KEYS: Final[frozenset[str]] = frozenset({"occurred_at", "sequence_id"})
+_COORDINATION_SORT_KEYS: Final[frozenset[str]] = frozenset(
+    {"occurred_at", "coordination_id"}
+)
+_HEATMAP_GROUPS: Final[frozenset[str]] = frozenset({"agent", "event_kind", "work_item"})
+_HEATMAP_RESOLUTIONS: Final[frozenset[int]] = frozenset({1, 5, 15, 30, 60})
 _SURFACES: Final[frozenset[str]] = frozenset({"tauri", "cli", "mcp"})
 _EVENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"evt_[0-9a-f]{24}\Z")
+_OPERATION_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"op_[0-9a-f]{24}\Z")
 _LOWER_HEX_DIGEST: Final[re.Pattern[str]] = re.compile(r"[0-9a-f]{64}\Z")
 _ABSOLUTE_PATH_PATTERN: Final[re.Pattern[str]] = re.compile(
     r"(?:^|\s)(?:/[^\s]*|[A-Za-z]:[\\/][^\s]*)"
@@ -116,6 +144,8 @@ class ReportError:
 
 
 T = TypeVar("T")
+F = TypeVar("F")
+S = TypeVar("S")
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,6 +203,7 @@ class OpenSnapshotRequest:
 
     scope: ReportScope
     preflight_token: str
+    source_revision: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -184,16 +215,27 @@ class SnapshotRequest:
 
 @dataclass(frozen=True, slots=True)
 class AgentFilters:
-    """Restrict agent rows by stable identifiers, roles, and states."""
+    """Restrict agent rows by text, identities, roles, and states."""
 
+    query: str = ""
     agent_ids: Sequence[str] = ()
     roles: Sequence[str] = ()
     states: Sequence[str] = ()
 
 
 @dataclass(frozen=True, slots=True)
+class AgentSort:
+    """Select one canonical agent ordering with its fixed identity tie break."""
+
+    key: AgentSortKey = "last_activity_at"
+    direction: SortDirection = "descending"
+    tie_break_key: Literal["agent_id"] = "agent_id"
+    tie_break_direction: Literal["ascending"] = "ascending"
+
+
+@dataclass(frozen=True, slots=True)
 class TurnFilters:
-    """Restrict turn rows by identifiers, states, agents, and an optional range."""
+    """Restrict turn rows by identities, states, agents, and time."""
 
     turn_ids: Sequence[str] = ()
     agent_ids: Sequence[str] = ()
@@ -203,8 +245,18 @@ class TurnFilters:
 
 
 @dataclass(frozen=True, slots=True)
+class TurnSort:
+    """Select one canonical turn ordering with its fixed identity tie break."""
+
+    key: TurnSortKey = "started_at"
+    direction: SortDirection = "ascending"
+    tie_break_key: Literal["turn_id"] = "turn_id"
+    tie_break_direction: Literal["ascending"] = "ascending"
+
+
+@dataclass(frozen=True, slots=True)
 class EventFilters:
-    """Restrict event rows by identifiers, kinds, agents, turns, and time."""
+    """Restrict event rows by identities, kinds, agents, turns, and time."""
 
     event_ids: Sequence[str] = ()
     agent_ids: Sequence[str] = ()
@@ -215,11 +267,22 @@ class EventFilters:
 
 
 @dataclass(frozen=True, slots=True)
+class EventSort:
+    """Select one canonical event ordering with its fixed identity tie break."""
+
+    key: EventSortKey = "occurred_at"
+    direction: SortDirection = "ascending"
+    tie_break_key: Literal["event_id"] = "event_id"
+    tie_break_direction: Literal["ascending"] = "ascending"
+
+
+@dataclass(frozen=True, slots=True)
 class ListAgentsRequest:
     """Request one stable page of agents."""
 
     snapshot_id: str
     filters: AgentFilters = AgentFilters()
+    sort: AgentSort = AgentSort()
     cursor: str | None = None
     page_size: int = DEFAULT_PAGE_SIZE
 
@@ -230,6 +293,7 @@ class ListTurnsRequest:
 
     snapshot_id: str
     filters: TurnFilters = TurnFilters()
+    sort: TurnSort = TurnSort()
     cursor: str | None = None
     page_size: int = DEFAULT_PAGE_SIZE
 
@@ -240,19 +304,42 @@ class ListEventsRequest:
 
     snapshot_id: str
     filters: EventFilters = EventFilters()
+    sort: EventSort = EventSort()
     cursor: str | None = None
     page_size: int = DEFAULT_PAGE_SIZE
 
 
 @dataclass(frozen=True, slots=True)
-class TimeRangeQueryRequest:
-    """Request one bounded time series for a supported measure."""
+class HeatmapQueryRequest:
+    """Request one bounded grouped heatmap for a supported measure."""
 
     snapshot_id: str
     from_time: datetime
     to_time: datetime
     measure: TimeMeasure
     requested_resolution_minutes: int
+    group_by: HeatmapGroupBy
+    maximum_rows: int = 100
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceFilters:
+    """Select sequence focus, event kinds, grouping, and reasoning disclosure."""
+
+    focus_agent_id: str | None = None
+    event_filters: EventFilters = EventFilters()
+    grouping: SequenceGrouping = "none"
+    include_reasoning: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceSort:
+    """Select the canonical chronological sequence ordering."""
+
+    key: SequenceSortKey = "occurred_at"
+    direction: SortDirection = "ascending"
+    tie_break_key: Literal["sequence_id"] = "sequence_id"
+    tie_break_direction: Literal["ascending"] = "ascending"
 
 
 @dataclass(frozen=True, slots=True)
@@ -260,11 +347,31 @@ class SequenceQueryRequest:
     """Request one stable page of delegation and communication sequence rows."""
 
     snapshot_id: str
-    focus_agent_id: str | None = None
-    filters: EventFilters = EventFilters()
-    grouping: SequenceGrouping = "none"
+    filters: SequenceFilters = SequenceFilters()
+    sort: SequenceSort = SequenceSort()
     cursor: str | None = None
     page_size: int = DEFAULT_PAGE_SIZE
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinationFilters:
+    """Select exact canonical coordination identifiers and evidence."""
+
+    work_item_id: str | None = None
+    delegated_root_id: str | None = None
+    agent_id: str | None = None
+    operation: str | None = None
+    evidence: EvidenceKind | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class CoordinationSort:
+    """Select the canonical chronological coordination ordering."""
+
+    key: CoordinationSortKey = "occurred_at"
+    direction: SortDirection = "ascending"
+    tie_break_key: Literal["coordination_id"] = "coordination_id"
+    tie_break_direction: Literal["ascending"] = "ascending"
 
 
 @dataclass(frozen=True, slots=True)
@@ -272,8 +379,8 @@ class CoordinationQueryRequest:
     """Request one stable page of evidence-derived coordination rows."""
 
     snapshot_id: str
-    work_item_ids: Sequence[str] = ()
-    agent_ids: Sequence[str] = ()
+    filters: CoordinationFilters = CoordinationFilters()
+    sort: CoordinationSort = CoordinationSort()
     cursor: str | None = None
     page_size: int = DEFAULT_PAGE_SIZE
 
@@ -349,12 +456,13 @@ class SnapshotMetadata:
 
     protocol_version: int
     snapshot_id: str
-    root_thread_id: str
-    include_children: bool
-    include_collaborators: bool
+    revision_id: str
+    scope: ReportScope
     source_revision: str
     parser_version: str
+    pricing_version: str
     pricing_digest: str
+    formatter_version: str
     formatter_digest: str
     observation_time: datetime
     mode: SnapshotMode
@@ -363,38 +471,72 @@ class SnapshotMetadata:
 
 @dataclass(frozen=True, slots=True)
 class MetricValue:
-    """Expose one metric with its unit, evidence label, and provenance."""
+    """Expose one raw and formatted metric with evidence and provenance."""
 
-    name: str
+    metric_id: str
+    label: str
     value: int | float | str | None
+    formatted_value: str
     unit: str | None
     evidence: EvidenceKind
     provenance: str
+    description: str | None
 
 
 @dataclass(frozen=True, slots=True)
-class ActivityItem:
+class MetricGroup:
+    """Group related summary metrics under one stable identifier."""
+
+    group_id: Literal[
+        "overview",
+        "model",
+        "context",
+        "inference",
+        "runtime",
+        "waits",
+        "work_items",
+        "claims",
+        "provenance",
+    ]
+    label: str
+    metrics: Sequence[MetricValue]
+
+
+@dataclass(frozen=True, slots=True)
+class TimeRange:
+    """Describe one exact aware half-open report range."""
+
+    from_time: datetime
+    to_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class SignificantActivity:
     """Describe one recent significant report event."""
 
     event_id: str
     occurred_at: datetime
-    kind: str
-    summary: str
+    label: str
     evidence: EvidenceKind
 
 
 @dataclass(frozen=True, slots=True)
 class SummaryResult:
-    """Return bounded snapshot state, metrics, provenance, and recent activity."""
+    """Return bounded display-ready snapshot metadata and grouped metrics."""
 
     snapshot_id: str
+    revision_id: str
+    title: str
     goal: str | None
     state: str
     scope: ReportScope
-    metrics: Sequence[MetricValue]
+    observed_at: datetime
+    mode: SnapshotMode
+    time_range: TimeRange | None
+    metric_groups: Sequence[MetricGroup]
     provenance: Sequence[str]
+    recent_activity: Sequence[SignificantActivity]
     warnings: Sequence[WarningRecord]
-    recent_activity: Sequence[ActivityItem]
 
 
 @dataclass(frozen=True, slots=True)
@@ -403,10 +545,14 @@ class AgentRow:
 
     agent_id: str
     parent_agent_id: str | None
-    role: str
+    nickname: str | None
+    role: str | None
     state: str
     started_at: datetime | None
     ended_at: datetime | None
+    last_activity_at: datetime | None
+    turn_count: int
+    event_count: int
     evidence: EvidenceKind
 
 
@@ -420,6 +566,7 @@ class TurnRow:
     ended_at: datetime | None
     state: str
     event_count: int
+    summary: str | None
     evidence: EvidenceKind
 
 
@@ -428,22 +575,47 @@ class EventRow:
     """Represent one bounded event in canonical list order."""
 
     event_id: str
-    turn_id: str | None
-    agent_id: str | None
     occurred_at: datetime
+    agent_id: str | None
+    turn_id: str | None
     kind: str
     summary: str
     evidence: EvidenceKind
+    source_key: str | None
+    has_detail: bool
 
 
 @dataclass(frozen=True, slots=True)
-class TimeBucket:
-    """Represent one bounded interval and measured or derived value."""
+class HeatmapCell:
+    """Represent one bounded interval in a grouped heatmap row."""
 
-    from_time: datetime
-    to_time: datetime
+    start_time: datetime
+    end_time: datetime
     value: int | float | None
+    count: int
     evidence: EvidenceKind
+    primary_label: str
+    secondary_label: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapScale:
+    """Describe the value and color semantics for one heatmap row."""
+
+    minimum: int | float
+    maximum: int | float
+    color_semantic: HeatmapColorSemantic
+    basis: HeatmapScaleBasis
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapRow:
+    """Represent one deterministically ordered grouped heatmap row."""
+
+    row_id: str
+    label: str
+    scale: HeatmapScale
+    cells: Sequence[HeatmapCell]
 
 
 @dataclass(frozen=True, slots=True)
@@ -451,13 +623,29 @@ class SequenceRow:
     """Represent one delegation or communication sequence item."""
 
     sequence_id: str
+    group_id: str | None
     occurred_at: datetime
-    source_agent_id: str | None
-    target_agent_id: str | None
+    from_agent_id: str | None
+    from_agent_label: str | None
+    to_agent_id: str | None
+    to_agent_label: str | None
     kind: str
     summary: str
-    repeated_count: int
     evidence: EvidenceKind
+    event_id: str | None
+    repeat_count: int
+    reasoning_available: bool
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceGroup:
+    """Describe one node in the sequence grouping hierarchy."""
+
+    group_id: str
+    parent_group_id: str | None
+    depth: int
+    label: str
+    collapsible: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -467,10 +655,22 @@ class CoordinationRow:
     coordination_id: str
     occurred_at: datetime
     work_item_id: str | None
-    agent_ids: Sequence[str]
-    action: str
+    delegated_root_id: str | None
+    agent_id: str | None
+    related_agent_ids: Sequence[str]
+    operation: str
     summary: str
     evidence: EvidenceKind
+    event_id: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class Disclosure:
+    """Expose one bounded structured event-detail disclosure."""
+
+    label: str
+    content: str
+    redacted: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -478,42 +678,58 @@ class EventDetail:
     """Return bounded, redacted detail for one snapshot event."""
 
     snapshot_id: str
+    revision_id: str
     event_id: str
     occurred_at: datetime
     kind: str
-    summary: str
-    bounded_arguments: str | None
-    bounded_result: str | None
+    title: str
     evidence: EvidenceKind
     provenance: Sequence[str]
-    redactions: Sequence[str]
+    summary: str | None
+    disclosures: Sequence[Disclosure]
+    source_key: str | None
 
 
 @dataclass(frozen=True, slots=True)
-class PageResult(Generic[T]):
+class PageResult(Generic[T, F, S]):
     """Return one immutable stable page and its opaque continuation cursor."""
 
     snapshot_id: str
+    revision_id: str
     operation: str
     items: Sequence[T]
-    applied_filters_digest: str
-    applied_sort: str
+    applied_filters: F
+    applied_sort: S
     page_size: int
     next_cursor: str | None
 
 
 @dataclass(frozen=True, slots=True)
-class TimeSeriesResult:
-    """Return a bounded time series with requested and actual resolution."""
+class HeatmapResult:
+    """Return a bounded grouped heatmap with complete applied facets."""
 
     snapshot_id: str
+    revision_id: str
     measure: TimeMeasure
-    requested_resolution_minutes: int
-    actual_resolution_minutes: int
+    group_by: HeatmapGroupBy
     from_time: datetime
     to_time: datetime
-    buckets: Sequence[TimeBucket]
+    requested_resolution_minutes: int
+    actual_resolution_minutes: int
+    maximum_rows: int
+    omitted_row_count: int
+    row_order: Literal["activity_descending_id_ascending"]
+    total_cell_count: int
+    rows: Sequence[HeatmapRow]
     provenance: Sequence[str]
+
+
+@dataclass(frozen=True, slots=True)
+class SequenceResult:
+    """Return one canonical sequence page and its exact group hierarchy."""
+
+    page: PageResult[SequenceRow, SequenceFilters, SequenceSort]
+    groups: Sequence[SequenceGroup]
 
 
 @dataclass(frozen=True, slots=True)
@@ -525,14 +741,28 @@ class RefreshSnapshotResult:
 
 
 @dataclass(frozen=True, slots=True)
+class ExportOmission:
+    """Describe one structured export omission and its recovery."""
+
+    section: str
+    reason: str
+    recovery: str
+
+
+@dataclass(frozen=True, slots=True)
 class ExportResult:
     """Describe a completed atomic export publication."""
 
+    operation_id: str
+    snapshot_id: str
+    revision_id: str
     mode: ExportMode
     published_target: Path
-    manifest_id: str | None
+    manifest_sha256: str | None
+    file_count: int
+    total_byte_count: int
     warnings: Sequence[WarningRecord]
-    omissions: Sequence[str]
+    omissions: Sequence[ExportOmission]
 
 
 @dataclass(frozen=True, slots=True)
@@ -825,6 +1055,7 @@ class QueryPort(Protocol):
         self,
         handle: SnapshotReadHandle,
         filters: AgentFilters,
+        sort: AgentSort,
         after: str | None,
         limit: int,
         cancellation: CancellationToken,
@@ -837,6 +1068,7 @@ class QueryPort(Protocol):
         self,
         handle: SnapshotReadHandle,
         filters: TurnFilters,
+        sort: TurnSort,
         after: str | None,
         limit: int,
         cancellation: CancellationToken,
@@ -849,6 +1081,7 @@ class QueryPort(Protocol):
         self,
         handle: SnapshotReadHandle,
         filters: EventFilters,
+        sort: EventSort,
         after: str | None,
         limit: int,
         cancellation: CancellationToken,
@@ -860,11 +1093,11 @@ class QueryPort(Protocol):
     def query_time_range(
         self,
         handle: SnapshotReadHandle,
-        request: TimeRangeQueryRequest,
+        request: HeatmapQueryRequest,
         actual_resolution_minutes: int,
         cancellation: CancellationToken,
-    ) -> TimeSeriesResult:
-        """Return one bounded time-series result."""
+    ) -> HeatmapResult:
+        """Return one bounded grouped heatmap result."""
 
         ...
 
@@ -874,8 +1107,8 @@ class QueryPort(Protocol):
         request: SequenceQueryRequest,
         after: str | None,
         cancellation: CancellationToken,
-    ) -> QuerySlice[SequenceRow]:
-        """Return one bounded sequence slice."""
+    ) -> SequenceResult:
+        """Return one bounded sequence page and group hierarchy."""
 
         ...
 
@@ -979,11 +1212,13 @@ class ApplicationServiceConfig:
 
     authorized_source_roots: Sequence[Path]
     parser_version: str
+    pricing_version: str
     pricing_digest: str
+    formatter_version: str
     formatter_digest: str
     default_page_size: int = DEFAULT_PAGE_SIZE
     max_page_size: int = MAX_PAGE_SIZE
-    max_time_buckets: int = MAX_TIME_BUCKETS
+    max_heatmap_cells: int = MAX_HEATMAP_CELLS
 
 
 @dataclass(frozen=True, slots=True)
@@ -1009,7 +1244,9 @@ class _PreflightClaims:
     scope: ReportScope
     source_revision: str
     parser_version: str
+    pricing_version: str
     pricing_digest: str
+    formatter_version: str
     formatter_digest: str
 
 
@@ -1171,8 +1408,11 @@ def _validate_context(context: OperationContext) -> ReportError | None:
         or context.protocol_version != PROTOCOL_VERSION
     ):
         return _invalid("The report protocol version is not supported.")
-    if not _valid_text(context.operation_id, MAX_ID_BYTES, trim=True):
-        return _invalid("operation_id must be a non-empty bounded identifier.")
+    if not (
+        isinstance(context.operation_id, str)
+        and _OPERATION_ID_PATTERN.fullmatch(context.operation_id)
+    ):
+        return _invalid("operation_id must use the supported cryptographic format.")
     return None
 
 
@@ -1482,6 +1722,20 @@ def _bounded_strings(
     )
 
 
+def _bounded_export_omissions(
+    values: Sequence[ExportOmission],
+) -> tuple[ExportOmission, ...] | None:
+    if len(values) > MAX_PROVENANCE_ITEMS:
+        return None
+    for value in values:
+        if any(
+            _validate_bounded_text(text, "export omission") is not None
+            for text in (value.section, value.reason, value.recovery)
+        ):
+            return None
+    return tuple(values)
+
+
 class ApplicationService:
     """Coordinate one process-local report lifecycle through injected ports.
 
@@ -1566,7 +1820,9 @@ class ApplicationService:
                 scope=request.scope,
                 source_revision=discovered.source_revision,
                 parser_version=self._config.parser_version,
+                pricing_version=self._config.pricing_version,
                 pricing_digest=self._config.pricing_digest,
+                formatter_version=self._config.formatter_version,
                 formatter_digest=self._config.formatter_digest,
             )
             with self._state_changed:
@@ -1629,6 +1885,8 @@ class ApplicationService:
             request.preflight_token, MAX_ID_BYTES, trim=True
         ):
             error = _invalid("preflight_token must be a valid opaque token.")
+        if error is None:
+            error = _validate_identifier(request.source_revision, "source_revision")
         if error is not None:
             return _failure(self._with_operation(error, context.operation_id))
         if cancellation.is_cancelled():
@@ -1657,8 +1915,11 @@ class ApplicationService:
             )
         if (
             claims.scope != request.scope
+            or claims.source_revision != request.source_revision
             or claims.parser_version != self._config.parser_version
+            or claims.pricing_version != self._config.pricing_version
             or claims.pricing_digest != self._config.pricing_digest
+            or claims.formatter_version != self._config.formatter_version
             or claims.formatter_digest != self._config.formatter_digest
         ):
             return _failure(
@@ -1681,7 +1942,7 @@ class ApplicationService:
             validation = self._validate_discovered(discovered, request.scope)
             if validation is not None:
                 return _failure(self._with_operation(validation, context.operation_id))
-            if discovered.source_revision != claims.source_revision:
+            if discovered.source_revision != request.source_revision:
                 return _failure(
                     ReportError(
                         code="REPORT_SCOPE_CONFLICT",
@@ -1759,12 +2020,13 @@ class ApplicationService:
             metadata = SnapshotMetadata(
                 protocol_version=PROTOCOL_VERSION,
                 snapshot_id=snapshot_id,
-                root_thread_id=request.scope.root_thread_id,
-                include_children=request.scope.include_children,
-                include_collaborators=request.scope.include_collaborators,
+                revision_id=published.revision_id,
+                scope=request.scope,
                 source_revision=published.source_revision,
                 parser_version=self._config.parser_version,
+                pricing_version=self._config.pricing_version,
                 pricing_digest=self._config.pricing_digest,
+                formatter_version=self._config.formatter_version,
                 formatter_digest=self._config.formatter_digest,
                 observation_time=observation_time.astimezone(timezone.utc),
                 mode="live",
@@ -1855,12 +2117,23 @@ class ApplicationService:
         request: ListAgentsRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[PageResult[AgentRow]]:
+    ) -> ServiceResult[PageResult[AgentRow, AgentFilters, AgentSort]]:
         """Return one stable agent page bound to all filters and page options."""
 
+        request = replace(
+            request,
+            filters=replace(
+                request.filters,
+                agent_ids=tuple(request.filters.agent_ids),
+                roles=tuple(request.filters.roles),
+                states=tuple(request.filters.states),
+            ),
+        )
         error = self._common_snapshot_gate(context, request.snapshot_id)
         if error is None:
             error = self._validate_agent_filters(request.filters)
+        if error is None:
+            error = self._validate_agent_sort(request.sort)
         if error is None:
             error = _validate_page(request.page_size, self._config.max_page_size)
         if error is not None:
@@ -1876,6 +2149,7 @@ class ApplicationService:
                 lambda: self._dependencies.queries.list_agents(
                     handle,
                     request.filters,
+                    request.sort,
                     after,
                     request.page_size,
                     cancellation,
@@ -1884,9 +2158,11 @@ class ApplicationService:
 
         return _query_page(
             self,
+            context,
             request,
             "list_agents",
-            "agent.started_at, agent.agent_id",
+            request.filters,
+            request.sort,
             query,
         )
 
@@ -1896,12 +2172,25 @@ class ApplicationService:
         request: ListTurnsRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[PageResult[TurnRow]]:
+    ) -> ServiceResult[PageResult[TurnRow, TurnFilters, TurnSort]]:
         """Return one stable turn page bound to all filters and page options."""
 
+        request = replace(
+            request,
+            filters=replace(
+                request.filters,
+                turn_ids=tuple(request.filters.turn_ids),
+                agent_ids=tuple(request.filters.agent_ids),
+                states=tuple(request.filters.states),
+                from_time=_utc_or_none(request.filters.from_time),
+                to_time=_utc_or_none(request.filters.to_time),
+            ),
+        )
         error = self._common_snapshot_gate(context, request.snapshot_id)
         if error is None:
             error = self._validate_turn_filters(request.filters)
+        if error is None:
+            error = self._validate_turn_sort(request.sort)
         if error is None:
             error = _validate_page(request.page_size, self._config.max_page_size)
         if error is not None:
@@ -1915,6 +2204,7 @@ class ApplicationService:
                 lambda: self._dependencies.queries.list_turns(
                     handle,
                     request.filters,
+                    request.sort,
                     after,
                     request.page_size,
                     cancellation,
@@ -1923,9 +2213,11 @@ class ApplicationService:
 
         return _query_page(
             self,
+            context,
             request,
             "list_turns",
-            "turn.started_at, turn.turn_id",
+            request.filters,
+            request.sort,
             query,
         )
 
@@ -1935,12 +2227,15 @@ class ApplicationService:
         request: ListEventsRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[PageResult[EventRow]]:
+    ) -> ServiceResult[PageResult[EventRow, EventFilters, EventSort]]:
         """Return one stable bounded event page bound to all selectors."""
 
+        request = replace(request, filters=_immutable_event_filters(request.filters))
         error = self._common_snapshot_gate(context, request.snapshot_id)
         if error is None:
             error = self._validate_event_filters(request.filters)
+        if error is None:
+            error = self._validate_event_sort(request.sort)
         if error is None:
             error = _validate_page(request.page_size, self._config.max_page_size)
         if error is not None:
@@ -1956,6 +2251,7 @@ class ApplicationService:
                 lambda: self._dependencies.queries.list_events(
                     handle,
                     request.filters,
+                    request.sort,
                     after,
                     request.page_size,
                     cancellation,
@@ -1964,43 +2260,50 @@ class ApplicationService:
 
         return _query_page(
             self,
+            context,
             request,
             "list_events",
-            "event.occurred_at, event.event_id",
+            request.filters,
+            request.sort,
             query,
         )
 
     def query_time_range(
         self,
         context: OperationContext,
-        request: TimeRangeQueryRequest,
+        request: HeatmapQueryRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[TimeSeriesResult]:
-        """Return at most 2,000 buckets at the smallest valid coarser resolution."""
+    ) -> ServiceResult[HeatmapResult]:
+        """Return a grouped heatmap with at most 2,000 cells."""
 
         error = self._common_snapshot_gate(context, request.snapshot_id)
         if error is None:
             error = _validate_range(request.from_time, request.to_time)
         if error is None and request.measure not in _TIME_MEASURES:
             error = _invalid("The requested time-series measure is not supported.")
+        if error is None and request.group_by not in _HEATMAP_GROUPS:
+            error = _invalid("The heatmap grouping is not supported.")
         if error is None and (
             isinstance(request.requested_resolution_minutes, bool)
             or not isinstance(request.requested_resolution_minutes, int)
-            or request.requested_resolution_minutes <= 0
+            or request.requested_resolution_minutes not in _HEATMAP_RESOLUTIONS
         ):
-            error = _invalid("requested_resolution_minutes must be positive.")
+            error = _invalid(
+                "requested_resolution_minutes must be one of 1, 5, 15, 30, or 60."
+            )
+        if error is None and (
+            isinstance(request.maximum_rows, bool)
+            or not isinstance(request.maximum_rows, int)
+            or not 1 <= request.maximum_rows <= 200
+        ):
+            error = _invalid("maximum_rows must be from 1 through 200.")
         if error is not None:
             return _failure(self._with_operation(error, context.operation_id))
-        actual_resolution = _actual_resolution_minutes(
-            request.from_time,
-            request.to_time,
-            request.requested_resolution_minutes,
-            self._config.max_time_buckets,
-        )
+        actual_resolution = request.requested_resolution_minutes
         lease_result = _acquire_read(self, request.snapshot_id)
         if not lease_result.ok:
-            return cast(ServiceResult[TimeSeriesResult], lease_result)
+            return cast(ServiceResult[HeatmapResult], lease_result)
         lease = cast(_ReadLease, lease_result.value)
         with lease as state:
             try:
@@ -2015,9 +2318,29 @@ class ApplicationService:
                         cancellation,
                     ),
                 )
+                coarsened_resolution = _actual_resolution_minutes(
+                    request.from_time,
+                    request.to_time,
+                    request.requested_resolution_minutes,
+                    self._config.max_heatmap_cells,
+                    len(result.rows),
+                )
+                if coarsened_resolution != actual_resolution:
+                    actual_resolution = coarsened_resolution
+                    result = self._run_query_call(
+                        context,
+                        "query_time_range",
+                        cancellation,
+                        lambda: self._dependencies.queries.query_time_range(
+                            state.read_handle,
+                            request,
+                            actual_resolution,
+                            cancellation,
+                        ),
+                    )
             except _OperationFailure as failure:
                 return _failure(failure.error)
-            validation = self._validate_time_series(
+            validation = self._validate_heatmap(
                 result, request, actual_resolution, state.metadata
             )
             if validation is not None:
@@ -2027,13 +2350,19 @@ class ApplicationService:
                     result,
                     from_time=result.from_time.astimezone(timezone.utc),
                     to_time=result.to_time.astimezone(timezone.utc),
-                    buckets=tuple(
+                    rows=tuple(
                         replace(
-                            bucket,
-                            from_time=bucket.from_time.astimezone(timezone.utc),
-                            to_time=bucket.to_time.astimezone(timezone.utc),
+                            row,
+                            cells=tuple(
+                                replace(
+                                    cell,
+                                    start_time=cell.start_time.astimezone(timezone.utc),
+                                    end_time=cell.end_time.astimezone(timezone.utc),
+                                )
+                                for cell in row.cells
+                            ),
                         )
-                        for bucket in result.buckets
+                        for row in result.rows
                     ),
                     provenance=cast(
                         tuple[str, ...],
@@ -2048,24 +2377,35 @@ class ApplicationService:
         request: SequenceQueryRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[PageResult[SequenceRow]]:
+    ) -> ServiceResult[SequenceResult]:
         """Return one stable bounded delegation or communication sequence page."""
 
+        request = replace(
+            request,
+            filters=replace(
+                request.filters,
+                event_filters=_immutable_event_filters(request.filters.event_filters),
+            ),
+        )
         error = self._common_snapshot_gate(context, request.snapshot_id)
-        if error is None and request.focus_agent_id is not None:
-            error = _validate_identifier(request.focus_agent_id, "focus_agent_id")
+        if error is None and request.filters.focus_agent_id is not None:
+            error = _validate_identifier(
+                request.filters.focus_agent_id, "focus_agent_id"
+            )
         if error is None:
-            error = self._validate_event_filters(request.filters)
-        if error is None and request.grouping not in _GROUPINGS:
+            error = self._validate_event_filters(request.filters.event_filters)
+        if error is None and request.filters.grouping not in _GROUPINGS:
             error = _invalid("The sequence grouping is not supported.")
+        if error is None and type(request.filters.include_reasoning) is not bool:
+            error = _invalid("include_reasoning must be a boolean.")
+        if error is None:
+            error = self._validate_sequence_sort(request.sort)
         if error is None:
             error = _validate_page(request.page_size, self._config.max_page_size)
         if error is not None:
             return _failure(self._with_operation(error, context.operation_id))
 
-        def query(
-            handle: SnapshotReadHandle, after: str | None
-        ) -> QuerySlice[SequenceRow]:
+        def query(handle: SnapshotReadHandle, after: str | None) -> SequenceResult:
             return self._run_query_call(
                 context,
                 "query_sequence",
@@ -2075,11 +2415,11 @@ class ApplicationService:
                 ),
             )
 
-        return _query_page(
+        return _query_sequence_result(
             self,
+            context,
             request,
             "query_sequence",
-            "sequence.occurred_at, sequence.sequence_id",
             query,
         )
 
@@ -2089,14 +2429,16 @@ class ApplicationService:
         request: CoordinationQueryRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[PageResult[CoordinationRow]]:
+    ) -> ServiceResult[
+        PageResult[CoordinationRow, CoordinationFilters, CoordinationSort]
+    ]:
         """Return one stable bounded coordination page with explicit evidence labels."""
 
         error = self._common_snapshot_gate(context, request.snapshot_id)
         if error is None:
-            error = _validate_filter_values(request.work_item_ids, "work_item_ids")
+            error = self._validate_coordination_filters(request.filters)
         if error is None:
-            error = _validate_filter_values(request.agent_ids, "agent_ids")
+            error = self._validate_coordination_sort(request.sort)
         if error is None:
             error = _validate_page(request.page_size, self._config.max_page_size)
         if error is not None:
@@ -2105,7 +2447,7 @@ class ApplicationService:
         def query(
             handle: SnapshotReadHandle, after: str | None
         ) -> QuerySlice[CoordinationRow]:
-            result = self._run_query_call(
+            return self._run_query_call(
                 context,
                 "query_coordination",
                 cancellation,
@@ -2113,21 +2455,14 @@ class ApplicationService:
                     handle, request, after, cancellation
                 ),
             )
-            return QuerySlice(
-                items=tuple(
-                    replace(row, evidence="inferred")
-                    if "decision" in row.action.casefold()
-                    else row
-                    for row in result.items
-                ),
-                next_position=result.next_position,
-            )
 
         return _query_page(
             self,
+            context,
             request,
             "query_coordination",
-            "coordination.occurred_at, coordination.coordination_id",
+            request.filters,
+            request.sort,
             query,
         )
 
@@ -2285,6 +2620,7 @@ class ApplicationService:
                     return _failure(_cancelled(context.operation_id))
                 new_metadata = replace(
                     state.metadata,
+                    revision_id=published.revision_id,
                     source_revision=published.source_revision,
                     observation_time=observation_time.astimezone(timezone.utc),
                     warnings=warnings,
@@ -2399,7 +2735,12 @@ class ApplicationService:
                     cancellation,
                 )
                 published = True
-                validation = self._validate_export_result(result, resolved)
+                validation = self._validate_export_result(
+                    result,
+                    resolved,
+                    context.operation_id,
+                    state.metadata,
+                )
                 if validation is not None:
                     return _failure(
                         self._with_operation(validation, context.operation_id)
@@ -2412,8 +2753,8 @@ class ApplicationService:
                             _bounded_warnings(result.warnings),
                         ),
                         omissions=cast(
-                            tuple[str, ...],
-                            _bounded_strings(result.omissions, MAX_PROVENANCE_ITEMS),
+                            tuple[ExportOmission, ...],
+                            _bounded_export_omissions(result.omissions),
                         ),
                     )
                 )
@@ -2590,6 +2931,11 @@ class ApplicationService:
 
     @staticmethod
     def _validate_agent_filters(filters: AgentFilters) -> ReportError | None:
+        if (
+            not isinstance(filters.query, str)
+            or len(filters.query.encode("utf-8")) > MAX_TEXT_BYTES
+        ):
+            return _invalid("query must be bounded text.")
         for label, values in (
             ("agent_ids", filters.agent_ids),
             ("roles", filters.roles),
@@ -2598,6 +2944,17 @@ class ApplicationService:
             error = _validate_filter_values(values, label)
             if error is not None:
                 return error
+        return None
+
+    @staticmethod
+    def _validate_agent_sort(sort: AgentSort) -> ReportError | None:
+        if (
+            sort.key not in _AGENT_SORT_KEYS
+            or sort.direction not in _SORT_DIRECTIONS
+            or sort.tie_break_key != "agent_id"
+            or sort.tie_break_direction != "ascending"
+        ):
+            return _invalid("The requested agent sort is not supported.")
         return None
 
     @staticmethod
@@ -2611,6 +2968,68 @@ class ApplicationService:
             if error is not None:
                 return error
         return _validate_optional_range(filters.from_time, filters.to_time)
+
+    @staticmethod
+    def _validate_turn_sort(sort: TurnSort) -> ReportError | None:
+        if (
+            sort.key not in _TURN_SORT_KEYS
+            or sort.direction not in _SORT_DIRECTIONS
+            or sort.tie_break_key != "turn_id"
+            or sort.tie_break_direction != "ascending"
+        ):
+            return _invalid("The requested turn sort is not supported.")
+        return None
+
+    @staticmethod
+    def _validate_event_sort(sort: EventSort) -> ReportError | None:
+        if (
+            sort.key not in _EVENT_SORT_KEYS
+            or sort.direction not in _SORT_DIRECTIONS
+            or sort.tie_break_key != "event_id"
+            or sort.tie_break_direction != "ascending"
+        ):
+            return _invalid("The requested event sort is not supported.")
+        return None
+
+    @staticmethod
+    def _validate_sequence_sort(sort: SequenceSort) -> ReportError | None:
+        if (
+            sort.key not in _SEQUENCE_SORT_KEYS
+            or sort.direction not in _SORT_DIRECTIONS
+            or sort.tie_break_key != "sequence_id"
+            or sort.tie_break_direction != "ascending"
+        ):
+            return _invalid("The requested sequence sort is not supported.")
+        return None
+
+    @staticmethod
+    def _validate_coordination_filters(
+        filters: CoordinationFilters,
+    ) -> ReportError | None:
+        for label, value in (
+            ("work_item_id", filters.work_item_id),
+            ("delegated_root_id", filters.delegated_root_id),
+            ("agent_id", filters.agent_id),
+            ("operation", filters.operation),
+        ):
+            if value is not None:
+                error = _validate_identifier(value, label)
+                if error is not None:
+                    return error
+        if filters.evidence is not None and filters.evidence not in _EVIDENCE_KINDS:
+            return _invalid("The coordination evidence selector is not supported.")
+        return None
+
+    @staticmethod
+    def _validate_coordination_sort(sort: CoordinationSort) -> ReportError | None:
+        if (
+            sort.key not in _COORDINATION_SORT_KEYS
+            or sort.direction not in _SORT_DIRECTIONS
+            or sort.tie_break_key != "coordination_id"
+            or sort.tie_break_direction != "ascending"
+        ):
+            return _invalid("The requested coordination sort is not supported.")
+        return None
 
     @staticmethod
     def _validate_event_filters(filters: EventFilters) -> ReportError | None:
@@ -2657,38 +3076,89 @@ class ApplicationService:
     def _normalize_summary(
         self, result: SummaryResult, metadata: SnapshotMetadata
     ) -> SummaryResult | ReportError:
-        if result.snapshot_id != metadata.snapshot_id or result.scope != ReportScope(
-            metadata.root_thread_id,
-            metadata.include_children,
-            metadata.include_collaborators,
+        title = (
+            result.title
+            if isinstance(result.title, str) and result.title
+            else "Agent Report"
+        )
+        if (
+            result.snapshot_id != metadata.snapshot_id
+            or result.revision_id != metadata.revision_id
+            or result.scope != metadata.scope
+            or not _aware_datetime(result.observed_at)
+            or result.mode not in {"live", "sealed"}
+            or (
+                result.time_range is not None
+                and _validate_range(
+                    result.time_range.from_time, result.time_range.to_time
+                )
+                is not None
+            )
         ):
             return _safe_internal_error("")
-        for label, value in (("goal", result.goal), ("state", result.state)):
+        for label, value in (
+            ("title", result.title),
+            ("goal", result.goal),
+            ("state", result.state),
+        ):
             error = _validate_bounded_text(value, label)
             if error is not None:
                 return error
-        if len(result.metrics) > MAX_FILTER_VALUES:
+        if len(result.metric_groups) > MAX_FILTER_VALUES:
             return _safe_internal_error("")
-        metrics: list[MetricValue] = []
-        for metric in result.metrics:
-            if metric.evidence not in _EVIDENCE_KINDS:
+        groups: list[MetricGroup] = []
+        metric_count = 0
+        group_ids: set[str] = set()
+        allowed_group_ids = {
+            "overview",
+            "model",
+            "context",
+            "inference",
+            "runtime",
+            "waits",
+            "work_items",
+            "claims",
+            "provenance",
+        }
+        for group in result.metric_groups:
+            if group.group_id not in allowed_group_ids or group.group_id in group_ids:
                 return _safe_internal_error("")
-            for label, value in (
-                ("metric name", metric.name),
-                ("metric unit", metric.unit),
-                ("metric provenance", metric.provenance),
-                (
-                    "metric value",
-                    metric.value if isinstance(metric.value, str) else None,
-                ),
-            ):
-                error = _validate_bounded_text(value, label)
-                if error is not None:
-                    return error
-            metrics.append(metric)
-        provenance = _bounded_strings(result.provenance, MAX_PROVENANCE_ITEMS)
+            group_ids.add(group.group_id)
+            error = _validate_bounded_text(group.label, "metric group label")
+            if error is not None:
+                return error
+            metric_count += len(group.metrics)
+            if metric_count > MAX_FILTER_VALUES:
+                return _safe_internal_error("")
+            metrics: list[MetricValue] = []
+            metric_ids: set[str] = set()
+            for metric in group.metrics:
+                if (
+                    metric.evidence not in _EVIDENCE_KINDS
+                    or metric.metric_id in metric_ids
+                ):
+                    return _safe_internal_error("")
+                metric_ids.add(metric.metric_id)
+                for label, value in (
+                    ("metric ID", metric.metric_id),
+                    ("metric label", metric.label),
+                    ("metric formatted value", metric.formatted_value),
+                    ("metric unit", metric.unit),
+                    ("metric provenance", metric.provenance),
+                    ("metric description", metric.description),
+                    (
+                        "metric raw value",
+                        metric.value if isinstance(metric.value, str) else None,
+                    ),
+                ):
+                    error = _validate_bounded_text(value, label)
+                    if error is not None:
+                        return error
+                metrics.append(metric)
+            groups.append(replace(group, metrics=tuple(metrics)))
         warnings = _bounded_warnings(result.warnings)
-        if provenance is None or warnings is None:
+        provenance = _bounded_strings(result.provenance, MAX_PROVENANCE_ITEMS)
+        if warnings is None or provenance is None:
             return ReportError(
                 code="REPORT_PRIVACY_FAILED",
                 message="The report summary failed privacy validation.",
@@ -2696,69 +3166,114 @@ class ApplicationService:
             )
         if len(result.recent_activity) > MAX_RECENT_ACTIVITY:
             return _safe_internal_error("")
-        activities: list[ActivityItem] = []
+        activities: list[SignificantActivity] = []
         for item in result.recent_activity:
             if (
-                _validate_identifier(item.event_id, "event_id") is not None
+                not _EVENT_ID_PATTERN.fullmatch(item.event_id)
                 or not _aware_datetime(item.occurred_at)
                 or item.evidence not in _EVIDENCE_KINDS
             ):
                 return _safe_internal_error("")
-            for label, value in (
-                ("activity kind", item.kind),
-                ("activity summary", item.summary),
-            ):
-                error = _validate_bounded_text(value, label)
-                if error is not None:
-                    return error
+            error = _validate_bounded_text(item.label, "activity label")
+            if error is not None:
+                return error
             activities.append(
                 replace(item, occurred_at=item.occurred_at.astimezone(timezone.utc))
             )
         return replace(
             result,
-            metrics=tuple(metrics),
+            title=title,
+            observed_at=result.observed_at.astimezone(timezone.utc),
+            time_range=(
+                replace(
+                    result.time_range,
+                    from_time=result.time_range.from_time.astimezone(timezone.utc),
+                    to_time=result.time_range.to_time.astimezone(timezone.utc),
+                )
+                if result.time_range is not None
+                else None
+            ),
+            metric_groups=tuple(groups),
             provenance=provenance,
             warnings=warnings,
             recent_activity=tuple(activities),
         )
 
-    def _validate_time_series(
+    def _validate_heatmap(
         self,
-        result: TimeSeriesResult,
-        request: TimeRangeQueryRequest,
+        result: HeatmapResult,
+        request: HeatmapQueryRequest,
         actual_resolution: int,
         metadata: SnapshotMetadata,
     ) -> ReportError | None:
         if (
             result.snapshot_id != metadata.snapshot_id
+            or result.revision_id != metadata.revision_id
             or result.measure != request.measure
+            or result.group_by != request.group_by
             or result.requested_resolution_minutes
             != request.requested_resolution_minutes
             or result.actual_resolution_minutes != actual_resolution
+            or result.maximum_rows != request.maximum_rows
+            or isinstance(result.omitted_row_count, bool)
+            or not isinstance(result.omitted_row_count, int)
+            or result.omitted_row_count < 0
+            or result.row_order != "activity_descending_id_ascending"
+            or isinstance(result.total_cell_count, bool)
+            or not isinstance(result.total_cell_count, int)
+            or result.total_cell_count < 0
             or not _aware_datetime(result.from_time)
             or not _aware_datetime(result.to_time)
             or result.from_time.astimezone(timezone.utc)
             != request.from_time.astimezone(timezone.utc)
             or result.to_time.astimezone(timezone.utc)
             != request.to_time.astimezone(timezone.utc)
-            or len(result.buckets) > self._config.max_time_buckets
+            or len(result.rows) > request.maximum_rows
+            or result.total_cell_count > self._config.max_heatmap_cells
+            or result.total_cell_count != sum(len(row.cells) for row in result.rows)
         ):
             return _safe_internal_error("")
-        previous_to: datetime | None = None
-        for bucket in result.buckets:
+        seen_rows: set[str] = set()
+        for row in result.rows:
             if (
-                not _aware_datetime(bucket.from_time)
-                or not _aware_datetime(bucket.to_time)
-                or bucket.from_time >= bucket.to_time
-                or bucket.evidence not in _EVIDENCE_KINDS
-                or (previous_to is not None and bucket.from_time < previous_to)
+                _validate_identifier(row.row_id, "row_id") is not None
+                or row.row_id in seen_rows
+                or not _valid_row_texts(row.label)
+                or isinstance(row.scale.minimum, bool)
+                or not isinstance(row.scale.minimum, (int, float))
+                or isinstance(row.scale.maximum, bool)
+                or not isinstance(row.scale.maximum, (int, float))
+                or row.scale.minimum > row.scale.maximum
+                or row.scale.color_semantic
+                not in {"sequential_nonnegative", "diverging_signed"}
+                or row.scale.basis
+                not in {"visible_row_maximum", "context_window_capacity"}
             ):
                 return _safe_internal_error("")
-            previous_to = bucket.to_time
+            seen_rows.add(row.row_id)
+            previous_end: datetime | None = None
+            for cell in row.cells:
+                if (
+                    not _aware_datetime(cell.start_time)
+                    or not _aware_datetime(cell.end_time)
+                    or cell.start_time >= cell.end_time
+                    or (previous_end is not None and cell.start_time < previous_end)
+                    or isinstance(cell.count, bool)
+                    or not isinstance(cell.count, int)
+                    or cell.count < 0
+                    or cell.evidence not in _EVIDENCE_KINDS
+                    or not _valid_row_texts(cell.primary_label)
+                    or (
+                        cell.secondary_label is not None
+                        and not _valid_row_texts(cell.secondary_label)
+                    )
+                ):
+                    return _safe_internal_error("")
+                previous_end = cell.end_time
         if _bounded_strings(result.provenance, MAX_PROVENANCE_ITEMS) is None:
             return ReportError(
                 code="REPORT_PRIVACY_FAILED",
-                message="The time-series provenance failed privacy validation.",
+                message="The heatmap provenance failed privacy validation.",
                 recoverable=False,
             )
         return None
@@ -2766,15 +3281,24 @@ class ApplicationService:
     def _normalize_event_detail(
         self, detail: EventDetail, snapshot_id: str, event_id: str
     ) -> EventDetail | ReportError:
+        with self._state_changed:
+            state = self._snapshots.get(snapshot_id)
+        expected_revision = state.metadata.revision_id if state is not None else None
         if (
             detail.snapshot_id != snapshot_id
+            or detail.revision_id != expected_revision
             or detail.event_id != event_id
             or not _aware_datetime(detail.occurred_at)
             or detail.evidence not in _EVIDENCE_KINDS
+            or (
+                detail.source_key is not None
+                and _validate_identifier(detail.source_key, "source_key") is not None
+            )
         ):
             return _safe_internal_error("")
         for label, value in (
             ("event kind", detail.kind),
+            ("event title", detail.title),
             ("event summary", detail.summary),
         ):
             error = _validate_bounded_text(value, label)
@@ -2787,63 +3311,68 @@ class ApplicationService:
                 message="The event provenance failed privacy validation.",
                 recoverable=False,
             )
-        redactions = list(detail.redactions)
-        bounded_arguments = detail.bounded_arguments
-        bounded_result = detail.bounded_result
-        for detail_label, detail_value in (
-            ("bounded_arguments", bounded_arguments),
-            ("bounded_result", bounded_result),
-        ):
-            if detail_value is not None and _contains_absolute_path(detail_value):
+        if len(detail.disclosures) > MAX_PROVENANCE_ITEMS:
+            return _safe_internal_error("")
+        disclosures: list[Disclosure] = []
+        for disclosure in detail.disclosures:
+            if (
+                type(disclosure.redacted) is not bool
+                or _validate_bounded_text(disclosure.label, "disclosure label")
+                is not None
+                or not isinstance(disclosure.content, str)
+                or _contains_absolute_path(disclosure.content)
+            ):
                 return ReportError(
                     code="REPORT_PRIVACY_FAILED",
                     message="The event detail failed privacy validation.",
                     recoverable=False,
                 )
-            if (
-                detail_value is not None
-                and len(detail_value.encode("utf-8")) > MAX_DETAIL_FIELD_BYTES
-            ):
-                redactions.append(
-                    f"{detail_label} omitted because it exceeded the detail limit."
+            if len(disclosure.content.encode("utf-8")) > MAX_DETAIL_FIELD_BYTES:
+                disclosures.append(
+                    replace(
+                        disclosure,
+                        content="Content omitted because it exceeded the detail limit.",
+                        redacted=True,
+                    )
                 )
-                if detail_label == "bounded_arguments":
-                    bounded_arguments = None
-                else:
-                    bounded_result = None
-        bounded_redactions = _bounded_strings(redactions, MAX_PROVENANCE_ITEMS)
-        if bounded_redactions is None:
-            return ReportError(
-                code="REPORT_PRIVACY_FAILED",
-                message="The event redactions failed privacy validation.",
-                recoverable=False,
-            )
+            else:
+                disclosures.append(disclosure)
         return replace(
             detail,
             occurred_at=detail.occurred_at.astimezone(timezone.utc),
-            bounded_arguments=bounded_arguments,
-            bounded_result=bounded_result,
             provenance=provenance,
-            redactions=bounded_redactions,
+            disclosures=tuple(disclosures),
         )
 
     @staticmethod
     def _validate_export_result(
-        result: ExportResult, request: ResolvedExportRequest
+        result: ExportResult,
+        request: ResolvedExportRequest,
+        operation_id: str,
+        metadata: SnapshotMetadata,
     ) -> ReportError | None:
         if (
-            result.mode != request.mode
+            result.operation_id != operation_id
+            or result.snapshot_id != request.snapshot_id
+            or result.revision_id != metadata.revision_id
+            or result.mode != request.mode
             or result.published_target != request.target
             or not result.published_target.is_absolute()
             or (
-                result.manifest_id is not None
-                and _validate_identifier(result.manifest_id, "manifest_id") is not None
+                result.manifest_sha256 is not None
+                and not _LOWER_HEX_DIGEST.fullmatch(result.manifest_sha256)
             )
+            or isinstance(result.file_count, bool)
+            or not isinstance(result.file_count, int)
+            or result.file_count < 0
+            or isinstance(result.total_byte_count, bool)
+            or not isinstance(result.total_byte_count, int)
+            or result.total_byte_count < 0
         ):
             return _safe_internal_error("")
         if (
             _bounded_warnings(result.warnings) is None
-            or _bounded_strings(result.omissions, MAX_PROVENANCE_ITEMS) is None
+            or _bounded_export_omissions(result.omissions) is None
         ):
             return _safe_internal_error("")
         return None
@@ -3015,32 +3544,34 @@ def _acquire_mutation(
 
 def _query_page(
     self: ApplicationService,
+    context: OperationContext,
     request: (
         ListAgentsRequest
         | ListTurnsRequest
         | ListEventsRequest
-        | SequenceQueryRequest
         | CoordinationQueryRequest
     ),
     operation: str,
-    sort: str,
+    filters: F,
+    sort: S,
     query: Callable[[SnapshotReadHandle, str | None], QuerySlice[T]],
-) -> ServiceResult[PageResult[T]]:
-    digest = _filters_digest(_page_filter_value(request))
+) -> ServiceResult[PageResult[T, F, S]]:
+    digest = _filters_digest(filters)
+    sort_binding = _filters_digest(sort)
     lease_result = _acquire_read(self, request.snapshot_id)
     if not lease_result.ok:
-        return cast(ServiceResult[PageResult[T]], lease_result)
+        return cast(ServiceResult[PageResult[T, F, S]], lease_result)
     lease = cast(_ReadLease, lease_result.value)
     with lease as state:
         after: str | None = None
         if request.cursor is not None:
             if not _valid_text(request.cursor, MAX_ID_BYTES, trim=True):
-                return _failure(_cursor_conflict())
+                return _failure(_cursor_conflict(context.operation_id))
             try:
                 with self._state_changed:
                     claims = self._token_codec.decode_cursor(request.cursor)
             except _TokenDecodeError:
-                return _failure(_cursor_conflict())
+                return _failure(_cursor_conflict(context.operation_id))
             if (
                 claims
                 != _CursorClaims(
@@ -3048,20 +3579,20 @@ def _query_page(
                     revision_id=state.revision_id,
                     operation=operation,
                     filters_digest=digest,
-                    sort=sort,
+                    sort=sort_binding,
                     page_size=request.page_size,
                     position=claims.position,
                 )
                 or _validate_identifier(claims.position, "cursor position") is not None
             ):
-                return _failure(_cursor_conflict())
+                return _failure(_cursor_conflict(context.operation_id))
             after = claims.position
         try:
             query_slice = query(state.read_handle, after)
         except _OperationFailure as failure:
             return _failure(failure.error)
         except Exception:
-            return _failure(_safe_internal_error(""))
+            return _failure(_safe_internal_error(context.operation_id))
         if (
             not isinstance(query_slice, QuerySlice)
             or len(query_slice.items) > request.page_size
@@ -3071,10 +3602,10 @@ def _query_page(
                 is not None
             )
         ):
-            return _failure(_safe_internal_error(""))
-        normalized = _normalize_page_items(operation, query_slice.items)
+            return _failure(_safe_internal_error(context.operation_id))
+        normalized = _normalize_page_items(operation, query_slice.items, sort)
         if isinstance(normalized, ReportError):
-            return _failure(normalized)
+            return _failure(self._with_operation(normalized, context.operation_id))
         next_cursor = None
         if query_slice.next_position is not None:
             with self._state_changed:
@@ -3084,7 +3615,7 @@ def _query_page(
                         revision_id=state.revision_id,
                         operation=operation,
                         filters_digest=digest,
-                        sort=sort,
+                        sort=sort_binding,
                         page_size=request.page_size,
                         position=query_slice.next_position,
                     )
@@ -3092,9 +3623,10 @@ def _query_page(
         return _success(
             PageResult(
                 snapshot_id=request.snapshot_id,
+                revision_id=state.metadata.revision_id,
                 operation=operation,
                 items=cast(tuple[T, ...], normalized),
-                applied_filters_digest=digest,
+                applied_filters=filters,
                 applied_sort=sort,
                 page_size=request.page_size,
                 next_cursor=next_cursor,
@@ -3102,34 +3634,146 @@ def _query_page(
         )
 
 
-def _page_filter_value(
-    request: (
-        ListAgentsRequest
-        | ListTurnsRequest
-        | ListEventsRequest
-        | SequenceQueryRequest
-        | CoordinationQueryRequest
-    ),
-) -> object:
-    if isinstance(request, (ListAgentsRequest, ListTurnsRequest, ListEventsRequest)):
-        return request.filters
-    if isinstance(request, SequenceQueryRequest):
-        return {
-            "focus_agent_id": request.focus_agent_id,
-            "filters": request.filters,
-            "grouping": request.grouping,
-        }
-    return {
-        "work_item_ids": request.work_item_ids,
-        "agent_ids": request.agent_ids,
-    }
+def _query_sequence_result(
+    self: ApplicationService,
+    context: OperationContext,
+    request: SequenceQueryRequest,
+    operation: str,
+    query: Callable[[SnapshotReadHandle, str | None], SequenceResult],
+) -> ServiceResult[SequenceResult]:
+    filters_digest = _filters_digest(request.filters)
+    sort_binding = _filters_digest(request.sort)
+    lease_result = _acquire_read(self, request.snapshot_id)
+    if not lease_result.ok:
+        return cast(ServiceResult[SequenceResult], lease_result)
+    lease = cast(_ReadLease, lease_result.value)
+    with lease as state:
+        after: str | None = None
+        if request.cursor is not None:
+            if not _valid_text(request.cursor, MAX_ID_BYTES, trim=True):
+                return _failure(_cursor_conflict(context.operation_id))
+            try:
+                with self._state_changed:
+                    claims = self._token_codec.decode_cursor(request.cursor)
+            except _TokenDecodeError:
+                return _failure(_cursor_conflict(context.operation_id))
+            if (
+                claims.snapshot_id != request.snapshot_id
+                or claims.revision_id != state.revision_id
+                or claims.operation != operation
+                or claims.filters_digest != filters_digest
+                or claims.sort != sort_binding
+                or claims.page_size != request.page_size
+                or _validate_identifier(claims.position, "cursor position") is not None
+            ):
+                return _failure(_cursor_conflict(context.operation_id))
+            after = claims.position
+        try:
+            result = query(state.read_handle, after)
+        except _OperationFailure as failure:
+            return _failure(failure.error)
+        except Exception:
+            return _failure(_safe_internal_error(context.operation_id))
+        if not isinstance(result, SequenceResult):
+            return _failure(_safe_internal_error(context.operation_id))
+        raw_page = result.page
+        if (
+            raw_page.snapshot_id != request.snapshot_id
+            or raw_page.revision_id != state.metadata.revision_id
+            or raw_page.operation != operation
+            or raw_page.applied_filters != request.filters
+            or raw_page.applied_sort != request.sort
+            or raw_page.page_size != request.page_size
+            or len(raw_page.items) > request.page_size
+            or (
+                raw_page.next_cursor is not None
+                and _validate_identifier(raw_page.next_cursor, "cursor position")
+                is not None
+            )
+        ):
+            return _failure(_safe_internal_error(context.operation_id))
+        normalized = _normalize_page_items(operation, raw_page.items, request.sort)
+        if isinstance(normalized, ReportError):
+            return _failure(self._with_operation(normalized, context.operation_id))
+        normalized_rows = cast(tuple[SequenceRow, ...], normalized)
+        groups = _normalize_sequence_groups(result.groups, normalized_rows)
+        if isinstance(groups, ReportError):
+            return _failure(self._with_operation(groups, context.operation_id))
+        if request.filters.grouping == "none" and (
+            groups or any(row.group_id is not None for row in normalized_rows)
+        ):
+            return _failure(_safe_internal_error(context.operation_id))
+        next_cursor = None
+        if raw_page.next_cursor is not None:
+            with self._state_changed:
+                next_cursor = self._token_codec.encode_cursor(
+                    _CursorClaims(
+                        snapshot_id=request.snapshot_id,
+                        revision_id=state.revision_id,
+                        operation=operation,
+                        filters_digest=filters_digest,
+                        sort=sort_binding,
+                        page_size=request.page_size,
+                        position=raw_page.next_cursor,
+                    )
+                )
+        return _success(
+            SequenceResult(
+                page=PageResult(
+                    snapshot_id=request.snapshot_id,
+                    revision_id=state.metadata.revision_id,
+                    operation=operation,
+                    items=normalized_rows,
+                    applied_filters=request.filters,
+                    applied_sort=request.sort,
+                    page_size=request.page_size,
+                    next_cursor=next_cursor,
+                ),
+                groups=groups,
+            )
+        )
+
+
+def _normalize_sequence_groups(
+    values: Sequence[SequenceGroup], rows: Sequence[SequenceRow]
+) -> tuple[SequenceGroup, ...] | ReportError:
+    groups: list[SequenceGroup] = []
+    by_id: dict[str, SequenceGroup] = {}
+    for group in values:
+        if (
+            _validate_identifier(group.group_id, "group_id") is not None
+            or group.group_id in by_id
+            or (
+                group.parent_group_id is not None
+                and _validate_identifier(group.parent_group_id, "parent_group_id")
+                is not None
+            )
+            or isinstance(group.depth, bool)
+            or not isinstance(group.depth, int)
+            or group.depth < 0
+            or not _valid_row_texts(group.label)
+            or type(group.collapsible) is not bool
+        ):
+            return _safe_internal_error("")
+        if group.parent_group_id is None:
+            if group.depth != 0:
+                return _safe_internal_error("")
+        else:
+            parent = by_id.get(group.parent_group_id)
+            if parent is None or group.depth != parent.depth + 1:
+                return _safe_internal_error("")
+        by_id[group.group_id] = group
+        groups.append(group)
+    if any(row.group_id is not None and row.group_id not in by_id for row in rows):
+        return _safe_internal_error("")
+    return tuple(groups)
 
 
 def _normalize_page_items(
-    operation: str, items: Sequence[object]
+    operation: str, items: Sequence[object], sort: object
 ) -> tuple[object, ...] | ReportError:
+    del sort  # QueryPort owns row ordering after the service validates the sort DTO.
     normalized: list[object] = []
-    sort_keys: list[tuple[object, str]] = []
     for item in items:
         if operation == "list_agents" and isinstance(item, AgentRow):
             if (
@@ -3139,9 +3783,21 @@ def _normalize_page_items(
                     and _validate_identifier(item.parent_agent_id, "parent_agent_id")
                     is not None
                 )
-                or not _valid_row_texts(item.role, item.state)
+                or (
+                    item.nickname is not None
+                    and _validate_bounded_text(item.nickname, "agent nickname")
+                    is not None
+                )
+                or (
+                    item.role is not None
+                    and _validate_bounded_text(item.role, "agent role") is not None
+                )
+                or not _valid_row_texts(item.state)
                 or not _optional_aware(item.started_at)
                 or not _optional_aware(item.ended_at)
+                or not _optional_aware(item.last_activity_at)
+                or not _valid_nonnegative_integer(item.turn_count)
+                or not _valid_nonnegative_integer(item.event_count)
                 or item.evidence not in _EVIDENCE_KINDS
             ):
                 return _safe_internal_error("")
@@ -3149,13 +3805,7 @@ def _normalize_page_items(
                 item,
                 started_at=_utc_or_none(item.started_at),
                 ended_at=_utc_or_none(item.ended_at),
-            )
-            sort_keys.append(
-                (
-                    normalized_agent.started_at
-                    or datetime.min.replace(tzinfo=timezone.utc),
-                    item.agent_id,
-                )
+                last_activity_at=_utc_or_none(item.last_activity_at),
             )
             normalized.append(normalized_agent)
         elif operation == "list_turns" and isinstance(item, TurnRow):
@@ -3163,11 +3813,13 @@ def _normalize_page_items(
                 _validate_identifier(item.turn_id, "turn_id") is not None
                 or _validate_identifier(item.agent_id, "agent_id") is not None
                 or not _valid_row_texts(item.state)
+                or (
+                    item.summary is not None
+                    and _validate_bounded_text(item.summary, "turn summary") is not None
+                )
                 or not _aware_datetime(item.started_at)
                 or not _optional_aware(item.ended_at)
-                or isinstance(item.event_count, bool)
-                or not isinstance(item.event_count, int)
-                or item.event_count < 0
+                or not _valid_nonnegative_integer(item.event_count)
                 or item.evidence not in _EVIDENCE_KINDS
             ):
                 return _safe_internal_error("")
@@ -3176,7 +3828,6 @@ def _normalize_page_items(
                 started_at=item.started_at.astimezone(timezone.utc),
                 ended_at=_utc_or_none(item.ended_at),
             )
-            sort_keys.append((normalized_turn.started_at, item.turn_id))
             normalized.append(normalized_turn)
         elif operation == "list_events" and isinstance(item, EventRow):
             if (
@@ -3192,38 +3843,62 @@ def _normalize_page_items(
                 or not _aware_datetime(item.occurred_at)
                 or not _valid_row_texts(item.kind, item.summary)
                 or item.evidence not in _EVIDENCE_KINDS
+                or (
+                    item.source_key is not None
+                    and _validate_identifier(item.source_key, "source_key") is not None
+                )
+                or type(item.has_detail) is not bool
             ):
                 return _safe_internal_error("")
             normalized_event = replace(
                 item, occurred_at=item.occurred_at.astimezone(timezone.utc)
             )
-            sort_keys.append((normalized_event.occurred_at, item.event_id))
             normalized.append(normalized_event)
         elif operation == "query_sequence" and isinstance(item, SequenceRow):
             if (
                 _validate_identifier(item.sequence_id, "sequence_id") is not None
                 or (
-                    item.source_agent_id is not None
-                    and _validate_identifier(item.source_agent_id, "source_agent_id")
+                    item.group_id is not None
+                    and _validate_identifier(item.group_id, "group_id") is not None
+                )
+                or (
+                    item.from_agent_id is not None
+                    and _validate_identifier(item.from_agent_id, "from_agent_id")
                     is not None
                 )
                 or (
-                    item.target_agent_id is not None
-                    and _validate_identifier(item.target_agent_id, "target_agent_id")
+                    item.from_agent_label is not None
+                    and _validate_bounded_text(
+                        item.from_agent_label, "from agent label"
+                    )
+                    is not None
+                )
+                or (
+                    item.to_agent_id is not None
+                    and _validate_identifier(item.to_agent_id, "to_agent_id")
+                    is not None
+                )
+                or (
+                    item.to_agent_label is not None
+                    and _validate_bounded_text(item.to_agent_label, "to agent label")
                     is not None
                 )
                 or not _aware_datetime(item.occurred_at)
                 or not _valid_row_texts(item.kind, item.summary)
-                or isinstance(item.repeated_count, bool)
-                or not isinstance(item.repeated_count, int)
-                or item.repeated_count < 1
+                or (
+                    item.event_id is not None
+                    and not _EVENT_ID_PATTERN.fullmatch(item.event_id)
+                )
+                or isinstance(item.repeat_count, bool)
+                or not isinstance(item.repeat_count, int)
+                or item.repeat_count < 1
+                or type(item.reasoning_available) is not bool
                 or item.evidence not in _EVIDENCE_KINDS
             ):
                 return _safe_internal_error("")
             normalized_sequence = replace(
                 item, occurred_at=item.occurred_at.astimezone(timezone.utc)
             )
-            sort_keys.append((normalized_sequence.occurred_at, item.sequence_id))
             normalized.append(normalized_sequence)
         elif operation == "query_coordination" and isinstance(item, CoordinationRow):
             if (
@@ -3234,25 +3909,41 @@ def _normalize_page_items(
                     and _validate_identifier(item.work_item_id, "work_item_id")
                     is not None
                 )
-                or _validate_filter_values(item.agent_ids, "agent_ids") is not None
+                or (
+                    item.delegated_root_id is not None
+                    and _validate_identifier(
+                        item.delegated_root_id, "delegated_root_id"
+                    )
+                    is not None
+                )
+                or (
+                    item.agent_id is not None
+                    and _validate_identifier(item.agent_id, "agent_id") is not None
+                )
+                or _validate_filter_values(item.related_agent_ids, "related_agent_ids")
+                is not None
                 or not _aware_datetime(item.occurred_at)
-                or not _valid_row_texts(item.action, item.summary)
+                or not _valid_row_texts(item.operation, item.summary)
                 or item.evidence not in _EVIDENCE_KINDS
+                or (
+                    item.event_id is not None
+                    and not _EVENT_ID_PATTERN.fullmatch(item.event_id)
+                )
             ):
                 return _safe_internal_error("")
             normalized_coordination = replace(
                 item,
                 occurred_at=item.occurred_at.astimezone(timezone.utc),
-                agent_ids=tuple(item.agent_ids),
-            )
-            sort_keys.append(
-                (normalized_coordination.occurred_at, item.coordination_id)
+                related_agent_ids=tuple(item.related_agent_ids),
+                evidence=(
+                    "inferred"
+                    if "decision" in item.operation.casefold()
+                    else item.evidence
+                ),
             )
             normalized.append(normalized_coordination)
         else:
             return _safe_internal_error("")
-    if sort_keys != sorted(sort_keys):
-        return _safe_internal_error("")
     return tuple(normalized)
 
 
@@ -3268,24 +3959,44 @@ def _optional_aware(value: datetime | None) -> bool:
     return value is None or _aware_datetime(value)
 
 
+def _valid_nonnegative_integer(value: object) -> bool:
+    return not isinstance(value, bool) and isinstance(value, int) and value >= 0
+
+
 def _utc_or_none(value: datetime | None) -> datetime | None:
-    return value.astimezone(timezone.utc) if value is not None else None
+    if value is None or not _aware_datetime(value):
+        return value
+    return value.astimezone(timezone.utc)
+
+
+def _immutable_event_filters(filters: EventFilters) -> EventFilters:
+    return replace(
+        filters,
+        event_ids=tuple(filters.event_ids),
+        agent_ids=tuple(filters.agent_ids),
+        turn_ids=tuple(filters.turn_ids),
+        kinds=tuple(filters.kinds),
+        from_time=_utc_or_none(filters.from_time),
+        to_time=_utc_or_none(filters.to_time),
+    )
 
 
 def _actual_resolution_minutes(
     from_time: datetime,
     to_time: datetime,
     requested_resolution_minutes: int,
-    maximum_buckets: int,
+    maximum_cells: int,
+    returned_rows: int,
 ) -> int:
+    if returned_rows <= 0:
+        return requested_resolution_minutes
     duration_seconds = (
         to_time.astimezone(timezone.utc) - from_time.astimezone(timezone.utc)
     ).total_seconds()
-    requested_buckets = math.ceil(
-        duration_seconds / (requested_resolution_minutes * 60)
+    required_total_minutes = math.ceil(
+        duration_seconds * returned_rows / (maximum_cells * 60)
     )
-    multiplier = max(1, math.ceil(requested_buckets / maximum_buckets))
-    return requested_resolution_minutes * multiplier
+    return max(requested_resolution_minutes, required_total_minutes)
 
 
 def resolve_automation_export_mode(
@@ -3322,10 +4033,14 @@ def _validate_config(config: ApplicationServiceConfig) -> None:
             )
     if not _valid_text(config.parser_version, 128, trim=True):
         raise ValueError("parser_version must be a non-empty bounded value")
+    if not _valid_text(config.pricing_version, 128, trim=True):
+        raise ValueError("pricing_version must be a non-empty bounded value")
     if not _LOWER_HEX_DIGEST.fullmatch(config.pricing_digest):
         raise ValueError("pricing_digest must be a lowercase SHA-256 digest")
     if not _LOWER_HEX_DIGEST.fullmatch(config.formatter_digest):
         raise ValueError("formatter_digest must be a lowercase SHA-256 digest")
+    if not _valid_text(config.formatter_version, 128, trim=True):
+        raise ValueError("formatter_version must be a non-empty bounded value")
     if (
         isinstance(config.max_page_size, bool)
         or not isinstance(config.max_page_size, int)
@@ -3338,5 +4053,5 @@ def _validate_config(config: ApplicationServiceConfig) -> None:
         or not 1 <= config.default_page_size <= config.max_page_size
     ):
         raise ValueError("default_page_size must be within the configured page limit")
-    if config.max_time_buckets != MAX_TIME_BUCKETS:
-        raise ValueError("max_time_buckets must equal 2000 for protocol version 1")
+    if config.max_heatmap_cells != MAX_HEATMAP_CELLS:
+        raise ValueError("max_heatmap_cells must equal 2000 for protocol version 1")

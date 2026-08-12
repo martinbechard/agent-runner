@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Callable
@@ -17,15 +17,18 @@ from typing import Any, cast
 import pytest
 
 from agent_report.application_service import (
-    ActivityItem,
     AgentFilters,
     AgentRow,
+    AgentSort,
     AutomationSurface,
     ApplicationServiceConfig,
     ApplicationServiceDependencies,
     CloseSnapshotRequest,
     CoordinationQueryRequest,
+    CoordinationFilters,
     CoordinationRow,
+    CoordinationSort,
+    Disclosure,
     DiscoveredScope,
     DiscoveredSource,
     DiscoveryFailure,
@@ -33,18 +36,27 @@ from agent_report.application_service import (
     EventDetailsRequest,
     EventFilters,
     EventRow,
+    EventSort,
     ExportResult,
+    ExportOmission,
     ExportMode,
     ExportRenderFailure,
     ExportSnapshotRequest,
     ListAgentsRequest,
     ListEventsRequest,
     ListTurnsRequest,
+    HeatmapCell,
+    HeatmapQueryRequest,
+    HeatmapResult,
+    HeatmapRow,
+    HeatmapScale,
+    MetricGroup,
     MetricValue,
     InfrastructureFailure,
     NormalizationFailure,
     OpenSnapshotRequest,
     OperationContext,
+    PageResult,
     PreflightReportRequest,
     PublicationFailure,
     PublishedRevision,
@@ -54,14 +66,18 @@ from agent_report.application_service import (
     ReportScope,
     RepositoryFailure,
     SequenceQueryRequest,
+    SequenceFilters,
+    SequenceGroup,
+    SequenceResult,
     SequenceRow,
+    SequenceSort,
     SnapshotRequest,
     SummaryResult,
-    TimeBucket,
-    TimeRangeQueryRequest,
-    TimeSeriesResult,
+    SignificantActivity,
+    TimeRange,
     TurnFilters,
     TurnRow,
+    TurnSort,
     resolve_automation_export_mode,
     create_application_service,
     _map_dependency_failure,
@@ -83,6 +99,13 @@ class ManualCancellationToken:
 
     def is_cancelled(self) -> bool:
         return self.cancelled
+
+
+def _context(label: str) -> OperationContext:
+    """Return a deterministic operation ID with the required 96-bit spelling."""
+
+    value = label.encode("utf-8").hex()[:24].ljust(24, "0")
+    return OperationContext(1, f"op_{value}")
 
 
 class RecordingProgressSink:
@@ -280,27 +303,52 @@ class FakeQueryPort:
         self._hold_or_fail()
         return SummaryResult(
             snapshot_id=snapshot.snapshot_id,
+            revision_id=snapshot.revision_id,
+            title="Agent Report",
             goal="Verify the shared service",
             state="running",
-            scope=ReportScope(snapshot.root_thread_id),
-            metrics=(MetricValue("events", 1, "count", "measured", "normalized"),),
+            scope=snapshot.scope,
+            observed_at=datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
+            mode="live",
+            time_range=TimeRange(
+                datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
+                datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
+            ),
+            metric_groups=(
+                MetricGroup(
+                    "overview",
+                    "Overview",
+                    (
+                        MetricValue(
+                            "events",
+                            "Events",
+                            1,
+                            "1",
+                            "count",
+                            "measured",
+                            "normalized",
+                            None,
+                        ),
+                    ),
+                ),
+            ),
             provenance=("normalized",),
-            warnings=(),
             recent_activity=(
-                ActivityItem(
+                SignificantActivity(
                     "evt_000000000000000000000001",
                     datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
-                    "message",
                     "One bounded event",
                     "measured",
                 ),
             ),
+            warnings=(),
         )
 
     def list_agents(
         self,
         _handle: _ReadHandle,
         _filters: AgentFilters,
+        _sort: AgentSort,
         after: str | None,
         _limit: int,
         _cancellation: object,
@@ -311,10 +359,14 @@ class FakeQueryPort:
                 AgentRow(
                     "agent-1",
                     None,
+                    None,
                     "worker",
                     "running",
                     datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
                     None,
+                    None,
+                    1,
+                    1,
                     "measured",
                 ),
             ),
@@ -325,6 +377,7 @@ class FakeQueryPort:
         self,
         _handle: _ReadHandle,
         _filters: TurnFilters,
+        _sort: TurnSort,
         _after: str | None,
         _limit: int,
         _cancellation: object,
@@ -339,6 +392,7 @@ class FakeQueryPort:
                     None,
                     "complete",
                     1,
+                    "One turn",
                     "measured",
                 ),
             ),
@@ -349,6 +403,7 @@ class FakeQueryPort:
         self,
         _handle: _ReadHandle,
         _filters: EventFilters,
+        _sort: EventSort,
         _after: str | None,
         _limit: int,
         _cancellation: object,
@@ -358,12 +413,14 @@ class FakeQueryPort:
             items=(
                 EventRow(
                     "evt_000000000000000000000001",
-                    "turn-1",
-                    "agent-1",
                     datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
+                    "agent-1",
+                    "turn-1",
                     "message",
                     "One event",
                     "measured",
+                    "source-1",
+                    True,
                 ),
             ),
             next_position=None,
@@ -372,19 +429,42 @@ class FakeQueryPort:
     def query_time_range(
         self,
         _handle: _ReadHandle,
-        request: TimeRangeQueryRequest,
+        request: HeatmapQueryRequest,
         actual: int,
         _cancellation: object,
-    ) -> TimeSeriesResult:
+    ) -> HeatmapResult:
         self._hold_or_fail()
-        return TimeSeriesResult(
+        return HeatmapResult(
             snapshot_id=request.snapshot_id,
+            revision_id="revision-1",
             measure=request.measure,
-            requested_resolution_minutes=request.requested_resolution_minutes,
-            actual_resolution_minutes=actual,
+            group_by=request.group_by,
             from_time=request.from_time,
             to_time=request.to_time,
-            buckets=(TimeBucket(request.from_time, request.to_time, 1, "measured"),),
+            requested_resolution_minutes=request.requested_resolution_minutes,
+            actual_resolution_minutes=actual,
+            maximum_rows=request.maximum_rows,
+            omitted_row_count=0,
+            row_order="activity_descending_id_ascending",
+            total_cell_count=1,
+            rows=(
+                HeatmapRow(
+                    "agent-1",
+                    "Agent 1",
+                    HeatmapScale(0, 1, "sequential_nonnegative", "visible_row_maximum"),
+                    (
+                        HeatmapCell(
+                            request.from_time,
+                            request.to_time,
+                            1,
+                            1,
+                            "measured",
+                            "1",
+                            None,
+                        ),
+                    ),
+                ),
+            ),
             provenance=("normalized",),
         )
 
@@ -394,22 +474,37 @@ class FakeQueryPort:
         request: SequenceQueryRequest,
         _after: str | None,
         _cancellation: object,
-    ) -> QuerySlice[SequenceRow]:
+    ) -> SequenceResult:
         self._hold_or_fail()
-        return QuerySlice(
-            items=(
-                SequenceRow(
-                    "sequence-1",
-                    datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
-                    "agent-1",
-                    "agent-2",
-                    "delegation",
-                    "Delegated",
-                    1,
-                    "measured",
-                ),
+        row = SequenceRow(
+            "sequence-1",
+            "group-1" if request.filters.grouping != "none" else None,
+            datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
+            "agent-1",
+            "Agent 1",
+            "agent-2",
+            "Agent 2",
+            "delegation",
+            "Delegated",
+            "measured",
+            "evt_000000000000000000000001",
+            1,
+            request.filters.include_reasoning,
+        )
+        return SequenceResult(
+            page=PageResult(
+                snapshot_id=request.snapshot_id,
+                revision_id="revision-1",
+                operation="query_sequence",
+                items=(row,),
+                applied_filters=request.filters,
+                applied_sort=request.sort,
+                page_size=request.page_size,
+                next_cursor=None if _after else "sequence-1",
             ),
-            next_position=None if _after else "sequence-1",
+            groups=(SequenceGroup("group-1", None, 0, "Group", True),)
+            if request.filters.grouping != "none"
+            else (),
         )
 
     def query_coordination(
@@ -426,10 +521,13 @@ class FakeQueryPort:
                     "coordination-1",
                     datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
                     "work-1",
-                    ("agent-1",),
+                    "root-1",
+                    "agent-1",
+                    ("agent-2",),
                     "decision from prose",
                     "Selected",
                     "derived",
+                    "evt_000000000000000000000001",
                 ),
             ),
             next_position=None,
@@ -445,15 +543,16 @@ class FakeQueryPort:
             return None
         return EventDetail(
             snapshot_id=self.snapshot_id,
+            revision_id="revision-1",
             event_id=event_id,
             occurred_at=datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
             kind="message",
+            title="One event",
             summary="One event",
-            bounded_arguments="{}",
-            bounded_result="{}",
             evidence="measured",
             provenance=("normalized",),
-            redactions=(),
+            disclosures=(Disclosure("Arguments", "{}", False),),
+            source_key="source-1",
         )
 
 
@@ -491,7 +590,18 @@ class FakePublicationPort:
         if self.failure is not None:
             raise self.failure
         self.published.append((staged, target, replace))
-        return ExportResult(staged.mode, target, "manifest-1", (), ())
+        return ExportResult(
+            _context("export").operation_id,
+            "snapshot-1",
+            "revision-1",
+            staged.mode,
+            target,
+            "a" * 64,
+            2,
+            128,
+            (),
+            (),
+        )
 
     def discard(self, staged: _StagedExport) -> None:
         self.discarded.append(staged)
@@ -525,7 +635,9 @@ def _service_fixture(tmp_path: Path, *, prefix: str = "snapshot") -> _ServiceFix
         ApplicationServiceConfig(
             authorized_source_roots=(tmp_path.resolve(),),
             parser_version="parser-1",
+            pricing_version="pricing-1",
             pricing_digest="a" * 64,
+            formatter_version="formatter-1",
             formatter_digest="b" * 64,
         ),
         ApplicationServiceDependencies(
@@ -555,14 +667,16 @@ def _service_fixture(tmp_path: Path, *, prefix: str = "snapshot") -> _ServiceFix
 def _open_snapshot(fixture: _ServiceFixture) -> str:
     cancellation = ManualCancellationToken()
     preflight = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=cancellation,
     )
     assert preflight.ok is True
     opened = fixture.service.open_snapshot(
-        OperationContext(1, "open"),
-        OpenSnapshotRequest(ReportScope("thread-1"), preflight.value.preflight_token),
+        _context("open"),
+        OpenSnapshotRequest(
+            ReportScope("thread-1"), preflight.value.preflight_token, "source-1"
+        ),
         cancellation=cancellation,
     )
     assert opened.ok is True
@@ -593,7 +707,9 @@ def test_factory_rejects_invalid_configuration_before_dependency_work(
             ApplicationServiceConfig(
                 authorized_source_roots=(tmp_path / "missing",),
                 parser_version="parser-1",
+                pricing_version="pricing-1",
                 pricing_digest="a" * 64,
+                formatter_version="formatter-1",
                 formatter_digest="b" * 64,
             ),
             _unused_dependencies(),
@@ -642,7 +758,7 @@ def test_preflight_defaults_to_root_only_and_keeps_relationship_flags_independen
         fixture.discovery.result = _discovered(tmp_path, scope)
         results.append(
             fixture.service.preflight_report(
-                OperationContext(1, f"preflight-{index}"),
+                _context(f"preflight-{index}"),
                 PreflightReportRequest(scope),
                 cancellation=ManualCancellationToken(),
             )
@@ -663,7 +779,7 @@ def test_process_local_composition_has_no_shared_mutable_state(tmp_path: Path) -
     first_snapshot = _open_snapshot(first)
 
     result = second.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(first_snapshot),
         cancellation=ManualCancellationToken(),
     )
@@ -679,7 +795,7 @@ def test_preflight_returns_bounded_counts_without_snapshot_mutation(
     fixture = _service_fixture(tmp_path)
 
     result = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(),
     )
@@ -696,7 +812,7 @@ def test_preflight_cancellation_returns_no_token_or_snapshot(tmp_path: Path) -> 
     fixture = _service_fixture(tmp_path)
 
     result = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(cancelled=True),
     )
@@ -712,14 +828,14 @@ def test_preflight_token_is_short_and_unknown_tokens_are_rejected(
 ) -> None:
     fixture = _service_fixture(tmp_path)
     preflight = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(),
     )
 
     unknown = fixture.service.open_snapshot(
-        OperationContext(1, "open-unknown"),
-        OpenSnapshotRequest(ReportScope("thread-1"), "x" * 43),
+        _context("open-unknown"),
+        OpenSnapshotRequest(ReportScope("thread-1"), "x" * 43, "source-1"),
         cancellation=ManualCancellationToken(),
     )
 
@@ -732,15 +848,17 @@ def test_preflight_token_is_short_and_unknown_tokens_are_rejected(
 def test_preflight_token_expires_before_snapshot_work(tmp_path: Path) -> None:
     fixture = _service_fixture(tmp_path)
     preflight = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(),
     )
     fixture.clock.advance(seconds=301)
 
     expired = fixture.service.open_snapshot(
-        OperationContext(1, "open-expired"),
-        OpenSnapshotRequest(ReportScope("thread-1"), preflight.value.preflight_token),
+        _context("open-expired"),
+        OpenSnapshotRequest(
+            ReportScope("thread-1"), preflight.value.preflight_token, "source-1"
+        ),
         cancellation=ManualCancellationToken(),
     )
 
@@ -753,21 +871,21 @@ def test_preflight_token_expires_before_snapshot_work(tmp_path: Path) -> None:
 def test_preflight_token_is_consumed_and_cannot_be_reused(tmp_path: Path) -> None:
     fixture = _service_fixture(tmp_path)
     preflight = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(),
     )
     request = OpenSnapshotRequest(
-        ReportScope("thread-1"), preflight.value.preflight_token
+        ReportScope("thread-1"), preflight.value.preflight_token, "source-1"
     )
 
     first = fixture.service.open_snapshot(
-        OperationContext(1, "open-first"),
+        _context("open-first"),
         request,
         cancellation=ManualCancellationToken(),
     )
     reused = fixture.service.open_snapshot(
-        OperationContext(1, "open-reused"),
+        _context("open-reused"),
         request,
         cancellation=ManualCancellationToken(),
     )
@@ -783,7 +901,7 @@ def test_open_snapshot_rejects_changed_source_revision_with_scope_conflict(
 ) -> None:
     fixture = _service_fixture(tmp_path)
     preflight = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(),
     )
@@ -792,8 +910,10 @@ def test_open_snapshot_rejects_changed_source_revision_with_scope_conflict(
     )
 
     result = fixture.service.open_snapshot(
-        OperationContext(1, "open"),
-        OpenSnapshotRequest(ReportScope("thread-1"), preflight.value.preflight_token),
+        _context("open"),
+        OpenSnapshotRequest(
+            ReportScope("thread-1"), preflight.value.preflight_token, "source-1"
+        ),
         cancellation=ManualCancellationToken(),
     )
 
@@ -805,6 +925,33 @@ def test_open_snapshot_rejects_changed_source_revision_with_scope_conflict(
     assert fixture.repository.publish_calls == 0
 
 
+def test_open_snapshot_binds_scope_token_and_exact_source_revision(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    preflight = fixture.service.preflight_report(
+        _context("preflight-binding"),
+        PreflightReportRequest(ReportScope("thread-1")),
+        cancellation=ManualCancellationToken(),
+    )
+
+    result = fixture.service.open_snapshot(
+        _context("open-binding"),
+        OpenSnapshotRequest(
+            ReportScope("thread-1"),
+            preflight.value.preflight_token,
+            "source-stale",
+        ),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert result.error.code == "REPORT_SCOPE_CONFLICT"
+    assert result.error.preflight_required is True
+    assert fixture.discovery.recheck_calls == 0
+    assert fixture.normalization.calls == 0
+    assert fixture.repository.publish_calls == 0
+
+
 def test_open_snapshot_publishes_state_only_after_repository_commit(
     tmp_path: Path,
 ) -> None:
@@ -812,7 +959,7 @@ def test_open_snapshot_publishes_state_only_after_repository_commit(
     snapshot_id = _open_snapshot(fixture)
 
     summary = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -829,14 +976,16 @@ def test_open_snapshot_privacy_failure_publishes_no_revision_or_snapshot(
     fixture = _service_fixture(tmp_path)
     fixture.normalization.privacy_validated = False
     preflight = fixture.service.preflight_report(
-        OperationContext(1, "preflight"),
+        _context("preflight"),
         PreflightReportRequest(ReportScope("thread-1")),
         cancellation=ManualCancellationToken(),
     )
 
     result = fixture.service.open_snapshot(
-        OperationContext(1, "open"),
-        OpenSnapshotRequest(ReportScope("thread-1"), preflight.value.preflight_token),
+        _context("open"),
+        OpenSnapshotRequest(
+            ReportScope("thread-1"), preflight.value.preflight_token, "source-1"
+        ),
         cancellation=ManualCancellationToken(),
     )
 
@@ -850,17 +999,52 @@ def test_get_summary_is_bounded_sanitized_and_read_only(tmp_path: Path) -> None:
     snapshot_id = _open_snapshot(fixture)
 
     result = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
 
     assert result.ok is True
-    assert isinstance(result.value.metrics, tuple)
-    assert isinstance(result.value.provenance, tuple)
+    assert result.value.revision_id == "revision-1"
+    assert result.value.title == "Agent Report"
+    assert isinstance(result.value.metric_groups, tuple)
+    assert isinstance(result.value.metric_groups[0].metrics, tuple)
     assert isinstance(result.value.recent_activity, tuple)
     assert fixture.repository.publish_calls == 1
     assert fixture.repository.released == []
+
+
+def test_snapshot_metadata_and_summary_return_exact_revision_fields(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    metadata = fixture.service._snapshots[snapshot_id].metadata
+
+    result = fixture.service.get_summary(
+        _context("summary-revision"),
+        SnapshotRequest(snapshot_id),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert metadata.revision_id == "revision-1"
+    assert metadata.source_revision == "source-1"
+    assert metadata.scope == ReportScope("thread-1")
+    assert metadata.parser_version == "parser-1"
+    assert metadata.pricing_version == "pricing-1"
+    assert metadata.pricing_digest == "a" * 64
+    assert metadata.formatter_version == "formatter-1"
+    assert metadata.formatter_digest == "b" * 64
+    assert result.value.revision_id == metadata.revision_id
+    assert result.value.scope == metadata.scope
+    assert result.value.mode == metadata.mode
+    assert result.value.metric_groups[0].metrics[0].value == 1
+    assert result.value.metric_groups[0].metrics[0].formatted_value == "1"
+    assert result.value.provenance == ("normalized",)
+    assert result.value.time_range == TimeRange(
+        datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
+        datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc),
+    )
 
 
 def test_list_agents_enforces_page_bounds_and_canonical_order(tmp_path: Path) -> None:
@@ -868,12 +1052,12 @@ def test_list_agents_enforces_page_bounds_and_canonical_order(tmp_path: Path) ->
     snapshot_id = _open_snapshot(fixture)
 
     invalid = fixture.service.list_agents(
-        OperationContext(1, "agents-invalid"),
+        _context("agents-invalid"),
         ListAgentsRequest(snapshot_id, page_size=501),
         cancellation=ManualCancellationToken(),
     )
     valid = fixture.service.list_agents(
-        OperationContext(1, "agents"),
+        _context("agents"),
         ListAgentsRequest(snapshot_id, page_size=1),
         cancellation=ManualCancellationToken(),
     )
@@ -881,9 +1065,74 @@ def test_list_agents_enforces_page_bounds_and_canonical_order(tmp_path: Path) ->
     assert invalid.error is not None
     assert invalid.error.code == "REPORT_INVALID_REQUEST"
     assert valid.ok is True
-    assert valid.value.applied_sort == "agent.started_at, agent.agent_id"
+    assert valid.value.revision_id == "revision-1"
+    assert valid.value.applied_filters == AgentFilters()
+    assert valid.value.applied_sort == AgentSort()
     assert isinstance(valid.value.items, tuple)
     assert len(valid.value.next_cursor.encode("utf-8")) <= 256
+
+
+def test_list_agents_returns_revision_and_exact_applied_filters_and_sort(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    filters = AgentFilters(
+        query="worker",
+        agent_ids=("agent-1",),
+        roles=("worker",),
+        states=("running",),
+    )
+    sort = AgentSort(key="agent_id", direction="ascending")
+
+    result = fixture.service.list_agents(
+        _context("agent-values"),
+        ListAgentsRequest(snapshot_id, filters=filters, sort=sort, page_size=5),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert result.ok is True
+    assert result.value.revision_id == "revision-1"
+    assert result.value.applied_filters == filters
+    assert result.value.applied_sort == sort
+    assert result.value.items[0] == AgentRow(
+        "agent-1",
+        None,
+        None,
+        "worker",
+        "running",
+        datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
+        None,
+        None,
+        1,
+        1,
+        "measured",
+    )
+
+
+def test_list_requests_reject_unsupported_sort_before_query_work(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    invalid_agent_sort = cast(AgentSort, AgentSort(key=cast(Any, "role")))
+    invalid_turn_sort = cast(
+        TurnSort, TurnSort(tie_break_direction=cast(Any, "descending"))
+    )
+
+    agent_result = fixture.service.list_agents(
+        _context("invalid-agent-sort"),
+        ListAgentsRequest(snapshot_id, sort=invalid_agent_sort),
+        cancellation=ManualCancellationToken(),
+    )
+    turn_result = fixture.service.list_turns(
+        _context("invalid-turn-sort"),
+        ListTurnsRequest(snapshot_id, sort=invalid_turn_sort),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert agent_result.error.code == "REPORT_INVALID_REQUEST"
+    assert turn_result.error.code == "REPORT_INVALID_REQUEST"
 
 
 def test_list_turns_cursor_binds_snapshot_revision_filters_sort_and_page_size(
@@ -892,7 +1141,7 @@ def test_list_turns_cursor_binds_snapshot_revision_filters_sort_and_page_size(
     fixture = _service_fixture(tmp_path)
     snapshot_id = _open_snapshot(fixture)
     first = fixture.service.list_turns(
-        OperationContext(1, "turns-first"),
+        _context("turns-first"),
         ListTurnsRequest(
             snapshot_id, filters=TurnFilters(states=("complete",)), page_size=1
         ),
@@ -900,7 +1149,7 @@ def test_list_turns_cursor_binds_snapshot_revision_filters_sort_and_page_size(
     )
 
     conflict = fixture.service.list_turns(
-        OperationContext(1, "turns-next"),
+        _context("turns-next"),
         ListTurnsRequest(
             snapshot_id,
             filters=TurnFilters(states=("running",)),
@@ -916,26 +1165,76 @@ def test_list_turns_cursor_binds_snapshot_revision_filters_sort_and_page_size(
     assert conflict.error.restart_from_first_page is True
 
 
+def test_turn_and_event_pages_return_full_filters_rows_and_sort_values(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    start = datetime(2026, 8, 12, 14, 0, tzinfo=timezone.utc)
+    end = datetime(2026, 8, 12, 16, 0, tzinfo=timezone.utc)
+    turn_filters = TurnFilters(
+        turn_ids=("turn-1",),
+        agent_ids=("agent-1",),
+        states=("complete",),
+        from_time=start,
+        to_time=end,
+    )
+    event_filters = EventFilters(
+        event_ids=("evt_000000000000000000000001",),
+        agent_ids=("agent-1",),
+        turn_ids=("turn-1",),
+        kinds=("message",),
+        from_time=start,
+        to_time=end,
+    )
+
+    turns = fixture.service.list_turns(
+        _context("turn-values"),
+        ListTurnsRequest(
+            snapshot_id,
+            filters=turn_filters,
+            sort=TurnSort(key="ended_at", direction="descending"),
+        ),
+        cancellation=ManualCancellationToken(),
+    )
+    events = fixture.service.list_events(
+        _context("event-values"),
+        ListEventsRequest(
+            snapshot_id,
+            filters=event_filters,
+            sort=EventSort(key="event_id", direction="descending"),
+        ),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert turns.value.applied_filters == turn_filters
+    assert turns.value.items[0].summary == "One turn"
+    assert turns.value.items[0].evidence == "measured"
+    assert events.value.applied_filters == event_filters
+    assert events.value.items[0].summary == "One event"
+    assert events.value.items[0].source_key == "source-1"
+
+
 def test_list_events_rejects_cross_operation_and_cross_snapshot_cursors(
     tmp_path: Path,
 ) -> None:
     fixture = _service_fixture(tmp_path / "first")
     snapshot_id = _open_snapshot(fixture)
     agents = fixture.service.list_agents(
-        OperationContext(1, "agents"),
+        _context("agents"),
         ListAgentsRequest(snapshot_id, page_size=1),
         cancellation=ManualCancellationToken(),
     )
 
     cross_operation = fixture.service.list_events(
-        OperationContext(1, "events"),
+        _context("events"),
         ListEventsRequest(snapshot_id, cursor=agents.value.next_cursor, page_size=1),
         cancellation=ManualCancellationToken(),
     )
     second = _service_fixture(tmp_path / "second", prefix="second")
     second_snapshot = _open_snapshot(second)
     cross_snapshot = second.service.list_agents(
-        OperationContext(1, "agents-second"),
+        _context("agents-second"),
         ListAgentsRequest(
             second_snapshot, cursor=agents.value.next_cursor, page_size=1
         ),
@@ -946,7 +1245,7 @@ def test_list_events_rejects_cross_operation_and_cross_snapshot_cursors(
     assert cross_snapshot.error.code == "REPORT_CURSOR_CONFLICT"
 
 
-def test_query_time_range_coarsens_to_at_most_two_thousand_buckets(
+def test_query_time_range_returns_grouped_heatmap_with_bounded_cells_rows_scales_and_coarsening(
     tmp_path: Path,
 ) -> None:
     fixture = _service_fixture(tmp_path)
@@ -954,13 +1253,15 @@ def test_query_time_range_coarsens_to_at_most_two_thousand_buckets(
     start = datetime(2026, 8, 1, tzinfo=timezone.utc)
 
     result = fixture.service.query_time_range(
-        OperationContext(1, "time"),
-        TimeRangeQueryRequest(
+        _context("time"),
+        HeatmapQueryRequest(
             snapshot_id,
             start,
             start + timedelta(minutes=4_001),
             "wall_time",
             1,
+            "agent",
+            2,
         ),
         cancellation=ManualCancellationToken(),
     )
@@ -968,31 +1269,68 @@ def test_query_time_range_coarsens_to_at_most_two_thousand_buckets(
     assert result.ok is True
     assert result.value.requested_resolution_minutes == 1
     assert result.value.actual_resolution_minutes == 3
-    assert len(result.value.buckets) <= 2_000
+    assert result.value.group_by == "agent"
+    assert result.value.maximum_rows == 2
+    assert result.value.total_cell_count <= 2_000
+    assert result.value.rows[0].scale.color_semantic == "sequential_nonnegative"
 
 
 def test_query_sequence_binds_focus_filters_grouping_and_cursor(tmp_path: Path) -> None:
     fixture = _service_fixture(tmp_path)
     snapshot_id = _open_snapshot(fixture)
     first = fixture.service.query_sequence(
-        OperationContext(1, "sequence-first"),
-        SequenceQueryRequest(snapshot_id, focus_agent_id="agent-1", page_size=1),
-        cancellation=ManualCancellationToken(),
-    )
-
-    conflict = fixture.service.query_sequence(
-        OperationContext(1, "sequence-next"),
+        _context("sequence-first"),
         SequenceQueryRequest(
             snapshot_id,
-            focus_agent_id="agent-2",
-            cursor=first.value.next_cursor,
+            filters=SequenceFilters(focus_agent_id="agent-1"),
+            page_size=1,
+        ),
+        cancellation=ManualCancellationToken(),
+    )
+    assert first.ok, first.error
+
+    conflict = fixture.service.query_sequence(
+        _context("sequence-next"),
+        SequenceQueryRequest(
+            snapshot_id,
+            filters=SequenceFilters(focus_agent_id="agent-2"),
+            cursor=first.value.page.next_cursor,
             page_size=1,
         ),
         cancellation=ManualCancellationToken(),
     )
 
-    assert first.value.next_cursor is not None
+    assert first.value.page.next_cursor is not None
     assert conflict.error.code == "REPORT_CURSOR_CONFLICT"
+
+
+def test_query_sequence_returns_canonical_page_and_exact_group_hierarchy(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    filters = SequenceFilters(
+        focus_agent_id="agent-1",
+        event_filters=EventFilters(kinds=["delegation"]),
+        grouping="delegation",
+        include_reasoning=True,
+    )
+    sort = SequenceSort()
+
+    result = fixture.service.query_sequence(
+        _context("sequence-groups"),
+        SequenceQueryRequest(snapshot_id, filters=filters, sort=sort, page_size=2),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert result.ok is True
+    assert result.value.page.revision_id == "revision-1"
+    assert result.value.page.applied_filters == replace(
+        filters, event_filters=EventFilters(kinds=("delegation",))
+    )
+    assert result.value.page.applied_sort == sort
+    assert result.value.groups == (SequenceGroup("group-1", None, 0, "Group", True),)
+    assert result.value.page.items[0].reasoning_available is True
 
 
 def test_query_coordination_labels_prose_derived_decisions_as_inferred(
@@ -1002,14 +1340,44 @@ def test_query_coordination_labels_prose_derived_decisions_as_inferred(
     snapshot_id = _open_snapshot(fixture)
 
     result = fixture.service.query_coordination(
-        OperationContext(1, "coordination"),
+        _context("coordination"),
         CoordinationQueryRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
 
     assert result.ok is True
     assert result.value.items[0].evidence == "inferred"
-    assert isinstance(result.value.items[0].agent_ids, tuple)
+    assert result.value.items[0].agent_id == "agent-1"
+    assert result.value.applied_filters == CoordinationFilters()
+
+
+def test_query_coordination_returns_exact_applied_values_and_labels_inference(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    filters = CoordinationFilters(
+        work_item_id="work-1",
+        delegated_root_id="root-1",
+        agent_id="agent-1",
+        operation="decision from prose",
+        evidence="derived",
+    )
+    sort = CoordinationSort()
+
+    result = fixture.service.query_coordination(
+        _context("coordination-values"),
+        CoordinationQueryRequest(snapshot_id, filters=filters, sort=sort),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert result.ok is True
+    assert result.value.revision_id == "revision-1"
+    assert result.value.applied_filters == filters
+    assert result.value.applied_sort == sort
+    assert result.value.items[0].delegated_root_id == "root-1"
+    assert result.value.items[0].related_agent_ids == ("agent-2",)
+    assert result.value.items[0].evidence == "inferred"
 
 
 def test_get_event_details_not_found_preserves_open_snapshot(tmp_path: Path) -> None:
@@ -1017,12 +1385,12 @@ def test_get_event_details_not_found_preserves_open_snapshot(tmp_path: Path) -> 
     snapshot_id = _open_snapshot(fixture)
 
     missing = fixture.service.get_event_details(
-        OperationContext(1, "detail"),
+        _context("detail"),
         EventDetailsRequest(snapshot_id, "evt_000000000000000000000000"),
         cancellation=ManualCancellationToken(),
     )
     summary = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1040,27 +1408,50 @@ def test_get_event_details_is_lazy_bounded_redacted_and_path_free(
     def oversized(event_id: str) -> EventDetail:
         return EventDetail(
             snapshot_id=snapshot_id,
+            revision_id="revision-1",
             event_id=event_id,
             occurred_at=datetime(2026, 8, 12, 15, 0, tzinfo=timezone.utc),
             kind="message",
+            title="One event",
             summary="One event",
-            bounded_arguments="x" * 16_385,
-            bounded_result="{}",
             evidence="measured",
             provenance=("normalized",),
-            redactions=(),
+            disclosures=(Disclosure("Arguments", "x" * 16_385, False),),
+            source_key="source-1",
         )
 
     fixture.queries.detail_factory = oversized
     result = fixture.service.get_event_details(
-        OperationContext(1, "detail"),
+        _context("detail"),
         EventDetailsRequest(snapshot_id, "evt_000000000000000000000001"),
         cancellation=ManualCancellationToken(),
     )
 
     assert result.ok is True
-    assert result.value.bounded_arguments is None
-    assert "omitted" in result.value.redactions[-1]
+    assert result.value.disclosures[0].redacted is True
+    assert "omitted" in result.value.disclosures[0].content
+    assert result.value.source_key == "source-1"
+
+
+def test_event_rows_and_details_return_only_opaque_source_key(tmp_path: Path) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+
+    events = fixture.service.list_events(
+        _context("events-source"),
+        ListEventsRequest(snapshot_id),
+        cancellation=ManualCancellationToken(),
+    )
+    detail = fixture.service.get_event_details(
+        _context("detail-source"),
+        EventDetailsRequest(snapshot_id, "evt_000000000000000000000001"),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert events.value.items[0].source_key == "source-1"
+    assert detail.value.source_key == "source-1"
+    assert not hasattr(events.value.items[0], "authorized_path")
+    assert not hasattr(detail.value, "authorized_path")
 
 
 def test_refresh_unchanged_returns_existing_binding_without_normalization(
@@ -1070,7 +1461,7 @@ def test_refresh_unchanged_returns_existing_binding_without_normalization(
     snapshot_id = _open_snapshot(fixture)
 
     result = fixture.service.refresh_snapshot(
-        OperationContext(1, "refresh"),
+        _context("refresh"),
         RefreshSnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1089,7 +1480,7 @@ def test_refresh_swaps_binding_only_after_new_revision_commit(tmp_path: Path) ->
     )
 
     result = fixture.service.refresh_snapshot(
-        OperationContext(1, "refresh"),
+        _context("refresh"),
         RefreshSnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1116,13 +1507,13 @@ def test_refresh_failure_or_cancellation_preserves_last_coherent_binding(
     )
 
     failed = fixture.service.refresh_snapshot(
-        OperationContext(1, "refresh"),
+        _context("refresh"),
         RefreshSnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
     fixture.normalization.failure = None
     summary = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1140,7 +1531,7 @@ def test_export_validates_mode_specific_options_before_rendering(
     snapshot_id = _open_snapshot(fixture)
 
     result = fixture.service.export_snapshot(
-        OperationContext(1, "export"),
+        _context("export"),
         ExportSnapshotRequest(
             snapshot_id,
             "mcp",
@@ -1163,7 +1554,7 @@ def test_export_reports_success_only_after_atomic_publication(tmp_path: Path) ->
     target = (tmp_path / "bundle").resolve()
 
     result = fixture.service.export_snapshot(
-        OperationContext(1, "export"),
+        _context("export"),
         ExportSnapshotRequest(snapshot_id, "cli", target, False),
         cancellation=ManualCancellationToken(),
     )
@@ -1173,6 +1564,73 @@ def test_export_reports_success_only_after_atomic_publication(tmp_path: Path) ->
     assert result.value.published_target == target
     assert fixture.exporter.requests[0].mode == "directory"
     assert fixture.publisher.published[0][1] == target
+
+
+def test_export_result_has_native_target_manifest_digest_exact_counts_and_structured_records(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    target = (tmp_path / "bundle").resolve()
+
+    result = fixture.service.export_snapshot(
+        _context("export"),
+        ExportSnapshotRequest(snapshot_id, "tauri", target, False),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert result.ok is True
+    assert result.value.operation_id == _context("export").operation_id
+    assert result.value.snapshot_id == snapshot_id
+    assert result.value.revision_id == "revision-1"
+    assert result.value.manifest_sha256 == "a" * 64
+    assert result.value.file_count == 2
+    assert result.value.total_byte_count == 128
+    assert result.value.published_target == target
+    assert isinstance(result.value.warnings, tuple)
+    assert isinstance(result.value.omissions, tuple)
+
+
+def test_export_result_validates_structured_omissions(tmp_path: Path) -> None:
+    fixture = _service_fixture(tmp_path)
+    snapshot_id = _open_snapshot(fixture)
+    target = (tmp_path / "bundle").resolve()
+
+    class OmissionPublisher(FakePublicationPort):
+        def publish(
+            self,
+            staged: _StagedExport,
+            published_target: Path,
+            replace_target: bool,
+            _cancellation: object,
+        ) -> ExportResult:
+            del replace_target
+            return ExportResult(
+                _context("export").operation_id,
+                snapshot_id,
+                "revision-1",
+                staged.mode,
+                published_target,
+                None,
+                1,
+                64,
+                (),
+                (ExportOmission("archive", "not requested", "enable archive"),),
+            )
+
+    fixture.service._dependencies = replace(
+        fixture.service._dependencies, publisher=OmissionPublisher()
+    )
+    result = fixture.service.export_snapshot(
+        _context("export"),
+        ExportSnapshotRequest(snapshot_id, "mcp", target, False),
+        cancellation=ManualCancellationToken(),
+    )
+
+    assert result.ok is True
+    assert result.value.omissions == (
+        ExportOmission("archive", "not requested", "enable archive"),
+    )
 
 
 def test_export_failure_or_cancellation_preserves_prior_target_and_snapshot(
@@ -1185,14 +1643,14 @@ def test_export_failure_or_cancellation_preserves_prior_target_and_snapshot(
     )
 
     failed = fixture.service.export_snapshot(
-        OperationContext(1, "export"),
+        _context("export"),
         ExportSnapshotRequest(
             snapshot_id, "mcp", (tmp_path / "bundle").resolve(), False
         ),
         cancellation=ManualCancellationToken(),
     )
     summary = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1212,7 +1670,7 @@ def test_concurrent_snapshot_mutation_returns_snapshot_conflict_without_waiting(
     fixture.exporter.resume = threading.Event()
     thread = threading.Thread(
         target=lambda: fixture.service.export_snapshot(
-            OperationContext(1, "export"),
+            _context("export"),
             ExportSnapshotRequest(
                 snapshot_id, "mcp", (tmp_path / "bundle").resolve(), False
             ),
@@ -1223,7 +1681,7 @@ def test_concurrent_snapshot_mutation_returns_snapshot_conflict_without_waiting(
     assert fixture.exporter.entered.wait(timeout=5)
 
     result = fixture.service.refresh_snapshot(
-        OperationContext(1, "refresh"),
+        _context("refresh"),
         RefreshSnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1240,7 +1698,7 @@ def test_close_snapshot_is_idempotent_for_unknown_well_formed_id(
     fixture = _service_fixture(tmp_path)
 
     result = fixture.service.close_snapshot(
-        OperationContext(1, "close"), CloseSnapshotRequest("snapshot-unknown")
+        _context("close"), CloseSnapshotRequest("snapshot-unknown")
     )
 
     assert result.ok is True
@@ -1254,10 +1712,11 @@ def test_close_snapshot_releases_handle_without_purging_derived_data(
     snapshot_id = _open_snapshot(fixture)
 
     result = fixture.service.close_snapshot(
-        OperationContext(1, "close"), CloseSnapshotRequest(snapshot_id)
+        _context("close"), CloseSnapshotRequest(snapshot_id)
     )
 
     assert result.value.closed is True
+    assert result.value.snapshot_id == snapshot_id
     assert fixture.repository.publish_calls == 1
     assert len(fixture.repository.released) == 1
 
@@ -1274,7 +1733,7 @@ def test_close_snapshot_retry_releases_handle_once_after_reader_finishes(
     thread = threading.Thread(
         target=lambda: result_box.append(
             fixture.service.get_summary(
-                OperationContext(1, "summary"),
+                _context("summary"),
                 SnapshotRequest(snapshot_id),
                 cancellation=ManualCancellationToken(),
             )
@@ -1283,12 +1742,12 @@ def test_close_snapshot_retry_releases_handle_once_after_reader_finishes(
     thread.start()
     assert fixture.queries.entered.wait(timeout=5)
     conflict = fixture.service.close_snapshot(
-        OperationContext(1, "close-conflict"), CloseSnapshotRequest(snapshot_id)
+        _context("close-conflict"), CloseSnapshotRequest(snapshot_id)
     )
     fixture.queries.resume.set()
     thread.join(timeout=5)
     closed = fixture.service.close_snapshot(
-        OperationContext(1, "close-retry"), CloseSnapshotRequest(snapshot_id)
+        _context("close-retry"), CloseSnapshotRequest(snapshot_id)
     )
 
     assert conflict.error.code == "REPORT_SNAPSHOT_CONFLICT"
@@ -1306,7 +1765,7 @@ def test_active_reader_rejects_refresh_and_export_without_side_effects(
     fixture.queries.resume = threading.Event()
     thread = threading.Thread(
         target=lambda: fixture.service.get_summary(
-            OperationContext(1, "summary"),
+            _context("summary"),
             SnapshotRequest(snapshot_id),
             cancellation=ManualCancellationToken(),
         )
@@ -1315,12 +1774,12 @@ def test_active_reader_rejects_refresh_and_export_without_side_effects(
     assert fixture.queries.entered.wait(timeout=5)
 
     refresh = fixture.service.refresh_snapshot(
-        OperationContext(1, "refresh"),
+        _context("refresh"),
         RefreshSnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
     export = fixture.service.export_snapshot(
-        OperationContext(1, "export"),
+        _context("export"),
         ExportSnapshotRequest(
             snapshot_id, "mcp", (tmp_path / "bundle").resolve(), False
         ),
@@ -1408,7 +1867,7 @@ def test_cleanup_failure_never_replaces_primary_error_or_discloses_path(
     )
 
     result = fixture.service.export_snapshot(
-        OperationContext(1, "export"),
+        _context("export"),
         ExportSnapshotRequest(
             snapshot_id, "mcp", (tmp_path / "bundle").resolve(), False
         ),
@@ -1430,7 +1889,7 @@ def test_structured_errors_never_disclose_source_cache_staging_or_raw_content(
     )
 
     result = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1449,7 +1908,7 @@ def test_service_close_rejects_new_leases_waits_for_active_work_and_releases_onc
     fixture.queries.resume = threading.Event()
     query_thread = threading.Thread(
         target=lambda: fixture.service.get_summary(
-            OperationContext(1, "summary-active"),
+            _context("summary-active"),
             SnapshotRequest(snapshot_id),
             cancellation=ManualCancellationToken(),
         )
@@ -1464,7 +1923,7 @@ def test_service_close_rejects_new_leases_waits_for_active_work_and_releases_onc
         )
 
     rejected = fixture.service.get_summary(
-        OperationContext(1, "summary-new"),
+        _context("summary-new"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
@@ -1483,7 +1942,7 @@ def test_close_stops_new_work_and_releases_all_handles(tmp_path: Path) -> None:
 
     fixture.service.close()
     result = fixture.service.get_summary(
-        OperationContext(1, "summary"),
+        _context("summary"),
         SnapshotRequest(snapshot_id),
         cancellation=ManualCancellationToken(),
     )
