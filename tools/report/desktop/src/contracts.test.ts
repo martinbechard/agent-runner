@@ -18,7 +18,9 @@ import {
   type TurnSortDto,
   dateRangeError,
   discoveryProgressPresentation,
+  localDayDateHourRange,
   localDateHourToUtc,
+  localExclusiveDateHourToInclusiveUtcHour,
   normalizeWorkerCount,
   parseAgentPageDto,
   parseCoordinationPageDto,
@@ -97,6 +99,11 @@ describe("catalog boundary contracts", () => {
   it("keeps local time conversion, worker bounds, and safe discovery progress", () => {
     expect(dateRangeError("2026-08-12T17:00", "2026-08-12T09:00")).not.toBeNull();
     expect(localDateHourToUtc("2026-08-12T09:00")).toBe(new Date("2026-08-12T09:00").toISOString().slice(0, 13));
+    expect(localExclusiveDateHourToInclusiveUtcHour("2026-08-13T00:00")).toBe(new Date(new Date("2026-08-13T00:00").getTime() - 1).toISOString().slice(0, 13));
+    expect(localDayDateHourRange(new Date(2026, 7, 12, 12, 30))).toEqual({
+      fromDate: "2026-08-12T00:00",
+      toDate: "2026-08-13T00:00",
+    });
     expect(normalizeWorkerCount("64", 4)).toBe(64);
     expect(normalizeWorkerCount("65", 4)).toBe(4);
     const progress = parseDiscoveryProgress({ completed_files: 1, candidate_files: 2, sourceLabel: "root.jsonl", source: "scan" });

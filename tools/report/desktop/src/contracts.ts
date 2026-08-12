@@ -637,6 +637,30 @@ export function localDateHourToUtc(value: string): string {
   return value === "" ? "" : new Date(value).toISOString().slice(0, 13);
 }
 
+export function localExclusiveDateHourToInclusiveUtcHour(value: string): string {
+  if (value === "") return "";
+  const exclusiveBoundary = new Date(value);
+  return new Date(exclusiveBoundary.getTime() - 1).toISOString().slice(0, 13);
+}
+
+export function localDayDateHourRange(now: Date): { readonly fromDate: string; readonly toDate: string } {
+  const localMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const localTomorrow = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  return {
+    fromDate: localDateHourValue(localMidnight),
+    toDate: localDateHourValue(localTomorrow),
+  };
+}
+
+function localDateHourValue(value: Date): string {
+  const year = String(value.getFullYear()).padStart(4, "0");
+  const month = String(value.getMonth() + 1).padStart(2, "0");
+  const day = String(value.getDate()).padStart(2, "0");
+  const hour = String(value.getHours()).padStart(2, "0");
+  const minute = String(value.getMinutes()).padStart(2, "0");
+  return `${year}-${month}-${day}T${hour}:${minute}`;
+}
+
 export function normalizeWorkerCount(value: unknown, fallback: number): number {
   const parsed = typeof value === "number" ? value : Number(value);
   return Number.isSafeInteger(parsed) && parsed >= 1 && parsed <= 64 ? parsed : fallback;

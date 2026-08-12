@@ -16,7 +16,9 @@ import {
   type SearchResponse,
   dateRangeError,
   discoveryProgressPresentation,
+  localDayDateHourRange,
   localDateHourToUtc,
+  localExclusiveDateHourToInclusiveUtcHour,
   normalizeWorkerCount,
   parseDesktopDefaults,
   parseDiscoveryProgress,
@@ -164,7 +166,7 @@ function currentRequest(): SearchRequest {
     rootRefs: [...roots.keys()],
     query: queryInput.value.trim(),
     fromDate: localDateHourToUtc(fromDateInput.value),
-    toDate: localDateHourToUtc(toDateInput.value),
+    toDate: localExclusiveDateHourToInclusiveUtcHour(toDateInput.value),
     includeDescendants: includeDescendantsInput.checked,
     workers: selectedWorkerCount(),
   };
@@ -504,6 +506,9 @@ async function handleParentReport(request: ParentReportRequest): Promise<void> {
 
 async function initialize(): Promise<void> {
   restoreLastExport();
+  const localToday = localDayDateHourRange(new Date());
+  fromDateInput.value = localToday.fromDate;
+  toDateInput.value = localToday.toDate;
   workerThreadsInput.value = String(normalizeWorkerCount(localStorage.getItem(WORKER_COUNT_STORAGE_KEY), DEFAULT_WORKER_COUNT));
   includeDescendantsInput.checked = localStorage.getItem(INCLUDE_CHILDREN_STORAGE_KEY) === "true";
   includeCollaboratorsInput.checked = localStorage.getItem(INCLUDE_COLLABORATORS_STORAGE_KEY) === "true";
