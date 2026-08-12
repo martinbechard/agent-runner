@@ -22,10 +22,22 @@ chrono = { workspace = true, features = ["clock"] }
 html-escape.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2 = "0.10.9"
 tauri = { version = "2.11.5", features = [] }
 tauri-plugin-dialog = "2.7.2"
 tauri-plugin-shell = "2.3.5"
 url.workspace = true
+unicode-normalization = "0.1.24"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59.0", features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_Storage_FileSystem",
+    "Win32_System_JobObjects",
+    "Win32_System_Pipes",
+    "Win32_System_Threading",
+] }
 
 [dev-dependencies]
 rusqlite.workspace = true

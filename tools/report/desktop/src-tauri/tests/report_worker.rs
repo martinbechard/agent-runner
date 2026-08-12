@@ -162,14 +162,22 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
         (
             "open_snapshot",
             None,
-            json!({"scope": scope, "preflight_token": "preflight-token"}),
+            json!({
+                "scope": scope,
+                "preflight_token": "preflight-token",
+                "source_revision": "revision-1"
+            }),
         ),
         ("get_summary", Some(SNAPSHOT_ID), json!({})),
         (
             "list_agents",
             Some(SNAPSHOT_ID),
             json!({
-                "filters": {"agent_ids": [], "roles": [], "states": []},
+                "filters": {"query": "", "agent_ids": [], "roles": [], "states": []},
+                "sort": {
+                    "key": "last_activity_at", "direction": "descending",
+                    "tie_break_key": "agent_id", "tie_break_direction": "ascending"
+                },
                 "cursor": null,
                 "page_size": 100
             }),
@@ -182,6 +190,10 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
                     "turn_ids": [], "agent_ids": [], "states": [],
                     "from_time": null, "to_time": null
                 },
+                "sort": {
+                    "key": "started_at", "direction": "ascending",
+                    "tie_break_key": "turn_id", "tie_break_direction": "ascending"
+                },
                 "cursor": null,
                 "page_size": 100
             }),
@@ -189,7 +201,15 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
         (
             "list_events",
             Some(SNAPSHOT_ID),
-            json!({"filters": event_filters.clone(), "cursor": null, "page_size": 100}),
+            json!({
+                "filters": event_filters.clone(),
+                "sort": {
+                    "key": "occurred_at", "direction": "ascending",
+                    "tie_break_key": "event_id", "tie_break_direction": "ascending"
+                },
+                "cursor": null,
+                "page_size": 100
+            }),
         ),
         (
             "query_time_range",
@@ -198,16 +218,25 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
                 "from_time": "2026-08-12T12:00:00Z",
                 "to_time": "2026-08-12T13:00:00Z",
                 "measure": "wall_time",
-                "requested_resolution_minutes": 5
+                "requested_resolution_minutes": 5,
+                "group_by": "agent",
+                "maximum_rows": 100
             }),
         ),
         (
             "query_sequence",
             Some(SNAPSHOT_ID),
             json!({
-                "focus_agent_id": null,
-                "filters": event_filters,
-                "grouping": "operation",
+                "filters": {
+                    "focus_agent_id": null,
+                    "event_filters": event_filters,
+                    "grouping": "none",
+                    "include_reasoning": false
+                },
+                "sort": {
+                    "key": "occurred_at", "direction": "ascending",
+                    "tie_break_key": "sequence_id", "tie_break_direction": "ascending"
+                },
                 "cursor": null,
                 "page_size": 100
             }),
@@ -216,7 +245,15 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
             "query_coordination",
             Some(SNAPSHOT_ID),
             json!({
-                "work_item_ids": [], "agent_ids": [], "cursor": null, "page_size": 100
+                "filters": {
+                    "work_item_id": null, "delegated_root_id": null,
+                    "agent_id": null, "operation": null, "evidence": null
+                },
+                "sort": {
+                    "key": "occurred_at", "direction": "ascending",
+                    "tie_break_key": "coordination_id", "tie_break_direction": "ascending"
+                },
+                "cursor": null, "page_size": 100
             }),
         ),
         (
@@ -391,15 +428,18 @@ fn supervisor_config(source_root: &Path) -> WorkerSupervisorConfig {
         expected_package_version: "0.10.2".to_owned(),
         service_configuration: ServiceConfiguration {
             parser_version: "parser-v1".to_owned(),
+            pricing_version: "pricing-v1".to_owned(),
             pricing_digest: "sha256:pricing".to_owned(),
+            formatter_version: "formatters-v1".to_owned(),
             formatter_digest: "sha256:formatters".to_owned(),
             default_page_size: 100,
             max_page_size: 500,
-            max_time_buckets: 2_000,
+            max_heatmap_cells: 2_000,
         },
         path_authority: PathAuthority {
             source_roots: vec![source_root.to_path_buf()],
         },
+        diagnostic_sink: None,
     }
 }
 

@@ -38,11 +38,13 @@ const COMMAND_CAPACITY: usize = 128;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ServiceConfiguration {
     pub parser_version: String,
+    pub pricing_version: String,
     pub pricing_digest: String,
+    pub formatter_version: String,
     pub formatter_digest: String,
     pub default_page_size: u16,
     pub max_page_size: u16,
-    pub max_time_buckets: u32,
+    pub max_heatmap_cells: u32,
 }
 
 /// Canonical roots that the native host authorizes the Worker to read.
@@ -52,7 +54,7 @@ pub struct PathAuthority {
 }
 
 /// Static limits and trusted startup values for one Supervisor.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct WorkerSupervisorConfig {
     pub max_in_flight: usize,
     pub cancellation_grace: Duration,
@@ -62,6 +64,27 @@ pub struct WorkerSupervisorConfig {
     pub expected_package_version: String,
     pub service_configuration: ServiceConfiguration,
     pub path_authority: PathAuthority,
+    pub diagnostic_sink: Option<Arc<dyn Fn(SanitizedDiagnostic) + Send + Sync>>,
+}
+
+impl fmt::Debug for WorkerSupervisorConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("WorkerSupervisorConfig")
+            .field("max_in_flight", &self.max_in_flight)
+            .field("cancellation_grace", &self.cancellation_grace)
+            .field("startup_timeout", &self.startup_timeout)
+            .field("max_record_bytes", &self.max_record_bytes)
+            .field("max_stderr_bytes", &self.max_stderr_bytes)
+            .field("expected_package_version", &self.expected_package_version)
+            .field("service_configuration", &self.service_configuration)
+            .field("path_authority", &self.path_authority)
+            .field(
+                "diagnostic_sink",
+                &self.diagnostic_sink.as_ref().map(|_| "configured"),
+            )
+            .finish()
+    }
 }
 
 /// The native-host-selected executable, arguments, and environment for each generation.
@@ -1032,24 +1055,28 @@ fn validate_operation_arguments(
             validate_scope(object_field(arguments, "scope")?)
         }
         "open_snapshot" => {
-            exact_keys(arguments, &["scope", "preflight_token"])?;
+            exact_keys(arguments, &["scope", "preflight_token", "source_revision"])?;
             validate_scope(object_field(arguments, "scope")?)?;
             string_field(arguments, "preflight_token")?;
+            string_field(arguments, "source_revision")?;
             Ok(())
         }
         "get_summary" | "refresh_snapshot" | "close_snapshot" => exact_keys(arguments, &[]),
         "list_agents" => {
-            exact_keys(arguments, &["filters", "cursor", "page_size"])?;
-            validate_string_array_object(
-                object_field(arguments, "filters")?,
-                &["agent_ids", "roles", "states"],
-            )?;
+            exact_keys(arguments, &["filters", "sort", "cursor", "page_size"])?;
+            let filters = object_field(arguments, "filters")?;
+            exact_keys(filters, &["query", "agent_ids", "roles", "states"])?;
+            string_field_allow_empty(filters, "query")?;
+            for key in ["agent_ids", "roles", "states"] {
+                string_array_field(filters, key)?;
+            }
+            validate_sort(object_field(arguments, "sort")?)?;
             nullable_string_field(arguments, "cursor")?;
             unsigned_field(arguments, "page_size")?;
             Ok(())
         }
         "list_turns" => {
-            exact_keys(arguments, &["filters", "cursor", "page_size"])?;
+            exact_keys(arguments, &["filters", "sort", "cursor", "page_size"])?;
             let filters = object_field(arguments, "filters")?;
             exact_keys(
                 filters,
@@ -1060,13 +1087,15 @@ fn validate_operation_arguments(
             }
             nullable_string_field(filters, "from_time")?;
             nullable_string_field(filters, "to_time")?;
+            validate_sort(object_field(arguments, "sort")?)?;
             nullable_string_field(arguments, "cursor")?;
             unsigned_field(arguments, "page_size")?;
             Ok(())
         }
         "list_events" => {
-            exact_keys(arguments, &["filters", "cursor", "page_size"])?;
+            exact_keys(arguments, &["filters", "sort", "cursor", "page_size"])?;
             validate_event_filters(object_field(arguments, "filters")?)?;
+            validate_sort(object_field(arguments, "sort")?)?;
             nullable_string_field(arguments, "cursor")?;
             unsigned_field(arguments, "page_size")?;
             Ok(())
@@ -1079,39 +1108,62 @@ fn validate_operation_arguments(
                     "to_time",
                     "measure",
                     "requested_resolution_minutes",
+                    "group_by",
+                    "maximum_rows",
                 ],
             )?;
             string_field(arguments, "from_time")?;
             string_field(arguments, "to_time")?;
             string_field(arguments, "measure")?;
             unsigned_field(arguments, "requested_resolution_minutes")?;
+            string_field(arguments, "group_by")?;
+            unsigned_field(arguments, "maximum_rows")?;
             Ok(())
         }
         "query_sequence" => {
+            exact_keys(arguments, &["filters", "sort", "cursor", "page_size"])?;
+            let filters = object_field(arguments, "filters")?;
             exact_keys(
-                arguments,
+                filters,
                 &[
                     "focus_agent_id",
-                    "filters",
+                    "event_filters",
                     "grouping",
-                    "cursor",
-                    "page_size",
+                    "include_reasoning",
                 ],
             )?;
-            nullable_string_field(arguments, "focus_agent_id")?;
-            validate_event_filters(object_field(arguments, "filters")?)?;
-            string_field(arguments, "grouping")?;
+            nullable_string_field(filters, "focus_agent_id")?;
+            validate_event_filters(object_field(filters, "event_filters")?)?;
+            string_field(filters, "grouping")?;
+            bool_field(filters, "include_reasoning")?;
+            validate_sort(object_field(arguments, "sort")?)?;
             nullable_string_field(arguments, "cursor")?;
             unsigned_field(arguments, "page_size")?;
             Ok(())
         }
         "query_coordination" => {
+            exact_keys(arguments, &["filters", "sort", "cursor", "page_size"])?;
+            let filters = object_field(arguments, "filters")?;
             exact_keys(
-                arguments,
-                &["work_item_ids", "agent_ids", "cursor", "page_size"],
+                filters,
+                &[
+                    "work_item_id",
+                    "delegated_root_id",
+                    "agent_id",
+                    "operation",
+                    "evidence",
+                ],
             )?;
-            string_array_field(arguments, "work_item_ids")?;
-            string_array_field(arguments, "agent_ids")?;
+            for key in [
+                "work_item_id",
+                "delegated_root_id",
+                "agent_id",
+                "operation",
+                "evidence",
+            ] {
+                nullable_string_field(filters, key)?;
+            }
+            validate_sort(object_field(arguments, "sort")?)?;
             nullable_string_field(arguments, "cursor")?;
             unsigned_field(arguments, "page_size")?;
             Ok(())
@@ -1165,13 +1217,13 @@ fn validate_event_filters(value: &Map<String, Value>) -> Result<(), SupervisorEr
     nullable_string_field(value, "to_time")
 }
 
-fn validate_string_array_object(
-    value: &Map<String, Value>,
-    keys: &[&str],
-) -> Result<(), SupervisorError> {
-    exact_keys(value, keys)?;
-    for key in keys {
-        string_array_field(value, key)?;
+fn validate_sort(value: &Map<String, Value>) -> Result<(), SupervisorError> {
+    exact_keys(
+        value,
+        &["key", "direction", "tie_break_key", "tie_break_direction"],
+    )?;
+    for key in ["key", "direction", "tie_break_key", "tie_break_direction"] {
+        string_field(value, key)?;
     }
     Ok(())
 }
@@ -1202,6 +1254,17 @@ fn string_field(value: &Map<String, Value>, key: &'static str) -> Result<(), Sup
         .get(key)
         .and_then(Value::as_str)
         .filter(|item| !item.is_empty())
+        .map(|_| ())
+        .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
+fn string_field_allow_empty(
+    value: &Map<String, Value>,
+    key: &'static str,
+) -> Result<(), SupervisorError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
         .map(|_| ())
         .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
 }
@@ -1529,7 +1592,11 @@ impl RecoveryCoordinator {
             cleanup_failed_spawn(&mut process);
             return Err(error);
         }
-        if let Err(error) = spawn_stderr_reader(stderr, self.config.max_stderr_bytes) {
+        if let Err(error) = spawn_stderr_reader(
+            stderr,
+            self.config.max_stderr_bytes,
+            self.config.diagnostic_sink.clone(),
+        ) {
             cleanup_failed_spawn(&mut process);
             return Err(error);
         }
@@ -1687,11 +1754,13 @@ impl RecoveryCoordinator {
                 "service_config": {
                     "authorized_source_roots": roots,
                     "parser_version": service.parser_version,
+                    "pricing_version": service.pricing_version,
                     "pricing_digest": service.pricing_digest,
+                    "formatter_version": service.formatter_version,
                     "formatter_digest": service.formatter_digest,
                     "default_page_size": service.default_page_size,
                     "max_page_size": service.max_page_size,
-                    "max_time_buckets": service.max_time_buckets,
+                    "max_heatmap_cells": service.max_heatmap_cells,
                 }
             })
             .as_object()
@@ -2209,12 +2278,14 @@ fn validate_static_configuration(
     }
     if config.expected_package_version.is_empty()
         || config.service_configuration.parser_version.is_empty()
+        || config.service_configuration.pricing_version.is_empty()
         || config.service_configuration.pricing_digest.is_empty()
+        || config.service_configuration.formatter_version.is_empty()
         || config.service_configuration.formatter_digest.is_empty()
         || config.service_configuration.default_page_size == 0
         || config.service_configuration.default_page_size
             > config.service_configuration.max_page_size
-        || config.service_configuration.max_time_buckets == 0
+        || config.service_configuration.max_heatmap_cells == 0
     {
         return Err(invalid_config(
             "service_configuration",
@@ -2462,6 +2533,7 @@ fn read_worker_stdout(
 fn spawn_stderr_reader(
     mut stderr: impl Read + Send + 'static,
     maximum: usize,
+    diagnostic_sink: Option<Arc<dyn Fn(SanitizedDiagnostic) + Send + Sync>>,
 ) -> Result<(), SupervisorError> {
     thread::Builder::new()
         .name("agent-report-worker-stderr".to_owned())
@@ -2472,9 +2544,12 @@ fn spawn_stderr_reader(
                 match stderr.read(&mut buffer) {
                     Ok(0) | Err(_) => return,
                     Ok(count) => {
-                        // The native diagnostic sink is supplied by the later crate-root
-                        // integration. Raw child bytes are intentionally discarded here.
-                        let _ = sanitizer.ingest(&buffer[..count]);
+                        for diagnostic in sanitizer.ingest(&buffer[..count]) {
+                            if let Some(sink) = diagnostic_sink.as_ref() {
+                                let sink = Arc::clone(sink);
+                                invoke_observer(move || sink(diagnostic));
+                            }
+                        }
                     }
                 }
             }
