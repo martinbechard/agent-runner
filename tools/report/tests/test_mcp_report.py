@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
+from agent_report import application_service as service_types
 from agent_report.mcp_report import (
     ReportGenerator,
     ReportServerConfig,
@@ -156,7 +157,9 @@ def test_exact_thread_selection_ignores_date_and_name_filters(tmp_path: Path) ->
     assert runtime.build_calls == 1
 
 
-def test_time_range_query_builds_one_task_and_returns_structured_data(tmp_path: Path) -> None:
+def test_time_range_query_builds_one_task_and_returns_structured_data(
+    tmp_path: Path,
+) -> None:
     entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
     runtime = FakeRuntime([entry])
     generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
@@ -180,7 +183,9 @@ def test_time_range_query_builds_one_task_and_returns_structured_data(tmp_path: 
     assert runtime.build_calls == 1
 
 
-def test_exact_time_range_query_only_reads_selected_catalog_entry(tmp_path: Path) -> None:
+def test_exact_time_range_query_only_reads_selected_catalog_entry(
+    tmp_path: Path,
+) -> None:
     entries = [
         _entry(
             tmp_path,
@@ -234,16 +239,16 @@ def test_cancelled_time_range_query_stops_before_catalog_reads(tmp_path: Path) -
     runtime = FakeRuntime([entry])
     generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
 
-    result = generator.query_time_range(
-        thread_id="thread-1", cancelled=lambda: True
-    )
+    result = generator.query_time_range(thread_id="thread-1", cancelled=lambda: True)
 
     assert result["code"] == "REPORT_DISCOVERY_FAILED"
     assert runtime.catalog_reads == 0
     assert runtime.build_calls == 0
 
 
-def test_time_range_query_rejects_unsupported_bucket_before_build(tmp_path: Path) -> None:
+def test_time_range_query_rejects_unsupported_bucket_before_build(
+    tmp_path: Path,
+) -> None:
     entry = _entry(tmp_path, "thread-1", "Query task", "2026-08-10T12:00:00+00:00")
     runtime = FakeRuntime([entry])
     generator = ReportGenerator(runtime, _config(tmp_path, Path("bundle")))
@@ -436,6 +441,42 @@ def test_one_snapshot_writes_the_complete_stable_bundle(tmp_path: Path) -> None:
     }
 
 
+def test_classic_generation_does_not_use_injected_snapshot_service(
+    tmp_path: Path,
+) -> None:
+    """Keep classic generation independent from the additive snapshot API."""
+
+    entry = _entry(tmp_path, "thread-1", "Classic task", "2026-08-10T12:00:00+00:00")
+    runtime = FakeRuntime([entry])
+
+    class Service:
+        def __getattr__(self, name: str) -> object:
+            raise AssertionError(
+                f"classic generation called snapshot service method {name}"
+            )
+
+        def close(self) -> None:
+            pass
+
+    generator = ReportGenerator(
+        runtime,
+        _config(tmp_path, Path("classic")),
+        application_service=Service(),  # type: ignore[arg-type]
+    )
+
+    result = generator.generate_report(thread_id="thread-1", workspace_root=tmp_path)
+
+    assert result["ok"] is True
+    assert runtime.build_calls == 1
+    assert {Path(path).name for path in result["written_files"].values()} == {
+        "report.html",
+        "report.json",
+        "turns.csv",
+        "work-units.csv",
+        "report.md",
+    }
+
+
 def test_oversized_inline_report_is_not_truncated_and_keeps_written_paths(
     tmp_path: Path,
 ) -> None:
@@ -515,3 +556,92 @@ def test_workspace_root_accepts_only_existing_local_file_uris(tmp_path: Path) ->
     assert workspace_root_from_uri(tmp_path.as_uri()) == tmp_path.resolve()
     assert workspace_root_from_uri("https://example.com/workspace") is None
     assert workspace_root_from_uri("file://remote-host/workspace") is None
+
+
+def test_snapshot_adapter_uses_crypto_operation_and_exact_open_binding(
+    tmp_path: Path,
+) -> None:
+    """Map MCP fields to the reconciled service DTO without changing names."""
+
+    captured: dict[str, object] = {}
+
+    class Service:
+        def open_snapshot(self, context, request, **kwargs):  # type: ignore[no-untyped-def]
+            captured.update(context=context, request=request, **kwargs)
+            return service_types.ServiceResult(
+                True,
+                service_types.SnapshotMetadata(
+                    service_types.PROTOCOL_VERSION,
+                    "snap_1234567890abcdef12345678",
+                    "a" * 64,
+                    "thread-1",
+                    True,
+                    False,
+                    "b" * 64,
+                    "parser-v1",
+                    "c" * 64,
+                    "d" * 64,
+                    datetime(2026, 8, 12, tzinfo=timezone.utc),
+                    "sealed",
+                    (),
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    generator = ReportGenerator(
+        FakeRuntime([]),
+        _config(tmp_path, Path("bundle")),
+        application_service=Service(),  # type: ignore[arg-type]
+    )
+
+    result = generator.open_snapshot(
+        root_thread_id="thread-1",
+        preflight_token="token",
+        source_revision="b" * 64,
+        include_children=True,
+    )
+
+    context = captured["context"]
+    request = captured["request"]
+    assert isinstance(context, service_types.OperationContext)
+    assert context.operation_id.startswith("op_")
+    assert len(context.operation_id) == 27
+    assert isinstance(request, service_types.OpenSnapshotRequest)
+    assert request.source_revision == "b" * 64
+    assert request.scope.include_children is True
+    assert result["ok"] is True
+    assert result["revision_id"] == "a" * 64
+    assert result["observation_time"] == "2026-08-12T00:00:00+00:00"
+
+
+def test_snapshot_adapter_preserves_structured_service_error(tmp_path: Path) -> None:
+    """Return service error fields directly instead of parsing exception text."""
+
+    class Service:
+        def get_summary(self, context, request, **kwargs):  # type: ignore[no-untyped-def]
+            return service_types.ServiceResult(
+                False,
+                error=service_types.ReportError(
+                    "REPORT_SNAPSHOT_NOT_FOUND",
+                    "The report snapshot was not found.",
+                    True,
+                    context.operation_id,
+                ),
+            )
+
+        def close(self) -> None:
+            pass
+
+    generator = ReportGenerator(
+        FakeRuntime([]),
+        _config(tmp_path, Path("bundle")),
+        application_service=Service(),  # type: ignore[arg-type]
+    )
+
+    result = generator.get_summary(snapshot_id="snap_1234567890abcdef12345678")
+
+    assert result["ok"] is False
+    assert result["code"] == "REPORT_SNAPSHOT_NOT_FOUND"
+    assert str(result["operation_id"]).startswith("op_")

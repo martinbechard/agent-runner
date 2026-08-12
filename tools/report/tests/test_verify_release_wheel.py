@@ -20,7 +20,12 @@ sys.modules[SPEC.name] = MODULE
 SPEC.loader.exec_module(MODULE)
 
 
-def _write_wheel(path: Path, *, include_engine: bool = True) -> None:
+def _write_wheel(
+    path: Path,
+    *,
+    include_engine: bool = True,
+    omitted_module: str | None = None,
+) -> None:
     """Write the smallest representative platform wheel fixture."""
 
     prefix = "agent_report-0.10.1.data/purelib"
@@ -40,8 +45,16 @@ def _write_wheel(path: Path, *, include_engine: bool = True) -> None:
             "agent-report = agent_report.cli:main\n"
             "mcp-agent-report = agent_report.mcp_server:main\n",
         )
-        archive.writestr(f"{prefix}/agent_report/mcp_report.py", "")
-        archive.writestr(f"{prefix}/agent_report/mcp_server.py", "")
+        for module in (
+            "application_service.py",
+            "event_cache.py",
+            "mcp_report.py",
+            "mcp_server.py",
+            "report_worker.py",
+            "static_export.py",
+        ):
+            if module != omitted_module:
+                archive.writestr(f"{prefix}/agent_report/{module}", "")
         archive.writestr(
             "agent_report-0.10.1.data/data/share/agent-report/run-timeline.py", ""
         )
@@ -67,6 +80,16 @@ def test_rejects_wheel_without_platform_engine(tmp_path: Path) -> None:
     _write_wheel(wheel, include_engine=False)
 
     with pytest.raises(ValueError, match="bundled agent-report-engine"):
+        MODULE.verify_release_wheel(wheel, "0.10.1")
+
+
+def test_rejects_wheel_without_shared_report_runtime_module(tmp_path: Path) -> None:
+    """Require every production service and worker module in release wheels."""
+
+    wheel = tmp_path / "agent_report-0.10.1-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, omitted_module="report_worker.py")
+
+    with pytest.raises(ValueError, match="agent_report/report_worker.py"):
         MODULE.verify_release_wheel(wheel, "0.10.1")
 
 

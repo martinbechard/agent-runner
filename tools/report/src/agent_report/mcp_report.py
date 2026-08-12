@@ -9,16 +9,25 @@ from __future__ import annotations
 
 import os
 import re
+import secrets
+import hashlib
+import shutil
+import tempfile
+from contextvars import ContextVar
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, time, timedelta, timezone, tzinfo
+from enum import Enum
 from pathlib import Path
 from time import monotonic
 from types import ModuleType
-from typing import Literal
+from typing import Any, Literal, cast
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+from . import application_service as service_types
+from . import event_cache, static_export
 
 MAX_INLINE_BYTES = 65_536
 DEFAULT_INLINE_BYTES = 65_536
@@ -41,6 +50,1142 @@ TimeRangeMeasure = Literal[
 ]
 BucketMinutes = Literal[1, 5, 15, 30, 60]
 RUN_CACHE_FRESH_SECONDS = 60.0
+NORMALIZATION_VERSION = "agent-report-service-v1"
+_CURRENT_OPERATION_ID: ContextVar[str] = ContextVar("agent_report_operation_id")
+
+
+def _digest_file(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def application_service_config(
+    runtime: ModuleType, roots: tuple[Path, ...]
+) -> service_types.ApplicationServiceConfig:
+    """Build immutable service configuration from packaged runtime resources."""
+
+    pricing_path = Path(runtime.PRICING_FILE).resolve()
+    formatter_path = Path(runtime.DEFAULT_TOOL_FORMATTER_CONFIG).resolve()
+    pricing_version, pricing_digest = runtime._pricing_metadata()
+    formatter = runtime._load_tool_formatter_config(formatter_path)
+    return service_types.ApplicationServiceConfig(
+        authorized_source_roots=roots,
+        parser_version=str(runtime.CODEX_ROLLOUT_PARSER_VERSION),
+        pricing_version=pricing_version or "unavailable",
+        pricing_digest=pricing_digest or _digest_file(pricing_path),
+        formatter_version=str(formatter.version),
+        formatter_digest=_digest_file(formatter_path),
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class _NormalizedRun:
+    source_revision: str
+    privacy_validated: bool
+    run: object
+    scope: service_types.ReportScope
+    sources: tuple[event_cache.SourceRevision, ...]
+    records: tuple[
+        tuple[
+            event_cache.SourceRevision, tuple[event_cache.NormalizedEventRecord, ...]
+        ],
+        ...,
+    ]
+
+
+@dataclass(slots=True)
+class _ReadHandle:
+    revision_id: str
+    source_revision: str
+    cache_snapshot_id: str
+    run: object
+    scope: service_types.ReportScope
+    public_snapshot_id: str = ""
+
+
+@dataclass(frozen=True, slots=True)
+class _StagedExport:
+    mode: service_types.ExportMode
+    stage_id: str
+    surface: service_types.AutomationSurface
+    source: Path
+    result: static_export.ExportResult
+
+
+class _RuntimeDiscovery:
+    def __init__(self, runtime: ModuleType) -> None:
+        self._runtime = runtime
+
+    def preflight(self, scope, roots, cancellation, progress):  # type: ignore[no-untyped-def]
+        return self._discover(scope, roots, cancellation)
+
+    def recheck(self, scope, roots, cancellation, progress):  # type: ignore[no-untyped-def]
+        return self._discover(scope, roots, cancellation)
+
+    def _discover(self, scope, roots, cancellation):  # type: ignore[no-untyped-def]
+        candidates = sorted(
+            {
+                path.resolve()
+                for root in roots
+                for path in self._runtime._candidate_rollouts(root)
+            }
+        )
+        if cancellation.is_cancelled():
+            raise service_types.DiscoveryFailure("cancelled")
+        try:
+            paths, diagnostics, _parent = self._runtime._discover_rollout_paths(
+                scope.root_thread_id,
+                candidates,
+                include_children=scope.include_children,
+                include_delegations=scope.include_collaborators,
+                index_path=self._runtime._default_codex_discovery_index_path(),
+            )
+        except ValueError as error:
+            raise service_types.DiscoveryFailure("not_found") from error
+        sources: list[service_types.DiscoveredSource] = []
+        digest = hashlib.sha256()
+        for index, path in enumerate(paths):
+            stat = path.stat()
+            revision = hashlib.sha256(path.read_bytes()).hexdigest()
+            source_key = event_cache.source_key_for_path(path)
+            identity = self._runtime._rollout_identity(path)
+            relationship: service_types.SourceRelationship = "root"
+            if index:
+                relationship = "child" if identity and identity[1] else "collaborator"
+            sources.append(
+                service_types.DiscoveredSource(
+                    str(source_key), path, revision, stat.st_size, relationship
+                )
+            )
+            digest.update(str(source_key).encode())
+            digest.update(revision.encode())
+        warnings = tuple(
+            service_types.WarningRecord("REPORT_DISCOVERY_WARNING", item[:512])
+            for item in diagnostics[:100]
+        )
+        return service_types.DiscoveredScope(
+            scope,
+            digest.hexdigest(),
+            tuple(sources),
+            len(sources),
+            sum(source.byte_count for source in sources),
+            sum(source.relationship == "child" for source in sources),
+            sum(source.relationship == "collaborator" for source in sources),
+            0,
+            len(sources),
+            warnings,
+        )
+
+
+def _aware(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def _event_label(kind: str, *, tool_name: str | None = None) -> str:
+    """Return a bounded label without copying transcript or path-shaped content."""
+
+    if tool_name:
+        return f"{tool_name.replace('_', ' ').title()} tool call"
+    return f"{kind.replace('_', ' ').title()} event"
+
+
+class _RuntimeNormalization:
+    def __init__(
+        self,
+        runtime: ModuleType,
+        *,
+        seal: bool,
+        allow_aborted: bool,
+        title: str,
+        thread_titles: Mapping[str, str],
+        workers: int,
+    ) -> None:
+        self._runtime = runtime
+        self._seal = seal
+        self._allow_aborted = allow_aborted
+        self._title = title
+        self._thread_titles = dict(thread_titles)
+        self._workers = workers
+
+    def normalize(
+        self,
+        discovered,
+        parser_version,
+        pricing_digest,
+        formatter_digest,
+        cancellation,
+        progress,
+    ):  # type: ignore[no-untyped-def]
+        run = cast(
+            Any,
+            self._runtime.build_codex_rollout_run(
+                discovered.scope.root_thread_id,
+                [
+                    path.parent
+                    for path in (
+                        source.authorized_path for source in discovered.sources
+                    )
+                ],
+                seal=self._seal,
+                allow_aborted=self._allow_aborted,
+                include_children=discovered.scope.include_children,
+                include_delegations=discovered.scope.include_collaborators,
+                title=self._title,
+                thread_titles=self._thread_titles,
+                workers=self._workers,
+                candidate_paths=[
+                    source.authorized_path for source in discovered.sources
+                ],
+                discovery_index_path=self._runtime._default_codex_discovery_index_path(),
+                cancelled=cancellation.is_cancelled,
+            ),
+        )
+        source_by_path = {
+            source.authorized_path: source for source in discovered.sources
+        }
+        grouped: dict[str, list[event_cache.NormalizedEventRecord]] = {
+            source.source_key: [] for source in discovered.sources
+        }
+        ordinals: dict[str, int] = {
+            source.source_key: 0 for source in discovered.sources
+        }
+        for thread in run.threads:
+            for activity in thread.activities:
+                source = source_by_path.get(Path(activity.source_path).resolve())
+                occurred = _aware(activity.event_timestamp)
+                if source is None or occurred is None:
+                    continue
+                ordinal = ordinals[source.source_key]
+                ordinals[source.source_key] += 1
+                grouped[source.source_key].append(
+                    event_cache.NormalizedEventRecord(
+                        ordinal,
+                        occurred.astimezone(timezone.utc),
+                        activity.activity_type,
+                        thread.thread_id,
+                        activity.turn_id,
+                        None,
+                        None,
+                        activity.model or None,
+                        None,
+                        event_cache.EvidenceMethod.MEASURED,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        _event_label(activity.activity_type),
+                        None,
+                        None,
+                        None,
+                        len(activity.content),
+                        None,
+                        0,
+                        "sanitized",
+                    )
+                )
+            for tool in thread.tool_intervals:
+                source = source_by_path.get(Path(tool.source_path).resolve())
+                occurred = _aware(tool.started_at)
+                if source is None or occurred is None:
+                    continue
+                ordinal = ordinals[source.source_key]
+                ordinals[source.source_key] += 1
+                grouped[source.source_key].append(
+                    event_cache.NormalizedEventRecord(
+                        ordinal,
+                        occurred.astimezone(timezone.utc),
+                        "tool",
+                        thread.thread_id,
+                        tool.turn_id,
+                        None,
+                        tool.tool_name,
+                        tool.model or None,
+                        "completed" if tool.completed_at else "active",
+                        event_cache.EvidenceMethod.MEASURED,
+                        tool.duration_ms,
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        _event_label("tool", tool_name=tool.tool_name),
+                        None,
+                        None,
+                        None,
+                        None,
+                        None,
+                        0,
+                        "sanitized",
+                    )
+                )
+        cache_sources: list[event_cache.SourceRevision] = []
+        records: list[
+            tuple[
+                event_cache.SourceRevision,
+                tuple[event_cache.NormalizedEventRecord, ...],
+            ]
+        ] = []
+        for source in discovered.sources:
+            stat = source.authorized_path.stat()
+            cached = event_cache.SourceRevision(
+                event_cache.SourceKey(source.source_key),
+                event_cache.SourceRevisionDigest(
+                    hashlib.sha256(
+                        f"{source.source_revision}:{NORMALIZATION_VERSION}".encode()
+                    ).hexdigest()
+                ),
+                source.byte_count,
+                stat.st_mtime_ns,
+                parser_version,
+                event_cache.PRIVACY_REGISTRY_VERSION,
+            )
+            cache_sources.append(cached)
+            records.append((cached, tuple(grouped[source.source_key])))
+        records.sort(key=lambda item: str(item[0].source_key))
+        cache_sources = [item[0] for item in records]
+        return _NormalizedRun(
+            discovered.source_revision,
+            True,
+            run,
+            discovered.scope,
+            tuple(cache_sources),
+            tuple(records),
+        )
+
+
+class _RepositoryAdapter:
+    def __init__(
+        self,
+        repository: event_cache.EventRepository,
+        config: service_types.ApplicationServiceConfig,
+    ) -> None:
+        self._repository = repository
+        self._config = config
+        self._runs: dict[str, tuple[str, str, object, service_types.ReportScope]] = {}
+        self.pending_handle: _ReadHandle | None = None
+
+    def known_event_count(self, source_revision: str) -> int | None:
+        return None
+
+    def reuse_or_publish(self, revision: _NormalizedRun, cancellation, progress):  # type: ignore[no-untyped-def]
+        run = cast(Any, revision.run)
+        for source, records in revision.records:
+            self._repository.replace_source(
+                source, records, cancellation_check=cancellation.is_cancelled
+            )
+        cache_snapshot_id = "snap_" + secrets.token_hex(12)
+        binding = self._repository.publish_snapshot(
+            snapshot_id=event_cache.SnapshotId(cache_snapshot_id),
+            expected_active_revision=None,
+            binding=event_cache.SnapshotBindingInput(
+                run.root_thread_id,
+                revision.scope.include_children,
+                revision.scope.include_collaborators,
+                self._config.parser_version,
+                self._config.pricing_version,
+                self._config.formatter_version,
+                event_cache.PRIVACY_REGISTRY_VERSION,
+                (_aware(run.observed_at) or datetime.now(timezone.utc)).astimezone(
+                    timezone.utc
+                ),
+                event_cache.SnapshotState.SEALED
+                if run.state == "sealed"
+                else event_cache.SnapshotState.LIVE,
+            ),
+            sources=revision.sources,
+            cancellation_check=cancellation.is_cancelled,
+        )
+        self._runs[str(binding.revision_id)] = (
+            cache_snapshot_id,
+            revision.source_revision,
+            revision.run,
+            revision.scope,
+        )
+        return service_types.PublishedRevision(
+            str(binding.revision_id), revision.source_revision
+        )
+
+    def open_read(self, revision_id: str) -> _ReadHandle:
+        snapshot_id, source_revision, run, scope = self._runs[revision_id]
+        self._repository.get_snapshot(event_cache.SnapshotId(snapshot_id))
+        handle = _ReadHandle(revision_id, source_revision, snapshot_id, run, scope)
+        self.pending_handle = handle
+        return handle
+
+    def release_read(self, handle: _ReadHandle) -> None:
+        return None
+
+    def close(self) -> None:
+        self._repository.close()
+
+
+class _Ids:
+    def __init__(self, repository: _RepositoryAdapter) -> None:
+        self._repository = repository
+
+    def new_snapshot_id(self) -> str:
+        value = "snap_" + secrets.token_hex(12)
+        if self._repository.pending_handle is not None:
+            self._repository.pending_handle.public_snapshot_id = value
+            self._repository.pending_handle = None
+        return value
+
+    def new_token_key(self) -> bytes:
+        return secrets.token_bytes(32)
+
+
+class _Clock:
+    def now_utc(self) -> datetime:
+        return datetime.now(timezone.utc)
+
+
+class _Logger:
+    def info(self, event: str, fields: Mapping[str, str | int | bool | None]) -> None:
+        return None
+
+    def error(self, event: str, fields: Mapping[str, str | int | bool | None]) -> None:
+        return None
+
+
+def _slice(
+    items: list[object], after: str | None, limit: int
+) -> service_types.QuerySlice[object]:
+    start = int(after or "0")
+    selected = items[start : start + limit]
+    next_position = str(start + limit) if start + limit < len(items) else None
+    return service_types.QuerySlice(tuple(selected), next_position)
+
+
+class _RuntimeQueries:
+    def __init__(self, repository: event_cache.EventRepository) -> None:
+        self._repository = repository
+
+    def get_summary(self, handle, snapshot, cancellation):  # type: ignore[no-untyped-def]
+        run = handle.run
+        root = next(
+            (item for item in run.threads if item.thread_id == run.root_thread_id),
+            run.threads[0],
+        )
+        metrics = (
+            service_types.MetricGroup(
+                "overview",
+                "Overview",
+                (
+                    service_types.MetricValue(
+                        "turns",
+                        "Turns",
+                        sum(len(t.turns) for t in run.threads),
+                        str(sum(len(t.turns) for t in run.threads)),
+                        "turns",
+                        "measured",
+                        "rollout events",
+                        None,
+                    ),
+                    service_types.MetricValue(
+                        "agents",
+                        "Agents",
+                        len(run.threads),
+                        str(len(run.threads)),
+                        "agents",
+                        "derived",
+                        "included scope",
+                        None,
+                    ),
+                ),
+            ),
+        )
+        return service_types.SummaryResult(
+            snapshot.snapshot_id,
+            snapshot.revision_id,
+            root.task_title or run.run_label or "Agent Report",
+            None,
+            run.state,
+            snapshot.scope,
+            snapshot.observation_time,
+            snapshot.mode,
+            service_types.TimeRange(
+                _aware(run.wall_started_at), _aware(run.wall_ended_at)
+            )
+            if _aware(run.wall_started_at) and _aware(run.wall_ended_at)
+            else None,
+            metrics,
+            ("Codex rollout",),
+            (),
+            snapshot.warnings,
+        )
+
+    def list_agents(self, handle, filters, sort, after, limit, cancellation):  # type: ignore[no-untyped-def]
+        rows = [
+            service_types.AgentRow(
+                item.thread_id,
+                item.parent_thread_id or None,
+                item.agent_nickname or None,
+                item.agent_role or None,
+                item.terminal_state,
+                _aware(item.started_at),
+                _aware(item.last_observed_at)
+                if item.terminal_state != "active"
+                else None,
+                _aware(item.last_observed_at),
+                len(item.turns),
+                len(item.activities) + len(item.tool_intervals) + len(item.mcp_calls),
+                "measured",
+            )
+            for item in handle.run.threads
+            if (not filters.agent_ids or item.thread_id in filters.agent_ids)
+            and (not filters.roles or item.agent_role in filters.roles)
+            and (not filters.states or item.terminal_state in filters.states)
+            and (
+                not filters.query
+                or filters.query.casefold()
+                in f"{item.task_title} {item.agent_nickname} {item.agent_role}".casefold()
+            )
+        ]
+
+        rows.sort(key=lambda row: row.agent_id)
+        rows.sort(
+            key=lambda row: getattr(row, sort.key)
+            or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=sort.direction == "descending",
+        )
+        return _slice(cast(list[object], rows), after, limit)
+
+    def list_turns(self, handle, filters, sort, after, limit, cancellation):  # type: ignore[no-untyped-def]
+        rows = []
+        for thread in handle.run.threads:
+            for item in thread.turns:
+                started = _aware(item.started_at)
+                ended = _aware(item.completed_at)
+                if started is None:
+                    continue
+                if (
+                    filters.turn_ids
+                    and item.turn_id not in filters.turn_ids
+                    or filters.agent_ids
+                    and thread.thread_id not in filters.agent_ids
+                    or filters.states
+                    and item.outcome not in filters.states
+                ):
+                    continue
+                if (
+                    filters.from_time
+                    and (ended or started) < filters.from_time
+                    or filters.to_time
+                    and started >= filters.to_time
+                ):
+                    continue
+                rows.append(
+                    service_types.TurnRow(
+                        item.turn_id,
+                        thread.thread_id,
+                        started,
+                        ended,
+                        item.outcome,
+                        0,
+                        item.activity or None,
+                        "measured",
+                    )
+                )
+        rows.sort(key=lambda row: row.turn_id)
+        rows.sort(
+            key=lambda row: getattr(row, sort.key)
+            or datetime.min.replace(tzinfo=timezone.utc),
+            reverse=sort.direction == "descending",
+        )
+        return _slice(cast(list[object], rows), after, limit)
+
+    def _stored_events(self, handle, filters, *, descending=False):  # type: ignore[no-untyped-def]
+        page = self._repository.query_events(
+            event_cache.EventQuery(
+                event_cache.SnapshotId(handle.cache_snapshot_id),
+                event_cache.SnapshotRevisionId(handle.revision_id),
+                event_cache.EventFilter(
+                    filters.from_time,
+                    filters.to_time,
+                    filters.agent_ids[0] if len(filters.agent_ids) == 1 else None,
+                    filters.turn_ids[0] if len(filters.turn_ids) == 1 else None,
+                    None,
+                    filters.kinds[0] if len(filters.kinds) == 1 else None,
+                ),
+                500,
+                descending=descending,
+            )
+        )
+        return [
+            item
+            for item in page.items
+            if (not filters.event_ids or str(item.event_id) in filters.event_ids)
+            and (not filters.agent_ids or item.record.agent_id in filters.agent_ids)
+            and (not filters.turn_ids or item.record.turn_id in filters.turn_ids)
+            and (not filters.kinds or item.record.kind in filters.kinds)
+        ]
+
+    def list_events(self, handle, filters, sort, after, limit, cancellation):  # type: ignore[no-untyped-def]
+        rows = [
+            service_types.EventRow(
+                str(item.event_id),
+                item.record.timestamp_utc,
+                item.record.agent_id,
+                item.record.turn_id,
+                item.record.kind,
+                item.record.summary_text
+                or item.record.argument_summary
+                or item.record.kind,
+                item.record.evidence_method.value,
+                str(item.source_key),
+                True,
+            )
+            for item in self._stored_events(handle, filters)
+        ]
+        rows.sort(key=lambda row: row.event_id)
+        rows.sort(
+            key=lambda row: getattr(row, sort.key),
+            reverse=sort.direction == "descending",
+        )
+        return _slice(cast(list[object], rows), after, limit)
+
+    def query_time_range(
+        self, handle, request, actual_resolution_minutes, cancellation
+    ):  # type: ignore[no-untyped-def]
+        filters = service_types.EventFilters(
+            from_time=request.from_time, to_time=request.to_time
+        )
+        events = self._stored_events(handle, filters)
+        grouped: dict[str, list[object]] = {}
+        for event in events:
+            key = (
+                event.record.agent_id
+                if request.group_by == "agent"
+                else event.record.kind
+                if request.group_by == "event_kind"
+                else event.record.work_item_id
+            )
+            grouped.setdefault(key or "unassigned", []).append(event)
+        rows = []
+        for key, values in sorted(
+            grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])
+        )[: request.maximum_rows]:
+            buckets: dict[datetime, list[object]] = {}
+            resolution = timedelta(minutes=actual_resolution_minutes)
+            for item in values:
+                offset = item.record.timestamp_utc - request.from_time
+                bucket_number = int(
+                    offset.total_seconds() // resolution.total_seconds()
+                )
+                bucket_start = request.from_time + bucket_number * resolution
+                buckets.setdefault(bucket_start, []).append(item)
+            cells = []
+            for bucket_start, bucket_events in sorted(buckets.items()):
+                measured_values = [
+                    value
+                    for item in bucket_events
+                    for value in (self._event_measure(item.record, request.measure),)
+                    if value is not None
+                ]
+                cells.append(
+                    service_types.HeatmapCell(
+                        bucket_start,
+                        min(bucket_start + resolution, request.to_time),
+                        sum(measured_values) if measured_values else None,
+                        len(bucket_events),
+                        "measured" if measured_values else "unavailable",
+                        f"{len(bucket_events)} events",
+                        None,
+                    )
+                )
+            scale_values = [cell.value for cell in cells if cell.value is not None]
+            rows.append(
+                service_types.HeatmapRow(
+                    key,
+                    key,
+                    service_types.HeatmapScale(
+                        0,
+                        max(scale_values, default=0),
+                        "sequential_nonnegative",
+                        "visible_row_maximum",
+                    ),
+                    tuple(cells),
+                )
+            )
+        return service_types.HeatmapResult(
+            request.snapshot_id,
+            handle.revision_id,
+            request.measure,
+            request.group_by,
+            request.from_time,
+            request.to_time,
+            request.requested_resolution_minutes,
+            actual_resolution_minutes,
+            request.maximum_rows,
+            max(0, len(grouped) - len(rows)),
+            "activity_descending_id_ascending",
+            sum(len(row.cells) for row in rows),
+            tuple(rows),
+            ("normalized event cache",),
+        )
+
+    @staticmethod
+    def _event_measure(record, measure):  # type: ignore[no-untyped-def]
+        if measure == "wall_time":
+            return record.duration_ms
+        value = getattr(record, measure)
+        return float(value) if measure == "cost_usd" and value is not None else value
+
+    def query_sequence(self, handle, request, after, cancellation):  # type: ignore[no-untyped-def]
+        events = self._stored_events(handle, request.filters.event_filters)
+        rows = [
+            service_types.SequenceRow(
+                str(item.event_id).replace("evt_", "seq_"),
+                None,
+                item.record.timestamp_utc,
+                item.record.agent_id,
+                item.record.agent_id,
+                None,
+                None,
+                item.record.kind,
+                item.record.summary_text or item.record.kind,
+                item.record.evidence_method.value,
+                str(item.event_id),
+                1,
+                request.filters.include_reasoning
+                and item.record.kind in {"reasoning", "assistant"},
+            )
+            for item in events
+            if request.filters.focus_agent_id is None
+            or item.record.agent_id == request.filters.focus_agent_id
+        ]
+        rows.sort(key=lambda row: row.sequence_id)
+        rows.sort(key=lambda row: row.occurred_at)
+        sliced = _slice(cast(list[object], rows), after, request.page_size)
+        page = service_types.PageResult(
+            request.snapshot_id,
+            handle.revision_id,
+            "query_sequence",
+            sliced.items,
+            request.filters,
+            request.sort,
+            request.page_size,
+            sliced.next_position,
+        )
+        return service_types.SequenceResult(page, ())
+
+    def query_coordination(self, handle, request, after, cancellation):  # type: ignore[no-untyped-def]
+        return service_types.QuerySlice((), None)
+
+    def get_event_details(self, handle, event_id, cancellation):  # type: ignore[no-untyped-def]
+        try:
+            item = self._repository.get_event(
+                event_cache.SnapshotId(handle.cache_snapshot_id),
+                event_cache.SnapshotRevisionId(handle.revision_id),
+                event_cache.EventId(event_id),
+            )
+        except event_cache.CacheEventNotFoundError:
+            return None
+        record = item.record
+        return service_types.EventDetail(
+            handle.public_snapshot_id,
+            handle.revision_id,
+            event_id,
+            record.timestamp_utc,
+            record.kind,
+            record.summary_text or record.kind,
+            record.evidence_method.value,
+            ("normalized event cache",),
+            record.summary_text,
+            tuple(
+                service_types.Disclosure(label, content, False)
+                for label, content in (
+                    ("Arguments", record.argument_summary),
+                    ("Result", record.result_preview),
+                    ("Message", record.message_preview),
+                )
+                if content
+            ),
+            str(item.source_key),
+        )
+
+
+class _FilesystemPublication:
+    def __init__(self, surface: Literal["tauri", "cli", "mcp"]) -> None:
+        self._surface = surface
+
+    def authorize(
+        self, request: static_export.ExportRequest
+    ) -> static_export.PublicationPlan:
+        target = request.requested_target.resolve()
+        target.parent.mkdir(parents=True, exist_ok=True)
+        staging = Path(
+            tempfile.mkdtemp(prefix=static_export.STAGING_PREFIX, dir=target.parent)
+        )
+        return static_export.PublicationPlan(
+            self._surface,
+            secrets.token_hex(16),
+            request.requested_target,
+            target,
+            staging,
+            "file" if request.mode is static_export.ExportMode.SUMMARY else "directory",
+            "atomic-file-replace"
+            if request.mode is static_export.ExportMode.SUMMARY
+            else "atomic-directory-rename",
+            request.replace,
+        )
+
+    def publish(self, plan, staged_entry, expected_relative_paths):  # type: ignore[no-untyped-def]
+        target = plan.absolute_target
+        if target.exists():
+            if not plan.replace:
+                raise service_types.PublicationFailure("replace_required")
+            backup = target.with_name(f".{target.name}.backup-{secrets.token_hex(6)}")
+            os.replace(target, backup)
+            try:
+                os.replace(staged_entry, target)
+            except BaseException:
+                os.replace(backup, target)
+                raise
+            if backup.is_dir():
+                shutil.rmtree(backup)
+            else:
+                backup.unlink()
+        else:
+            os.replace(staged_entry, target)
+        if plan.staging_directory.exists():
+            shutil.rmtree(plan.staging_directory)
+        return target
+
+    def discard(self, plan):  # type: ignore[no-untyped-def]
+        shutil.rmtree(plan.staging_directory, ignore_errors=True)
+
+    def cleanup_stale(self, *, older_than):  # type: ignore[no-untyped-def]
+        return ()
+
+
+class _ExporterAdapter:
+    def __init__(self, config: service_types.ApplicationServiceConfig) -> None:
+        self._config = config
+
+    def stage(self, handle, request, cancellation, progress):  # type: ignore[no-untyped-def]
+        model = _export_model(handle.run, handle, request.snapshot_id, self._config)
+        scratch = Path(tempfile.mkdtemp(prefix="agent-report-export-"))
+        target = scratch / ("summary.html" if request.mode == "summary" else "report")
+        exporter_request = static_export.ExportRequest(
+            _CURRENT_OPERATION_ID.get(),
+            request.snapshot_id,
+            handle.revision_id,
+            static_export.ExportMode(request.mode),
+            target,
+            False,
+            request.include_sqlite_archive,
+        )
+        try:
+            result = static_export.StaticExporter().export(
+                model,
+                exporter_request,
+                _FilesystemPublication(request.surface),
+                _ExportCancellation(cancellation),
+            )
+        except static_export.StaticExportError as error:
+            shutil.rmtree(scratch, ignore_errors=True)
+            raise service_types.ExportRenderFailure("render") from error
+        return _StagedExport(
+            request.mode,
+            secrets.token_hex(16),
+            request.surface,
+            result.published_target,
+            result,
+        )
+
+
+class _ExportCancellation:
+    def __init__(self, cancellation: service_types.CancellationToken) -> None:
+        self._cancellation = cancellation
+
+    def raise_if_cancelled(self) -> None:
+        if self._cancellation.is_cancelled():
+            raise static_export.StaticExportError.from_code(
+                "REPORT_CANCELLED", "Operation cancelled", operation_id="op_cancelled"
+            )
+
+
+class _PublisherAdapter:
+    def publish(self, staged, target, replace, cancellation):  # type: ignore[no-untyped-def]
+        result = staged.result
+        scratch = staged.source.parent
+        publication = _FilesystemPublication(staged.surface)
+        try:
+            published = publication.publish(
+                publication.authorize(
+                    static_export.ExportRequest(
+                        result.operation_id,
+                        result.snapshot_id,
+                        result.revision,
+                        result.mode,
+                        target,
+                        replace,
+                    )
+                ),
+                staged.source,
+                (),
+            )
+        except (OSError, service_types.PublicationFailure) as error:
+            raise service_types.PublicationFailure("write") from error
+        finally:
+            shutil.rmtree(scratch, ignore_errors=True)
+        return service_types.ExportResult(
+            result.operation_id,
+            result.snapshot_id,
+            result.revision,
+            result.mode.value,
+            published,
+            result.manifest_sha256,
+            result.file_count,
+            result.total_byte_count,
+            tuple(
+                service_types.WarningRecord(item.code, item.message)
+                for item in result.warnings
+            ),
+            tuple(
+                service_types.ExportOmission(item.section, item.reason, item.recovery)
+                for item in result.omissions
+            ),
+        )
+
+    def discard(self, staged):  # type: ignore[no-untyped-def]
+        shutil.rmtree(staged.source.parent, ignore_errors=True)
+
+
+def _export_model(
+    run: object,
+    handle: _ReadHandle,
+    snapshot_id: str,
+    config: service_types.ApplicationServiceConfig,
+) -> static_export.CodexExportModel:
+    run = cast(Any, run)
+    root = next(
+        (item for item in run.threads if item.thread_id == run.root_thread_id),
+        run.threads[0],
+    )
+    observed = _aware(run.observed_at) or datetime.now(timezone.utc)
+    provenance = static_export.SnapshotProvenance(
+        snapshot_id,
+        handle.revision_id,
+        run.root_thread_id,
+        static_export.ExportScope(
+            handle.scope.include_children, handle.scope.include_collaborators
+        ),
+        observed,
+        static_export.SnapshotState.SEALED
+        if run.state == "sealed"
+        else static_export.SnapshotState.LIVE,
+        handle.source_revision,
+        config.parser_version,
+        config.pricing_version,
+        config.pricing_digest,
+        config.formatter_version,
+        config.formatter_digest,
+    )
+    metrics = (
+        static_export.MetricExport(
+            "agents",
+            "Agents",
+            str(len(run.threads)),
+            len(run.threads),
+            "agents",
+            "derived",
+        ),
+        static_export.MetricExport(
+            "wall_time",
+            "Wall time",
+            str(run.wall_time_ms),
+            run.wall_time_ms,
+            "ms",
+            "measured",
+        ),
+    )
+    summary = static_export.SummaryExport(
+        root.task_title or run.run_label or "Agent Report",
+        None,
+        run.state,
+        metrics,
+        (),
+        tuple(
+            static_export.ExportWarningRecord("REPORT_SOURCE_WARNING", item[:512])
+            for item in run.diagnostics[:100]
+        ),
+    )
+    agents = tuple(
+        static_export.AgentExportRow(
+            item.thread_id,
+            item.parent_thread_id or None,
+            item.task_title,
+            item.agent_role,
+            item.model,
+            item.effort,
+            item.started_at,
+            item.last_observed_at,
+            item.terminal_state,
+            len(item.turns),
+            len(item.tool_intervals),
+            len(item.mcp_calls),
+            0,
+            0,
+            item.token_totals.input_tokens,
+            item.token_totals.cached_input_tokens,
+            item.token_totals.output_tokens,
+            item.token_totals.reasoning_tokens,
+            item.recorded_cost_usd,
+            "estimated" if item.recorded_cost_usd is not None else "unavailable",
+        )
+        for item in run.threads
+    )
+    turns = tuple(
+        static_export.TurnExportRow(
+            thread.thread_id,
+            item.turn_id,
+            item.started_at,
+            item.completed_at,
+            item.duration_ms,
+            item.time_to_first_token_ms,
+            item.outcome,
+            item.abort_reason,
+            item.abort_event_timestamp,
+            item.abort_initiator_thread_id,
+            item.abort_initiator_agent_path,
+            item.abort_initiator_turn_id,
+            item.abort_initiator_relationship,
+            "",
+            item.abort_request_source_ordinal,
+            item.phase_id,
+            item.lane_id,
+            item.work_unit_id,
+            item.activity,
+            item.attribution_confidence,
+            item.usage.input_tokens,
+            item.usage.cached_input_tokens,
+            item.usage.uncached_input_tokens,
+            item.usage.output_tokens,
+            item.usage.reasoning_tokens,
+            item.usage.processed_tokens,
+            "source",
+            item.source_ordinal,
+        )
+        for thread in run.threads
+        for item in thread.turns
+    )
+    work_units = tuple(
+        static_export.WorkUnitExportRow(
+            item.work_unit_id,
+            item.phase_id,
+            item.lane_id,
+            item.activity,
+            tuple(item.turn_ids),
+            item.allocation_method,
+            item.attribution_confidence,
+            item.usage.input_tokens,
+            item.usage.cached_input_tokens,
+            item.usage.uncached_input_tokens,
+            item.usage.output_tokens,
+            item.usage.reasoning_tokens,
+            item.usage.processed_tokens,
+            item.cost.status,
+            item.cost.total_cost,
+        )
+        for item in run.work_units
+    )
+    events: list[static_export.EventExportRow] = []
+    for thread in run.threads:
+        for index, item in enumerate(thread.activities):
+            events.append(
+                static_export.EventExportRow(
+                    f"evt_{hashlib.sha256(f'{thread.thread_id}:{item.source_ordinal}'.encode()).hexdigest()[:24]}",
+                    thread.thread_id,
+                    item.turn_id,
+                    item.event_timestamp,
+                    item.activity_type,
+                    item.summary or item.activity_type,
+                    item.summary,
+                    "measured",
+                    item.source_ordinal,
+                )
+            )
+    participants = tuple(
+        static_export.SequenceParticipantExport(
+            item.thread_id,
+            item.parent_thread_id or None,
+            item.task_title or item.thread_id,
+            item.agent_role,
+        )
+        for item in run.threads
+    )
+    return static_export.CodexExportModel(
+        provenance,
+        summary,
+        agents,
+        turns,
+        work_units,
+        tuple(events),
+        (),
+        participants,
+        (),
+    )
+
+
+def create_production_application_service(
+    runtime: ModuleType,
+    config: service_types.ApplicationServiceConfig,
+    *,
+    seal: bool = False,
+    allow_aborted: bool = False,
+    title: str = "",
+    thread_titles: Mapping[str, str] | None = None,
+    workers: int = 1,
+) -> service_types.ApplicationService:
+    """Compose one process-local service from runtime, cache, and exporter adapters."""
+
+    cache_path = event_cache.DEFAULT_CACHE_PATH
+    repository = event_cache.EventRepository.open_or_rebuild(cache_path).repository
+    repository_adapter = _RepositoryAdapter(repository, config)
+    dependencies = service_types.ApplicationServiceDependencies(
+        _RuntimeDiscovery(runtime),
+        _RuntimeNormalization(
+            runtime,
+            seal=seal,
+            allow_aborted=allow_aborted,
+            title=title,
+            thread_titles=thread_titles or {},
+            workers=workers,
+        ),
+        repository_adapter,
+        _RuntimeQueries(repository),
+            _ExporterAdapter(config),
+        _PublisherAdapter(),
+        _Clock(),
+        _Ids(repository_adapter),
+        _Logger(),
+    )
+    return _ProductionApplicationService(config, dependencies, repository_adapter)
+
+
+class _ProductionApplicationService(service_types.ApplicationService):
+    """Close the cache owned by this process-local composition root."""
+
+    def __init__(
+        self,
+        config: service_types.ApplicationServiceConfig,
+        dependencies: service_types.ApplicationServiceDependencies,
+        repository: _RepositoryAdapter,
+    ) -> None:
+        super().__init__(config, dependencies)
+        self._production_repository = repository
+
+    def close(self) -> None:
+        try:
+            super().close()
+        finally:
+            self._production_repository.close()
 
 
 @dataclass(frozen=True)
@@ -175,10 +1320,44 @@ def workspace_root_from_uri(uri: object) -> Path | None:
     return path if path.is_dir() else None
 
 
+class _CallableCancellation:
+    """Adapt the retained callback convention to the service cancellation port."""
+
+    def __init__(self, cancelled: Callable[[], bool] | None) -> None:
+        self._cancelled = cancelled
+
+    def is_cancelled(self) -> bool:
+        return self._cancelled is not None and self._cancelled()
+
+
+def _json_value(value: object) -> object:
+    """Convert service DTOs into the JSON-safe shape exposed by MCP."""
+
+    if is_dataclass(value) and not isinstance(value, type):
+        return {key: _json_value(item) for key, item in asdict(value).items()}
+    if isinstance(value, dict):
+        return {str(key): _json_value(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_value(item) for item in value]
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Enum):
+        return value.value
+    return value
+
+
 class ReportGenerator:
     """Generate MCP results through the existing authoritative report runtime."""
 
-    def __init__(self, runtime: ModuleType, config: ReportServerConfig) -> None:
+    def __init__(
+        self,
+        runtime: ModuleType,
+        config: ReportServerConfig,
+        *,
+        application_service: service_types.ApplicationService | None = None,
+    ) -> None:
         self._runtime = runtime
         self._config = config
         self._run_cache: dict[
@@ -187,6 +1366,411 @@ class ReportGenerator:
         self._discovery_cache: (
             tuple[list[TaskCandidate], list[Path], str | None, float] | None
         ) = None
+        self._application_service = application_service
+
+    def close(self) -> None:
+        """Release process-local snapshot and repository resources."""
+
+        if self._application_service is not None:
+            self._application_service.close()
+
+    @staticmethod
+    def _operation_context() -> service_types.OperationContext:
+        context = service_types.OperationContext(
+            protocol_version=service_types.PROTOCOL_VERSION,
+            operation_id=f"op_{secrets.token_hex(12)}",
+        )
+        _CURRENT_OPERATION_ID.set(context.operation_id)
+        return context
+
+    def _service(self) -> service_types.ApplicationService:
+        if self._application_service is None:
+            raise RuntimeError("The snapshot application service is unavailable")
+        return self._application_service
+
+    @staticmethod
+    def _service_result(result: object) -> dict[str, object]:
+        value = getattr(result, "value", None)
+        error = getattr(result, "error", None)
+        if error is not None:
+            payload = cast(dict[str, object], _json_value(error))
+            return {"ok": False, **payload}
+        return {"ok": True, **cast(dict[str, object], _json_value(value))}
+
+    def preflight_report(
+        self,
+        *,
+        root_thread_id: str,
+        include_children: bool = False,
+        include_collaborators: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Preflight one exact report scope without opening a snapshot."""
+
+        scope = service_types.ReportScope(
+            root_thread_id, include_children, include_collaborators
+        )
+        result = self._service().preflight_report(
+            self._operation_context(),
+            service_types.PreflightReportRequest(scope),
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def open_snapshot(
+        self,
+        *,
+        root_thread_id: str,
+        preflight_token: str,
+        source_revision: str,
+        include_children: bool = False,
+        include_collaborators: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Open one coherent service snapshot from an accepted preflight."""
+
+        scope = service_types.ReportScope(
+            root_thread_id, include_children, include_collaborators
+        )
+        result = self._service().open_snapshot(
+            self._operation_context(),
+            service_types.OpenSnapshotRequest(scope, preflight_token, source_revision),
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def get_summary(
+        self, *, snapshot_id: str, cancelled: Callable[[], bool] | None = None
+    ) -> dict[str, object]:
+        """Return the shared display-ready snapshot summary."""
+
+        result = self._service().get_summary(
+            self._operation_context(),
+            service_types.SnapshotRequest(snapshot_id),
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def list_agents(
+        self,
+        *,
+        snapshot_id: str,
+        query: str = "",
+        agent_ids: list[str] | None = None,
+        roles: list[str] | None = None,
+        states: list[str] | None = None,
+        sort_key: service_types.AgentSortKey = "last_activity_at",
+        sort_direction: service_types.SortDirection = "descending",
+        cursor: str | None = None,
+        page_size: int = service_types.DEFAULT_PAGE_SIZE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return one canonical agent page from an open snapshot."""
+
+        request = service_types.ListAgentsRequest(
+            snapshot_id,
+            service_types.AgentFilters(
+                query, tuple(agent_ids or ()), tuple(roles or ()), tuple(states or ())
+            ),
+            service_types.AgentSort(sort_key, sort_direction),
+            cursor,
+            page_size,
+        )
+        result = self._service().list_agents(
+            self._operation_context(),
+            request,
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def list_turns(
+        self,
+        *,
+        snapshot_id: str,
+        turn_ids: list[str] | None = None,
+        agent_ids: list[str] | None = None,
+        states: list[str] | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        sort_key: service_types.TurnSortKey = "started_at",
+        sort_direction: service_types.SortDirection = "ascending",
+        cursor: str | None = None,
+        page_size: int = service_types.DEFAULT_PAGE_SIZE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return one canonical turn page from an open snapshot."""
+
+        try:
+            parsed_from = (
+                self._parse_timestamp(from_time, "from_time") if from_time else None
+            )
+            parsed_to = self._parse_timestamp(to_time, "to_time") if to_time else None
+        except ValueError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+        request = service_types.ListTurnsRequest(
+            snapshot_id,
+            service_types.TurnFilters(
+                tuple(turn_ids or ()),
+                tuple(agent_ids or ()),
+                tuple(states or ()),
+                parsed_from,
+                parsed_to,
+            ),
+            service_types.TurnSort(sort_key, sort_direction),
+            cursor,
+            page_size,
+        )
+        result = self._service().list_turns(
+            self._operation_context(),
+            request,
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def list_events(
+        self,
+        *,
+        snapshot_id: str,
+        event_ids: list[str] | None = None,
+        agent_ids: list[str] | None = None,
+        turn_ids: list[str] | None = None,
+        kinds: list[str] | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        sort_key: service_types.EventSortKey = "occurred_at",
+        sort_direction: service_types.SortDirection = "ascending",
+        cursor: str | None = None,
+        page_size: int = service_types.DEFAULT_PAGE_SIZE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return one canonical event page from an open snapshot."""
+
+        try:
+            parsed_from = (
+                self._parse_timestamp(from_time, "from_time") if from_time else None
+            )
+            parsed_to = self._parse_timestamp(to_time, "to_time") if to_time else None
+        except ValueError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+        request = service_types.ListEventsRequest(
+            snapshot_id,
+            service_types.EventFilters(
+                tuple(event_ids or ()),
+                tuple(agent_ids or ()),
+                tuple(turn_ids or ()),
+                tuple(kinds or ()),
+                parsed_from,
+                parsed_to,
+            ),
+            service_types.EventSort(sort_key, sort_direction),
+            cursor,
+            page_size,
+        )
+        result = self._service().list_events(
+            self._operation_context(),
+            request,
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def query_snapshot_time_range(
+        self,
+        *,
+        snapshot_id: str,
+        from_time: str,
+        to_time: str,
+        measure: service_types.TimeMeasure,
+        group_by: service_types.HeatmapGroupBy,
+        requested_resolution_minutes: int,
+        maximum_rows: int = 100,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return the grouped snapshot heatmap without overloading the retained tool."""
+
+        try:
+            start = self._parse_timestamp(from_time, "from_time")
+            end = self._parse_timestamp(to_time, "to_time")
+        except ValueError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+        request = service_types.HeatmapQueryRequest(
+            snapshot_id,
+            start,
+            end,
+            measure,
+            requested_resolution_minutes,
+            group_by,
+            maximum_rows,
+        )
+        result = self._service().query_time_range(
+            self._operation_context(),
+            request,
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def query_sequence(
+        self,
+        *,
+        snapshot_id: str,
+        focus_agent_id: str | None = None,
+        event_ids: list[str] | None = None,
+        agent_ids: list[str] | None = None,
+        turn_ids: list[str] | None = None,
+        kinds: list[str] | None = None,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        grouping: service_types.SequenceGrouping = "none",
+        include_reasoning: bool = False,
+        cursor: str | None = None,
+        page_size: int = service_types.DEFAULT_PAGE_SIZE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return one canonical sequence page and its hierarchy groups."""
+
+        try:
+            parsed_from = (
+                self._parse_timestamp(from_time, "from_time") if from_time else None
+            )
+            parsed_to = self._parse_timestamp(to_time, "to_time") if to_time else None
+        except ValueError as error:
+            return self._error("REPORT_INVALID_REQUEST", str(error))
+        event_filters = service_types.EventFilters(
+            tuple(event_ids or ()),
+            tuple(agent_ids or ()),
+            tuple(turn_ids or ()),
+            tuple(kinds or ()),
+            parsed_from,
+            parsed_to,
+        )
+        request = service_types.SequenceQueryRequest(
+            snapshot_id,
+            service_types.SequenceFilters(
+                focus_agent_id, event_filters, grouping, include_reasoning
+            ),
+            service_types.SequenceSort(),
+            cursor,
+            page_size,
+        )
+        result = self._service().query_sequence(
+            self._operation_context(),
+            request,
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def query_coordination(
+        self,
+        *,
+        snapshot_id: str,
+        work_item_id: str | None = None,
+        delegated_root_id: str | None = None,
+        agent_id: str | None = None,
+        operation: str | None = None,
+        evidence: service_types.EvidenceKind | None = None,
+        cursor: str | None = None,
+        page_size: int = service_types.DEFAULT_PAGE_SIZE,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return one canonical coordination page."""
+
+        request = service_types.CoordinationQueryRequest(
+            snapshot_id,
+            service_types.CoordinationFilters(
+                work_item_id, delegated_root_id, agent_id, operation, evidence
+            ),
+            service_types.CoordinationSort(),
+            cursor,
+            page_size,
+        )
+        result = self._service().query_coordination(
+            self._operation_context(),
+            request,
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def get_snapshot_event_details(
+        self,
+        *,
+        snapshot_id: str,
+        event_id: str,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Return bounded detail for an event in an open snapshot."""
+
+        result = self._service().get_event_details(
+            self._operation_context(),
+            service_types.EventDetailsRequest(snapshot_id, event_id),
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def refresh_snapshot(
+        self, *, snapshot_id: str, cancelled: Callable[[], bool] | None = None
+    ) -> dict[str, object]:
+        """Refresh an open snapshot while retaining the exact changed wrapper."""
+
+        result = self._service().refresh_snapshot(
+            self._operation_context(),
+            service_types.RefreshSnapshotRequest(snapshot_id),
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def export_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        target: str,
+        replace: bool = False,
+        report_mode: Literal["directory", "summary"] | None = None,
+        include_sqlite_archive: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        """Publish an open snapshot through the shared MCP exporter."""
+
+        return self._export_snapshot(
+            snapshot_id=snapshot_id,
+            surface="mcp",
+            target=target,
+            replace=replace,
+            report_mode=report_mode,
+            include_sqlite_archive=include_sqlite_archive,
+            cancelled=cancelled,
+        )
+
+    def _export_snapshot(
+        self,
+        *,
+        snapshot_id: str,
+        surface: service_types.AutomationSurface,
+        target: str,
+        replace: bool,
+        report_mode: Literal["directory", "summary"] | None,
+        include_sqlite_archive: bool = False,
+        cancelled: Callable[[], bool] | None = None,
+    ) -> dict[str, object]:
+        result = self._service().export_snapshot(
+            self._operation_context(),
+            service_types.ExportSnapshotRequest(
+                snapshot_id,
+                surface,
+                Path(target).expanduser().resolve(),
+                replace,
+                report_mode,
+                include_sqlite_archive,
+            ),
+            cancellation=_CallableCancellation(cancelled),
+        )
+        return self._service_result(result)
+
+    def close_snapshot(self, *, snapshot_id: str) -> dict[str, object]:
+        """Close one process-local snapshot and release its read handle."""
+
+        result = self._service().close_snapshot(
+            self._operation_context(), service_types.CloseSnapshotRequest(snapshot_id)
+        )
+        return self._service_result(result)
 
     def generate_report(
         self,
@@ -300,6 +1884,86 @@ class ReportGenerator:
         if inline is not None:
             result["inline"] = inline
         return result
+
+    def generate_streamlined_report(
+        self,
+        *,
+        thread_id: str,
+        output_path: str | None,
+        include_children: bool,
+        include_collaborators: bool,
+        report_mode: Literal["directory", "summary"],
+        workspace_root: Path | None,
+    ) -> dict[str, object]:
+        """Generate an explicit streamlined export without changing classic MCP."""
+
+        try:
+            candidates, _candidate_paths = self._discover_candidates(
+                thread_id=thread_id
+            )
+        except (OSError, RuntimeError, ValueError) as error:
+            return self._error("REPORT_DISCOVERY_FAILED", str(error))
+        lower_bound, upper_bound = self._selection_range(None, None)
+        selected = self._select_candidate(
+            candidates,
+            thread_id=thread_id,
+            lower_bound=lower_bound,
+            upper_bound=upper_bound,
+            name_contains=[],
+        )
+        if isinstance(selected, dict):
+            return selected
+
+        preflight = self.preflight_report(
+            root_thread_id=selected.thread_id,
+            include_children=include_children,
+            include_collaborators=include_collaborators,
+        )
+        if not preflight.get("ok"):
+            return preflight
+        opened = self.open_snapshot(
+            root_thread_id=selected.thread_id,
+            preflight_token=cast(str, preflight["preflight_token"]),
+            source_revision=cast(str, preflight["source_revision"]),
+            include_children=include_children,
+            include_collaborators=include_collaborators,
+        )
+        if not opened.get("ok"):
+            return opened
+        snapshot_id = cast(str, opened["snapshot_id"])
+        base_workspace = (
+            workspace_root or self._config.workspace_root or Path.cwd().resolve()
+        )
+        target = self._resolve_output_directory(output_path, base_workspace)
+        mode = report_mode or "directory"
+        if mode == "summary" and output_path is None:
+            target = target / "report.html"
+        try:
+            exported = self._export_snapshot(
+                snapshot_id=snapshot_id,
+                surface="cli",
+                target=str(target),
+                replace=target.exists(),
+                report_mode=mode,
+            )
+            if not exported.get("ok"):
+                return exported
+            return {
+                "ok": True,
+                "thread_id": selected.thread_id,
+                "task_name": selected.title,
+                "snapshot_id": snapshot_id,
+                "revision_id": opened["revision_id"],
+                "mode": mode,
+                "written_files": {"report": cast(str, exported["published_target"])},
+                "file_count": exported["file_count"],
+                "total_byte_count": exported["total_byte_count"],
+                "manifest_sha256": exported.get("manifest_sha256"),
+                "warnings": exported.get("warnings", []),
+                "omissions": exported.get("omissions", []),
+            }
+        finally:
+            self.close_snapshot(snapshot_id=snapshot_id)
 
     def query_time_range(
         self,
@@ -516,7 +2180,9 @@ class ReportGenerator:
             candidate = TaskCandidate(
                 thread_id=metadata.identity[0],
                 title=indexed_entry.task_title or metadata.task_title,
-                timestamp=datetime.fromisoformat(metadata.started_at.replace("Z", "+00:00")),
+                timestamp=datetime.fromisoformat(
+                    metadata.started_at.replace("Z", "+00:00")
+                ),
                 last_activity_at=datetime.fromtimestamp(
                     metadata.modified_at_ns / 1_000_000_000, tz=timezone.utc
                 ),

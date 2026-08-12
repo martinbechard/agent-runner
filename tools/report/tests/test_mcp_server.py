@@ -27,8 +27,21 @@ def test_generate_report_schema_hides_server_implementation_details() -> None:
             "generate_report",
             "query_time_range",
             "get_event_details",
+            "preflight_report",
+            "open_snapshot",
+            "get_summary",
+            "list_agents",
+            "list_turns",
+            "list_events",
+            "query_snapshot_time_range",
+            "query_sequence",
+            "query_coordination",
+            "get_snapshot_event_details",
+            "refresh_snapshot",
+            "export_snapshot",
+            "close_snapshot",
         ]
-        generate, query, details = tools
+        generate, query, details, *snapshot_tools = tools
         assert set(generate.parameters["properties"]) == {
             "thread_id",
             "from_time",
@@ -64,6 +77,27 @@ def test_generate_report_schema_hides_server_implementation_details() -> None:
         ]
         assert set(details.parameters["properties"]) == {"thread_id", "event_id"}
         assert details.parameters["required"] == ["thread_id", "event_id"]
+        by_name = {tool.name: tool for tool in snapshot_tools}
+        assert set(by_name["open_snapshot"].parameters["properties"]) == {
+            "root_thread_id",
+            "preflight_token",
+            "source_revision",
+            "include_children",
+            "include_collaborators",
+        }
+        assert set(by_name["query_snapshot_time_range"].parameters["properties"]) == {
+            "snapshot_id",
+            "from_time",
+            "to_time",
+            "measure",
+            "group_by",
+            "requested_resolution_minutes",
+            "maximum_rows",
+        }
+        assert set(by_name["get_snapshot_event_details"].parameters["properties"]) == {
+            "snapshot_id",
+            "event_id",
+        }
 
     asyncio.run(inspect_schema())
 

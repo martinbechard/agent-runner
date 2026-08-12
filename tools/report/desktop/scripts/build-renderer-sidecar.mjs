@@ -142,6 +142,11 @@ await run(cargo, [
 await requireFile(enginePath);
 
 const hiddenImports = [
+  "agent_report.application_service",
+  "agent_report.event_cache",
+  "agent_report.mcp_report",
+  "agent_report.report_worker",
+  "agent_report.static_export",
   "argparse",
   "bisect",
   "collections",

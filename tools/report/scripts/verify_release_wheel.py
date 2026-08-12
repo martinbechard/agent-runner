@@ -110,8 +110,12 @@ def verify_release_wheel(
                 f"{len(engine_paths)}"
             )
         required_resources = (
+            "/agent_report/application_service.py",
+            "/agent_report/event_cache.py",
             "/agent_report/mcp_report.py",
             "/agent_report/mcp_server.py",
+            "/agent_report/report_worker.py",
+            "/agent_report/static_export.py",
             "/share/agent-report/run-timeline.py",
         )
         missing_resources = [
