@@ -115,6 +115,16 @@
   avoid dates, owner names, and status words in the filename.
 - **Example:** `modularize-report-tool-for-concurrent-maintenance.md`
 
+### docs/future-ideas/
+- **Purpose:** Lightweight possibilities that are intentionally not approved,
+  scheduled, dispatchable, or recognized as active work. Future ideas remain
+  outside the backlog until deliberately promoted into a complete work item.
+- **Signals:** deferred possibility, exploratory refactoring direction, idea to
+  revisit later, non-actionable proposal retained without lifecycle status.
+- **Filename pattern:** `<stable-idea-slug>.md` in lowercase kebab-case; avoid
+  dates, owner names, and lifecycle status words in the filename.
+- **Example:** `modularize-report-tool-for-concurrent-maintenance.md`
+
 ### docs/holding/
 - **Purpose:** Visible work packages and handoff proposals that are real but
   must not be dispatched as implementation work in this repository.
@@ -479,6 +489,7 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-08-12 — docs/future-ideas/ added — deferred possibilities need a non-dispatchable home outside the active backlog lifecycle.
 - 2026-08-10 — .github/workflows/ added — GitHub-hosted CI and release publication need a canonical automation path distinct from local scripts.
 - 2026-07-15 — docs/holding/ added — cross-repository proposals need a visible handoff location that the local backlog runner will not dispatch.
 - 2026-07-15 — docs/feature-backlog/ added — active project enhancements need a dispatchable queue separate from requirements, designs, and implementation plans.
