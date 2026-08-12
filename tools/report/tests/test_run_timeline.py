@@ -4739,6 +4739,27 @@ def test_delegated_subagent_report_keeps_one_parent_context_without_parent_tree(
     assert "agent-report://view-parent-report?" in html
     assert "sibling" not in {thread.thread_id for thread in run.threads}
 
+    child_records = [json.loads(line) for line in child.read_text().splitlines()]
+    child.write_text(
+        "\n".join(
+            json.dumps(record)
+            for record in child_records
+            if record["timestamp"] != "2026-07-22T01:01:01Z"
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    state_title_run = module.build_codex_rollout_run(
+        "child",
+        tmp_path,
+        include_delegations=True,
+    )
+    assert [thread.thread_id for thread in state_title_run.threads] == [
+        "child",
+        "grandchild",
+    ]
+    assert state_title_run.parent_context.thread_id == "parent"
+
 
 def test_native_codex_sealed_linked_delegations_reprocess(tmp_path):
     module = _load_module()

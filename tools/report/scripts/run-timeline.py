@@ -2235,11 +2235,11 @@ def _normalized_codex_thread_title(value: object) -> str:
     return title
 
 
-def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
-    """Read Codex's local task titles without requiring the Codex service."""
+def _local_codex_thread_title_rows(thread_ids: set[str]) -> list[tuple[str, object]]:
+    """Read raw local Codex task-title rows in source-precedence order."""
 
     if not thread_ids:
-        return {}
+        return []
     placeholders = ",".join("?" for _ in thread_ids)
     ordered_ids = sorted(thread_ids)
     sources = (
@@ -2256,7 +2256,7 @@ def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
             f"SELECT id, title FROM threads WHERE id IN ({placeholders})",
         ),
     )
-    titles: dict[str, str] = {}
+    rows: list[tuple[str, object]] = []
     for database, query in sources:
         if not database.is_file():
             continue
@@ -2267,16 +2267,35 @@ def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
                 timeout=0.2,
             )
             try:
-                rows = connection.execute(query, ordered_ids).fetchall()
+                source_rows = connection.execute(query, ordered_ids).fetchall()
             finally:
                 connection.close()
         except (OSError, sqlite3.Error):
             continue
-        for thread_id, raw_title in rows:
-            title = _normalized_codex_thread_title(raw_title)
-            if title:
-                titles.setdefault(str(thread_id), title)
+        rows.extend(source_rows)
+    return rows
+
+
+def _local_codex_thread_titles(thread_ids: set[str]) -> dict[str, str]:
+    """Read Codex's local task titles without requiring the Codex service."""
+
+    titles: dict[str, str] = {}
+    for thread_id, raw_title in _local_codex_thread_title_rows(thread_ids):
+        title = _normalized_codex_thread_title(raw_title)
+        if title:
+            titles.setdefault(str(thread_id), title)
     return titles
+
+
+def _local_codex_delegation_parents(thread_ids: set[str]) -> dict[str, str]:
+    """Return parent IDs preserved in local delegated-task title envelopes."""
+
+    parents: dict[str, str] = {}
+    for thread_id, raw_title in _local_codex_thread_title_rows(thread_ids):
+        parent_thread_id = _initial_delegation_source(str(raw_title or ""))
+        if parent_thread_id:
+            parents.setdefault(str(thread_id), parent_thread_id)
+    return parents
 
 
 def _append_codex_activity(
@@ -3415,13 +3434,27 @@ def _discover_rollout_paths(
             children.setdefault(parent_thread_id, []).append(thread_id)
     if root_thread_id not in identities:
         raise ValueError(f"Codex root thread not found: {root_thread_id}")
+    root_path, root_parent_thread_id = identities[root_thread_id]
+    if not root_parent_thread_id:
+        root_entry = _read_codex_catalog_entry(root_path, "codex")
+        inferred_parent_thread_id = (
+            root_entry.parent_thread_id if root_entry is not None else ""
+        )
+        if not inferred_parent_thread_id:
+            inferred_parent_thread_id = _local_codex_delegation_parents(
+                {root_thread_id}
+            ).get(root_thread_id, "")
+        if inferred_parent_thread_id in identities:
+            identities[root_thread_id] = (root_path, inferred_parent_thread_id)
+            children.setdefault(inferred_parent_thread_id, []).append(root_thread_id)
     if include_delegations:
-        for target_thread_id, (path, _) in identities.items():
+        for target_thread_id, (path, target_parent_thread_id) in identities.items():
             for source_thread_id in metadata_by_path[path].delegation_source_ids:
                 source_identity = identities.get(source_thread_id)
                 if (
                     source_identity is not None
                     and source_thread_id != target_thread_id
+                    and target_parent_thread_id != source_thread_id
                     and source_identity[1] != target_thread_id
                 ):
                     delegation_targets.setdefault(source_thread_id, set()).add(
