@@ -104,7 +104,7 @@ input:focus-visible,
 
 .field-label { display: block; margin: 18px 0 7px; color: var(--ink-muted); font-size: 0.74rem; font-weight: 700; }
 input[type="search"],
-input[type="datetime-local"],
+input[type="date"],
 input[type="number"] { width: 100%; max-width: 100%; padding: 10px 11px; color: var(--ink); background: var(--paper); border: 1px solid #9eb0bd; border-radius: 2px; }
 .date-range { display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; margin-top: 13px; }
 .date-range label { min-width: 0; }

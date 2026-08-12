@@ -16,7 +16,7 @@ import {
   type SearchResponse,
   dateRangeError,
   discoveryProgressPresentation,
-  localDayDateHourRange,
+  localDayDateRange,
   localDateHourToUtc,
   localExclusiveDateHourToInclusiveUtcHour,
   normalizeWorkerCount,
@@ -506,7 +506,7 @@ async function handleParentReport(request: ParentReportRequest): Promise<void> {
 
 async function initialize(): Promise<void> {
   restoreLastExport();
-  const localToday = localDayDateHourRange(new Date());
+  const localToday = localDayDateRange(new Date());
   fromDateInput.value = localToday.fromDate;
   toDateInput.value = localToday.toDate;
   workerThreadsInput.value = String(normalizeWorkerCount(localStorage.getItem(WORKER_COUNT_STORAGE_KEY), DEFAULT_WORKER_COUNT));
