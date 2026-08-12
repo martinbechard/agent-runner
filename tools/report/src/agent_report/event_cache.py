@@ -45,7 +45,11 @@ DEFAULT_BUSY_TIMEOUT_MS: Final = 5_000
 DEFAULT_MAX_BYTES: Final = 5_368_709_120
 PRIVACY_REGISTRY_VERSION: Final = "agent-report-privacy-v1"
 REDACTION_MARKER: Final = "[redacted]"
-NEVER_CANCELLED: Final[CancellationCheck] = lambda: False
+def _never_cancelled() -> bool:
+    return False
+
+
+NEVER_CANCELLED: Final[CancellationCheck] = _never_cancelled
 
 _ID_64 = re.compile(r"[0-9a-f]{64}\Z")
 _SNAPSHOT_ID = re.compile(r"snap_[0-9a-f]{24}\Z")
@@ -922,7 +926,15 @@ def _inspect_database(path: Path) -> _Inspection:
 
 def _configure_connection(path: Path, timeout_ms: int) -> sqlite3.Connection:
     try:
-        connection = sqlite3.connect(path, timeout=timeout_ms / 1000, isolation_level=None)
+        # The report service creates the repository during worker startup and
+        # executes bounded operations on its worker pool. SQLite is built in
+        # serialized mode here, so permit that connection to cross threads.
+        connection = sqlite3.connect(
+            path,
+            timeout=timeout_ms / 1000,
+            isolation_level=None,
+            check_same_thread=False,
+        )
         connection.row_factory = sqlite3.Row
         if connection.execute("PRAGMA journal_mode=WAL").fetchone()[0].lower() != "wal":
             raise CacheIoError("enable WAL")
@@ -1682,7 +1694,7 @@ class EventRepository:
         )
 
     def get_snapshot(self, snapshot_id: SnapshotId) -> SnapshotBinding:
-        connection = self._require_open()
+        self._require_open()
         if not _SNAPSHOT_ID.fullmatch(snapshot_id):
             raise CacheValidationError("snapshot_id", "invalid identifier")
         with self._transaction("DEFERRED", operation="get snapshot") as transaction:

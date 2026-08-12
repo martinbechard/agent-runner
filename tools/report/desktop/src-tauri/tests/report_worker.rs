@@ -372,7 +372,7 @@ fn grant_output_target_canonicalizes_without_accepting_a_symlink_ancestor() {
 }
 
 #[test]
-fn stderr_allowlist_maps_valid_record_to_fixed_native_message() {
+fn stderr_allowlist_preserves_bounded_valid_diagnostic_detail() {
     let mut sanitizer = StderrSanitizer::new(65_536);
     let diagnostics = sanitizer.ingest(&line(
         r#"{"timestamp":"2026-08-12T12:00:00Z","level":"error","event":"worker.internal_failure","operation_id":"op_75ffcf97671b4ccbaf96790c","code":"REPORT_WORKER_INTERNAL","message":"/secret/path API_KEY=value"}"#,
@@ -385,7 +385,7 @@ fn stderr_allowlist_maps_valid_record_to_fixed_native_message() {
             event: "worker.internal_failure",
             operation_id: Some(OPERATION_ID.to_owned()),
             code: Some("REPORT_WORKER_INTERNAL".to_owned()),
-            message: "Worker execution failed.",
+            message: "Worker diagnostic contained a redacted sensitive value.".to_owned(),
         }]
     );
     assert!(!format!("{diagnostics:?}").contains("secret"));

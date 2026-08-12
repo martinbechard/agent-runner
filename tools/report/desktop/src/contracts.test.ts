@@ -19,8 +19,7 @@ import {
   dateRangeError,
   discoveryProgressPresentation,
   localDayDateRange,
-  localDateHourToUtc,
-  localExclusiveDateHourToInclusiveUtcHour,
+  localDateTimeToUtc,
   normalizeWorkerCount,
   parseAgentPageDto,
   parseCoordinationPageDto,
@@ -97,9 +96,9 @@ describe("catalog boundary contracts", () => {
   });
 
   it("keeps local time conversion, worker bounds, and safe discovery progress", () => {
-    expect(dateRangeError("2026-08-12T17:00", "2026-08-12T09:00")).not.toBeNull();
-    expect(localDateHourToUtc("2026-08-12")).toBe(new Date("2026-08-12T00:00").toISOString().slice(0, 13));
-    expect(localExclusiveDateHourToInclusiveUtcHour("2026-08-13")).toBe(new Date(new Date("2026-08-13T00:00").getTime() - 1).toISOString().slice(0, 13));
+    expect(dateRangeError("2026-08-12", "17:30", "2026-08-12", "09:15")).not.toBeNull();
+    expect(dateRangeError("2026-08-12", "00:30", "2026-08-12", "01:00")).toBeNull();
+    expect(localDateTimeToUtc("2026-08-12", "00:30")).toBe(new Date("2026-08-12T00:30").toISOString());
     expect(localDayDateRange(new Date(2026, 7, 12, 12, 30))).toEqual({
       fromDate: "2026-08-12",
       toDate: "2026-08-13",

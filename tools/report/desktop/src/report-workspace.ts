@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Martin.Bechard@DevConsult.ca
 // AI attribution: Generated with AI assistance.
-// Responsibility: Present and control one privacy-bounded Dynamic Workspace snapshot.
+// Responsibility: Present and control one bounded interactive report snapshot.
 // Design: docs/design/components/CD-005-agent-report-dynamic-workspace.md
 
 import {
@@ -675,7 +675,7 @@ function renderDetail(detail: EventDetailDto): Node {
 function assertElements(elements: WorkspaceElements): void {
   for (const [name, element] of Object.entries(elements)) {
     if (typeof element !== "object" || element === null || typeof element.addEventListener !== "function" || typeof element.replaceChildren !== "function") {
-      throw new Error(`Missing Dynamic Workspace element ${name}.`);
+      throw new Error(`Missing interactive report element ${name}.`);
     }
   }
 }

@@ -23,7 +23,7 @@ use agent_report_core::{
     PROTOCOL_VERSION, collect_rollout_paths, index_rollouts, read_codex_task_parents,
     read_codex_task_titles,
 };
-use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Timelike, Utc};
+use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, SecondsFormat, Utc};
 use html_escape::{encode_double_quoted_attribute, encode_text};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -199,6 +199,15 @@ fn secure_diagnostic_file_permissions(_path: &Path) -> Result<(), String> {
 }
 
 fn append_diagnostic_entry(log_path: &Path, level: &str, event: &str) -> Result<(), String> {
+    append_diagnostic_detail(log_path, level, event, None)
+}
+
+fn append_diagnostic_detail(
+    log_path: &Path,
+    level: &str,
+    event: &str,
+    detail: Option<Value>,
+) -> Result<(), String> {
     let _guard = DIAGNOSTIC_WRITE_LOCK
         .lock()
         .map_err(|_| "diagnostic log writer lock is unavailable".to_owned())?;
@@ -222,13 +231,16 @@ fn append_diagnostic_entry(log_path: &Path, level: &str, event: &str) -> Result<
         fs::rename(log_path, previous_path)
             .map_err(|error| format!("unable to rotate diagnostic log: {error}"))?;
     }
-    let entry = serde_json::json!({
+    let mut entry = serde_json::json!({
         "timestamp": DateTime::<Utc>::from(SystemTime::now())
             .to_rfc3339_opts(SecondsFormat::Millis, true),
         "level": level,
         "event": event,
         "message": fixed_diagnostic_message(event),
     });
+    if let Some(detail) = detail {
+        entry["detail"] = detail;
+    }
     let mut options = OpenOptions::new();
     options.create(true).append(true);
     #[cfg(unix)]
@@ -256,6 +268,25 @@ fn diagnostic_log_path(app: &AppHandle) -> Result<PathBuf, String> {
 
 fn record_diagnostic(app: &AppHandle, level: &str, event: &str) -> Result<(), String> {
     append_diagnostic_entry(&diagnostic_log_path(app)?, level, event)
+}
+
+fn record_worker_error(
+    app: &AppHandle,
+    operation: &str,
+    error: &NativeReportError,
+) -> Result<(), String> {
+    append_diagnostic_detail(
+        &diagnostic_log_path(app)?,
+        "error",
+        "report_worker_operation",
+        Some(serde_json::json!({
+            "operation": operation,
+            "operationId": error.operation_id,
+            "code": error.code,
+            "recoverable": error.recoverable,
+            "message": error.message.chars().take(4096).collect::<String>(),
+        })),
+    )
 }
 
 fn record_failed_result<T>(
@@ -1221,7 +1252,18 @@ fn worker_supervisor_config(
     let diagnostic_app = app.clone();
     let diagnostic_sink: Arc<dyn Fn(SanitizedDiagnostic) + Send + Sync> =
         Arc::new(move |diagnostic| {
-            let _ = record_diagnostic(&diagnostic_app, diagnostic.level, diagnostic.event);
+            if let Ok(path) = diagnostic_log_path(&diagnostic_app) {
+                let _ = append_diagnostic_detail(
+                    &path,
+                    diagnostic.level,
+                    diagnostic.event,
+                    Some(serde_json::json!({
+                        "operationId": diagnostic.operation_id,
+                        "code": diagnostic.code,
+                        "message": diagnostic.message,
+                    })),
+                );
+            }
         });
     Ok(WorkerSupervisorConfig {
         max_in_flight: 4,
@@ -1258,12 +1300,12 @@ fn worker_launch_arguments() -> Vec<OsString> {
 }
 
 fn supervisor_error(
-    _error: impl std::fmt::Display,
+    error: impl std::fmt::Display,
     operation_id: Option<&str>,
 ) -> NativeReportError {
     NativeReportError::new(
         "REPORT_UNAVAILABLE",
-        "The native report worker is unavailable. Try the operation again.",
+        &format!("The native report worker is unavailable: {error}"),
         operation_id,
         true,
     )
@@ -1322,6 +1364,7 @@ async fn execute_worker_request(
     let operation_id = request.envelope().operation_id.clone();
     let join_operation_id = operation_id.clone();
     let operation = request.envelope().operation.clone();
+    let diagnostic_operation = operation.clone();
     let diagnostic_app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let state = app.state::<NativeReportState>();
@@ -1360,8 +1403,8 @@ async fn execute_worker_request(
             true,
         )
     })?
-    .inspect_err(|_error| {
-        let _ = record_diagnostic(&diagnostic_app, "error", "report_worker_operation");
+    .inspect_err(|error| {
+        let _ = record_worker_error(&diagnostic_app, &diagnostic_operation, error);
     })
 }
 
@@ -1640,7 +1683,7 @@ impl CatalogDateRange {
             .zip(range.to_exclusive)
             .is_some_and(|(from, to)| from >= to)
         {
-            return Err("From date and hour must not be after To date and hour".to_owned());
+            return Err("From date and time must be before To date and time".to_owned());
         }
         Ok(range)
     }
@@ -1672,6 +1715,9 @@ fn parse_catalog_boundary(
     if value.is_empty() {
         return Ok(None);
     }
+    if let Ok(instant) = DateTime::parse_from_rfc3339(value) {
+        return Ok(Some(instant.with_timezone(&Utc)));
+    }
     let (parsed, increment) = if let Ok(date) = NaiveDate::parse_from_str(value, "%Y-%m-%d") {
         (
             date.and_hms_opt(0, 0, 0).expect("midnight is a valid time"),
@@ -1681,16 +1727,11 @@ fn parse_catalog_boundary(
         && let Ok(hour) = NaiveDateTime::parse_from_str(&format!("{value}:00"), "%Y-%m-%dT%H:%M")
     {
         (hour, Duration::hours(1))
-    } else if let Ok(hour) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M") {
-        if hour.minute() != 0 {
-            return Err(format!(
-                "Invalid {label} date/hour '{value}'; expected a whole UTC hour"
-            ));
-        }
-        (hour, Duration::hours(1))
+    } else if let Ok(moment) = NaiveDateTime::parse_from_str(value, "%Y-%m-%dT%H:%M") {
+        (moment, Duration::zero())
     } else {
         return Err(format!(
-            "Invalid {label} date/hour '{value}'; expected YYYY-MM-DD or YYYY-MM-DDTHH"
+            "Invalid {label} date/time '{value}'; expected an ISO date or timestamp"
         ));
     };
     let parsed = DateTime::from_naive_utc_and_offset(parsed, Utc);

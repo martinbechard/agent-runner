@@ -740,7 +740,7 @@ pub struct SanitizedDiagnostic {
     pub event: &'static str,
     pub operation_id: Option<String>,
     pub code: Option<String>,
-    pub message: &'static str,
+    pub message: String,
 }
 
 impl SanitizedDiagnostic {
@@ -751,7 +751,7 @@ impl SanitizedDiagnostic {
             event: "worker.stderr_rejected",
             operation_id: None,
             code: None,
-            message: "Worker diagnostic input was rejected.",
+            message: "Worker diagnostic input was rejected.".to_owned(),
         }
     }
 
@@ -761,7 +761,7 @@ impl SanitizedDiagnostic {
             event: "worker.stderr_limit_reached",
             operation_id: None,
             code: None,
-            message: "Worker diagnostic limit was reached.",
+            message: "Worker diagnostic limit was reached.".to_owned(),
         }
     }
 }
@@ -876,28 +876,14 @@ fn sanitize_child_diagnostic(line: &[u8]) -> Option<SanitizedDiagnostic> {
         return None;
     }
     let code = value.code.as_deref()?;
-    let (event, message) = match (value.event.as_str(), code) {
-        ("worker.startup_failed", "REPORT_WORKER_STARTUP_FAILED") => {
-            ("worker.startup_failed", "Worker startup failed.")
-        }
-        ("worker.invalid_input", "REPORT_WORKER_INVALID_JSON") => {
-            ("worker.invalid_input", "Worker input validation failed.")
-        }
-        ("worker.invalid_input", "REPORT_WORKER_INVALID_ENVELOPE") => {
-            ("worker.invalid_input", "Worker envelope validation failed.")
-        }
-        ("worker.service_contract", "REPORT_WORKER_SERVICE_CONTRACT") => {
-            ("worker.service_contract", "Worker service contract failed.")
-        }
-        ("worker.internal_failure", "REPORT_WORKER_INTERNAL") => {
-            ("worker.internal_failure", "Worker execution failed.")
-        }
-        ("worker.output_failed", "REPORT_WORKER_OUTPUT_FAILED") => {
-            ("worker.output_failed", "Worker protocol output failed.")
-        }
-        ("worker.shutdown_failed", "REPORT_WORKER_SHUTDOWN_FAILED") => {
-            ("worker.shutdown_failed", "Worker shutdown failed.")
-        }
+    let event = match (value.event.as_str(), code) {
+        ("worker.startup_failed", "REPORT_WORKER_STARTUP_FAILED") => "worker.startup_failed",
+        ("worker.invalid_input", "REPORT_WORKER_INVALID_JSON") => "worker.invalid_input",
+        ("worker.invalid_input", "REPORT_WORKER_INVALID_ENVELOPE") => "worker.invalid_input",
+        ("worker.service_contract", "REPORT_WORKER_SERVICE_CONTRACT") => "worker.service_contract",
+        ("worker.internal_failure", "REPORT_WORKER_INTERNAL") => "worker.internal_failure",
+        ("worker.output_failed", "REPORT_WORKER_OUTPUT_FAILED") => "worker.output_failed",
+        ("worker.shutdown_failed", "REPORT_WORKER_SHUTDOWN_FAILED") => "worker.shutdown_failed",
         _ => return None,
     };
     let level = match value.level.as_str() {
@@ -905,6 +891,14 @@ fn sanitize_child_diagnostic(line: &[u8]) -> Option<SanitizedDiagnostic> {
         "warning" => "warning",
         "error" => "error",
         _ => return None,
+    };
+    let message = if ["API_KEY=", "TOKEN=", "PASSWORD=", "SECRET="]
+        .iter()
+        .any(|marker| value.message.to_ascii_uppercase().contains(marker))
+    {
+        "Worker diagnostic contained a redacted sensitive value.".to_owned()
+    } else {
+        value.message
     };
     Some(SanitizedDiagnostic {
         level,

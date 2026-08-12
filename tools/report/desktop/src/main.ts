@@ -17,8 +17,7 @@ import {
   dateRangeError,
   discoveryProgressPresentation,
   localDayDateRange,
-  localDateHourToUtc,
-  localExclusiveDateHourToInclusiveUtcHour,
+  localDateTimeToUtc,
   normalizeWorkerCount,
   parseDesktopDefaults,
   parseDiscoveryProgress,
@@ -85,7 +84,9 @@ const addRootButton = element<HTMLButtonElement>("add-root");
 const rootList = element<HTMLDivElement>("root-list");
 const queryInput = element<HTMLInputElement>("query");
 const fromDateInput = element<HTMLInputElement>("from-date");
+const fromTimeInput = element<HTMLInputElement>("from-time");
 const toDateInput = element<HTMLInputElement>("to-date");
+const toTimeInput = element<HTMLInputElement>("to-time");
 const includeDescendantsInput = element<HTMLInputElement>("include-descendants");
 const includeCollaboratorsInput = element<HTMLInputElement>("include-collaborators");
 const workerThreadsInput = element<HTMLInputElement>("worker-threads");
@@ -165,8 +166,8 @@ function currentRequest(): SearchRequest {
   return {
     rootRefs: [...roots.keys()],
     query: queryInput.value.trim(),
-    fromDate: localDateHourToUtc(fromDateInput.value),
-    toDate: localExclusiveDateHourToInclusiveUtcHour(toDateInput.value),
+    fromDate: localDateTimeToUtc(fromDateInput.value, fromTimeInput.value),
+    toDate: localDateTimeToUtc(toDateInput.value, toTimeInput.value),
     includeDescendants: includeDescendantsInput.checked,
     workers: selectedWorkerCount(),
   };
@@ -331,9 +332,11 @@ async function runSearch(): Promise<void> {
     setCatalogState({ kind: "error", message: "Add at least one log folder before searching." });
     return;
   }
-  const rangeError = dateRangeError(fromDateInput.value, toDateInput.value);
+  const rangeError = dateRangeError(fromDateInput.value, fromTimeInput.value, toDateInput.value, toTimeInput.value);
   fromDateInput.setCustomValidity(rangeError ?? "");
+  fromTimeInput.setCustomValidity(rangeError ?? "");
   toDateInput.setCustomValidity(rangeError ?? "");
+  toTimeInput.setCustomValidity(rangeError ?? "");
   if (rangeError !== null) {
     fromDateInput.reportValidity();
     setCatalogState({ kind: "error", message: rangeError });
@@ -508,7 +511,9 @@ async function initialize(): Promise<void> {
   restoreLastExport();
   const localToday = localDayDateRange(new Date());
   fromDateInput.value = localToday.fromDate;
+  fromTimeInput.value = "00:00";
   toDateInput.value = localToday.toDate;
+  toTimeInput.value = "00:00";
   workerThreadsInput.value = String(normalizeWorkerCount(localStorage.getItem(WORKER_COUNT_STORAGE_KEY), DEFAULT_WORKER_COUNT));
   includeDescendantsInput.checked = localStorage.getItem(INCLUDE_CHILDREN_STORAGE_KEY) === "true";
   includeCollaboratorsInput.checked = localStorage.getItem(INCLUDE_COLLABORATORS_STORAGE_KEY) === "true";
@@ -566,13 +571,15 @@ includeCollaboratorsInput.addEventListener("change", () => {
   localStorage.setItem(INCLUDE_COLLABORATORS_STORAGE_KEY, String(includeCollaboratorsInput.checked));
   applyWorkspaceScope();
 });
-for (const input of [queryInput, fromDateInput, toDateInput]) input.addEventListener("keydown", (event) => {
+for (const input of [queryInput, fromDateInput, fromTimeInput, toDateInput, toTimeInput]) input.addEventListener("keydown", (event) => {
   if (event.key === "Enter") void runSearch();
 });
-for (const input of [fromDateInput, toDateInput]) input.addEventListener("input", () => {
-  const rangeError = dateRangeError(fromDateInput.value, toDateInput.value);
+for (const input of [fromDateInput, fromTimeInput, toDateInput, toTimeInput]) input.addEventListener("input", () => {
+  const rangeError = dateRangeError(fromDateInput.value, fromTimeInput.value, toDateInput.value, toTimeInput.value);
   fromDateInput.setCustomValidity(rangeError ?? "");
+  fromTimeInput.setCustomValidity(rangeError ?? "");
   toDateInput.setCustomValidity(rangeError ?? "");
+  toTimeInput.setCustomValidity(rangeError ?? "");
 });
 resultsViewport.addEventListener("scroll", renderVirtualRows, { passive: true });
 window.addEventListener("resize", renderVirtualRows, { passive: true });

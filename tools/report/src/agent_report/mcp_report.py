@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import os
+import json
 import re
 import secrets
 import hashlib
@@ -15,6 +16,7 @@ import shutil
 import stat
 import tempfile
 import threading
+import sys
 from contextvars import ContextVar
 from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass, is_dataclass
@@ -293,7 +295,9 @@ class _RuntimeDiscovery:
             }
         )
         if cancellation.is_cancelled():
-            raise service_types.DiscoveryFailure("cancelled")
+            raise service_types.DiscoveryFailure(
+                "cancelled", "Report discovery was cancelled.", True
+            )
         try:
             paths, diagnostics, _parent = self._runtime._discover_rollout_paths(
                 scope.root_thread_id,
@@ -303,7 +307,9 @@ class _RuntimeDiscovery:
                 index_path=self._runtime._default_codex_discovery_index_path(),
             )
         except ValueError as error:
-            raise service_types.DiscoveryFailure("not_found") from error
+            raise service_types.DiscoveryFailure(
+                "not_found", "The selected report task was not found.", True
+            ) from error
         sources: list[service_types.DiscoveredSource] = []
         digest = hashlib.sha256()
         for index, path in enumerate(paths):
@@ -611,7 +617,16 @@ class _Logger:
         return None
 
     def error(self, event: str, fields: Mapping[str, str | int | bool | None]) -> None:
-        return None
+        operation_id = fields.get("operation_id")
+        record = {
+            "timestamp": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "level": "error",
+            "event": "worker.internal_failure",
+            "operation_id": operation_id if isinstance(operation_id, str) else None,
+            "code": "REPORT_WORKER_INTERNAL",
+            "message": f"{event}: {dict(fields)}"[:4096],
+        }
+        print(json.dumps(record, separators=(",", ":"), ensure_ascii=True), file=sys.stderr, flush=True)
 
 
 def _slice(

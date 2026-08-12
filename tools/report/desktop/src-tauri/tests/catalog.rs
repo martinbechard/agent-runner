@@ -384,10 +384,11 @@ fn rejects_invalid_or_reversed_date_ranges() {
 
     assert_eq!(
         search_catalog_sync(request("2026-02-30", "")),
-        Err("Invalid From date/hour '2026-02-30'; expected YYYY-MM-DD or YYYY-MM-DDTHH".to_owned())
+        Err("Invalid From date/time '2026-02-30'; expected an ISO date or timestamp".to_owned())
     );
     assert_eq!(
         search_catalog_sync(request("2026-07-22", "2026-07-21")),
-        Err("From date and hour must not be after To date and hour".to_owned())
+        Err("From date and time must be before To date and time".to_owned())
     );
+    assert!(search_catalog_sync(request("2026-07-22T00:30:00Z", "2026-07-22T01:00:00Z")).is_ok());
 }

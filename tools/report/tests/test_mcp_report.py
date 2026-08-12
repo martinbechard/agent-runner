@@ -874,3 +874,37 @@ def test_snapshot_adapter_preserves_structured_service_error(tmp_path: Path) -> 
     assert result["ok"] is False
     assert result["code"] == "REPORT_SNAPSHOT_NOT_FOUND"
     assert str(result["operation_id"]).startswith("op_")
+
+
+def test_runtime_discovery_returns_typed_not_found_failure(tmp_path: Path) -> None:
+    """Construct the complete DiscoveryFailure expected by the service boundary."""
+
+    class Runtime:
+        @staticmethod
+        def _candidate_rollouts(root: Path) -> list[Path]:
+            return []
+
+        @staticmethod
+        def _default_codex_discovery_index_path() -> Path:
+            return tmp_path / "index.sqlite3"
+
+        @staticmethod
+        def _discover_rollout_paths(*args, **kwargs):  # type: ignore[no-untyped-def]
+            raise ValueError("missing")
+
+    class Cancellation:
+        @staticmethod
+        def is_cancelled() -> bool:
+            return False
+
+    discovery = report_module._RuntimeDiscovery(Runtime())  # type: ignore[arg-type]
+    with pytest.raises(service_types.DiscoveryFailure) as captured:
+        discovery.preflight(
+            service_types.ReportScope("missing-thread", False, False),
+            (tmp_path,),
+            Cancellation(),
+            None,
+        )
+    assert captured.value.kind == "not_found"
+    assert captured.value.safe_message == "The selected report task was not found."
+    assert captured.value.recoverable is True

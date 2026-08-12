@@ -3469,6 +3469,7 @@ class ApplicationService:
             "operation": operation,
             "dependency": dependency,
             "exception_class": type(failure).__name__,
+            "detail": str(failure)[:2048],
         }
         if cleanup:
             fields_value["cleanup"] = True

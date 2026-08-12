@@ -627,20 +627,17 @@ function parseExactTextRecord(value: unknown, label: string, keys: readonly stri
   return exact(value, label, keys);
 }
 
-export function dateRangeError(fromDate: string, toDate: string): string | null {
-  return fromDate !== "" && toDate !== "" && fromDate > toDate
-    ? "From date and hour must not be after To date and hour."
+export function dateRangeError(fromDate: string, fromTime: string, toDate: string, toTime: string): string | null {
+  const from = localDateTime(fromDate, fromTime);
+  const to = localDateTime(toDate, toTime);
+  return from !== null && to !== null && from >= to
+    ? "From date and time must be before To date and time."
     : null;
 }
 
-export function localDateHourToUtc(value: string): string {
-  return value === "" ? "" : localDateBoundary(value).toISOString().slice(0, 13);
-}
-
-export function localExclusiveDateHourToInclusiveUtcHour(value: string): string {
-  if (value === "") return "";
-  const exclusiveBoundary = localDateBoundary(value);
-  return new Date(exclusiveBoundary.getTime() - 1).toISOString().slice(0, 13);
+export function localDateTimeToUtc(date: string, time: string): string {
+  const value = localDateTime(date, time);
+  return value === null ? "" : value.toISOString();
 }
 
 export function localDayDateRange(now: Date): { readonly fromDate: string; readonly toDate: string } {
@@ -652,8 +649,9 @@ export function localDayDateRange(now: Date): { readonly fromDate: string; reado
   };
 }
 
-function localDateBoundary(value: string): Date {
-  return new Date(value.length === 10 ? `${value}T00:00` : value);
+function localDateTime(date: string, time: string): Date | null {
+  if (date === "") return null;
+  return new Date(`${date}T${time || "00:00"}`);
 }
 
 function localDateValue(value: Date): string {

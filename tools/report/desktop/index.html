@@ -1,6 +1,6 @@
 <!-- Copyright (c) 2026 Martin.Bechard@DevConsult.ca -->
 <!-- AI attribution: Generated with AI assistance. -->
-<!-- Responsibility: Host the Agent Report catalog and Dynamic Workspace. -->
+<!-- Responsibility: Host the Agent Report catalog and interactive report. -->
 <!-- Design: docs/design/components/CD-005-agent-report-dynamic-workspace.md -->
 <!doctype html>
 <html lang="en">
@@ -40,9 +40,9 @@
             <p class="step">Find</p>
             <label class="field-label" for="query">Search</label>
             <input id="query" type="search" autocomplete="off" placeholder="Title, thread, or workspace" />
-            <div class="date-range" role="group" aria-label="Local date range with an exclusive To date">
-              <label for="from-date"><span>From</span><input id="from-date" type="date" /></label>
-              <label for="to-date"><span>To</span><input id="to-date" type="date" /></label>
+            <div class="date-range" role="group" aria-label="Local date and time range with an exclusive To value">
+              <fieldset><legend>From</legend><div class="date-time-fields"><label for="from-date"><span>Date</span><input id="from-date" type="date" /></label><label for="from-time"><span>Time (24-hour)</span><input id="from-time" type="time" lang="en-GB" step="60" /></label></div></fieldset>
+              <fieldset><legend>To (exclusive)</legend><div class="date-time-fields"><label for="to-date"><span>Date</span><input id="to-date" type="date" /></label><label for="to-time"><span>Time (24-hour)</span><input id="to-time" type="time" lang="en-GB" step="60" /></label></div></fieldset>
             </div>
             <button id="search" class="primary-action" type="button">Search logs</button>
           </section>
@@ -100,18 +100,18 @@
       <main id="report-workspace" class="report-workspace" hidden>
         <header class="workspace-header">
           <div>
-            <p class="eyebrow">Dynamic Workspace</p>
+            <p class="eyebrow">Interactive report</p>
             <h2 id="report-workspace-title">No report selected</h2>
             <p id="report-scope-summary">Root only.</p>
             <p id="report-workspace-observation">Snapshot not opened.</p>
           </div>
-          <div class="workspace-actions" aria-label="Workspace actions">
+          <div class="workspace-actions" aria-label="Report actions">
             <button id="report-refresh" type="button">Refresh</button>
             <button id="report-export-directory" class="primary-action" type="button">Export complete directory</button>
             <button id="report-export-summary" type="button">Bounded summary</button>
             <button id="report-open-diagnostics" type="button">Diagnostics</button>
             <button id="report-cancel" type="button">Cancel operation</button>
-            <button id="report-close" type="button">Close workspace</button>
+            <button id="report-close" type="button">Close report</button>
           </div>
         </header>
         <details id="report-workspace-nav-disclosure" class="workspace-nav-disclosure">
@@ -132,7 +132,7 @@
         <h2 id="report-preflight-heading" data-dialog-heading tabindex="-1">Choose report contents</h2>
         <div id="report-preflight-summary" aria-live="polite"></div>
         <div class="dialog-actions">
-          <button id="report-preflight-continue" class="primary-action" type="button">Continue to workspace</button>
+          <button id="report-preflight-continue" class="primary-action" type="button">View report</button>
           <button id="report-preflight-change" type="button">Change scope</button>
           <button id="report-preflight-cancel" type="button">Cancel</button>
         </div>
