@@ -25,27 +25,38 @@ from pathlib import Path
 from typing import BinaryIO, Final, Literal, Protocol, TextIO, TypeAlias, TypeVar, cast, get_args, get_origin, get_type_hints
 
 from .application_service import (
-    ActivityItem,
     AgentFilters,
     AgentRow,
+    AgentSort,
     ApplicationService,
     ApplicationServiceConfig,
     AutomationSurface,
     CancellationToken,
     CloseSnapshotRequest,
     CloseSnapshotResult,
+    CoordinationFilters,
     CoordinationQueryRequest,
     CoordinationRow,
+    CoordinationSort,
+    Disclosure,
     EventDetail,
     EventDetailsRequest,
     EventFilters,
     EventRow,
+    EventSort,
     ExportMode,
+    ExportOmission,
     ExportResult,
     ExportSnapshotRequest,
+    HeatmapCell,
+    HeatmapQueryRequest,
+    HeatmapResult,
+    HeatmapRow,
+    HeatmapScale,
     ListAgentsRequest,
     ListEventsRequest,
     ListTurnsRequest,
+    MetricGroup,
     MetricValue,
     OpenSnapshotRequest,
     OperationContext,
@@ -58,19 +69,23 @@ from .application_service import (
     ReportError,
     ReportErrorCode,
     ReportScope,
+    SequenceFilters,
+    SequenceGroup,
     SequenceGrouping,
     SequenceQueryRequest,
+    SequenceResult,
     SequenceRow,
+    SequenceSort,
     ServiceResult,
     SnapshotMetadata,
     SnapshotRequest,
+    SignificantActivity,
     SummaryResult,
-    TimeBucket,
+    TimeRange,
     TimeMeasure,
-    TimeRangeQueryRequest,
-    TimeSeriesResult,
     TurnFilters,
     TurnRow,
+    TurnSort,
     WarningRecord,
 )
 
@@ -94,14 +109,14 @@ OperationName = Literal[
 ServiceMethodName = OperationName
 ServiceRequestValue = (
     PreflightReportRequest | OpenSnapshotRequest | SnapshotRequest | ListAgentsRequest
-    | ListTurnsRequest | ListEventsRequest | TimeRangeQueryRequest | SequenceQueryRequest
+    | ListTurnsRequest | ListEventsRequest | HeatmapQueryRequest | SequenceQueryRequest
     | CoordinationQueryRequest | EventDetailsRequest | RefreshSnapshotRequest
     | ExportSnapshotRequest | CloseSnapshotRequest
 )
 ServiceResultValue = (
-    PreflightResult | SnapshotMetadata | SummaryResult | PageResult[AgentRow]
-    | PageResult[TurnRow] | PageResult[EventRow] | TimeSeriesResult
-    | PageResult[SequenceRow] | PageResult[CoordinationRow] | EventDetail
+    PreflightResult | SnapshotMetadata | SummaryResult | PageResult[AgentRow, AgentFilters, AgentSort]
+    | PageResult[TurnRow, TurnFilters, TurnSort] | PageResult[EventRow, EventFilters, EventSort]
+    | HeatmapResult | SequenceResult | PageResult[CoordinationRow, CoordinationFilters, CoordinationSort] | EventDetail
     | RefreshSnapshotResult | ExportResult | CloseSnapshotResult
 )
 PageRowValue = AgentRow | TurnRow | EventRow | SequenceRow | CoordinationRow
@@ -273,8 +288,8 @@ OPERATION_BINDINGS: Final[dict[OperationName, OperationBinding]] = {
     "list_agents": OperationBinding(ListAgentsRequest, "list_agents", PageResult, AgentRow, _default_serializer),
     "list_turns": OperationBinding(ListTurnsRequest, "list_turns", PageResult, TurnRow, _default_serializer),
     "list_events": OperationBinding(ListEventsRequest, "list_events", PageResult, EventRow, _default_serializer),
-    "query_time_range": OperationBinding(TimeRangeQueryRequest, "query_time_range", TimeSeriesResult, None, _default_serializer),
-    "query_sequence": OperationBinding(SequenceQueryRequest, "query_sequence", PageResult, SequenceRow, _default_serializer),
+    "query_time_range": OperationBinding(HeatmapQueryRequest, "query_time_range", HeatmapResult, None, _default_serializer),
+    "query_sequence": OperationBinding(SequenceQueryRequest, "query_sequence", SequenceResult, SequenceRow, _default_serializer),
     "query_coordination": OperationBinding(CoordinationQueryRequest, "query_coordination", PageResult, CoordinationRow, _default_serializer),
     "get_event_details": OperationBinding(EventDetailsRequest, "get_event_details", EventDetail, None, _default_serializer),
     "refresh_snapshot": OperationBinding(RefreshSnapshotRequest, "refresh_snapshot", RefreshSnapshotResult, None, _default_serializer),
@@ -344,6 +359,13 @@ def _datetime(value: object, label: str) -> datetime:
 
 def _nullable_datetime(value: object, label: str) -> datetime | None:
     return None if value is None else _datetime(value, label)
+
+
+def _one_of(value: object, choices: set[str], label: str) -> str:
+    selected = _string(value, label)
+    if selected not in choices:
+        raise _protocol_error(f"Invalid {label}.")
+    return selected
 
 
 def _validate_envelope_common(data: dict[str, object]) -> tuple[int, str]:
@@ -419,8 +441,83 @@ def _scope(value: object) -> ReportScope:
 
 
 def _event_filters(value: object) -> EventFilters:
-    data = _require_object(value, {"event_ids", "agent_ids", "turn_ids", "kinds", "from_time", "to_time"}, "arguments.filters")
-    return EventFilters(_strings(data["event_ids"], "event IDs"), _strings(data["agent_ids"], "agent IDs"), _strings(data["turn_ids"], "turn IDs"), _strings(data["kinds"], "kinds"), _nullable_datetime(data["from_time"], "from_time"), _nullable_datetime(data["to_time"], "to_time"))
+    data = _require_object(
+        value, {"event_ids", "agent_ids", "turn_ids", "kinds", "from_time", "to_time"},
+        "arguments.filters",
+    )
+    return EventFilters(
+        _strings(data["event_ids"], "event IDs"),
+        _strings(data["agent_ids"], "agent IDs"),
+        _strings(data["turn_ids"], "turn IDs"),
+        _strings(data["kinds"], "kinds"),
+        _nullable_datetime(data["from_time"], "from_time"),
+        _nullable_datetime(data["to_time"], "to_time"),
+    )
+
+
+def _agent_sort(value: object) -> AgentSort:
+    data = _require_object(
+        value, {"key", "direction", "tie_break_key", "tie_break_direction"},
+        "arguments.sort",
+    )
+    return AgentSort(
+        cast(typing.Any, _one_of(data["key"], {"last_activity_at", "started_at", "agent_id"}, "sort key")),
+        cast(typing.Any, _one_of(data["direction"], {"ascending", "descending"}, "sort direction")),
+        cast(typing.Any, _one_of(data["tie_break_key"], {"agent_id"}, "sort tie-break key")),
+        cast(typing.Any, _one_of(data["tie_break_direction"], {"ascending"}, "sort tie-break direction")),
+    )
+
+
+def _turn_sort(value: object) -> TurnSort:
+    data = _require_object(
+        value, {"key", "direction", "tie_break_key", "tie_break_direction"},
+        "arguments.sort",
+    )
+    return TurnSort(
+        cast(typing.Any, _one_of(data["key"], {"started_at", "ended_at", "turn_id"}, "sort key")),
+        cast(typing.Any, _one_of(data["direction"], {"ascending", "descending"}, "sort direction")),
+        cast(typing.Any, _one_of(data["tie_break_key"], {"turn_id"}, "sort tie-break key")),
+        cast(typing.Any, _one_of(data["tie_break_direction"], {"ascending"}, "sort tie-break direction")),
+    )
+
+
+def _event_sort(value: object) -> EventSort:
+    data = _require_object(
+        value, {"key", "direction", "tie_break_key", "tie_break_direction"},
+        "arguments.sort",
+    )
+    return EventSort(
+        cast(typing.Any, _one_of(data["key"], {"occurred_at", "event_id"}, "sort key")),
+        cast(typing.Any, _one_of(data["direction"], {"ascending", "descending"}, "sort direction")),
+        cast(typing.Any, _one_of(data["tie_break_key"], {"event_id"}, "sort tie-break key")),
+        cast(typing.Any, _one_of(data["tie_break_direction"], {"ascending"}, "sort tie-break direction")),
+    )
+
+
+def _sequence_sort(value: object) -> SequenceSort:
+    data = _require_object(
+        value, {"key", "direction", "tie_break_key", "tie_break_direction"},
+        "arguments.sort",
+    )
+    return SequenceSort(
+        cast(typing.Any, _one_of(data["key"], {"occurred_at", "sequence_id"}, "sort key")),
+        cast(typing.Any, _one_of(data["direction"], {"ascending"}, "sort direction")),
+        cast(typing.Any, _one_of(data["tie_break_key"], {"sequence_id"}, "sort tie-break key")),
+        cast(typing.Any, _one_of(data["tie_break_direction"], {"ascending"}, "sort tie-break direction")),
+    )
+
+
+def _coordination_sort(value: object) -> CoordinationSort:
+    data = _require_object(
+        value, {"key", "direction", "tie_break_key", "tie_break_direction"},
+        "arguments.sort",
+    )
+    return CoordinationSort(
+        cast(typing.Any, _one_of(data["key"], {"occurred_at", "coordination_id"}, "sort key")),
+        cast(typing.Any, _one_of(data["direction"], {"ascending"}, "sort direction")),
+        cast(typing.Any, _one_of(data["tie_break_key"], {"coordination_id"}, "sort tie-break key")),
+        cast(typing.Any, _one_of(data["tie_break_direction"], {"ascending"}, "sort tie-break direction")),
+    )
 
 
 def decode_service_request(request: RequestEnvelope) -> ServiceRequestValue:
@@ -434,9 +531,12 @@ def decode_service_request(request: RequestEnvelope) -> ServiceRequestValue:
             _snapshot(request, required=False)
             return PreflightReportRequest(_scope(data["scope"]))
         if operation == "open_snapshot":
-            data = _require_object(arguments, {"scope", "preflight_token"}, "arguments")
+            data = _require_object(arguments, {"scope", "preflight_token", "source_revision"}, "arguments")
             _snapshot(request, required=False)
-            return OpenSnapshotRequest(_scope(data["scope"]), _string(data["preflight_token"], "preflight token"))
+            return OpenSnapshotRequest(
+                _scope(data["scope"]), _string(data["preflight_token"], "preflight token"),
+                _string(data["source_revision"], "source revision"),
+            )
         snapshot_id = cast(str, _snapshot(request, required=True))
         if operation == "get_summary":
             _require_object(arguments, set(), "arguments")
@@ -448,31 +548,98 @@ def decode_service_request(request: RequestEnvelope) -> ServiceRequestValue:
             _require_object(arguments, set(), "arguments")
             return CloseSnapshotRequest(snapshot_id)
         if operation == "list_agents":
-            data = _require_object(arguments, {"filters", "cursor", "page_size"}, "arguments")
-            filters = _require_object(data["filters"], {"agent_ids", "roles", "states"}, "arguments.filters")
-            return ListAgentsRequest(snapshot_id, AgentFilters(_strings(filters["agent_ids"], "agent IDs"), _strings(filters["roles"], "roles"), _strings(filters["states"], "states")), _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"))
+            data = _require_object(arguments, {"filters", "sort", "cursor", "page_size"}, "arguments")
+            filters = _require_object(
+                data["filters"], {"query", "agent_ids", "roles", "states"},
+                "arguments.filters",
+            )
+            return ListAgentsRequest(
+                snapshot_id,
+                AgentFilters(
+                    _string(filters["query"], "query"),
+                    _strings(filters["agent_ids"], "agent IDs"),
+                    _strings(filters["roles"], "roles"),
+                    _strings(filters["states"], "states"),
+                ),
+                _agent_sort(data["sort"]), _nullable_string(data["cursor"], "cursor"),
+                _u64(data["page_size"], "page_size"),
+            )
         if operation == "list_turns":
-            data = _require_object(arguments, {"filters", "cursor", "page_size"}, "arguments")
-            filters = _require_object(data["filters"], {"turn_ids", "agent_ids", "states", "from_time", "to_time"}, "arguments.filters")
-            return ListTurnsRequest(snapshot_id, TurnFilters(_strings(filters["turn_ids"], "turn IDs"), _strings(filters["agent_ids"], "agent IDs"), _strings(filters["states"], "states"), _nullable_datetime(filters["from_time"], "from_time"), _nullable_datetime(filters["to_time"], "to_time")), _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"))
+            data = _require_object(arguments, {"filters", "sort", "cursor", "page_size"}, "arguments")
+            filters = _require_object(
+                data["filters"],
+                {"turn_ids", "agent_ids", "states", "from_time", "to_time"},
+                "arguments.filters",
+            )
+            return ListTurnsRequest(
+                snapshot_id,
+                TurnFilters(
+                    _strings(filters["turn_ids"], "turn IDs"),
+                    _strings(filters["agent_ids"], "agent IDs"),
+                    _strings(filters["states"], "states"),
+                    _nullable_datetime(filters["from_time"], "from_time"),
+                    _nullable_datetime(filters["to_time"], "to_time"),
+                ),
+                _turn_sort(data["sort"]), _nullable_string(data["cursor"], "cursor"),
+                _u64(data["page_size"], "page_size"),
+            )
         if operation == "list_events":
-            data = _require_object(arguments, {"filters", "cursor", "page_size"}, "arguments")
-            return ListEventsRequest(snapshot_id, _event_filters(data["filters"]), _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"))
+            data = _require_object(arguments, {"filters", "sort", "cursor", "page_size"}, "arguments")
+            return ListEventsRequest(
+                snapshot_id, _event_filters(data["filters"]), _event_sort(data["sort"]),
+                _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"),
+            )
         if operation == "query_time_range":
-            data = _require_object(arguments, {"from_time", "to_time", "measure", "requested_resolution_minutes"}, "arguments")
+            data = _require_object(arguments, {"from_time", "to_time", "measure", "requested_resolution_minutes", "group_by", "maximum_rows"}, "arguments")
             measure = _string(data["measure"], "measure")
             if measure not in get_args(TimeMeasure):
                 raise _protocol_error("Invalid measure.")
-            return TimeRangeQueryRequest(snapshot_id, _datetime(data["from_time"], "from_time"), _datetime(data["to_time"], "to_time"), cast(TimeMeasure, measure), _u64(data["requested_resolution_minutes"], "requested_resolution_minutes"))
+            group_by = _one_of(data["group_by"], {"agent", "event_kind", "work_item"}, "group_by")
+            return HeatmapQueryRequest(
+                snapshot_id, _datetime(data["from_time"], "from_time"),
+                _datetime(data["to_time"], "to_time"), cast(TimeMeasure, measure),
+                _u64(data["requested_resolution_minutes"], "requested_resolution_minutes"),
+                cast(typing.Any, group_by), _u64(data["maximum_rows"], "maximum_rows"),
+            )
         if operation == "query_sequence":
-            data = _require_object(arguments, {"focus_agent_id", "filters", "grouping", "cursor", "page_size"}, "arguments")
-            grouping = _string(data["grouping"], "grouping")
+            data = _require_object(arguments, {"filters", "sort", "cursor", "page_size"}, "arguments")
+            filters = _require_object(
+                data["filters"],
+                {"focus_agent_id", "event_filters", "grouping", "include_reasoning"},
+                "arguments.filters",
+            )
+            grouping = _string(filters["grouping"], "grouping")
             if grouping not in get_args(SequenceGrouping):
                 raise _protocol_error("Invalid grouping.")
-            return SequenceQueryRequest(snapshot_id, _nullable_string(data["focus_agent_id"], "focus agent ID"), _event_filters(data["filters"]), cast(SequenceGrouping, grouping), _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"))
+            return SequenceQueryRequest(
+                snapshot_id,
+                SequenceFilters(
+                    _nullable_string(filters["focus_agent_id"], "focus agent ID"),
+                    _event_filters(filters["event_filters"]),
+                    cast(SequenceGrouping, grouping),
+                    _boolean(filters["include_reasoning"], "include_reasoning"),
+                ),
+                _sequence_sort(data["sort"]), _nullable_string(data["cursor"], "cursor"),
+                _u64(data["page_size"], "page_size"),
+            )
         if operation == "query_coordination":
-            data = _require_object(arguments, {"work_item_ids", "agent_ids", "cursor", "page_size"}, "arguments")
-            return CoordinationQueryRequest(snapshot_id, _strings(data["work_item_ids"], "work item IDs"), _strings(data["agent_ids"], "agent IDs"), _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"))
+            data = _require_object(arguments, {"filters", "sort", "cursor", "page_size"}, "arguments")
+            filters = _require_object(data["filters"], {"work_item_id", "delegated_root_id", "agent_id", "operation", "evidence"}, "arguments.filters")
+            evidence = _nullable_string(filters["evidence"], "evidence")
+            if evidence is not None and evidence not in {"measured", "derived", "inferred", "unavailable", "estimated"}:
+                raise _protocol_error("Invalid evidence.")
+            return CoordinationQueryRequest(
+                snapshot_id,
+                CoordinationFilters(
+                    _nullable_string(filters["work_item_id"], "work item ID"),
+                    _nullable_string(filters["delegated_root_id"], "delegated root ID"),
+                    _nullable_string(filters["agent_id"], "agent ID"),
+                    _nullable_string(filters["operation"], "operation"),
+                    cast(typing.Any, evidence),
+                ),
+                _coordination_sort(data["sort"]), _nullable_string(data["cursor"], "cursor"),
+                _u64(data["page_size"], "page_size"),
+            )
         if operation == "get_event_details":
             data = _require_object(arguments, {"event_id"}, "arguments")
             return EventDetailsRequest(snapshot_id, _string(data["event_id"], "event ID"))
@@ -519,10 +686,14 @@ def dispatch_service_operation(
 
 
 _ALLOWED_DATACLASSES: Final[set[type[object]]] = {
-    WarningRecord, ReportScope, MetricValue, ActivityItem, AgentRow, TurnRow, EventRow,
-    TimeBucket, SequenceRow, CoordinationRow, PreflightResult, SnapshotMetadata,
-    SummaryResult, PageResult, TimeSeriesResult, EventDetail, RefreshSnapshotResult,
-    ExportResult, CloseSnapshotResult, ProgressEnvelope, ResultEnvelope, ErrorEnvelope,
+    WarningRecord, ReportScope, AgentFilters, AgentSort, TurnFilters, TurnSort,
+    EventFilters, EventSort, SequenceFilters, SequenceSort, CoordinationFilters,
+    CoordinationSort, MetricValue, MetricGroup, TimeRange, SignificantActivity,
+    AgentRow, TurnRow, EventRow, HeatmapCell, HeatmapScale, HeatmapRow,
+    SequenceRow, SequenceGroup, CoordinationRow, Disclosure, ExportOmission,
+    PreflightResult, SnapshotMetadata, SummaryResult, PageResult, HeatmapResult,
+    SequenceResult, EventDetail, RefreshSnapshotResult, ExportResult,
+    CloseSnapshotResult, ProgressEnvelope, ResultEnvelope, ErrorEnvelope,
     CancelledEnvelope, StructuredError,
 }
 
@@ -531,15 +702,15 @@ def _to_json(value: object) -> JsonValue:
     if value is None or type(value) in {bool, str}:
         return cast(None | bool | str, value)
     if type(value) is int:
-        if not 0 <= cast(int, value) <= _MAX_U64:
+        if not 0 <= value <= _MAX_U64:
             raise _contract_error()
-        return cast(int, value)
+        return value
     if type(value) is float:
-        if not math.isfinite(cast(float, value)):
+        if not math.isfinite(value):
             raise _contract_error()
-        return cast(float, value)
+        return value
     if type(value) is datetime:
-        moment = cast(datetime, value)
+        moment = value
         if moment.tzinfo is None or moment.utcoffset() is None:
             raise _contract_error()
         return moment.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
@@ -617,35 +788,91 @@ def _validate_dataclass(value: object) -> None:
         _validate_annotation(getattr(value, field.name), hints[field.name])
 
 
-def _validate_binding_value(binding: OperationBinding, value: ServiceResultValue) -> None:
+_PAGE_SCHEMAS: Final[dict[OperationName, tuple[type[object], type[object], type[object]]]] = {
+    "list_agents": (AgentRow, AgentFilters, AgentSort),
+    "list_turns": (TurnRow, TurnFilters, TurnSort),
+    "list_events": (EventRow, EventFilters, EventSort),
+    "query_sequence": (SequenceRow, SequenceFilters, SequenceSort),
+    "query_coordination": (CoordinationRow, CoordinationFilters, CoordinationSort),
+}
+
+
+def _validate_page(
+    page: object,
+    *,
+    operation: OperationName,
+    row_type: type[object],
+    filter_type: type[object],
+    sort_type: type[object],
+) -> PageResult[object, object, object]:
+    if type(page) is not PageResult:
+        raise _contract_error()
+    typed_page = cast(PageResult[object, object, object], page)
+    if (
+        typed_page.operation != operation
+        or type(typed_page.applied_filters) is not filter_type
+        or type(typed_page.applied_sort) is not sort_type
+        or not isinstance(typed_page.items, Sequence)
+        or isinstance(typed_page.items, (str, bytes, bytearray))
+        or any(type(item) is not row_type for item in typed_page.items)
+    ):
+        raise _contract_error()
+    _validate_dataclass(typed_page.applied_filters)
+    _validate_dataclass(typed_page.applied_sort)
+    for item in typed_page.items:
+        _validate_dataclass(item)
+    return typed_page
+
+
+def _validate_binding_value(
+    operation: OperationName, binding: OperationBinding, value: ServiceResultValue
+) -> None:
     if type(value) is not binding.result_type:
         raise _contract_error()
-    if binding.page_item_type is not None:
-        page = cast(PageResult[object], value)
-        if not isinstance(page.items, Sequence) or isinstance(page.items, (str, bytes, bytearray)):
+    if operation == "query_sequence":
+        sequence = cast(SequenceResult, value)
+        _validate_page(
+            sequence.page, operation=operation, row_type=SequenceRow,
+            filter_type=SequenceFilters, sort_type=SequenceSort,
+        )
+        if (
+            not isinstance(sequence.groups, Sequence)
+            or isinstance(sequence.groups, (str, bytes, bytearray))
+            or any(type(group) is not SequenceGroup for group in sequence.groups)
+        ):
             raise _contract_error()
-        if any(type(item) is not binding.page_item_type for item in page.items):
-            raise _contract_error()
+    elif operation in _PAGE_SCHEMAS:
+        row_type, filter_type, sort_type = _PAGE_SCHEMAS[operation]
+        _validate_page(
+            value, operation=operation, row_type=row_type,
+            filter_type=filter_type, sort_type=sort_type,
+        )
 
 
 def serialize_service_value(request: RequestEnvelope, value: ServiceResultValue) -> dict[str, JsonValue]:
-    binding = OPERATION_BINDINGS.get(cast(OperationName, request.operation))
+    operation = cast(OperationName, request.operation)
+    binding = OPERATION_BINDINGS.get(operation)
     if binding is None:
         raise _contract_error()
-    _validate_binding_value(binding, value)
+    _validate_binding_value(operation, binding, value)
     _validate_dataclass(value)
     if type(value) is SnapshotMetadata:
         if value.protocol_version != request.protocol_version:
             raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
-    elif isinstance(value, PageResult):
+    elif type(value) is PageResult:
         if value.snapshot_id != request.snapshot_id or value.operation != request.operation:
             raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
-    elif isinstance(value, RefreshSnapshotResult):
+    elif type(value) is SequenceResult:
+        if value.page.snapshot_id != request.snapshot_id or value.page.operation != request.operation:
+            raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
+    elif type(value) is RefreshSnapshotResult:
         if value.snapshot.snapshot_id != request.snapshot_id or value.snapshot.protocol_version != request.protocol_version:
             raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
     elif request.operation in {
-        "get_summary", "query_time_range", "get_event_details", "close_snapshot"
+        "get_summary", "query_time_range", "get_event_details", "export_snapshot", "close_snapshot"
     } and getattr(value, "snapshot_id") != request.snapshot_id:
+        raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
+    if type(value) is ExportResult and value.operation_id != request.operation_id:
         raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
     return binding.serialize_result(value)
 
@@ -763,7 +990,16 @@ class WorkerRuntime:
             args = _require_object(request.arguments, {"supervisor_protocol_version", "expected_package_version", "service_config"}, "handshake arguments")
             supervisor_version = _u64(args["supervisor_protocol_version"], "supervisor protocol version")
             expected_package = _string(args["expected_package_version"], "expected package version")
-            service = _require_object(args["service_config"], {"authorized_source_roots", "parser_version", "pricing_digest", "formatter_digest", "default_page_size", "max_page_size", "max_time_buckets"}, "service configuration")
+            service = _require_object(
+                args["service_config"],
+                {
+                    "authorized_source_roots", "parser_version", "pricing_digest",
+                    "pricing_version", "formatter_version", "formatter_digest",
+                    "default_page_size", "max_page_size",
+                    "max_heatmap_cells",
+                },
+                "service configuration",
+            )
             if supervisor_version != self._config.protocol_version or expected_package != self._config.package_version:
                 raise WorkerProtocolError("REPORT_WORKER_PROTOCOL_MISMATCH", "The worker protocol or package version does not match.", operation_id=request.operation_id, recoverable=False)
             roots_value = service["authorized_source_roots"]
@@ -772,11 +1008,13 @@ class WorkerRuntime:
             roots = tuple(Path(_string(root, "authorized source root")) for root in roots_value)
             config = ApplicationServiceConfig(
                 roots, _string(service["parser_version"], "parser version"),
+                _string(service["pricing_version"], "pricing version"),
                 _string(service["pricing_digest"], "pricing digest"),
+                _string(service["formatter_version"], "formatter version"),
                 _string(service["formatter_digest"], "formatter digest"),
                 _u64(service["default_page_size"], "default page size"),
                 _u64(service["max_page_size"], "max page size"),
-                _u64(service["max_time_buckets"], "max time buckets"),
+                _u64(service["max_heatmap_cells"], "max heatmap cells"),
             )
             self._service = self._service_factory(config)
             self._write(ResultEnvelope(PROTOCOL_VERSION, request.operation_id, "result", request.operation, None, True, {"worker_protocol_version": PROTOCOL_VERSION, "worker_package_version": self._config.package_version}))
@@ -836,14 +1074,14 @@ class WorkerRuntime:
             if result.ok:
                 if result.value is None or result.error is not None:
                     raise _contract_error()
-                payload = serialize_service_value(request, cast(ServiceResultValue, result.value))
+                payload = serialize_service_value(request, result.value)
                 envelope = ResultEnvelope(PROTOCOL_VERSION, request.operation_id, "result", request.operation, request.snapshot_id, True, payload)
                 encode_output_record(envelope, max_record_bytes=self._config.max_record_bytes)
                 self._terminal(slot, OperationState.RESULT, envelope)
             else:
                 if result.value is not None or type(result.error) is not ReportError:
                     raise _contract_error()
-                structured = _structured_error(cast(ReportError, result.error), request.operation_id)
+                structured = _structured_error(result.error, request.operation_id)
                 if structured.code == "REPORT_CANCELLED":
                     self._terminal(slot, OperationState.CANCELLED, CancelledEnvelope(PROTOCOL_VERSION, request.operation_id, "cancelled", request.operation, request.snapshot_id, False, structured))
                 else:
@@ -987,13 +1225,21 @@ def create_worker_runtime(
     stdin: BinaryIO,
     stdout: BinaryIO,
     stderr: TextIO,
+    service_factory: Callable[[ApplicationServiceConfig], ApplicationService] | None = None,
 ) -> WorkerRuntime:
-    """Create a stdio runtime; the composition root must inject service dependencies."""
+    """Create a stdio runtime with an optional composition-root service factory."""
 
     def missing_factory(_: ApplicationServiceConfig) -> ApplicationService:
         raise RuntimeError("The Application Service composition root is not configured.")
 
-    return WorkerRuntime(missing_factory, config, clock=_SystemClock(), stdin=stdin, stdout=stdout, stderr=stderr)
+    return WorkerRuntime(
+        service_factory or missing_factory,
+        config,
+        clock=_SystemClock(),
+        stdin=stdin,
+        stdout=stdout,
+        stderr=stderr,
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -1014,3 +1260,8 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+    HeatmapCell,
+    HeatmapQueryRequest,
+    HeatmapResult,
+    HeatmapRow,
+    HeatmapScale,

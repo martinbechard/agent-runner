@@ -12,27 +12,38 @@ import time
 from dataclasses import fields, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import cast, get_args
+from typing import Any, cast, get_args
 
 import pytest
 
 from agent_report.application_service import (
-    ActivityItem,
     AgentFilters,
     AgentRow,
+    AgentSort,
     CloseSnapshotRequest,
     CloseSnapshotResult,
+    CoordinationFilters,
     CoordinationQueryRequest,
     CoordinationRow,
+    CoordinationSort,
+    Disclosure,
     EventDetail,
     EventDetailsRequest,
     EventFilters,
     EventRow,
+    EventSort,
+    ExportOmission,
     ExportResult,
     ExportSnapshotRequest,
+    HeatmapCell,
+    HeatmapQueryRequest,
+    HeatmapResult,
+    HeatmapRow,
+    HeatmapScale,
     ListAgentsRequest,
     ListEventsRequest,
     ListTurnsRequest,
+    MetricGroup,
     MetricValue,
     OpenSnapshotRequest,
     PageResult,
@@ -41,18 +52,23 @@ from agent_report.application_service import (
     RefreshSnapshotRequest,
     RefreshSnapshotResult,
     ReportError,
+    ReportErrorCode,
     ReportScope,
+    SequenceFilters,
+    SequenceGroup,
     SequenceQueryRequest,
+    SequenceResult,
     SequenceRow,
+    SequenceSort,
     ServiceResult,
     SnapshotMetadata,
     SnapshotRequest,
     SummaryResult,
-    TimeRangeQueryRequest,
-    TimeBucket,
-    TimeSeriesResult,
+    SignificantActivity,
+    TimeRange,
     TurnFilters,
     TurnRow,
+    TurnSort,
     WarningRecord,
 )
 from agent_report.report_worker import (
@@ -65,6 +81,7 @@ from agent_report.report_worker import (
     WorkerConfig,
     WorkerProtocolError,
     WorkerRuntime,
+    create_worker_runtime,
     decode_service_request,
     dispatch_service_operation,
     parse_input_line,
@@ -89,14 +106,14 @@ def operation_requests() -> dict[str, RequestEnvelope]:
     }
     return {
         "preflight_report": request("preflight_report", {"scope": scope}, None),
-        "open_snapshot": request("open_snapshot", {"scope": scope, "preflight_token": "token"}, None),
+        "open_snapshot": request("open_snapshot", {"scope": scope, "preflight_token": "token", "source_revision": "source-rev"}, None),
         "get_summary": request("get_summary", {}),
-        "list_agents": request("list_agents", {"filters": {"agent_ids": [], "roles": [], "states": []}, "cursor": None, "page_size": 25}),
-        "list_turns": request("list_turns", {"filters": {"turn_ids": [], "agent_ids": [], "states": [], "from_time": None, "to_time": None}, "cursor": None, "page_size": 25}),
-        "list_events": request("list_events", {"filters": event_filters, "cursor": None, "page_size": 25}),
-        "query_time_range": request("query_time_range", {"from_time": "2026-08-12T12:00:00Z", "to_time": "2026-08-12T13:00:00Z", "measure": "wall_time", "requested_resolution_minutes": 5}),
-        "query_sequence": request("query_sequence", {"focus_agent_id": None, "filters": event_filters, "grouping": "none", "cursor": None, "page_size": 25}),
-        "query_coordination": request("query_coordination", {"work_item_ids": [], "agent_ids": [], "cursor": None, "page_size": 25}),
+        "list_agents": request("list_agents", {"filters": {"query": "", "agent_ids": [], "roles": [], "states": []}, "sort": {"key": "last_activity_at", "direction": "descending", "tie_break_key": "agent_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
+        "list_turns": request("list_turns", {"filters": {"turn_ids": [], "agent_ids": [], "states": [], "from_time": None, "to_time": None}, "sort": {"key": "started_at", "direction": "ascending", "tie_break_key": "turn_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
+        "list_events": request("list_events", {"filters": event_filters, "sort": {"key": "occurred_at", "direction": "ascending", "tie_break_key": "event_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
+        "query_time_range": request("query_time_range", {"from_time": "2026-08-12T12:00:00Z", "to_time": "2026-08-12T13:00:00Z", "measure": "wall_time", "requested_resolution_minutes": 5, "group_by": "agent", "maximum_rows": 25}),
+        "query_sequence": request("query_sequence", {"filters": {"focus_agent_id": None, "event_filters": event_filters, "grouping": "none", "include_reasoning": False}, "sort": {"key": "occurred_at", "direction": "ascending", "tie_break_key": "sequence_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
+        "query_coordination": request("query_coordination", {"filters": {"work_item_id": None, "delegated_root_id": None, "agent_id": None, "operation": None, "evidence": None}, "sort": {"key": "occurred_at", "direction": "ascending", "tie_break_key": "coordination_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
         "get_event_details": request("get_event_details", {"event_id": "evt_0123456789abcdef01234567"}),
         "refresh_snapshot": request("refresh_snapshot", {}),
         "export_snapshot": request("export_snapshot", {"surface": "tauri", "target": "/tmp/report", "replace": False, "mode": None, "include_sqlite_archive": False}),
@@ -123,7 +140,7 @@ def test_operation_bindings_are_exhaustive_and_decoders_construct_exact_types() 
         "preflight_report": PreflightReportRequest, "open_snapshot": OpenSnapshotRequest,
         "get_summary": SnapshotRequest, "list_agents": ListAgentsRequest,
         "list_turns": ListTurnsRequest, "list_events": ListEventsRequest,
-        "query_time_range": TimeRangeQueryRequest, "query_sequence": SequenceQueryRequest,
+        "query_time_range": HeatmapQueryRequest, "query_sequence": SequenceQueryRequest,
         "query_coordination": CoordinationQueryRequest, "get_event_details": EventDetailsRequest,
         "refresh_snapshot": RefreshSnapshotRequest, "export_snapshot": ExportSnapshotRequest,
         "close_snapshot": CloseSnapshotRequest,
@@ -194,11 +211,15 @@ def test_each_wire_operation_calls_only_its_exact_named_service_method() -> None
 
 def test_serializer_rejects_wrong_result_and_correlation_before_traversal() -> None:
     envelope = operation_requests()["list_agents"]
-    wrong = PageResult(SNAPSHOT_ID, "list_agents", [TurnRow("turn", "agent", NOW, None, "done", 1, "measured")], "d", "agent_id", 25, None)
+    wrong = PageResult(
+        SNAPSHOT_ID, "revision", "list_agents",
+        [TurnRow("turn", "agent", NOW, None, "done", 1, None, "measured")],
+        AgentFilters(), AgentSort(), 25, None,
+    )
     with pytest.raises(WorkerProtocolError, match="invalid result"):
         serialize_service_value(envelope, wrong)  # type: ignore[arg-type]
-    right_row = AgentRow("agent", None, "worker", "done", NOW, None, "measured")
-    mismatch = PageResult("other", "list_agents", [right_row], "d", "agent_id", 25, None)
+    right_row = AgentRow("agent", None, None, "worker", "done", NOW, None, NOW, 1, 2, "measured")
+    mismatch = PageResult("other", "revision", "list_agents", [right_row], AgentFilters(), AgentSort(), 25, None)
     with pytest.raises(WorkerProtocolError, match="correlation"):
         serialize_service_value(envelope, mismatch)
 
@@ -215,29 +236,127 @@ def test_serializer_is_deterministic_and_privacy_preserving() -> None:
 
 
 def test_every_operation_serializes_its_exact_cd002_result_schema() -> None:
-    snapshot = SnapshotMetadata(1, SNAPSHOT_ID, "root", True, False, "rev", "parser", "pricing", "formatter", NOW, "live", [])
+    snapshot = SnapshotMetadata(
+        1, SNAPSHOT_ID, "revision", ReportScope("root", True, False), "source-rev",
+        "parser", "pricing-v1", "pricing", "formatter-v1", "formatter", NOW, "live", [],
+    )
     page_values = {
-        "list_agents": PageResult(SNAPSHOT_ID, "list_agents", [AgentRow("agent", None, "worker", "done", NOW, None, "measured")], "d", "agent_id", 25, None),
-        "list_turns": PageResult(SNAPSHOT_ID, "list_turns", [TurnRow("turn", "agent", NOW, None, "done", 1, "measured")], "d", "started_at", 25, None),
-        "list_events": PageResult(SNAPSHOT_ID, "list_events", [EventRow("evt_0123456789abcdef01234567", None, "agent", NOW, "message", "Safe", "measured")], "d", "occurred_at", 25, None),
-        "query_sequence": PageResult(SNAPSHOT_ID, "query_sequence", [SequenceRow("sequence", NOW, "agent", None, "delegation", "Safe", 1, "derived")], "d", "occurred_at", 25, None),
-        "query_coordination": PageResult(SNAPSHOT_ID, "query_coordination", [CoordinationRow("coordination", NOW, None, ["agent"], "claim", "Safe", "derived")], "d", "occurred_at", 25, None),
+        "list_agents": PageResult(SNAPSHOT_ID, "revision", "list_agents", [AgentRow("agent", None, None, "worker", "done", NOW, None, NOW, 1, 2, "measured")], AgentFilters(), AgentSort(), 25, None),
+        "list_turns": PageResult(SNAPSHOT_ID, "revision", "list_turns", [TurnRow("turn", "agent", NOW, None, "done", 1, None, "measured")], TurnFilters(), TurnSort(), 25, None),
+        "list_events": PageResult(SNAPSHOT_ID, "revision", "list_events", [EventRow("evt_0123456789abcdef01234567", NOW, "agent", "turn", "message", "Safe", "measured", "source", True)], EventFilters(), EventSort(), 25, None),
+        "query_sequence": SequenceResult(
+            PageResult(
+                SNAPSHOT_ID, "revision", "query_sequence",
+                [SequenceRow("sequence", "group", NOW, "agent", "Agent", None, None, "delegation", "Safe", "derived", "evt_0123456789abcdef01234567", 1, True)],
+                SequenceFilters(), SequenceSort(), 25, None,
+            ),
+            [SequenceGroup("group", None, 0, "Group", True)],
+        ),
+        "query_coordination": PageResult(
+            SNAPSHOT_ID, "revision", "query_coordination",
+            [CoordinationRow("coordination", NOW, "work", "root", "agent", ["other"], "claim", "Safe", "derived", "evt_0123456789abcdef01234567")],
+            CoordinationFilters(), CoordinationSort(), 25, None,
+        ),
     }
     values: dict[str, object] = {
         "preflight_report": PreflightResult("opaque", "root", True, False, "rev", 1, 2, 3, 4, 5, 6, None, []),
         "open_snapshot": snapshot,
-        "get_summary": SummaryResult(SNAPSHOT_ID, None, "ready", ReportScope("root"), [MetricValue("events", 1, "count", "measured", "events")], ["events"], [], [ActivityItem("evt_0123456789abcdef01234567", NOW, "message", "Safe", "measured")]),
+        "get_summary": SummaryResult(
+            SNAPSHOT_ID, "revision", "Report", None, "ready", ReportScope("root", True, False), NOW, "live",
+            TimeRange(NOW, NOW),
+            [MetricGroup("overview", "Overview", [MetricValue("events", "Events", 1, "1", "count", "measured", "events", "events")])],
+            ["events"], [SignificantActivity("evt_0123456789abcdef01234567", NOW, "Safe", "measured")], [],
+        ),
         **page_values,
-        "query_time_range": TimeSeriesResult(SNAPSHOT_ID, "wall_time", 5, 5, NOW, NOW, [TimeBucket(NOW, NOW, 1.5, "measured")], ["events"]),
-        "get_event_details": EventDetail(SNAPSHOT_ID, "evt_0123456789abcdef01234567", NOW, "message", "Safe", None, None, "measured", ["events"], []),
+        "query_time_range": HeatmapResult(
+            SNAPSHOT_ID, "revision", "wall_time", "agent", NOW, NOW, 5, 5, 25, 0,
+            "activity_descending_id_ascending", 1,
+            [HeatmapRow("agent", "Agent", HeatmapScale(0, 2.0, "sequential_nonnegative", "visible_row_maximum"), [HeatmapCell(NOW, NOW, 1.5, 1, "measured", "One", None)])],
+            ["events"],
+        ),
+        "get_event_details": EventDetail(
+            SNAPSHOT_ID, "revision", "evt_0123456789abcdef01234567", NOW,
+            "message", "Safe", "measured", ["events"], None,
+            [Disclosure("Message", "Safe", False)], "source",
+        ),
         "refresh_snapshot": RefreshSnapshotResult(False, snapshot),
-        "export_snapshot": ExportResult("directory", Path("/tmp/report"), None, [], []),
+        "export_snapshot": ExportResult(OPERATION_ID, SNAPSHOT_ID, "revision", "directory", Path("/tmp/report"), None, 2, 100, [], [ExportOmission("details", "bounded", "retry")]),
         "close_snapshot": CloseSnapshotResult(SNAPSHOT_ID, True),
     }
     assert set(values) == set(operation_requests())
     for operation, value in values.items():
         encoded = serialize_service_value(operation_requests()[operation], value)  # type: ignore[arg-type]
         assert list(encoded) == [field.name for field in fields(value)]  # type: ignore[arg-type]
+
+
+def test_pages_serialize_revision_and_exact_applied_filter_and_sort_objects() -> None:
+    envelopes = operation_requests()
+    decoded: dict[str, Any] = {
+        "list_agents": cast(ListAgentsRequest, decode_service_request(envelopes["list_agents"])),
+        "list_turns": cast(ListTurnsRequest, decode_service_request(envelopes["list_turns"])),
+        "list_events": cast(ListEventsRequest, decode_service_request(envelopes["list_events"])),
+        "query_sequence": cast(SequenceQueryRequest, decode_service_request(envelopes["query_sequence"])),
+        "query_coordination": cast(CoordinationQueryRequest, decode_service_request(envelopes["query_coordination"])),
+    }
+    rows: dict[str, Any] = {
+        "list_agents": AgentRow("agent", None, None, "worker", "done", NOW, None, NOW, 1, 2, "measured"),
+        "list_turns": TurnRow("turn", "agent", NOW, None, "done", 1, None, "measured"),
+        "list_events": EventRow("evt_0123456789abcdef01234567", NOW, "agent", "turn", "message", "Safe", "measured", "source", True),
+        "query_sequence": SequenceRow("sequence", None, NOW, "agent", "Agent", None, None, "delegation", "Safe", "derived", None, 1, False),
+        "query_coordination": CoordinationRow("coordination", NOW, "work", "root", "agent", ["other"], "claim", "Safe", "derived", None),
+    }
+    for operation in ("list_agents", "list_turns", "list_events", "query_coordination"):
+        value = decoded[operation]
+        page = PageResult(
+            SNAPSHOT_ID, "revision", operation, [rows[operation]],
+            value.filters, value.sort, value.page_size, None,
+        )
+        encoded = serialize_service_value(envelopes[operation], page)
+        assert encoded["revision_id"] == "revision"
+        assert encoded["applied_filters"] == envelopes[operation].arguments["filters"]
+        assert encoded["applied_sort"] == envelopes[operation].arguments["sort"]
+
+    sequence_request = decoded["query_sequence"]
+    sequence = SequenceResult(
+        PageResult(
+            SNAPSHOT_ID, "revision", "query_sequence", [rows["query_sequence"]],
+            sequence_request.filters, sequence_request.sort, sequence_request.page_size, None,
+        ),
+        [],
+    )
+    encoded_sequence = serialize_service_value(envelopes["query_sequence"], sequence)
+    encoded_page = cast(dict[str, object], encoded_sequence["page"])
+    assert encoded_page["revision_id"] == "revision"
+    assert encoded_page["applied_filters"] == envelopes["query_sequence"].arguments["filters"]
+
+
+def test_grouped_results_reject_snapshot_and_operation_correlation_mismatches() -> None:
+    sequence = SequenceResult(
+        PageResult(
+            "other", "revision", "query_sequence", [], SequenceFilters(),
+            SequenceSort(), 25, None,
+        ),
+        [],
+    )
+    with pytest.raises(WorkerProtocolError, match="correlation"):
+        serialize_service_value(operation_requests()["query_sequence"], sequence)
+
+    exported = ExportResult(
+        "op_aaaaaaaaaaaaaaaaaaaaaaaa", SNAPSHOT_ID, "revision", "directory",
+        Path("/tmp/report"), None, 1, 1, [], [],
+    )
+    with pytest.raises(WorkerProtocolError, match="correlation"):
+        serialize_service_value(operation_requests()["export_snapshot"], exported)
+
+
+def test_page_serializer_rejects_invalid_values_inside_exact_nested_classes() -> None:
+    page: PageResult[AgentRow, AgentFilters, AgentSort] = PageResult(
+        SNAPSHOT_ID, "revision", "list_agents", [],
+        AgentFilters("", [1], [], []),  # type: ignore[list-item]
+        AgentSort(), 25, None,
+    )
+    with pytest.raises(WorkerProtocolError, match="invalid result"):
+        serialize_service_value(operation_requests()["list_agents"], page)
 
 
 def test_serializer_rejects_wrong_nested_type_nonfinite_naive_and_bool_integer() -> None:
@@ -248,9 +367,12 @@ def test_serializer_rejects_wrong_nested_type_nonfinite_naive_and_bool_integer()
     ]
     for value in invalid_values:
         with pytest.raises(WorkerProtocolError, match="invalid result"):
-            serialize_service_value(envelope, value)  # type: ignore[arg-type]
+            serialize_service_value(envelope, value)
 
-    time_value = TimeSeriesResult(SNAPSHOT_ID, "wall_time", 5, 5, NOW.replace(tzinfo=None), NOW, [], [])
+    time_value = HeatmapResult(
+        SNAPSHOT_ID, "revision", "wall_time", "agent", NOW.replace(tzinfo=None), NOW,
+        5, 5, 25, 0, "activity_descending_id_ascending", 0, [], [],
+    )
     with pytest.raises(WorkerProtocolError, match="invalid result"):
         serialize_service_value(operation_requests()["query_time_range"], time_value)
 
@@ -276,7 +398,7 @@ def runtime_for(
         WorkerConfig(1, "0.10.2", max_in_flight, max_record_bytes),
         clock=clock or Clock(), stdin=io.BytesIO(), stdout=output, stderr=io.StringIO(),
     )
-    runtime._service = service  # type: ignore[assignment,attr-defined]
+    runtime._service = service  # type: ignore[assignment]
     return runtime, output
 
 
@@ -301,8 +423,9 @@ def handshake_record(*, protocol: int = 1, package: str = "0.10.2") -> dict[str,
             "expected_package_version": package,
             "service_config": {
                 "authorized_source_roots": ["/tmp"], "parser_version": "p",
-                "pricing_digest": "pricing", "formatter_digest": "formatter",
-                "default_page_size": 100, "max_page_size": 500, "max_time_buckets": 2000,
+                "pricing_version": "pv", "pricing_digest": "pricing",
+                "formatter_version": "fv", "formatter_digest": "formatter",
+                "default_page_size": 100, "max_page_size": 500, "max_heatmap_cells": 2000,
             },
         },
     }
@@ -327,7 +450,7 @@ def test_progress_is_monotonic_bounded_coalesced_and_terminal_does_not_bypass_in
     assert records[0]["completed"] == 0
 
     with pytest.raises(WorkerProtocolError, match="invalid result"):
-        runtime._record_progress(OPERATION_ID, "scan", -1, 10, "Invalid")  # type: ignore[attr-defined]
+        runtime._record_progress(OPERATION_ID, "scan", -1, 10, "Invalid")
     runtime.shutdown(wait=True)
 
 
@@ -363,7 +486,9 @@ def test_cancel_sets_only_selected_operation_and_service_errors_remain_correlate
             tokens.append(cancellation)
             started[index].set()
             release.wait(2)
-            code = "REPORT_CANCELLED" if cancellation.is_cancelled() else "REPORT_NOT_FOUND"
+            code: ReportErrorCode = (
+                "REPORT_CANCELLED" if cancellation.is_cancelled() else "REPORT_NOT_FOUND"
+            )
             return ServiceResult(False, error=ReportError(code, "Safe failure.", True, context.operation_id))
 
     runtime, output = runtime_for(Service())
@@ -415,7 +540,9 @@ def test_capacity_rejects_ordinary_work_but_cancel_remains_available() -> None:
         def get_summary(self, context, value, *, cancellation):  # type: ignore[no-untyped-def]
             started.set()
             release.wait(2)
-            code = "REPORT_CANCELLED" if cancellation.is_cancelled() else "REPORT_NOT_FOUND"
+            code: ReportErrorCode = (
+                "REPORT_CANCELLED" if cancellation.is_cancelled() else "REPORT_NOT_FOUND"
+            )
             return ServiceResult(False, error=ReportError(code, "Safe.", True, context.operation_id))
 
     runtime, output = runtime_for(Service(), max_in_flight=1)
@@ -442,7 +569,13 @@ def test_result_can_win_after_cancellation_and_duplicate_id_is_never_reused() ->
         def get_summary(self, context, value, *, cancellation):  # type: ignore[no-untyped-def]
             started.set()
             release.wait(2)
-            return ServiceResult(True, value=SummaryResult(SNAPSHOT_ID, None, "ready", ReportScope("root"), [], [], [], []))
+            return ServiceResult(
+                True,
+                value=SummaryResult(
+                    SNAPSHOT_ID, "revision", "Report", None, "ready", ReportScope("root"), NOW,
+                    "live", TimeRange(NOW, NOW), [], [], [], [],
+                ),
+            )
 
     runtime, output = runtime_for(Service())
     envelope = operation_requests()["get_summary"]
@@ -501,8 +634,9 @@ def test_runtime_handshake_constructs_one_service_and_keeps_stdout_jsonl_only() 
             "expected_package_version": "0.10.2",
             "service_config": {
                 "authorized_source_roots": ["/tmp"], "parser_version": "p",
-                "pricing_digest": "pricing", "formatter_digest": "formatter",
-                "default_page_size": 100, "max_page_size": 500, "max_time_buckets": 2000,
+                "pricing_version": "pv", "pricing_digest": "pricing",
+                "formatter_version": "fv", "formatter_digest": "formatter",
+                "default_page_size": 100, "max_page_size": 500, "max_heatmap_cells": 2000,
             },
         },
     }
@@ -527,3 +661,27 @@ def test_runtime_handshake_constructs_one_service_and_keeps_stdout_jsonl_only() 
         "type": "result", "operation": "worker_handshake", "snapshot_id": None,
         "ok": True, "result": {"worker_protocol_version": 1, "worker_package_version": "0.10.2"},
     }]
+
+
+def test_create_worker_runtime_accepts_a_production_service_factory() -> None:
+    """Let the CLI composition root supply the process-local Application Service."""
+
+    stdin = io.BytesIO(json.dumps(handshake_record()).encode() + b"\n")
+    stdout = io.BytesIO()
+    service = object()
+    received_configs: list[object] = []
+
+    def factory(config: object) -> object:
+        received_configs.append(config)
+        return service
+
+    runtime = create_worker_runtime(
+        WorkerConfig(1, "0.10.2", 2, 1_048_576),
+        stdin=stdin,
+        stdout=stdout,
+        stderr=io.StringIO(),
+        service_factory=factory,  # type: ignore[arg-type]
+    )
+
+    assert runtime.run() == 0
+    assert len(received_configs) == 1
