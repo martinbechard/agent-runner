@@ -13,19 +13,24 @@ import {
   MAX_HEATMAP_ROWS,
   MAX_PAGE_SIZE,
   MAX_HEATMAP_CELLS,
+  MAX_HEATMAP_EVIDENCE_ITEMS,
+  HEATMAP_MODES,
   SURFACE_DEFINITIONS,
   WORKSPACE_COMMANDS,
   computeVirtualWindow,
   describeBoundaryError,
   describeExportResult,
   formatLocalInstant,
+  heatmapCellAccessibleName,
   heatmapCellPresentation,
+  heatmapEvidenceMatchesSelection,
+  heatmapInteractionForMatrixRequest,
   heatmapResolutionLabel,
+  moveHeatmapGridFocus,
   nextHeatmapResolution,
   newOperationId,
   reportErrorRecovery,
   scopeSelectionForEditing,
-  shiftHeatmapRange,
   snapshotTitleAsOf,
 } from "./report-workspace";
 
@@ -41,6 +46,7 @@ describe("ReportWorkspaceController", () => {
       MAX_CURSOR_HISTORY,
       MAX_HEATMAP_CELLS,
       MAX_HEATMAP_ROWS,
+      MAX_HEATMAP_EVIDENCE_ITEMS,
       DEFAULT_ROW_HEIGHT_PX,
       DEFAULT_OVERSCAN_ROWS,
     }).toEqual({
@@ -49,6 +55,7 @@ describe("ReportWorkspaceController", () => {
       MAX_CURSOR_HISTORY: 100,
       MAX_HEATMAP_CELLS: 2_000,
       MAX_HEATMAP_ROWS: 200,
+      MAX_HEATMAP_EVIDENCE_ITEMS: 100,
       DEFAULT_ROW_HEIGHT_PX: 44,
       DEFAULT_OVERSCAN_ROWS: 8,
     });
@@ -59,7 +66,7 @@ describe("ReportWorkspaceController", () => {
       listAgents: "list_agents",
       listTurns: "list_turns",
       listEvents: "list_events",
-      queryTimeRange: "query_time_range",
+      querySnapshotTimeRange: "query_snapshot_time_range",
       querySequence: "query_sequence",
       queryCoordination: "query_coordination",
       getEventDetails: "get_event_details",
@@ -122,7 +129,7 @@ describe("ReportWorkspaceController", () => {
       expect(definition.headingId, surface).toBe(`report-view-heading-${surface}`);
     }
     expect(SURFACE_DEFINITIONS.summary.operation).toBe("get_summary");
-    expect(SURFACE_DEFINITIONS.heatmap.operation).toBe("query_time_range");
+    expect(SURFACE_DEFINITIONS.heatmap.operation).toBe("query_snapshot_time_range");
     expect(SURFACE_DEFINITIONS.timeline.operation).toBe("list_events");
     expect(SURFACE_DEFINITIONS.tools.operation).toBe("list_events");
     expect(SURFACE_DEFINITIONS.detail.operation).toBe("get_event_details");
@@ -226,29 +233,10 @@ describe("heatmap bounds", () => {
   it("labels service coarsening without claiming client reaggregation", () => {
     expect(heatmapResolutionLabel(5, 5)).toBe("");
     expect(heatmapResolutionLabel(5, 17)).toBe(
-      "Showing 17-minute buckets; requested 5-minute buckets.",
+      "Showing 17-minute periods; requested 5-minute periods.",
     );
     expect(() => heatmapResolutionLabel(0, 5)).toThrow("positive finite");
     expect(() => heatmapResolutionLabel(5, Number.NaN)).toThrow("positive finite");
-  });
-
-  it("moves a half-open range by one actual bucket without changing its duration", () => {
-    expect(shiftHeatmapRange(
-      { fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z" },
-      17,
-      "next",
-    )).toEqual({
-      fromTime: "2026-08-12T12:17:00.000Z",
-      toTime: "2026-08-12T13:17:00.000Z",
-    });
-    expect(shiftHeatmapRange(
-      { fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z" },
-      5,
-      "previous",
-    )).toEqual({
-      fromTime: "2026-08-12T11:55:00.000Z",
-      toTime: "2026-08-12T12:55:00.000Z",
-    });
   });
 
   it("zooms only through the accepted requested resolutions", () => {
@@ -258,27 +246,129 @@ describe("heatmap bounds", () => {
     expect(nextHeatmapResolution(60, "out")).toBe(60);
   });
 
-  it("uses each row domain independently and preserves non-color semantics", () => {
-    expect(heatmapCellPresentation(
-      { minimum: 0, maximum: 10, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" },
-      5,
-    )).toEqual({ tone: "sequential", intensity: 0.5, label: "midpoint" });
-    expect(heatmapCellPresentation(
-      { minimum: 0, maximum: 100, colorSemantic: "sequential_nonnegative", basis: "context_window_capacity" },
-      5,
-    )).toEqual({ tone: "sequential", intensity: 0.05, label: "low" });
-    expect(heatmapCellPresentation(
-      { minimum: -20, maximum: 80, colorSemantic: "diverging_signed", basis: "visible_row_maximum" },
-      -10,
-    )).toEqual({ tone: "negative", intensity: 0.5, label: "negative" });
-    expect(heatmapCellPresentation(
-      { minimum: 3, maximum: 3, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" },
-      3,
-    )).toEqual({ tone: "midpoint", intensity: 0.5, label: "midpoint" });
-    expect(heatmapCellPresentation(
-      { minimum: 0, maximum: 10, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" },
-      null,
-    )).toEqual({ tone: "unavailable", intensity: 0, label: "unavailable" });
+  const completeCell = {
+    startTime: "2026-08-12T12:00:00Z",
+    endTime: "2026-08-12T12:05:00Z",
+    value: 0,
+    formattedValue: "0",
+    valueState: "derived" as const,
+    applicableZero: true,
+    contributingEvidenceCount: 1,
+    normalizedIntensity: 0,
+    supportingText: null,
+  };
+
+  it("exposes exactly three modes and exact evidence-state wording", () => {
+    expect(HEATMAP_MODES).toEqual([
+      { value: "wall_time", label: "Wall time" },
+      { value: "tokens", label: "Tokens" },
+      { value: "models", label: "Models" },
+    ]);
+    const scale = { availability: "available" as const, minimum: 0, maximum: 10, basis: "visible_row_maximum" as const };
+    expect(heatmapCellPresentation(scale, completeCell)).toEqual({ tone: "derived", intensity: 0, visibleValue: "0", explanation: null });
+    expect(heatmapCellPresentation(scale, { ...completeCell, value: 4, formattedValue: "Partial · 4", valueState: "partial", applicableZero: false, normalizedIntensity: 0.4 })).toEqual({
+      tone: "partial",
+      intensity: 0.4,
+      visibleValue: "Partial · 4",
+      explanation: "Some data for this period is unavailable. The value shown is the available subtotal.",
+    });
+    expect(heatmapCellPresentation(scale, { ...completeCell, value: null, formattedValue: "Unavailable", valueState: "unavailable", applicableZero: false, normalizedIntensity: null })).toEqual({
+      tone: "unavailable",
+      intensity: null,
+      visibleValue: "Unavailable",
+      explanation: "No usable data is available for this period.",
+    });
+  });
+
+  it("uses true unavailable-capacity semantics without intensity, percentage, or fallback", () => {
+    const unavailableScale = { availability: "unavailable" as const, reason: "context_capacity_unavailable" as const };
+    const cell = { ...completeCell, value: null, formattedValue: "N/A", valueState: "unavailable" as const, applicableZero: false, normalizedIntensity: null, supportingText: "1.2K observed tokens" };
+    expect(heatmapCellPresentation(unavailableScale, cell)).toEqual({
+      tone: "capacity-unavailable",
+      intensity: null,
+      visibleValue: "N/A — capacity unavailable",
+      explanation: "Capacity is unavailable. No percentage or color comparison is available.",
+    });
+    const accessibleName = heatmapCellAccessibleName("tokens", "Context size (max)", cell, unavailableScale, true);
+    expect(accessibleName).toContain("N/A — capacity unavailable");
+    expect(accessibleName).toContain("intensity N/A");
+    expect(accessibleName).not.toContain("%");
+    expect(accessibleName).not.toContain("visible row maximum");
+  });
+
+  it("resolves bounded roving-grid coordinates without a DOM harness", () => {
+    expect(moveHeatmapGridFocus([3, 2], { rowIndex: 0, columnIndex: 1 }, "ArrowDown")).toEqual({ rowIndex: 1, columnIndex: 1 });
+    expect(moveHeatmapGridFocus([3, 2], { rowIndex: 1, columnIndex: 1 }, "ArrowRight")).toEqual({ rowIndex: 1, columnIndex: 1 });
+    expect(moveHeatmapGridFocus([3, 2], { rowIndex: 1, columnIndex: 1 }, "Home")).toEqual({ rowIndex: 1, columnIndex: 0 });
+    expect(moveHeatmapGridFocus([3, 2], { rowIndex: 0, columnIndex: 0 }, "End")).toEqual({ rowIndex: 0, columnIndex: 2 });
+  });
+
+  it("accepts synchronized evidence only for the exact selected matrix cell", () => {
+    const selection = {
+      rowId: "row-1",
+      rowLabel: "Uncached input",
+      periodStartTime: completeCell.startTime,
+      periodEndTime: completeCell.endTime,
+      formattedValue: completeCell.formattedValue,
+      valueState: completeCell.valueState,
+      applicableZero: completeCell.applicableZero,
+      scale: { availability: "available" as const, minimum: 0, maximum: 1, basis: "visible_row_maximum" as const },
+      supportingText: null,
+    };
+    const evidence = {
+      snapshotId: "snapshot-1",
+      revisionId: "revision-1",
+      queryKind: "cell_evidence" as const,
+      mode: "tokens" as const,
+      rowId: selection.rowId,
+      rowLabel: selection.rowLabel,
+      periodStartTime: selection.periodStartTime,
+      periodEndTime: selection.periodEndTime,
+      value: completeCell.value,
+      formattedValue: selection.formattedValue,
+      valueState: selection.valueState,
+      applicableZero: selection.applicableZero,
+      evidenceItems: [],
+      omittedEvidenceCount: 0,
+      provenance: [],
+    };
+    expect(heatmapEvidenceMatchesSelection(selection, evidence)).toBe(true);
+    expect(heatmapEvidenceMatchesSelection(selection, { ...evidence, formattedValue: "1" })).toBe(false);
+  });
+
+  it("creates a coherent matrix transition without carrying cell-scoped state", () => {
+    const evidence = {
+      snapshotId: "snapshot-1",
+      revisionId: "revision-1",
+      queryKind: "cell_evidence" as const,
+      mode: "tokens" as const,
+      rowId: "row-1",
+      rowLabel: "Uncached input",
+      periodStartTime: completeCell.startTime,
+      periodEndTime: completeCell.endTime,
+      value: completeCell.value,
+      formattedValue: completeCell.formattedValue,
+      valueState: completeCell.valueState,
+      applicableZero: completeCell.applicableZero,
+      evidenceItems: [],
+      omittedEvidenceCount: 0,
+      provenance: [],
+    };
+    const interaction = {
+      mode: "tokens" as const,
+      visibleFromTime: completeCell.startTime,
+      visibleToTime: completeCell.endTime,
+      requestedResolutionMinutes: 5 as const,
+      maximumRows: 100,
+      selectedCell: null,
+      history: [],
+      evidence: { kind: "loading" as const, previous: evidence, operationId: "operation-1" },
+    };
+    expect(heatmapInteractionForMatrixRequest(interaction, { mode: "models" })).toMatchObject({
+      mode: "models",
+      selectedCell: null,
+      evidence: { kind: "not-requested" },
+    });
   });
 });
 
@@ -327,8 +417,12 @@ describe("workspace accessibility", () => {
     const instant = "2026-08-12T12:30:00Z";
     expect(formatLocalInstant(instant)).toBe(
       new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
       }).format(new Date(instant)),
     );
     expect(() => formatLocalInstant("not-an-instant")).toThrow("valid ISO instant");
@@ -338,8 +432,12 @@ describe("workspace accessibility", () => {
     const observationTime = "2026-08-12T12:30:00Z";
     expect(snapshotTitleAsOf("Investigate report", observationTime)).toBe(
       `Investigate report as of ${new Intl.DateTimeFormat(undefined, {
-        dateStyle: "medium",
-        timeStyle: "short",
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+        hour: "numeric",
+        minute: "2-digit",
+        timeZoneName: "short",
       }).format(new Date(observationTime))}`,
     );
     expect(snapshotTitleAsOf("  ", observationTime)).toMatch(/^Untitled run as of /);

@@ -14,9 +14,12 @@ import {
   type EventSortDto,
   type ExportMode,
   type ExportSnapshotResultDto,
-  type HeatmapGroupBy,
+  type HeatmapCellEvidenceResultDto,
+  type HeatmapMatrixCellDto,
+  type HeatmapMatrixResultDto,
+  type HeatmapMode,
+  type HeatmapPeriodHistoryEntry,
   type HeatmapRequestedResolutionMinutes,
-  type HeatmapResultDto,
   type HeatmapScaleDto,
   type PreflightReportDto,
   type ReportErrorDto,
@@ -28,7 +31,6 @@ import {
   type SummaryMetricGroupId,
   type TurnFiltersDto,
   type TurnSortDto,
-  type TimeMeasure,
   parseAgentPageDto,
   parseCoordinationPageDto,
   parseCloseSnapshotResultDto,
@@ -51,6 +53,7 @@ export const MAX_PAGE_SIZE = 500;
 export const MAX_CURSOR_HISTORY = 100;
 export const MAX_HEATMAP_CELLS = 2_000;
 export const MAX_HEATMAP_ROWS = 200;
+export const MAX_HEATMAP_EVIDENCE_ITEMS = 100;
 export const DEFAULT_ROW_HEIGHT_PX = 44;
 export const DEFAULT_OVERSCAN_ROWS = 8;
 
@@ -151,7 +154,7 @@ export const WORKSPACE_COMMANDS = {
   listAgents: "list_agents",
   listTurns: "list_turns",
   listEvents: "list_events",
-  queryTimeRange: "query_time_range",
+  querySnapshotTimeRange: "query_snapshot_time_range",
   querySequence: "query_sequence",
   queryCoordination: "query_coordination",
   getEventDetails: "get_event_details",
@@ -183,6 +186,11 @@ export interface ReportWorkspaceController {
   navigate(surface: WorkspaceSurfaceId, trigger?: HTMLElement): Promise<void>;
   nextPage(): Promise<void>;
   previousPage(): Promise<void>;
+  selectHeatmapCell(rowId: string, periodStartTime: string, periodEndTime: string): Promise<void>;
+  drillDownHeatmap(): Promise<void>;
+  stepBackHeatmap(): Promise<void>;
+  moveHeatmapPeriod(direction: "previous" | "next"): Promise<void>;
+  setHeatmapPeriod(minutes: HeatmapRequestedResolutionMinutes): Promise<void>;
   refreshSnapshot(): Promise<void>;
   exportSnapshot(mode?: ExportMode): Promise<void>;
   reopenExport(exportId: string): Promise<void>;
@@ -222,13 +230,73 @@ export interface WorkspaceState {
   readonly snapshot: SnapshotMetadataDto | null;
   readonly summary: LoadState<ReportSummaryDto>;
   readonly pagers: Readonly<Record<PagerName, UnknownPager>>;
-  readonly timeSeries: LoadState<HeatmapResultDto>;
+  readonly timeSeries: LoadState<HeatmapMatrixResultDto>;
+  readonly heatmapInteraction: HeatmapInteractionState;
   readonly detail: LoadState<EventDetailDto>;
   readonly exportState: LoadState<ExportSnapshotResultDto>;
   readonly sequencePresentation: SequencePresentationState;
   readonly activeOperationId: string | null;
   readonly activeOperation: WorkspaceOperationName | null;
   readonly requestSequence: number;
+}
+
+export interface HeatmapSelectedCell {
+  readonly rowId: string;
+  readonly rowLabel: string;
+  readonly periodStartTime: string;
+  readonly periodEndTime: string;
+  readonly formattedValue: string;
+  readonly valueState: HeatmapMatrixCellDto["valueState"];
+  readonly applicableZero: boolean;
+  readonly scale: HeatmapScaleDto;
+  readonly supportingText: string | null;
+}
+
+export interface HeatmapInteractionState {
+  readonly mode: HeatmapMode;
+  readonly visibleFromTime: string;
+  readonly visibleToTime: string;
+  readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
+  readonly maximumRows: number;
+  readonly selectedCell: HeatmapSelectedCell | null;
+  readonly history: readonly HeatmapPeriodHistoryEntry[];
+  readonly evidence: LoadState<HeatmapCellEvidenceResultDto>;
+}
+
+/** Confirm that a lazy evidence result still describes the selected matrix cell. */
+export function heatmapEvidenceMatchesSelection(selection: HeatmapSelectedCell, result: HeatmapCellEvidenceResultDto): boolean {
+  return selection.rowId === result.rowId
+    && selection.rowLabel === result.rowLabel
+    && selection.periodStartTime === result.periodStartTime
+    && selection.periodEndTime === result.periodEndTime
+    && selection.formattedValue === result.formattedValue
+    && selection.valueState === result.valueState
+    && selection.applicableZero === result.applicableZero;
+}
+
+/** Remove a superseded evidence loading shell without pairing it to another cell. */
+export function coherentHeatmapInteraction(interaction: HeatmapInteractionState): HeatmapInteractionState {
+  if (interaction.evidence.kind !== "loading") return interaction;
+  const previous = interaction.evidence.previous;
+  return Object.freeze({
+    ...interaction,
+    evidence: previous === null
+      ? Object.freeze({ kind: "not-requested" })
+      : loadStateFor(previous, previous.evidenceItems.length === 0),
+  });
+}
+
+/** Create the next matrix binding while clearing cell-scoped state. */
+export function heatmapInteractionForMatrixRequest(
+  interaction: HeatmapInteractionState,
+  patch: Partial<HeatmapInteractionState>,
+): HeatmapInteractionState {
+  return Object.freeze({
+    ...coherentHeatmapInteraction(interaction),
+    ...patch,
+    selectedCell: null,
+    evidence: Object.freeze({ kind: "not-requested" }),
+  });
 }
 
 interface SurfaceDefinition {
@@ -260,7 +328,7 @@ export const SURFACE_DEFINITIONS: Readonly<Record<WorkspaceSurfaceId, SurfaceDef
   Object.freeze({
     summary: surface("summary", "Summary", "overview", "get_summary", "No summary is available."),
     coordination: surface("coordination", "Coordination", "evidence", "query_coordination", "No coordination evidence matches the active filters."),
-    heatmap: surface("heatmap", "Heatmap", "evidence", "query_time_range", "No activity falls within the visible time range."),
+    heatmap: surface("heatmap", "Heatmap", "evidence", "query_snapshot_time_range", "No activity falls within the visible time range."),
     timeline: surface("timeline", "Timeline", "evidence", "list_events", "No timeline events match the active filters."),
     sequence: surface("sequence", "Sequence", "evidence", "query_sequence", "No sequence evidence matches the active filters."),
     agents: surface("agents", "Agents", "evidence", "list_agents", "No agents match the active filters."),
@@ -318,12 +386,26 @@ function initialState(): WorkspaceState {
     summary: Object.freeze({ kind: "not-requested" }),
     pagers: createPagers(),
     timeSeries: Object.freeze({ kind: "not-requested" }),
+    heatmapInteraction: initialHeatmapInteraction(),
     detail: Object.freeze({ kind: "not-requested" }),
     exportState: Object.freeze({ kind: "not-requested" }),
     sequencePresentation: Object.freeze({ zoomScale: 1, fitMode: "fit-all", collapsedGroupIds: new Set<string>(), focusedAgentId: null, selectedEndpoint: null }),
     activeOperationId: null,
     activeOperation: null,
     requestSequence: 0,
+  });
+}
+
+function initialHeatmapInteraction(): HeatmapInteractionState {
+  return Object.freeze({
+    mode: "wall_time",
+    visibleFromTime: "",
+    visibleToTime: "",
+    requestedResolutionMinutes: 5,
+    maximumRows: 100,
+    selectedCell: null,
+    history: Object.freeze([]),
+    evidence: Object.freeze({ kind: "not-requested" }),
   });
 }
 
@@ -356,7 +438,14 @@ export function computeVirtualWindow(input: {
 export function formatLocalInstant(isoInstant: string): string {
   const instant = new Date(isoInstant);
   if (isoInstant === "" || Number.isNaN(instant.getTime())) throw new Error("Workspace instant is not a valid ISO instant.");
-  return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(instant);
+  return new Intl.DateTimeFormat(undefined, {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    timeZoneName: "short",
+  }).format(instant);
 }
 
 /** Pair the report identity with the snapshot's browser-local observation time. */
@@ -369,7 +458,7 @@ export function heatmapResolutionLabel(requestedMinutes: number, actualMinutes: 
   if (!Number.isFinite(requestedMinutes) || requestedMinutes <= 0 || !Number.isFinite(actualMinutes) || actualMinutes <= 0) {
     throw new Error("Heatmap resolutions must be positive finite values.");
   }
-  return actualMinutes === requestedMinutes ? "" : `Showing ${actualMinutes}-minute buckets; requested ${requestedMinutes}-minute buckets.`;
+  return actualMinutes === requestedMinutes ? "" : `Showing ${actualMinutes}-minute periods; requested ${requestedMinutes}-minute periods.`;
 }
 
 export interface HeatmapRange {
@@ -378,22 +467,25 @@ export interface HeatmapRange {
 }
 
 export interface HeatmapCellPresentation {
-  readonly tone: "sequential" | "negative" | "neutral" | "positive" | "midpoint" | "unavailable";
-  readonly intensity: number;
-  readonly label: "low" | "midpoint" | "high" | "negative" | "neutral" | "positive" | "unavailable";
+  readonly tone: "measured" | "derived" | "partial" | "unavailable" | "capacity-unavailable";
+  readonly intensity: number | null;
+  readonly visibleValue: string;
+  readonly explanation: string | null;
 }
 
-const HEATMAP_RESOLUTIONS = Object.freeze([1, 5, 15, 30, 60] as const);
-
-/** Move a half-open heatmap range by one returned service bucket. */
-export function shiftHeatmapRange(range: HeatmapRange, bucketMinutes: number, direction: "previous" | "next"): HeatmapRange {
-  const from = new Date(range.fromTime);
-  const to = new Date(range.toTime);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to) throw new Error("Heatmap range must contain ordered ISO instants.");
-  if (!Number.isSafeInteger(bucketMinutes) || bucketMinutes < 1) throw new Error("Heatmap bucket size must be a positive whole minute.");
-  const offset = bucketMinutes * 60_000 * (direction === "previous" ? -1 : 1);
-  return Object.freeze({ fromTime: new Date(from.getTime() + offset).toISOString(), toTime: new Date(to.getTime() + offset).toISOString() });
+function heatmapStateText(scale: HeatmapScaleDto, valueState: HeatmapMatrixCellDto["valueState"], formattedValue: string): Pick<HeatmapCellPresentation, "visibleValue" | "explanation"> {
+  if (scale.availability === "unavailable") return { visibleValue: "N/A — capacity unavailable", explanation: "Capacity is unavailable. No percentage or color comparison is available." };
+  if (valueState === "unavailable") return { visibleValue: "Unavailable", explanation: "No usable data is available for this period." };
+  if (valueState === "partial") return { visibleValue: formattedValue, explanation: "Some data for this period is unavailable. The value shown is the available subtotal." };
+  return { visibleValue: formattedValue, explanation: null };
 }
+
+export const HEATMAP_RESOLUTIONS = Object.freeze([1, 5, 15, 30, 60] as const);
+export const HEATMAP_MODES: readonly Readonly<{ value: HeatmapMode; label: string }>[] = Object.freeze([
+  Object.freeze({ value: "wall_time", label: "Wall time" }),
+  Object.freeze({ value: "tokens", label: "Tokens" }),
+  Object.freeze({ value: "models", label: "Models" }),
+]);
 
 /** Select the adjacent accepted service resolution for a zoom action. */
 export function nextHeatmapResolution(current: HeatmapRequestedResolutionMinutes, direction: "in" | "out"): HeatmapRequestedResolutionMinutes {
@@ -403,17 +495,51 @@ export function nextHeatmapResolution(current: HeatmapRequestedResolutionMinutes
   return HEATMAP_RESOLUTIONS[nextIndex] ?? current;
 }
 
-/** Map one value against only its returned row domain. */
-export function heatmapCellPresentation(scale: HeatmapScaleDto, value: number | null): HeatmapCellPresentation {
-  if (value === null) return Object.freeze({ tone: "unavailable", intensity: 0, label: "unavailable" });
-  if (scale.minimum === scale.maximum) return Object.freeze({ tone: "midpoint", intensity: 0.5, label: "midpoint" });
-  if (scale.colorSemantic === "sequential_nonnegative") {
-    const intensity = Math.max(0, Math.min(1, (value - scale.minimum) / (scale.maximum - scale.minimum)));
-    return Object.freeze({ tone: "sequential", intensity, label: intensity < 1 / 3 ? "low" : intensity > 2 / 3 ? "high" : "midpoint" });
-  }
-  if (value < 0) return Object.freeze({ tone: "negative", intensity: Math.max(0, Math.min(1, value / scale.minimum)), label: "negative" });
-  if (value > 0) return Object.freeze({ tone: "positive", intensity: Math.max(0, Math.min(1, value / scale.maximum)), label: "positive" });
-  return Object.freeze({ tone: "neutral", intensity: 0, label: "neutral" });
+/** Present service-owned Heatmap evidence without inventing a value or scale. */
+export function heatmapCellPresentation(scale: HeatmapScaleDto, cell: HeatmapMatrixCellDto): HeatmapCellPresentation {
+  const text = heatmapStateText(scale, cell.valueState, cell.formattedValue);
+  const tone = scale.availability === "unavailable" ? "capacity-unavailable" : cell.valueState;
+  return Object.freeze({ tone, intensity: scale.availability === "unavailable" ? null : cell.normalizedIntensity, ...text });
+}
+
+/** Create the complete non-color description for one matrix cell. */
+export function heatmapCellAccessibleName(
+  mode: HeatmapMode,
+  rowLabel: string,
+  cell: HeatmapMatrixCellDto,
+  scale: HeatmapScaleDto,
+  selected: boolean,
+): string {
+  const presentation = heatmapCellPresentation(scale, cell);
+  const scaleText = scale.availability === "available"
+    ? `scale available, ${scale.basis.replaceAll("_", " ")}`
+    : "scale unavailable, capacity unavailable, intensity N/A";
+  const zeroText = cell.applicableZero ? "; complete applicable zero" : "";
+  const support = cell.supportingText === null ? "" : `; ${cell.supportingText}`;
+  const explanation = presentation.explanation === null ? "" : `; ${presentation.explanation}`;
+  return `${HEATMAP_MODES.find((item) => item.value === mode)?.label ?? mode}; ${rowLabel}; ${formatLocalInstant(cell.startTime)} to ${formatLocalInstant(cell.endTime)}; ${presentation.visibleValue}; ${cell.valueState}${zeroText}; ${scaleText}${support}${explanation}; ${selected ? "selected" : "not selected"}`;
+}
+
+export interface HeatmapGridCoordinate { readonly rowIndex: number; readonly columnIndex: number }
+
+/** Resolve roving-grid intent without requiring a DOM test environment. */
+export function moveHeatmapGridFocus(
+  rowLengths: readonly number[],
+  current: HeatmapGridCoordinate,
+  key: "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End",
+): HeatmapGridCoordinate {
+  if (rowLengths.length === 0 || (rowLengths[current.rowIndex] ?? 0) === 0) return Object.freeze({ ...current });
+  let rowIndex = current.rowIndex;
+  let columnIndex = current.columnIndex;
+  if (key === "ArrowLeft") columnIndex -= 1;
+  else if (key === "ArrowRight") columnIndex += 1;
+  else if (key === "ArrowUp") rowIndex -= 1;
+  else if (key === "ArrowDown") rowIndex += 1;
+  else if (key === "Home") columnIndex = 0;
+  else columnIndex = (rowLengths[rowIndex] ?? 1) - 1;
+  rowIndex = Math.max(0, Math.min(rowLengths.length - 1, rowIndex));
+  columnIndex = Math.max(0, Math.min((rowLengths[rowIndex] ?? 1) - 1, columnIndex));
+  return Object.freeze({ rowIndex, columnIndex });
 }
 
 function safeBoundaryDetail(value: unknown): string | null {
@@ -738,131 +864,135 @@ function renderPage(
   return fragment;
 }
 
-interface HeatmapSelection {
-  readonly rowId: string;
-  readonly rowLabel: string;
-  readonly startTime: string;
-  readonly endTime: string;
-  readonly primaryLabel: string;
-  readonly secondaryLabel: string | null;
-  readonly evidence: string;
-  readonly count: number;
-}
-
-interface HeatmapPresentationState {
-  readonly range: HeatmapRange;
-  readonly history: readonly HeatmapRange[];
-  readonly selected: HeatmapSelection | null;
-  readonly measure: TimeMeasure;
-  readonly groupBy: HeatmapGroupBy;
-  readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
-  readonly maximumRows: number;
-}
-
 interface HeatmapRenderActions {
-  select(selection: HeatmapSelection): void;
-  drillIn(selection: HeatmapSelection): void;
+  select(selection: HeatmapSelectedCell): void;
+  drillDown(): void;
   stepBack(): void;
   restoreHistory(index: number): void;
-  pan(direction: "previous" | "next"): void;
-  zoom(direction: "in" | "out"): void;
-  setMeasure(measure: TimeMeasure): void;
-  setGroupBy(groupBy: HeatmapGroupBy): void;
+  movePeriod(direction: "previous" | "next"): void;
+  setMode(mode: HeatmapMode): void;
   setResolution(resolution: HeatmapRequestedResolutionMinutes): void;
   setMaximumRows(maximumRows: number): void;
+  openDetail(eventId: string, trigger: HTMLElement): void;
 }
-
-const HEATMAP_MEASURES: readonly Readonly<{ value: TimeMeasure; label: string }>[] = Object.freeze([
-  { value: "wall_time", label: "Wall time" },
-  { value: "uncached_input_tokens", label: "Uncached input tokens" },
-  { value: "cached_input_tokens", label: "Cached input tokens" },
-  { value: "output_tokens", label: "Output tokens" },
-  { value: "reasoning_tokens", label: "Reasoning tokens" },
-  { value: "cost_usd", label: "Cost (USD)" },
-]);
-
-const HEATMAP_GROUPS: readonly Readonly<{ value: HeatmapGroupBy; label: string }>[] = Object.freeze([
-  { value: "agent", label: "Agent" },
-  { value: "event_kind", label: "Event kind" },
-  { value: "work_item", label: "Work item" },
-]);
 
 function heatmapRangeLabel(range: HeatmapRange): string {
   return `${formatLocalInstant(range.fromTime)} to ${formatLocalInstant(range.toTime)}`;
 }
 
-function heatmapSelectionFor(row: HeatmapResultDto["rows"][number], cell: HeatmapResultDto["rows"][number]["cells"][number]): HeatmapSelection {
+function heatmapSelectionFor(row: HeatmapMatrixResultDto["rows"][number], cell: HeatmapMatrixCellDto): HeatmapSelectedCell {
   return Object.freeze({
     rowId: row.rowId,
     rowLabel: row.label,
-    startTime: cell.startTime,
-    endTime: cell.endTime,
-    primaryLabel: cell.primaryLabel,
-    secondaryLabel: cell.secondaryLabel,
-    evidence: cell.evidence,
-    count: cell.count,
+    periodStartTime: cell.startTime,
+    periodEndTime: cell.endTime,
+    formattedValue: cell.formattedValue,
+    valueState: cell.valueState,
+    applicableZero: cell.applicableZero,
+    scale: row.scale,
+    supportingText: cell.supportingText,
   });
 }
 
-function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentationState, actions: HeatmapRenderActions): Node {
+function renderHeatmapEvidence(
+  loadState: LoadState<HeatmapCellEvidenceResultDto>,
+  actions: HeatmapRenderActions,
+  selectedCell: HeatmapSelectedCell | null,
+): Node {
+  const host = document.createElement("section");
+  host.className = "heatmap-evidence";
+  host.setAttribute("aria-label", "Selected cell evidence");
+  renderLoadState(host, loadState, (result) => {
+    const fragment = document.createDocumentFragment();
+    const stateText = selectedCell === null
+      ? { visibleValue: result.formattedValue, explanation: null }
+      : heatmapStateText(selectedCell.scale, result.valueState, result.formattedValue);
+    const explanation = stateText.explanation === null ? "" : ` ${stateText.explanation}`;
+    fragment.append(
+      textElement("h4", `${result.rowLabel} evidence`),
+      textElement("p", `${heatmapRangeLabel({ fromTime: result.periodStartTime, toTime: result.periodEndTime })} · ${stateText.visibleValue} · ${result.valueState}.${explanation}`),
+    );
+    const table = document.createElement("table");
+    table.className = "heatmap-evidence-ledger";
+    const body = document.createElement("tbody");
+    for (const item of result.evidenceItems) {
+      const row = document.createElement("tr");
+      const occurred = document.createElement("td");
+      occurred.append(timeElement(item.occurredAt));
+      row.append(
+        occurred,
+        textElement("td", `${item.label} · ${item.formattedValue} · ${item.valueState} · ${item.evidenceMethod}${item.durationMs === null ? "" : ` · ${item.durationMs} ms`}${item.preview === null ? "" : ` · ${item.preview}`}`),
+      );
+      if (item.hasDetail && item.eventId !== null) {
+        const action = document.createElement("td");
+        const detail = textElement("button", "View detail") as HTMLButtonElement;
+        detail.type = "button";
+        detail.setAttribute("aria-label", `View detail for ${item.label}`);
+        detail.addEventListener("click", () => actions.openDetail(item.eventId ?? "", detail));
+        action.append(detail);
+        row.append(action);
+      }
+      body.append(row);
+    }
+    table.append(body);
+    fragment.append(table);
+    if (result.omittedEvidenceCount > 0) fragment.append(textElement("p", `${result.omittedEvidenceCount} additional evidence items omitted.`));
+    return fragment;
+  }, "Select a Heatmap cell to load its evidence.");
+  return host;
+}
+
+function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInteractionState, actions: HeatmapRenderActions): Node {
   const section = document.createElement("section");
   section.className = "heatmap-panel";
 
   const controls = document.createElement("div");
   controls.className = "heatmap-controls";
   controls.setAttribute("aria-label", "Heatmap controls");
-  const previous = textElement("button", "Previous bucket") as HTMLButtonElement;
+  const selectedRow = presentation.selectedCell === null ? undefined : result.rows.find((row) => row.rowId === presentation.selectedCell?.rowId);
+  const selectedColumn = selectedRow?.cells.findIndex((cell) => cell.startTime === presentation.selectedCell?.periodStartTime && cell.endTime === presentation.selectedCell?.periodEndTime) ?? -1;
+  const previous = textElement("button", "Previous") as HTMLButtonElement;
   previous.type = "button";
-  previous.addEventListener("click", () => actions.pan("previous"));
-  const next = textElement("button", "Next bucket") as HTMLButtonElement;
+  previous.disabled = selectedColumn <= 0;
+  previous.addEventListener("click", () => actions.movePeriod("previous"));
+  const next = textElement("button", "Next") as HTMLButtonElement;
   next.type = "button";
-  next.addEventListener("click", () => actions.pan("next"));
-  const zoomIn = textElement("button", "Zoom in") as HTMLButtonElement;
-  zoomIn.type = "button";
-  zoomIn.disabled = presentation.requestedResolutionMinutes === HEATMAP_RESOLUTIONS[0];
-  zoomIn.addEventListener("click", () => actions.zoom("in"));
-  const zoomOut = textElement("button", "Zoom out") as HTMLButtonElement;
-  zoomOut.type = "button";
-  zoomOut.disabled = presentation.requestedResolutionMinutes === HEATMAP_RESOLUTIONS[HEATMAP_RESOLUTIONS.length - 1];
-  zoomOut.addEventListener("click", () => actions.zoom("out"));
-  const drillIn = textElement("button", "Drill in") as HTMLButtonElement;
+  next.disabled = selectedColumn < 0 || selectedColumn >= (selectedRow?.cells.length ?? 0) - 1;
+  next.addEventListener("click", () => actions.movePeriod("next"));
+  const drillIn = textElement("button", "Drill down") as HTMLButtonElement;
   drillIn.type = "button";
-  drillIn.disabled = presentation.selected === null;
-  drillIn.addEventListener("click", () => { if (presentation.selected !== null) actions.drillIn(presentation.selected); });
+  drillIn.disabled = presentation.selectedCell === null || presentation.requestedResolutionMinutes === 1;
+  drillIn.addEventListener("click", actions.drillDown);
   const stepBack = textElement("button", "Step back") as HTMLButtonElement;
   stepBack.type = "button";
   stepBack.disabled = presentation.history.length === 0;
   stepBack.addEventListener("click", actions.stepBack);
-  controls.append(previous, next, zoomIn, zoomOut, drillIn, stepBack);
+  const scrollLeft = textElement("button", "Scroll left") as HTMLButtonElement;
+  scrollLeft.type = "button";
+  scrollLeft.addEventListener("click", () => section.querySelector<HTMLElement>(".heatmap-grid")?.scrollBy({ left: -320 }));
+  const scrollRight = textElement("button", "Scroll right") as HTMLButtonElement;
+  scrollRight.type = "button";
+  scrollRight.addEventListener("click", () => section.querySelector<HTMLElement>(".heatmap-grid")?.scrollBy({ left: 320 }));
+  controls.append(previous, next, drillIn, stepBack, scrollLeft, scrollRight);
 
   const settings = document.createElement("div");
   settings.className = "heatmap-settings";
-  function selectControl<T extends string>(id: string, labelText: string, values: readonly Readonly<{ value: T; label: string }>[], selected: T, onChange: (value: T) => void): HTMLLabelElement {
-    const label = document.createElement("label");
-    label.htmlFor = id;
-    label.append(textElement("span", labelText));
-    const select = document.createElement("select");
-    select.id = id;
-    for (const item of values) {
-      const option = document.createElement("option");
-      option.value = item.value;
-      option.textContent = item.label;
-      option.selected = item.value === selected;
-      select.append(option);
-    }
-    select.addEventListener("change", () => onChange(select.value as T));
-    label.append(select);
-    return label;
+  const modes = document.createElement("fieldset");
+  modes.className = "heatmap-modes";
+  modes.append(textElement("legend", "Mode"));
+  for (const item of HEATMAP_MODES) {
+    const button = textElement("button", item.label) as HTMLButtonElement;
+    button.type = "button";
+    button.setAttribute("aria-pressed", String(item.value === presentation.mode));
+    button.addEventListener("click", () => actions.setMode(item.value));
+    modes.append(button);
   }
-  settings.append(
-    selectControl("heatmap-metric", "Measure", HEATMAP_MEASURES, presentation.measure, actions.setMeasure),
-    selectControl("heatmap-group-by", "Group by", HEATMAP_GROUPS, presentation.groupBy, actions.setGroupBy),
-  );
+  settings.append(modes);
   const period = document.createElement("fieldset");
   period.className = "heatmap-granularity";
   period.append(textElement("legend", "Period"));
   for (const value of HEATMAP_RESOLUTIONS) {
-    const button = textElement("button", value === 60 ? "1 hour" : `${value} min`) as HTMLButtonElement;
+    const button = textElement("button", `${value} min`) as HTMLButtonElement;
     button.type = "button";
     button.dataset.heatmapMinutes = String(value);
     button.setAttribute("aria-pressed", String(value === presentation.requestedResolutionMinutes));
@@ -884,7 +1014,7 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
   rowsLabel.append(rowsInput);
   settings.append(rowsLabel);
   section.append(controls, settings);
-  const instructions = textElement("p", "Select a cell to inspect its evidence. Double-click to drill in; use Step back or the context menu to return.");
+  const instructions = textElement("p", "Select a cell to inspect its evidence. Double-click or use Drill down for a finer matrix; use Step back or the context menu to return.");
   instructions.className = "heatmap-instructions";
   section.append(instructions);
 
@@ -898,13 +1028,13 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
     button.addEventListener("click", () => actions.restoreHistory(index));
     breadcrumb.append(button, document.createTextNode(" / "));
   });
-  const currentRange = textElement("span", heatmapRangeLabel(presentation.range));
+  const currentRange = textElement("span", heatmapRangeLabel({ fromTime: presentation.visibleFromTime, toTime: presentation.visibleToTime }));
   currentRange.setAttribute("aria-current", "location");
   breadcrumb.append(currentRange);
   section.append(breadcrumb);
 
   const resolution = heatmapResolutionLabel(result.requestedResolutionMinutes, result.actualResolutionMinutes);
-  const rangeSummary = textElement("p", `${result.actualResolutionMinutes}-minute buckets · ${result.totalCellCount} cells · end time exclusive.`);
+  const rangeSummary = textElement("p", `${result.actualResolutionMinutes}-minute periods · ${result.totalCellCount} cells · end time exclusive.`);
   rangeSummary.className = "heatmap-range-summary";
   section.append(rangeSummary);
   if (resolution !== "") {
@@ -912,9 +1042,11 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
     resolutionNote.className = "heatmap-resolution-note";
     section.append(resolutionNote);
   }
-  if (result.omittedRowCount > 0) section.append(textElement("p", `Showing ${result.rows.length} rows; ${result.omittedRowCount} lower-activity rows omitted.`));
-  if (presentation.selected !== null) {
-    const selected = textElement("p", `Selected ${presentation.selected.rowLabel}, ${heatmapRangeLabel({ fromTime: presentation.selected.startTime, toTime: presentation.selected.endTime })}: ${presentation.selected.primaryLabel}${presentation.selected.secondaryLabel === null ? "" : `; ${presentation.selected.secondaryLabel}`}; evidence ${presentation.selected.evidence}; count ${presentation.selected.count}.`);
+  if (result.omittedRowCount > 0) section.append(textElement("p", `Showing ${result.rows.length} rows; ${result.omittedRowCount} rows omitted.`));
+  if (presentation.selectedCell !== null) {
+    const stateText = heatmapStateText(presentation.selectedCell.scale, presentation.selectedCell.valueState, presentation.selectedCell.formattedValue);
+    const explanation = stateText.explanation === null ? "" : ` ${stateText.explanation}`;
+    const selected = textElement("p", `Selected ${presentation.selectedCell.rowLabel}, ${heatmapRangeLabel({ fromTime: presentation.selectedCell.periodStartTime, toTime: presentation.selectedCell.periodEndTime })}: ${stateText.visibleValue}.${explanation}`);
     selected.className = "heatmap-selection";
     selected.setAttribute("role", "status");
     section.append(selected);
@@ -922,7 +1054,7 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
   const grid = document.createElement("div");
   grid.className = "heatmap-grid";
   grid.setAttribute("role", "grid");
-  grid.setAttribute("aria-label", `Activity heatmap grouped by ${result.groupBy.replaceAll("_", " ")}`);
+  grid.setAttribute("aria-label", `${HEATMAP_MODES.find((item) => item.value === result.mode)?.label ?? result.mode} Heatmap`);
   const timeRow = document.createElement("div");
   timeRow.className = "heatmap-time-row";
   timeRow.setAttribute("role", "row");
@@ -941,34 +1073,35 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
   for (const [rowIndex, row] of result.rows.entries()) {
     const rowElement = document.createElement("div");
     rowElement.setAttribute("role", "row");
-    rowElement.setAttribute("aria-label", `${row.label}; ${row.scale.colorSemantic}`);
+    rowElement.setAttribute("aria-label", `${row.label}; ${row.scale.availability} scale`);
     const label = textElement("div", row.label);
     label.className = "heatmap-row-label";
     label.setAttribute("role", "rowheader");
     rowElement.append(label);
     for (const [columnIndex, cell] of row.cells.entries()) {
       const selection = heatmapSelectionFor(row, cell);
-      const isSelected = presentation.selected?.rowId === selection.rowId && presentation.selected.startTime === selection.startTime;
-      const cellPresentation = heatmapCellPresentation(row.scale, cell.value);
+      const isSelected = presentation.selectedCell?.rowId === selection.rowId && presentation.selectedCell.periodStartTime === selection.periodStartTime;
+      const cellPresentation = heatmapCellPresentation(row.scale, cell);
       const button = document.createElement("button");
       button.type = "button";
       button.setAttribute("role", "gridcell");
       button.className = `heatmap-cell is-${cellPresentation.tone}`;
       button.dataset.rowIndex = String(rowIndex);
       button.dataset.columnIndex = String(columnIndex);
-      button.dataset.scaleBasis = row.scale.basis;
-      button.dataset.colorSemantic = row.scale.colorSemantic;
-      button.dataset.intensity = cellPresentation.intensity.toFixed(3);
-      button.style.setProperty("--heatmap-intensity", cellPresentation.intensity.toFixed(3));
-      button.style.setProperty("--heatmap-lightness", `${94 - cellPresentation.intensity * 38}%`);
-      button.tabIndex = rowIndex === 0 && columnIndex === 0 ? 0 : -1;
+      button.dataset.scaleAvailability = row.scale.availability;
+      if (row.scale.availability === "available") button.dataset.scaleBasis = row.scale.basis;
+      if (cellPresentation.intensity !== null) {
+        button.dataset.intensity = cellPresentation.intensity.toFixed(3);
+        button.style.setProperty("--heatmap-lightness", `${94 - cellPresentation.intensity * 38}%`);
+      }
+      button.tabIndex = isSelected || (presentation.selectedCell === null && rowIndex === 0 && columnIndex === 0) ? 0 : -1;
       button.setAttribute("aria-selected", String(isSelected));
-      const value = textElement("strong", cell.primaryLabel);
-      const metadata = textElement("span", `${cell.secondaryLabel === null ? "" : `${cell.secondaryLabel} · `}${cell.evidence} · count ${cell.count} · ${cellPresentation.label}`);
+      const value = textElement("strong", cellPresentation.visibleValue);
+      const metadata = textElement("span", `${cell.valueState} · ${cell.contributingEvidenceCount} evidence${cell.supportingText === null ? "" : ` · ${cell.supportingText}`}`);
       button.append(value, metadata);
-      button.setAttribute("aria-label", `${row.label}; ${formatLocalInstant(cell.startTime)} to ${formatLocalInstant(cell.endTime)}; ${cell.primaryLabel}; ${cell.secondaryLabel ?? "no secondary value"}; count ${cell.count}; evidence ${cell.evidence}; ${cellPresentation.label}; ${isSelected ? "selected" : "not selected"}`);
+      button.setAttribute("aria-label", heatmapCellAccessibleName(result.mode, row.label, cell, row.scale, isSelected));
       button.addEventListener("click", () => actions.select(selection));
-      button.addEventListener("dblclick", () => actions.drillIn(selection));
+      button.addEventListener("dblclick", actions.drillDown);
       button.addEventListener("contextmenu", (event) => { event.preventDefault(); actions.stepBack(); });
       button.addEventListener("keydown", (event) => {
         if (event.key === "Enter" || event.key === " ") {
@@ -976,18 +1109,11 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
           actions.select(selection);
           return;
         }
-        let targetRow = rowIndex;
-        let targetColumn = columnIndex;
-        if (event.key === "ArrowLeft") targetColumn -= 1;
-        else if (event.key === "ArrowRight") targetColumn += 1;
-        else if (event.key === "ArrowUp") targetRow -= 1;
-        else if (event.key === "ArrowDown") targetRow += 1;
-        else if (event.key === "Home") targetColumn = 0;
-        else if (event.key === "End") targetColumn = row.cells.length - 1;
-        else return;
+        if (!["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
         event.preventDefault();
+        const targetCoordinate = moveHeatmapGridFocus(result.rows.map((candidate) => candidate.cells.length), { rowIndex, columnIndex }, event.key as "ArrowLeft" | "ArrowRight" | "ArrowUp" | "ArrowDown" | "Home" | "End");
         const target = [...grid.querySelectorAll<HTMLButtonElement>('[role="gridcell"]')].find(
-          (candidate) => candidate.dataset.rowIndex === String(targetRow) && candidate.dataset.columnIndex === String(targetColumn),
+          (candidate) => candidate.dataset.rowIndex === String(targetCoordinate.rowIndex) && candidate.dataset.columnIndex === String(targetCoordinate.columnIndex),
         );
         if (target !== undefined) {
           grid.querySelectorAll<HTMLButtonElement>('[role="gridcell"]').forEach((candidate) => { candidate.tabIndex = candidate === target ? 0 : -1; });
@@ -998,14 +1124,13 @@ function renderHeatmap(result: HeatmapResultDto, presentation: HeatmapPresentati
     }
     const legend = document.createElement("div");
     legend.className = "heatmap-row-legend";
-    const midpoint = row.scale.minimum === row.scale.maximum
-      ? row.scale.minimum
-      : row.scale.colorSemantic === "diverging_signed" ? 0 : (row.scale.minimum + row.scale.maximum) / 2;
-    legend.textContent = `${row.scale.colorSemantic.replaceAll("_", " ")} · ${row.scale.basis.replaceAll("_", " ")} · minimum ${row.scale.minimum} · midpoint ${midpoint} · maximum ${row.scale.maximum} · unavailable`;
+    legend.textContent = row.scale.availability === "available"
+      ? `${row.scale.basis.replaceAll("_", " ")} · minimum ${row.scale.minimum} · maximum ${row.scale.maximum}`
+      : "N/A — capacity unavailable. Capacity is unavailable. No percentage or color comparison is available.";
     rowElement.append(legend);
     grid.append(rowElement);
   }
-  section.append(grid);
+  section.append(grid, renderHeatmapEvidence(presentation.evidence, actions, presentation.selectedCell));
   return section;
 }
 
@@ -1090,7 +1215,6 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
   let selectionTrigger: HTMLElement | null = null;
   let detailTrigger: HTMLElement | null = null;
   let frameHandle: number | null = null;
-  let heatmapPresentation: HeatmapPresentationState | null = null;
   let lastRequestedExportMode: ExportMode = "directory";
   let reopenExportError: ReportErrorDto | null = null;
   const requestFrame = options.requestAnimationFrame ?? window.requestAnimationFrame.bind(window);
@@ -1178,7 +1302,6 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       includeChildren: false,
       includeCollaborators: false,
     });
-    heatmapPresentation = null;
     reopenExportError = null;
     state = Object.freeze({ ...initialState(), lifecycle: "selected", route: Object.freeze({ kind: "preflight", rootThreadId: normalized.rootThreadId }), selection: normalized, requestSequence: state.requestSequence + 1 });
     scheduleRender();
@@ -1240,115 +1363,163 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     } catch (error) { fail(operation.sequence, operation.id, name, error, "ready"); }
   }
 
-  function currentHeatmapPresentation(summary: ReportSummaryDto): HeatmapPresentationState {
-    if (heatmapPresentation !== null) return heatmapPresentation;
-    heatmapPresentation = Object.freeze({
-      range: Object.freeze({ ...summary.timeRange }),
-      history: Object.freeze([]),
-      selected: null,
-      measure: "wall_time",
-      groupBy: "agent",
-      requestedResolutionMinutes: 5,
-      maximumRows: 100,
+  function currentHeatmapInteraction(summary: ReportSummaryDto): HeatmapInteractionState {
+    if (state.heatmapInteraction.visibleFromTime !== "" && state.heatmapInteraction.visibleToTime !== "") return state.heatmapInteraction;
+    const interaction: HeatmapInteractionState = Object.freeze({
+      ...state.heatmapInteraction,
+      visibleFromTime: summary.timeRange.fromTime,
+      visibleToTime: summary.timeRange.toTime,
     });
-    return heatmapPresentation;
+    commit({ heatmapInteraction: interaction });
+    return interaction;
   }
 
-  async function loadHeatmap(force = false): Promise<void> {
+  function updateHeatmapInteraction(patch: Partial<HeatmapInteractionState>): HeatmapInteractionState {
+    const interaction = Object.freeze({ ...state.heatmapInteraction, ...patch });
+    commit({ heatmapInteraction: interaction });
+    return interaction;
+  }
+
+  async function loadHeatmap(force = false, requestedInteraction?: HeatmapInteractionState): Promise<void> {
     const snapshot = state.snapshot;
     const summary = valueFrom(state.summary);
     if (snapshot === null || summary === null) return;
-    const presentation = currentHeatmapPresentation(summary);
+    const interaction = requestedInteraction ?? currentHeatmapInteraction(summary);
     const requestBinding = {
       snapshotId: snapshot.snapshotId,
-      fromTime: presentation.range.fromTime,
-      toTime: presentation.range.toTime,
-      measure: presentation.measure,
-      groupBy: presentation.groupBy,
-      requestedResolutionMinutes: presentation.requestedResolutionMinutes,
-      maximumRows: presentation.maximumRows,
+      queryKind: "matrix" as const,
+      fromTime: interaction.visibleFromTime,
+      toTime: interaction.visibleToTime,
+      mode: interaction.mode,
+      requestedResolutionMinutes: interaction.requestedResolutionMinutes,
+      maximumRows: interaction.maximumRows,
     };
     const previous = valueFrom(state.timeSeries);
-    if (!force && previous?.revision === snapshot.revision && previous.fromTime === requestBinding.fromTime && previous.toTime === requestBinding.toTime && previous.measure === requestBinding.measure && previous.groupBy === requestBinding.groupBy && previous.requestedResolutionMinutes === requestBinding.requestedResolutionMinutes && previous.maximumRows === requestBinding.maximumRows) return;
-    const operation = nextOperation("query_time_range");
+    if (!force && previous?.revisionId === snapshot.revision && previous.fromTime === requestBinding.fromTime && previous.toTime === requestBinding.toTime && previous.mode === requestBinding.mode && previous.requestedResolutionMinutes === requestBinding.requestedResolutionMinutes && previous.maximumRows === requestBinding.maximumRows) return;
+    const operation = nextOperation("query_snapshot_time_range");
     commit({ lifecycle: "querying", timeSeries: Object.freeze({ kind: "loading", previous, operationId: operation.id }) });
     try {
-      const result = parseHeatmapResultDto(await invoke(WORKSPACE_COMMANDS.queryTimeRange, { operationId: operation.id, ...requestBinding }), { ...requestBinding, revision: snapshot.revision });
-      if (!isCurrent(operation.sequence, operation.id)) return;
-      commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, timeSeries: loadStateFor(result, result.rows.length === 0) });
+      const request = { operationId: operation.id, ...requestBinding };
+      const result = parseHeatmapResultDto(await invoke(WORKSPACE_COMMANDS.querySnapshotTimeRange, request), { ...request, revisionId: snapshot.revision });
+      if (!isCurrent(operation.sequence, operation.id) || result.queryKind !== "matrix") return;
+      commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, timeSeries: loadStateFor(result, result.rows.length === 0), heatmapInteraction: interaction });
     } catch (error) { fail(operation.sequence, operation.id, "timeSeries", error, "ready"); }
   }
 
-  function updateHeatmapPresentation(patch: Partial<HeatmapPresentationState>): void {
-    const summary = valueFrom(state.summary);
-    if (summary === null) return;
-    heatmapPresentation = Object.freeze({ ...currentHeatmapPresentation(summary), ...patch });
-    scheduleRender();
+  async function loadHeatmapEvidence(selection: HeatmapSelectedCell): Promise<void> {
+    const snapshot = state.snapshot;
+    if (snapshot === null) return;
+    const priorInteraction = state.heatmapInteraction;
+    const sameSelection = priorInteraction.selectedCell?.rowId === selection.rowId
+      && priorInteraction.selectedCell.periodStartTime === selection.periodStartTime
+      && priorInteraction.selectedCell.periodEndTime === selection.periodEndTime;
+    const previous = sameSelection ? valueFrom(priorInteraction.evidence) : null;
+    const operation = nextOperation("query_snapshot_time_range");
+    updateHeatmapInteraction({ selectedCell: Object.freeze({ ...selection }), evidence: Object.freeze({ kind: "loading", previous, operationId: operation.id }) });
+    const request = {
+      operationId: operation.id,
+      snapshotId: snapshot.snapshotId,
+      queryKind: "cell_evidence" as const,
+      mode: state.heatmapInteraction.mode,
+      rowId: selection.rowId,
+      periodStartTime: selection.periodStartTime,
+      periodEndTime: selection.periodEndTime,
+    };
+    try {
+      const result = parseHeatmapResultDto(await invoke(WORKSPACE_COMMANDS.querySnapshotTimeRange, request), { ...request, revisionId: snapshot.revision });
+      if (!isCurrent(operation.sequence, operation.id) || result.queryKind !== "cell_evidence") return;
+      const selected = state.heatmapInteraction.selectedCell;
+      if (selected === null) return;
+      if (!heatmapEvidenceMatchesSelection(selected, result)) {
+        throw new Error("Heatmap evidence does not match the selected matrix cell.");
+      }
+      updateHeatmapInteraction({ evidence: loadStateFor(result, result.evidenceItems.length === 0) });
+      commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null });
+    } catch (error) {
+      if (!isCurrent(operation.sequence, operation.id)) return;
+      const reportError = safeError(error);
+      const priorEvidence = valueFrom(priorInteraction.evidence);
+      commit({
+        lifecycle: "ready",
+        activeOperationId: null,
+        activeOperation: null,
+        heatmapInteraction: Object.freeze({
+          ...priorInteraction,
+          evidence: reportError.code === "REPORT_CANCELLED"
+            ? Object.freeze({ kind: "cancelled", previous: priorEvidence, operationId: operation.id })
+            : Object.freeze({ kind: "error", previous: priorEvidence, error: reportError }),
+        }),
+      });
+    }
   }
 
-  function rememberHeatmapRange(range: HeatmapRange, presentation: HeatmapPresentationState): readonly HeatmapRange[] {
-    return Object.freeze([...presentation.history, Object.freeze({ ...range })].slice(-MAX_CURSOR_HISTORY));
+  function queryHeatmapWith(patch: Partial<HeatmapInteractionState>): Promise<void> {
+    const coherentInteraction = coherentHeatmapInteraction(state.heatmapInteraction);
+    if (coherentInteraction !== state.heatmapInteraction) commit({ heatmapInteraction: coherentInteraction });
+    const interaction = heatmapInteractionForMatrixRequest(coherentInteraction, patch);
+    return loadHeatmap(true, interaction);
   }
 
-  function queryHeatmapWith(patch: Partial<HeatmapPresentationState>): void {
-    updateHeatmapPresentation(patch);
-    void loadHeatmap(true);
+  function rememberHeatmapRange(interaction: HeatmapInteractionState): readonly HeatmapPeriodHistoryEntry[] {
+    const entry = Object.freeze({ fromTime: interaction.visibleFromTime, toTime: interaction.visibleToTime, requestedResolutionMinutes: interaction.requestedResolutionMinutes });
+    return Object.freeze([...interaction.history, entry].slice(-MAX_CURSOR_HISTORY));
+  }
+
+  async function drillDownHeatmap(): Promise<void> {
+    const interaction = state.heatmapInteraction;
+    const selected = interaction.selectedCell;
+    if (selected === null || interaction.requestedResolutionMinutes === 1) return;
+    await queryHeatmapWith({
+      visibleFromTime: selected.periodStartTime,
+      visibleToTime: selected.periodEndTime,
+      requestedResolutionMinutes: nextHeatmapResolution(interaction.requestedResolutionMinutes, "in"),
+      history: rememberHeatmapRange(interaction),
+    });
+  }
+
+  async function stepBackHeatmap(): Promise<void> {
+    const interaction = state.heatmapInteraction;
+    if (interaction.history.length === 0) return;
+    const history = [...interaction.history];
+    const entry = history.pop();
+    if (entry !== undefined) await queryHeatmapWith({ visibleFromTime: entry.fromTime, visibleToTime: entry.toTime, requestedResolutionMinutes: entry.requestedResolutionMinutes, history: Object.freeze(history) });
+  }
+
+  async function moveHeatmapPeriod(direction: "previous" | "next"): Promise<void> {
+    const matrix = valueFrom(state.timeSeries);
+    const selected = state.heatmapInteraction.selectedCell;
+    if (matrix === null || selected === null) return;
+    const row = matrix.rows.find((candidate) => candidate.rowId === selected.rowId);
+    const index = row?.cells.findIndex((cell) => cell.startTime === selected.periodStartTime && cell.endTime === selected.periodEndTime) ?? -1;
+    const target = row?.cells[index + (direction === "previous" ? -1 : 1)];
+    if (row !== undefined && target !== undefined) await loadHeatmapEvidence(heatmapSelectionFor(row, target));
+  }
+
+  async function setHeatmapPeriod(requestedResolutionMinutes: HeatmapRequestedResolutionMinutes): Promise<void> {
+    if (HEATMAP_RESOLUTIONS.includes(requestedResolutionMinutes)) await queryHeatmapWith({ requestedResolutionMinutes });
   }
 
   function heatmapActions(): HeatmapRenderActions {
     return {
-      select(selected) { updateHeatmapPresentation({ selected: Object.freeze({ ...selected }) }); },
-      drillIn(selected) {
-        const presentation = heatmapPresentation;
-        if (presentation === null) return;
-        queryHeatmapWith({
-          range: Object.freeze({ fromTime: selected.startTime, toTime: selected.endTime }),
-          history: rememberHeatmapRange(presentation.range, presentation),
-          selected: null,
-        });
-      },
-      stepBack() {
-        const presentation = heatmapPresentation;
-        if (presentation === null || presentation.history.length === 0) return;
-        const history = [...presentation.history];
-        const range = history.pop();
-        if (range !== undefined) queryHeatmapWith({ range, history: Object.freeze(history), selected: null });
-      },
+      select(selection) { void loadHeatmapEvidence(selection); },
+      drillDown() { void drillDownHeatmap(); },
+      stepBack() { void stepBackHeatmap(); },
       restoreHistory(index) {
-        const presentation = heatmapPresentation;
-        const range = presentation?.history[index];
-        if (presentation === null || range === undefined) return;
-        queryHeatmapWith({ range, history: Object.freeze(presentation.history.slice(0, index)), selected: null });
+        const interaction = state.heatmapInteraction;
+        const entry = interaction.history[index];
+        if (entry === undefined) return;
+        void queryHeatmapWith({ visibleFromTime: entry.fromTime, visibleToTime: entry.toTime, requestedResolutionMinutes: entry.requestedResolutionMinutes, history: Object.freeze(interaction.history.slice(0, index)) });
       },
-      pan(direction) {
-        const presentation = heatmapPresentation;
-        const result = valueFrom(state.timeSeries);
-        if (presentation === null || result === null) return;
-        queryHeatmapWith({
-          range: shiftHeatmapRange(presentation.range, result.actualResolutionMinutes, direction),
-          history: rememberHeatmapRange(presentation.range, presentation),
-          selected: null,
-        });
+      movePeriod(direction) { void moveHeatmapPeriod(direction); },
+      setMode(mode) {
+        if (HEATMAP_MODES.some((item) => item.value === mode)) void queryHeatmapWith({ mode, history: Object.freeze([]) });
       },
-      zoom(direction) {
-        const presentation = heatmapPresentation;
-        if (presentation === null) return;
-        const resolution = nextHeatmapResolution(presentation.requestedResolutionMinutes, direction);
-        if (resolution !== presentation.requestedResolutionMinutes) queryHeatmapWith({ requestedResolutionMinutes: resolution, selected: null });
-      },
-      setMeasure(measure) {
-        if (HEATMAP_MEASURES.some((item) => item.value === measure)) queryHeatmapWith({ measure, selected: null });
-      },
-      setGroupBy(groupBy) {
-        if (HEATMAP_GROUPS.some((item) => item.value === groupBy)) queryHeatmapWith({ groupBy, selected: null });
-      },
-      setResolution(requestedResolutionMinutes) {
-        if (HEATMAP_RESOLUTIONS.includes(requestedResolutionMinutes)) queryHeatmapWith({ requestedResolutionMinutes, selected: null });
-      },
+      setResolution(requestedResolutionMinutes) { void setHeatmapPeriod(requestedResolutionMinutes); },
       setMaximumRows(maximumRows) {
-        if (Number.isSafeInteger(maximumRows) && maximumRows >= 1 && maximumRows <= MAX_HEATMAP_ROWS) queryHeatmapWith({ maximumRows, selected: null });
+        if (Number.isSafeInteger(maximumRows) && maximumRows >= 1 && maximumRows <= MAX_HEATMAP_ROWS) void queryHeatmapWith({ maximumRows });
         else elements.statusRegion.textContent = `Maximum rows must be between 1 and ${MAX_HEATMAP_ROWS}.`;
       },
+      openDetail(eventId, trigger) { void controller.openDetail(eventId, trigger); },
     };
   }
 
@@ -1401,6 +1572,12 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
 
   function render(): void {
     const route = state.route;
+    const activeGridCell = route.kind === "snapshot" && route.surface === "heatmap"
+      && document.activeElement instanceof HTMLButtonElement
+      && document.activeElement.getAttribute("role") === "gridcell"
+      && elements.viewRegion.contains(document.activeElement)
+      ? Object.freeze({ rowIndex: document.activeElement.dataset.rowIndex, columnIndex: document.activeElement.dataset.columnIndex })
+      : null;
     const inWorkspace = route.kind === "snapshot";
     elements.catalogRegion.hidden = inWorkspace;
     elements.workspaceRegion.hidden = !inWorkspace;
@@ -1456,22 +1633,18 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     } else if (metricGroupsFor(route.surface).length > 0 || route.surface === "summary") {
       renderLoadState(elements.viewRegion, state.summary, (value) => renderSummary(value, metricGroupsFor(route.surface)), definition.emptyMessage, () => { void loadSummary(false, true); });
     } else if (route.surface === "heatmap") {
-      const summary = valueFrom(state.summary);
       renderLoadState(
         elements.viewRegion,
         state.timeSeries,
-        (value) => renderHeatmap(value, summary === null ? {
-          range: Object.freeze({ fromTime: value.fromTime, toTime: value.toTime }),
-          history: Object.freeze([]),
-          selected: null,
-          measure: value.measure,
-          groupBy: value.groupBy,
-          requestedResolutionMinutes: value.requestedResolutionMinutes,
-          maximumRows: value.maximumRows,
-        } : currentHeatmapPresentation(summary), heatmapActions()),
+        (value) => renderHeatmap(value, state.heatmapInteraction, heatmapActions()),
         definition.emptyMessage,
         () => { void loadHeatmap(true); },
       );
+      if (activeGridCell !== null) {
+        [...elements.viewRegion.querySelectorAll<HTMLButtonElement>('[role="gridcell"]')].find(
+          (cell) => cell.dataset.rowIndex === activeGridCell.rowIndex && cell.dataset.columnIndex === activeGridCell.columnIndex,
+        )?.focus();
+      }
     }
     else {
       const pagerName = pagerForSurface(route.surface);
@@ -1545,9 +1718,8 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     },
     updateScope(includeChildren, includeCollaborators) {
       if (disposed || state.selection === null) return;
-      heatmapPresentation = null;
       reopenExportError = null;
-      commit({ lifecycle: "selected", selection: Object.freeze({ ...state.selection, includeChildren, includeCollaborators }), preflight: Object.freeze({ kind: "not-requested" }), snapshot: null, summary: Object.freeze({ kind: "not-requested" }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" }), detail: Object.freeze({ kind: "not-requested" }) });
+      commit({ lifecycle: "selected", selection: Object.freeze({ ...state.selection, includeChildren, includeCollaborators }), preflight: Object.freeze({ kind: "not-requested" }), snapshot: null, summary: Object.freeze({ kind: "not-requested" }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" }), heatmapInteraction: initialHeatmapInteraction(), detail: Object.freeze({ kind: "not-requested" }) });
     },
     async preflight() {
       const selection = state.selection;
@@ -1669,6 +1841,17 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       const cursor = history.pop() ?? null;
       await loadPage(name, cursor, history);
     },
+    async selectHeatmapCell(rowId, periodStartTime, periodEndTime) {
+      const matrix = valueFrom(state.timeSeries);
+      if (disposed || matrix === null) return;
+      const row = matrix.rows.find((candidate) => candidate.rowId === rowId);
+      const cell = row?.cells.find((candidate) => candidate.startTime === periodStartTime && candidate.endTime === periodEndTime);
+      if (row !== undefined && cell !== undefined) await loadHeatmapEvidence(heatmapSelectionFor(row, cell));
+    },
+    async drillDownHeatmap() { if (!disposed) await drillDownHeatmap(); },
+    async stepBackHeatmap() { if (!disposed) await stepBackHeatmap(); },
+    async moveHeatmapPeriod(direction) { if (!disposed) await moveHeatmapPeriod(direction); },
+    async setHeatmapPeriod(minutes) { if (!disposed) await setHeatmapPeriod(minutes); },
     async refreshSnapshot() {
       const snapshot = state.snapshot;
       if (disposed || snapshot === null || snapshot.mode !== "live" || state.activeOperationId !== null) return;
@@ -1681,10 +1864,11 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         const revisionChanged = refreshed.revision !== snapshot.revision;
         if (refreshResult.changed !== revisionChanged) throw new Error("Refresh change status does not match its snapshot revision.");
         const activeSurface = state.route.kind === "snapshot" ? state.route.surface : "summary";
-        commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, snapshot: refreshed, ...(revisionChanged ? { summary: Object.freeze({ kind: "not-requested" as const }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" as const }), detail: Object.freeze({ kind: "not-requested" as const }) } : {
+        commit({ lifecycle: "ready", activeOperationId: null, activeOperation: null, snapshot: refreshed, ...(revisionChanged ? { summary: Object.freeze({ kind: "not-requested" as const }), pagers: createPagers(), timeSeries: Object.freeze({ kind: "not-requested" as const }), heatmapInteraction: Object.freeze({ ...state.heatmapInteraction, selectedCell: null, evidence: Object.freeze({ kind: "not-requested" as const }) }), detail: Object.freeze({ kind: "not-requested" as const }) } : {
           summary: clearStaleLoadState(state.summary, false),
           pagers: clearStalePagers(state.pagers),
           timeSeries: clearStaleLoadState(state.timeSeries, valueFrom(state.timeSeries)?.rows.length === 0),
+          heatmapInteraction: Object.freeze({ ...state.heatmapInteraction, evidence: clearStaleLoadState(state.heatmapInteraction.evidence, valueFrom(state.heatmapInteraction.evidence)?.evidenceItems.length === 0) }),
           detail: clearStaleLoadState(state.detail, false),
         }) });
         if (revisionChanged) await loadSurface(activeSurface, false);
@@ -1698,7 +1882,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
           activeOperationId: null,
           activeOperation: null,
           ...(activeSurface === "heatmap"
-            ? { timeSeries: staleLoadState(state.timeSeries, reason) }
+            ? { timeSeries: staleLoadState(state.timeSeries, reason), heatmapInteraction: Object.freeze({ ...state.heatmapInteraction, evidence: staleLoadState(state.heatmapInteraction.evidence, reason) }) }
             : activePager === null
               ? { summary: staleLoadState(state.summary, reason) }
               : {
@@ -1820,7 +2004,6 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         const result = parseCloseSnapshotResultDto(await invoke(WORKSPACE_COMMANDS.closeSnapshot, { operationId: operation.id, snapshotId: snapshot.snapshotId }), snapshot.snapshotId);
         if (!isCurrent(operation.sequence, operation.id)) return;
         if (!result.closed) throw new Error("The native snapshot remained open.");
-        heatmapPresentation = null;
         reopenExportError = null;
         state = Object.freeze({ ...initialState(), lifecycle: "closed", requestSequence: state.requestSequence + 1 });
         scheduleRender();
@@ -1843,7 +2026,6 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       if (frameHandle !== null) cancelFrame(frameHandle);
       frameHandle = null;
       state = Object.freeze({ ...state, lifecycle: "closed", activeOperationId: null, activeOperation: null, requestSequence: state.requestSequence + 1 });
-      heatmapPresentation = null;
       reopenExportError = null;
       selectionTrigger = null;
       detailTrigger = null;

@@ -202,9 +202,84 @@ describe("paged workspace contracts", () => {
 });
 
 describe("heatmap, detail, export, and progress contracts", () => {
-  it("accepts bounded heatmap, detail, export, and matching progress results", () => {
-    const expectedHeatmap = { snapshotId: "snapshot-1", revision: "revision-1", fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z", measure: "wall_time" as const, groupBy: "agent" as const, requestedResolutionMinutes: 5 as const, maximumRows: 100 };
-    expect(parseHeatmapResultDto({ ...expectedHeatmap, actualResolutionMinutes: 5, omittedRowCount: 0, rowOrder: "activity_descending_id_ascending", totalCellCount: 1, rows: [{ rowId: "agent-1", label: "Coder", scale: { minimum: 0, maximum: 2, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" }, cells: [{ startTime: "2026-08-12T12:00:00Z", endTime: "2026-08-12T12:05:00Z", value: 2, count: 1, evidence: "measured", primaryLabel: "2 events", secondaryLabel: null }] }], provenance: ["Recorded events"] }, expectedHeatmap).totalCellCount).toBe(1);
+  const matrixRequest = {
+    operationId: "operation-1",
+    snapshotId: "snapshot-1",
+    queryKind: "matrix" as const,
+    fromTime: "2026-08-12T12:00:00Z",
+    toTime: "2026-08-12T13:00:00Z",
+    mode: "tokens" as const,
+    requestedResolutionMinutes: 5 as const,
+    maximumRows: 100,
+  };
+  const matrixResult = {
+    snapshotId: "snapshot-1",
+    revisionId: "revision-1",
+    queryKind: "matrix" as const,
+    mode: "tokens" as const,
+    fromTime: "2026-08-12T12:00:00Z",
+    toTime: "2026-08-12T13:00:00Z",
+    requestedResolutionMinutes: 5,
+    actualResolutionMinutes: 5,
+    maximumRows: 100,
+    omittedRowCount: 0,
+    rowOrder: "token_contract",
+    totalCellCount: 2,
+    rows: [
+      {
+        rowId: "token:uncached-input",
+        rowKind: "token_measure",
+        label: "Uncached input",
+        scale: { availability: "available", minimum: 0, maximum: 2_000, basis: "visible_row_maximum" },
+        cells: [
+          { startTime: "2026-08-12T12:00:00Z", endTime: "2026-08-12T12:05:00Z", value: 0, formattedValue: "0", valueState: "derived", applicableZero: true, contributingEvidenceCount: 1, normalizedIntensity: 0, supportingText: null },
+          { startTime: "2026-08-12T12:05:00Z", endTime: "2026-08-12T12:10:00Z", value: 1_200, formattedValue: "Partial · 1.2K", valueState: "partial", applicableZero: false, contributingEvidenceCount: 2, normalizedIntensity: 0.6, supportingText: null },
+        ],
+      },
+    ],
+    provenance: ["Recorded usage"],
+  };
+  const evidenceRequest = {
+    operationId: "operation-2",
+    snapshotId: "snapshot-1",
+    queryKind: "cell_evidence" as const,
+    mode: "tokens" as const,
+    rowId: "token:context-maximum",
+    periodStartTime: "2026-08-12T12:00:00Z",
+    periodEndTime: "2026-08-12T12:05:00Z",
+  };
+  const evidenceResult = {
+    snapshotId: "snapshot-1",
+    revisionId: "revision-1",
+    queryKind: "cell_evidence" as const,
+    mode: "tokens" as const,
+    rowId: "token:context-maximum",
+    rowLabel: "Context size (max)",
+    periodStartTime: "2026-08-12T12:00:00Z",
+    periodEndTime: "2026-08-12T12:05:00Z",
+    value: null,
+    formattedValue: "N/A — capacity unavailable",
+    valueState: "unavailable",
+    applicableZero: false,
+    evidenceItems: [
+      { eventId: "event-1", occurredAt: "2026-08-12T12:01:00Z", value: 1_200, formattedValue: "1.2K tokens", durationMs: null, label: "main · gpt-5.6-sol · high", preview: "Recorded token use", evidenceMethod: "measured", valueState: "measured", hasDetail: true },
+      { eventId: null, occurredAt: "2026-08-12T12:02:00Z", value: null, formattedValue: "Unavailable", durationMs: null, label: "Capacity evidence", preview: null, evidenceMethod: "unavailable", valueState: "unavailable", hasDetail: false },
+    ],
+    omittedEvidenceCount: 3,
+    provenance: ["Recorded responses"],
+  };
+
+  it("accepts exact matrix and cell-evidence variants plus adjacent result contracts", () => {
+    const parsedMatrix = parseHeatmapResultDto(matrixResult, { ...matrixRequest, revisionId: "revision-1" });
+    expect(parsedMatrix).toMatchObject({ queryKind: "matrix", revisionId: "revision-1", rowOrder: "token_contract", totalCellCount: 2 });
+    if (parsedMatrix.queryKind !== "matrix") throw new Error("Expected a matrix result");
+    expect(parsedMatrix.rows[0]?.cells[1]).toMatchObject({ valueState: "partial", applicableZero: false, normalizedIntensity: 0.6 });
+
+    const parsedEvidence = parseHeatmapResultDto(evidenceResult, { ...evidenceRequest, revisionId: "revision-1" });
+    expect(parsedEvidence).toMatchObject({ queryKind: "cell_evidence", revisionId: "revision-1", value: null, omittedEvidenceCount: 3 });
+    if (parsedEvidence.queryKind !== "cell_evidence") throw new Error("Expected a cell-evidence result");
+    expect(parsedEvidence.evidenceItems.map((item) => item.evidenceMethod)).toEqual(["measured", "unavailable"]);
+
     expect(parseEventDetailDto({ snapshotId: "snapshot-1", revision: "revision-1", eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", kind: "tool", title: "Test run", evidence: "measured", provenance: ["Event log"], summary: null, disclosures: [{ label: "Output", content: "18 tests passed", redacted: false }], sourceRef: "source-1" }).disclosures[0]?.content).toBe("18 tests passed");
     expect(parseExportSnapshotResultDto({ operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "agent-report", mode: "directory", manifestSha256: "c".repeat(64), fileCount: 4, totalByteCount: 2048, warnings, omissions: [] }, { operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" })).toMatchObject({ exportId: "export-1", totalByteCount: 2048 });
     expect(parseRefreshSnapshotResultDto({ changed: false, snapshot }, "snapshot-1")).toEqual({ changed: false, snapshot });
@@ -212,10 +287,47 @@ describe("heatmap, detail, export, and progress contracts", () => {
     expect(parseWorkspaceProgressDto({ protocolVersion: 1, operationId: "operation-1", operation: "export_snapshot", snapshotId: "snapshot-1", phase: "rendering", completed: 2, total: 4, message: "Rendering pages" }, "operation-1", "export_snapshot").completed).toBe(2);
   });
 
-  it("rejects heatmap overflow, export paths, progress mismatch, and disclosure overflow", () => {
-    const expected = { snapshotId: "snapshot-1", revision: "revision-1", fromTime: "2026-08-12T12:00:00Z", toTime: "2026-08-12T13:00:00Z", measure: "wall_time" as const, groupBy: "agent" as const, requestedResolutionMinutes: 5 as const, maximumRows: 100 };
-    const cells = Array.from({ length: 2_001 }, (_, index) => ({ startTime: `2026-08-12T12:${String(index % 60).padStart(2, "0")}:00Z`, endTime: "2026-08-12T13:00:00Z", value: 1, count: 1, evidence: "measured", primaryLabel: "1", secondaryLabel: null }));
-    expect(() => parseHeatmapResultDto({ ...expected, actualResolutionMinutes: 5, omittedRowCount: 0, rowOrder: "activity_descending_id_ascending", totalCellCount: 2_001, rows: [{ rowId: "agent-1", label: "Coder", scale: { minimum: 0, maximum: 1, colorSemantic: "sequential_nonnegative", basis: "visible_row_maximum" }, cells }], provenance: [] }, expected)).toThrow();
+  it("rejects mixed variants, binding errors, invalid scales, and unavailable-value lies", () => {
+    expect(() => parseHeatmapResultDto({ ...matrixResult, evidenceItems: [] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("unexpected");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, revisionId: "revision-2" }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("active request");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rowOrder: "runtime_state_contract" }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("rowOrder");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], scale: { availability: "unavailable", reason: "context_capacity_unavailable", minimum: 0 } }] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("unexpected");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, valueState: "unavailable", applicableZero: true }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("applicableZero");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], cells: [{ ...matrixResult.rows[0]!.cells[0]!, normalizedIntensity: null }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("required for a usable value");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], rowId: "token:context-maximum", label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" }, cells: [{ ...matrixResult.rows[0]!.cells[0]!, normalizedIntensity: 0.1 }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("normalizedIntensity");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], rowId: "token:context-maximum", label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" }, cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, formattedValue: "50%", valueState: "unavailable", applicableZero: false, normalizedIntensity: null }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("percentage");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], rowId: "token:context-maximum", label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" }, cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, formattedValue: "Unavailable", valueState: "unavailable", applicableZero: false, normalizedIntensity: null, supportingText: "50%" }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("percentage");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[1], hasDetail: true }] }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("eventId");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[0], durationMs: 1.5 }] }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("non-negative integer");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, value: 0, formattedValue: "0", valueState: "derived", applicableZero: false }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("complete zero");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[1], value: 1 }] }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("null when unavailable");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [...evidenceResult.evidenceItems].reverse() }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("chronological");
+  });
+
+  it("accepts exactly 2,000 matrix cells and 100 evidence items, then rejects one more", () => {
+    const rangeStart = Date.parse("2026-08-01T00:00:00Z");
+    const boundedCells = Array.from({ length: 2_001 }, (_, index) => ({
+      startTime: new Date(rangeStart + index * 60_000).toISOString(),
+      endTime: new Date(rangeStart + (index + 1) * 60_000).toISOString(),
+      value: 1,
+      formattedValue: "1",
+      valueState: "measured",
+      applicableZero: false,
+      contributingEvidenceCount: 1,
+      normalizedIntensity: 1,
+      supportingText: null,
+    }));
+    const largeRequest = { ...matrixRequest, fromTime: boundedCells[0]?.startTime ?? "", toTime: boundedCells[2_000]?.endTime ?? "", requestedResolutionMinutes: 1 as const, maximumRows: 1 };
+    const largeResult = { ...matrixResult, fromTime: largeRequest.fromTime, toTime: largeRequest.toTime, requestedResolutionMinutes: 1, actualResolutionMinutes: 1, maximumRows: 1, totalCellCount: 2_000, rows: [{ ...matrixResult.rows[0], cells: boundedCells.slice(0, 2_000) }] };
+    expect(parseHeatmapResultDto(largeResult, { ...largeRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    expect(() => parseHeatmapResultDto({ ...largeResult, totalCellCount: 2_001, rows: [{ ...largeResult.rows[0], cells: boundedCells }] }, { ...largeRequest, revisionId: "revision-1" })).toThrow("2,000");
+
+    const evidenceItems = Array.from({ length: 101 }, (_, index) => ({ ...evidenceResult.evidenceItems[0], eventId: `event-${index}`, occurredAt: new Date(Date.parse(evidenceRequest.periodStartTime) + index * 1_000).toISOString() }));
+    expect(parseHeatmapResultDto({ ...evidenceResult, evidenceItems: evidenceItems.slice(0, 100) }, { ...evidenceRequest, revisionId: "revision-1" }).queryKind).toBe("cell_evidence");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("100");
+  });
+
+  it("rejects export paths, progress mismatch, and disclosure overflow", () => {
     expect(() => parseExportSnapshotResultDto({ operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", exportId: "export-1", displayName: "report", mode: "directory", manifestSha256: null, fileCount: 1, totalByteCount: 1, warnings: [], omissions: [], outputPath: "hidden" }, { operationId: "operation-1", snapshotId: "snapshot-1", revision: "revision-1", mode: "directory" })).toThrow("forbidden");
     expect(() => parseWorkspaceProgressDto({ protocolVersion: 1, operationId: "wrong", operation: "export_snapshot", snapshotId: null, phase: "x", completed: 0, total: null, message: "x" }, "operation-1", "export_snapshot")).toThrow("identity");
     expect(() => parseEventDetailDto({ snapshotId: "snapshot-1", revision: "revision-1", eventId: "event-1", occurredAt: "2026-08-12T12:00:00Z", kind: "tool", title: "Test", evidence: "measured", provenance: [], summary: null, disclosures: [{ label: "Output", content: "x".repeat(16_385), redacted: false }], sourceRef: null })).toThrow("client limit");

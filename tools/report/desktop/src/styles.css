@@ -307,8 +307,8 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 .heatmap-settings { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
 .heatmap-controls button,
 .heatmap-breadcrumbs button,
+.heatmap-modes button,
 .heatmap-granularity button,
-.heatmap-settings select,
 .heatmap-settings input {
   min-height: 36px;
   padding: 7px 9px;
@@ -319,12 +319,16 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 }
 .heatmap-controls button,
 .heatmap-breadcrumbs button,
+.heatmap-modes button,
 .heatmap-granularity button { cursor: pointer; }
 .heatmap-controls button:disabled { color: var(--ink-muted); cursor: default; opacity: 0.65; }
 .heatmap-settings label { display: grid; gap: 4px; color: var(--ink-muted); font-size: 0.72rem; font-weight: 650; }
 .heatmap-settings input { width: 88px; }
+.heatmap-modes,
 .heatmap-granularity { display: flex; gap: 4px; margin: 0; padding: 0; border: 0; }
+.heatmap-modes legend,
 .heatmap-granularity legend { margin-bottom: 4px; color: var(--ink-muted); font-size: 0.72rem; font-weight: 650; }
+.heatmap-modes button[aria-pressed="true"],
 .heatmap-granularity button[aria-pressed="true"] { color: #fff; background: var(--slate); border-color: var(--slate-deep); }
 .heatmap-breadcrumbs { color: var(--ink-muted); font-size: 0.74rem; }
 .heatmap-breadcrumbs button { min-height: 30px; padding: 4px 7px; color: var(--signal); background: transparent; border-color: transparent; text-decoration: underline; }
@@ -355,14 +359,21 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
 }
 .heatmap-grid [role="gridcell"] strong { font-size: 0.82rem; }
 .heatmap-grid [role="gridcell"] span { font-size: 0.64rem; line-height: 1.3; }
-.heatmap-grid [role="gridcell"].is-sequential { background: hsl(195 42% var(--heatmap-lightness)); }
-.heatmap-grid [role="gridcell"].is-negative { background: hsl(9 55% var(--heatmap-lightness)); }
-.heatmap-grid [role="gridcell"].is-positive { background: hsl(164 42% var(--heatmap-lightness)); }
-.heatmap-grid [role="gridcell"].is-neutral,
-.heatmap-grid [role="gridcell"].is-midpoint { background: #dce3e7; }
+.heatmap-grid [role="gridcell"].is-measured,
+.heatmap-grid [role="gridcell"].is-derived { background: hsl(195 42% var(--heatmap-lightness, 90%)); }
+.heatmap-grid [role="gridcell"].is-partial { border-width: 2px; border-style: dashed; border-color: var(--amber); background: hsl(195 42% var(--heatmap-lightness)); }
 .heatmap-grid [role="gridcell"].is-unavailable { color: var(--ink-muted); background: repeating-linear-gradient(135deg, #f2f4f5 0 7px, #e1e6e9 7px 14px); }
+.heatmap-grid [role="gridcell"].is-capacity-unavailable { color: var(--ink-muted); background: #eef1f2; border-style: dotted; }
 .heatmap-grid [role="gridcell"][aria-selected="true"] { outline: 3px solid var(--amber); outline-offset: 1px; }
 .heatmap-row-legend { width: 250px; flex: 0 0 250px; padding: 8px; color: var(--ink-muted); background: #f6f8f9; border: 1px solid #d5dee3; font-size: 0.66rem; line-height: 1.4; }
+.heatmap-evidence { min-width: 0; padding-top: 12px; border-top: 1px solid var(--line); }
+.heatmap-evidence h4,
+.heatmap-evidence p { margin: 0 0 8px; }
+.heatmap-evidence-ledger { width: 100%; border-collapse: collapse; }
+.heatmap-evidence-ledger tr { border-bottom: 1px solid #d2dce3; }
+.heatmap-evidence-ledger td { padding: 8px; vertical-align: top; overflow-wrap: anywhere; }
+.heatmap-evidence-ledger td:first-child { width: 11rem; color: var(--ink-muted); white-space: nowrap; }
+.heatmap-evidence-ledger button { padding: 6px 9px; color: var(--signal); background: var(--paper); border: 1px solid currentColor; border-radius: 3px; cursor: pointer; }
 .report-error p { margin: 5px 0 0; }
 .report-error button { margin-top: 8px; padding: 6px 10px; color: #fff; background: var(--slate); border: 1px solid var(--slate-deep); border-radius: 4px; cursor: pointer; }
 .report-export-state { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-top: 16px; }
@@ -425,6 +436,12 @@ button:disabled { cursor: not-allowed; opacity: 0.45; }
   .workspace-nav-disclosure[open] + .workspace-body .workspace-nav { display: grid; }
   .report-view { max-height: none; }
   .report-view dl { grid-template-columns: 1fr; }
+  .heatmap-controls,
+  .heatmap-settings { align-items: stretch; }
+  .heatmap-modes,
+  .heatmap-granularity { max-width: 100%; overflow-x: auto; }
+  .heatmap-evidence { overflow-x: auto; }
+  .heatmap-evidence-ledger { min-width: 640px; }
 }
 
 @media (prefers-reduced-motion: reduce) {

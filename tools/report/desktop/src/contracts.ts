@@ -8,6 +8,7 @@ const MAX_DISCLOSURE_LENGTH = 16_384;
 const MAX_WARNING_COUNT = 100;
 const MAX_PAGE_SIZE = 500;
 const MAX_HEATMAP_CELLS = 2_000;
+const MAX_HEATMAP_EVIDENCE_ITEMS = 100;
 const MAX_SEQUENCE_GROUPS = 500;
 
 export interface RootReferenceDto {
@@ -103,7 +104,7 @@ export type ReportOperationName =
   | "list_agents"
   | "list_turns"
   | "list_events"
-  | "query_time_range"
+  | "query_snapshot_time_range"
   | "query_sequence"
   | "query_coordination"
   | "get_event_details"
@@ -316,62 +317,113 @@ export interface EventRowDto {
   readonly hasDetail: boolean;
 }
 
-export type HeatmapGroupBy = "agent" | "event_kind" | "work_item";
-export type HeatmapColorSemantic = "sequential_nonnegative" | "diverging_signed";
 export type HeatmapRequestedResolutionMinutes = 1 | 5 | 15 | 30 | 60;
 export type HeatmapScaleBasis = "visible_row_maximum" | "context_window_capacity";
-export type TimeMeasure =
-  | "wall_time"
-  | "uncached_input_tokens"
-  | "cached_input_tokens"
-  | "output_tokens"
-  | "reasoning_tokens"
-  | "cost_usd";
-export interface HeatmapRequestDto extends WorkspaceOperationRequestDto {
+export type HeatmapMode = "wall_time" | "tokens" | "models";
+export type HeatmapValueState = "measured" | "derived" | "partial" | "unavailable";
+export type HeatmapRowKind = "runtime_state" | "token_measure" | "model" | "cost";
+export type HeatmapRowOrder = "runtime_state_contract" | "token_contract" | "model_first_occurrence_then_cost";
+export type HeatmapEvidenceMethod = "measured" | "derived" | "inferred" | "estimated" | "unavailable";
+
+export interface HeatmapMatrixRequestDto extends WorkspaceOperationRequestDto {
   readonly snapshotId: string;
+  readonly queryKind: "matrix";
   readonly fromTime: string;
   readonly toTime: string;
-  readonly measure: TimeMeasure;
-  readonly groupBy: HeatmapGroupBy;
+  readonly mode: HeatmapMode;
   readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
   readonly maximumRows: number;
 }
-export interface HeatmapCellDto {
+
+export interface HeatmapCellEvidenceRequestDto extends WorkspaceOperationRequestDto {
+  readonly snapshotId: string;
+  readonly queryKind: "cell_evidence";
+  readonly mode: HeatmapMode;
+  readonly rowId: string;
+  readonly periodStartTime: string;
+  readonly periodEndTime: string;
+}
+
+export type HeatmapRequestDto = HeatmapMatrixRequestDto | HeatmapCellEvidenceRequestDto;
+
+export type HeatmapScaleDto =
+  | { readonly availability: "available"; readonly minimum: number; readonly maximum: number; readonly basis: HeatmapScaleBasis }
+  | { readonly availability: "unavailable"; readonly reason: "context_capacity_unavailable" };
+
+export interface HeatmapMatrixCellDto {
   readonly startTime: string;
   readonly endTime: string;
   readonly value: number | null;
-  readonly count: number;
-  readonly evidence: EvidenceLabel;
-  readonly primaryLabel: string;
-  readonly secondaryLabel: string | null;
+  readonly formattedValue: string;
+  readonly valueState: HeatmapValueState;
+  readonly applicableZero: boolean;
+  readonly contributingEvidenceCount: number;
+  readonly normalizedIntensity: number | null;
+  readonly supportingText: string | null;
 }
-export interface HeatmapScaleDto {
-  readonly minimum: number;
-  readonly maximum: number;
-  readonly colorSemantic: HeatmapColorSemantic;
-  readonly basis: HeatmapScaleBasis;
-}
-export interface HeatmapRowDto {
+
+export interface HeatmapMatrixRowDto {
   readonly rowId: string;
+  readonly rowKind: HeatmapRowKind;
   readonly label: string;
   readonly scale: HeatmapScaleDto;
-  readonly cells: readonly HeatmapCellDto[];
+  readonly cells: readonly HeatmapMatrixCellDto[];
 }
-export interface HeatmapResultDto {
+
+export interface HeatmapMatrixResultDto {
   readonly snapshotId: string;
-  readonly revision: string;
-  readonly measure: TimeMeasure;
-  readonly groupBy: HeatmapGroupBy;
+  readonly revisionId: string;
+  readonly queryKind: "matrix";
+  readonly mode: HeatmapMode;
   readonly fromTime: string;
   readonly toTime: string;
   readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
-  readonly actualResolutionMinutes: number;
+  readonly actualResolutionMinutes: HeatmapRequestedResolutionMinutes;
   readonly maximumRows: number;
   readonly omittedRowCount: number;
-  readonly rowOrder: "activity_descending_id_ascending";
+  readonly rowOrder: HeatmapRowOrder;
   readonly totalCellCount: number;
-  readonly rows: readonly HeatmapRowDto[];
+  readonly rows: readonly HeatmapMatrixRowDto[];
   readonly provenance: readonly string[];
+}
+
+export interface HeatmapEvidenceItemDto {
+  readonly eventId: string | null;
+  readonly occurredAt: string;
+  readonly value: number | null;
+  readonly formattedValue: string;
+  readonly durationMs: number | null;
+  readonly label: string;
+  readonly preview: string | null;
+  readonly evidenceMethod: HeatmapEvidenceMethod;
+  readonly valueState: HeatmapValueState;
+  readonly hasDetail: boolean;
+}
+
+export interface HeatmapCellEvidenceResultDto {
+  readonly snapshotId: string;
+  readonly revisionId: string;
+  readonly queryKind: "cell_evidence";
+  readonly mode: HeatmapMode;
+  readonly rowId: string;
+  readonly rowLabel: string;
+  readonly periodStartTime: string;
+  readonly periodEndTime: string;
+  readonly value: number | null;
+  readonly formattedValue: string;
+  readonly valueState: HeatmapValueState;
+  readonly applicableZero: boolean;
+  readonly evidenceItems: readonly HeatmapEvidenceItemDto[];
+  readonly omittedEvidenceCount: number;
+  readonly provenance: readonly string[];
+}
+
+export type HeatmapResultDto = HeatmapMatrixResultDto | HeatmapCellEvidenceResultDto;
+
+export interface HeatmapPeriodHistoryEntry {
+  readonly fromTime: string;
+  readonly toTime: string;
+  readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
 }
 
 export interface SequenceFiltersDto {
@@ -558,6 +610,10 @@ function finite(source: Record<string, unknown>, key: string, label: string): nu
   const value = source[key];
   if (typeof value !== "number" || !Number.isFinite(value)) throw new Error(`${label}.${key} is not finite`);
   return value;
+}
+
+function nullableFinite(source: Record<string, unknown>, key: string, label: string): number | null {
+  return source[key] === null ? null : finite(source, key, label);
 }
 
 function nullableCount(source: Record<string, unknown>, key: string, label: string): number | null {
@@ -953,31 +1009,192 @@ export function parseCoordinationPageDto(value: unknown, expected: ExpectedPageB
   return { ...base, operation: "query_coordination" };
 }
 
-export function parseHeatmapResultDto(value: unknown, expected: Readonly<Pick<HeatmapRequestDto, "snapshotId" | "fromTime" | "toTime" | "measure" | "groupBy" | "requestedResolutionMinutes" | "maximumRows">> & { readonly revision: string }): HeatmapResultDto {
+export function parseHeatmapResultDto(
+  value: unknown,
+  expected: HeatmapRequestDto & { readonly revisionId: string },
+): HeatmapResultDto {
   scanBoundary(value);
   const result = record(value, "heatmap result");
-  for (const key of ["snapshotId", "revision", "fromTime", "toTime", "measure", "groupBy", "requestedResolutionMinutes", "maximumRows"] as const) if (result[key] !== expected[key]) throw new Error(`heatmap result.${key} does not match the active request`);
-  if (!Array.isArray(result.rows) || result.rows.length > expected.maximumRows) throw new Error("heatmap result.rows exceeds maximumRows");
-  const actualResolutionMinutes = finite(result, "actualResolutionMinutes", "heatmap result");
-  if (!Number.isInteger(actualResolutionMinutes) || actualResolutionMinutes < expected.requestedResolutionMinutes) throw new Error("heatmap result.actualResolutionMinutes is invalid");
-  const rows = result.rows.map((item, rowIndex): HeatmapRowDto => {
-    const label = `heatmap result.rows[${rowIndex}]`; const row = exact(item, label, ["rowId", "label", "scale", "cells"]); const scale = exact(row.scale, `${label}.scale`, ["minimum", "maximum", "colorSemantic", "basis"]);
-    const minimum = finite(scale, "minimum", `${label}.scale`); const maximum = finite(scale, "maximum", `${label}.scale`); const colorSemantic = oneOf(scale.colorSemantic, ["sequential_nonnegative", "diverging_signed"] as const, `${label}.scale.colorSemantic`); const basis = oneOf(scale.basis, ["visible_row_maximum", "context_window_capacity"] as const, `${label}.scale.basis`);
-    if (minimum > maximum || (colorSemantic === "sequential_nonnegative" && minimum < 0) || (colorSemantic === "diverging_signed" && (minimum > 0 || maximum < 0))) throw new Error(`${label}.scale has an invalid domain`);
+  for (const key of ["snapshotId", "revisionId", "queryKind", "mode"] as const) {
+    if (result[key] !== expected[key]) throw new Error(`heatmap result.${key} does not match the active request`);
+  }
+  if (expected.queryKind === "matrix") return parseHeatmapMatrixResult(result, expected);
+  return parseHeatmapEvidenceResult(result, expected);
+}
+
+function parseHeatmapScale(value: unknown, label: string): HeatmapScaleDto {
+  const source = record(value, label);
+  const availability = oneOf(source.availability, ["available", "unavailable"] as const, `${label}.availability`);
+  if (availability === "unavailable") {
+    const unavailable = exact(source, label, ["availability", "reason"]);
+    return { availability, reason: oneOf(unavailable.reason, ["context_capacity_unavailable"] as const, `${label}.reason`) };
+  }
+  const available = exact(source, label, ["availability", "minimum", "maximum", "basis"]);
+  const minimum = finite(available, "minimum", label);
+  const maximum = finite(available, "maximum", label);
+  if (minimum > maximum) throw new Error(`${label} has an invalid numeric domain`);
+  return { availability, minimum, maximum, basis: oneOf(available.basis, ["visible_row_maximum", "context_window_capacity"] as const, `${label}.basis`) };
+}
+
+function parseHeatmapCell(value: unknown, label: string, expected: HeatmapMatrixRequestDto, scale: HeatmapScaleDto): HeatmapMatrixCellDto {
+  const source = exact(value, label, ["startTime", "endTime", "value", "formattedValue", "valueState", "applicableZero", "contributingEvidenceCount", "normalizedIntensity", "supportingText"]);
+  const startTime = instant(source, "startTime", label);
+  const endTime = instant(source, "endTime", label);
+  if (Date.parse(startTime) >= Date.parse(endTime) || Date.parse(startTime) < Date.parse(expected.fromTime) || Date.parse(endTime) > Date.parse(expected.toTime)) throw new Error(`${label} is outside the requested half-open range`);
+  const numericValue = nullableFinite(source, "value", label);
+  const valueState = oneOf(source.valueState, ["measured", "derived", "partial", "unavailable"] as const, `${label}.valueState`);
+  const applicableZero = bool(source, "applicableZero", label);
+  const normalizedIntensity = nullableFinite(source, "normalizedIntensity", label);
+  if (normalizedIntensity !== null && (normalizedIntensity < 0 || normalizedIntensity > 1)) throw new Error(`${label}.normalizedIntensity is outside 0 through 1`);
+  if (valueState === "unavailable" && numericValue !== null) throw new Error(`${label}.value must be null when unavailable`);
+  if (valueState !== "unavailable" && numericValue === null) throw new Error(`${label}.value is required when usable`);
+  if (applicableZero && (numericValue !== 0 || (valueState !== "measured" && valueState !== "derived"))) throw new Error(`${label}.applicableZero is inconsistent with its value state`);
+  if ((valueState === "measured" || valueState === "derived") && numericValue === 0 && !applicableZero) throw new Error(`${label}.applicableZero must identify a complete zero`);
+  if (numericValue !== 0 && applicableZero) throw new Error(`${label}.applicableZero cannot qualify a nonzero value`);
+  if (scale.availability === "unavailable" && normalizedIntensity !== null) throw new Error(`${label}.normalizedIntensity must be null when scale availability is unavailable`);
+  if (valueState === "unavailable" && normalizedIntensity !== null) throw new Error(`${label}.normalizedIntensity must be null when its value is unavailable`);
+  if (scale.availability === "available" && valueState !== "unavailable" && normalizedIntensity === null) throw new Error(`${label}.normalizedIntensity is required for a usable value`);
+  if (scale.availability === "unavailable" && /%/u.test(text(source, "formattedValue", label))) throw new Error(`${label}.formattedValue cannot contain a capacity percentage when scale availability is unavailable`);
+  const supportingText = nullableText(source, "supportingText", label);
+  if (scale.availability === "unavailable" && supportingText !== null && /%/u.test(supportingText)) throw new Error(`${label}.supportingText cannot contain a capacity percentage when scale availability is unavailable`);
+  return {
+    startTime,
+    endTime,
+    value: numericValue,
+    formattedValue: text(source, "formattedValue", label),
+    valueState,
+    applicableZero,
+    contributingEvidenceCount: count(source, "contributingEvidenceCount", label),
+    normalizedIntensity,
+    supportingText,
+  };
+}
+
+function parseHeatmapMatrixResult(result: Record<string, unknown>, expected: HeatmapMatrixRequestDto): HeatmapMatrixResultDto {
+  const source = exact(result, "heatmap matrix result", ["snapshotId", "revisionId", "queryKind", "mode", "fromTime", "toTime", "requestedResolutionMinutes", "actualResolutionMinutes", "maximumRows", "omittedRowCount", "rowOrder", "totalCellCount", "rows", "provenance"]);
+  for (const key of ["fromTime", "toTime", "requestedResolutionMinutes", "maximumRows"] as const) {
+    if (source[key] !== expected[key]) throw new Error(`heatmap result.${key} does not match the active request`);
+  }
+  const parsedResolution = count(source, "actualResolutionMinutes", "heatmap matrix result");
+  let actualResolutionMinutes: HeatmapRequestedResolutionMinutes;
+  switch (parsedResolution) {
+    case 1:
+    case 5:
+    case 15:
+    case 30:
+    case 60:
+      actualResolutionMinutes = parsedResolution;
+      break;
+    default:
+      throw new Error("heatmap matrix result.actualResolutionMinutes is not a supported resolution");
+  }
+  if (actualResolutionMinutes < expected.requestedResolutionMinutes) throw new Error("heatmap matrix result.actualResolutionMinutes is finer than requested");
+  const expectedRowOrder: HeatmapRowOrder = expected.mode === "wall_time" ? "runtime_state_contract" : expected.mode === "tokens" ? "token_contract" : "model_first_occurrence_then_cost";
+  const rowOrder = oneOf(source.rowOrder, ["runtime_state_contract", "token_contract", "model_first_occurrence_then_cost"] as const, "heatmap matrix result.rowOrder");
+  if (rowOrder !== expectedRowOrder) throw new Error("heatmap matrix result.rowOrder does not match its mode");
+  if (!Array.isArray(source.rows) || source.rows.length > expected.maximumRows) throw new Error("heatmap matrix result.rows exceeds maximumRows");
+  const rows = source.rows.map((value, rowIndex): HeatmapMatrixRowDto => {
+    const label = `heatmap matrix result.rows[${rowIndex}]`;
+    const row = exact(value, label, ["rowId", "rowKind", "label", "scale", "cells"]);
+    const rowKind = oneOf(row.rowKind, ["runtime_state", "token_measure", "model", "cost"] as const, `${label}.rowKind`);
+    if (expected.mode === "wall_time" && rowKind !== "runtime_state") throw new Error(`${label}.rowKind does not match wall_time mode`);
+    if (expected.mode === "tokens" && rowKind !== "token_measure" && rowKind !== "cost") throw new Error(`${label}.rowKind does not match tokens mode`);
+    if (expected.mode === "models" && rowKind !== "model" && rowKind !== "cost") throw new Error(`${label}.rowKind does not match models mode`);
+    const scale = parseHeatmapScale(row.scale, `${label}.scale`);
+    const rowLabel = text(row, "label", label);
+    if (scale.availability === "unavailable" && (rowKind !== "token_measure" || !rowLabel.startsWith("Context size"))) throw new Error(`${label}.scale is unavailable outside a context row`);
     if (!Array.isArray(row.cells)) throw new Error(`${label}.cells is not an array`);
-    const cells = row.cells.map((cellValue, cellIndex): HeatmapCellDto => {
-      const cellLabel = `${label}.cells[${cellIndex}]`; const cell = exact(cellValue, cellLabel, ["startTime", "endTime", "value", "count", "evidence", "primaryLabel", "secondaryLabel"]); const startTime = instant(cell, "startTime", cellLabel); const endTime = instant(cell, "endTime", cellLabel); if (startTime >= endTime || startTime < expected.fromTime || endTime > expected.toTime) throw new Error(`${cellLabel} is outside the requested half-open range`);
-      const cellValueNumber = cell.value === null ? null : finite(cell, "value", cellLabel); if (cellValueNumber !== null && (cellValueNumber < minimum || cellValueNumber > maximum)) throw new Error(`${cellLabel}.value is outside its row scale`);
-      return { startTime, endTime, value: cellValueNumber, count: count(cell, "count", cellLabel), evidence: evidence(cell.evidence, `${cellLabel}.evidence`), primaryLabel: text(cell, "primaryLabel", cellLabel), secondaryLabel: nullableText(cell, "secondaryLabel", cellLabel) };
-    });
-    for (let index = 1; index < cells.length; index += 1) if ((cells[index - 1]?.endTime ?? "") > (cells[index]?.startTime ?? "")) throw new Error(`${label}.cells overlap or are unordered`);
-    return { rowId: opaque(row, "rowId", label), label: text(row, "label", label), scale: { minimum, maximum, colorSemantic, basis }, cells };
+    const cells = row.cells.map((cell, cellIndex) => parseHeatmapCell(cell, `${label}.cells[${cellIndex}]`, expected, scale));
+    for (let index = 1; index < cells.length; index += 1) {
+      if (Date.parse(cells[index - 1]?.endTime ?? "") > Date.parse(cells[index]?.startTime ?? "")) throw new Error(`${label}.cells overlap or are unordered`);
+    }
+    return { rowId: opaque(row, "rowId", label), rowKind, label: rowLabel, scale, cells };
   });
-  const totalCellCount = count(result, "totalCellCount", "heatmap result"); const actualCount = rows.reduce((total, row) => total + row.cells.length, 0);
-  if (totalCellCount !== actualCount || totalCellCount > MAX_HEATMAP_CELLS) throw new Error("heatmap result.totalCellCount is invalid");
-  const durationMinutes = (Date.parse(expected.toTime) - Date.parse(expected.fromTime)) / 60_000;
-  if (rows.length > 0 && Math.ceil(durationMinutes / actualResolutionMinutes) * rows.length > MAX_HEATMAP_CELLS) throw new Error("heatmap result.actualResolutionMinutes does not satisfy coarsening");
-  return { snapshotId: expected.snapshotId, revision: expected.revision, measure: expected.measure, groupBy: expected.groupBy, fromTime: expected.fromTime, toTime: expected.toTime, requestedResolutionMinutes: expected.requestedResolutionMinutes, actualResolutionMinutes, maximumRows: expected.maximumRows, omittedRowCount: count(result, "omittedRowCount", "heatmap result"), rowOrder: oneOf(result.rowOrder, ["activity_descending_id_ascending"] as const, "heatmap result.rowOrder"), totalCellCount, rows, provenance: stringArray(result.provenance, "heatmap result.provenance", MAX_WARNING_COUNT) };
+  if (expected.mode === "models") {
+    const costIndex = rows.findIndex((row) => row.rowKind === "cost");
+    if (costIndex >= 0 && costIndex !== rows.length - 1) throw new Error("heatmap matrix result model Cost row is not last");
+  }
+  const totalCellCount = count(source, "totalCellCount", "heatmap matrix result");
+  const actualCellCount = rows.reduce((total, row) => total + row.cells.length, 0);
+  if (totalCellCount !== actualCellCount) throw new Error("heatmap matrix result.totalCellCount does not match its rows");
+  if (totalCellCount > MAX_HEATMAP_CELLS) throw new Error("heatmap matrix result exceeds the 2,000-cell client limit");
+  return {
+    snapshotId: expected.snapshotId,
+    revisionId: text(source, "revisionId", "heatmap matrix result"),
+    queryKind: "matrix",
+    mode: expected.mode,
+    fromTime: expected.fromTime,
+    toTime: expected.toTime,
+    requestedResolutionMinutes: expected.requestedResolutionMinutes,
+    actualResolutionMinutes,
+    maximumRows: expected.maximumRows,
+    omittedRowCount: count(source, "omittedRowCount", "heatmap matrix result"),
+    rowOrder,
+    totalCellCount,
+    rows,
+    provenance: stringArray(source.provenance, "heatmap matrix result.provenance", MAX_WARNING_COUNT),
+  };
+}
+
+function parseHeatmapEvidenceResult(result: Record<string, unknown>, expected: HeatmapCellEvidenceRequestDto): HeatmapCellEvidenceResultDto {
+  const source = exact(result, "heatmap cell evidence result", ["snapshotId", "revisionId", "queryKind", "mode", "rowId", "rowLabel", "periodStartTime", "periodEndTime", "value", "formattedValue", "valueState", "applicableZero", "evidenceItems", "omittedEvidenceCount", "provenance"]);
+  for (const key of ["rowId", "periodStartTime", "periodEndTime"] as const) {
+    if (source[key] !== expected[key]) throw new Error(`heatmap result.${key} does not match the active request`);
+  }
+  const numericValue = nullableFinite(source, "value", "heatmap cell evidence result");
+  const valueState = oneOf(source.valueState, ["measured", "derived", "partial", "unavailable"] as const, "heatmap cell evidence result.valueState");
+  const applicableZero = bool(source, "applicableZero", "heatmap cell evidence result");
+  if (valueState === "unavailable" && numericValue !== null) throw new Error("heatmap cell evidence result.value must be null when unavailable");
+  if (valueState !== "unavailable" && numericValue === null) throw new Error("heatmap cell evidence result.value is required when usable");
+  if (applicableZero && (numericValue !== 0 || (valueState !== "measured" && valueState !== "derived"))) throw new Error("heatmap cell evidence result.applicableZero is inconsistent");
+  if ((valueState === "measured" || valueState === "derived") && numericValue === 0 && !applicableZero) throw new Error("heatmap cell evidence result.applicableZero must identify a complete zero");
+  if (!Array.isArray(source.evidenceItems) || source.evidenceItems.length > MAX_HEATMAP_EVIDENCE_ITEMS) throw new Error("heatmap cell evidence result exceeds the 100-item client limit");
+  const evidenceItems = source.evidenceItems.map((value, index): HeatmapEvidenceItemDto => {
+    const label = `heatmap cell evidence result.evidenceItems[${index}]`;
+    const item = exact(value, label, ["eventId", "occurredAt", "value", "formattedValue", "durationMs", "label", "preview", "evidenceMethod", "valueState", "hasDetail"]);
+    const eventId = item.eventId === null ? null : opaque(item, "eventId", label);
+    const hasDetail = bool(item, "hasDetail", label);
+    if (hasDetail && eventId === null) throw new Error(`${label}.eventId is required when hasDetail is true`);
+    const durationMs = nullableCount(item, "durationMs", label);
+    const occurredAt = instant(item, "occurredAt", label);
+    if (Date.parse(occurredAt) < Date.parse(expected.periodStartTime) || Date.parse(occurredAt) >= Date.parse(expected.periodEndTime)) throw new Error(`${label}.occurredAt is outside the selected period`);
+    const numericItemValue = nullableFinite(item, "value", label);
+    const valueState = oneOf(item.valueState, ["measured", "derived", "partial", "unavailable"] as const, `${label}.valueState`);
+    if (valueState === "unavailable" && numericItemValue !== null) throw new Error(`${label}.value must be null when unavailable`);
+    if (valueState !== "unavailable" && numericItemValue === null) throw new Error(`${label}.value is required when usable`);
+    return {
+      eventId,
+      occurredAt,
+      value: numericItemValue,
+      formattedValue: text(item, "formattedValue", label),
+      durationMs,
+      label: text(item, "label", label),
+      preview: nullableText(item, "preview", label),
+      evidenceMethod: oneOf(item.evidenceMethod, ["measured", "derived", "inferred", "estimated", "unavailable"] as const, `${label}.evidenceMethod`),
+      valueState,
+      hasDetail,
+    };
+  });
+  for (let index = 1; index < evidenceItems.length; index += 1) {
+    if (Date.parse(evidenceItems[index - 1]?.occurredAt ?? "") > Date.parse(evidenceItems[index]?.occurredAt ?? "")) throw new Error("heatmap cell evidence result.evidenceItems is not chronological");
+  }
+  return {
+    snapshotId: expected.snapshotId,
+    revisionId: text(source, "revisionId", "heatmap cell evidence result"),
+    queryKind: "cell_evidence",
+    mode: expected.mode,
+    rowId: expected.rowId,
+    rowLabel: text(source, "rowLabel", "heatmap cell evidence result"),
+    periodStartTime: expected.periodStartTime,
+    periodEndTime: expected.periodEndTime,
+    value: numericValue,
+    formattedValue: text(source, "formattedValue", "heatmap cell evidence result"),
+    valueState,
+    applicableZero,
+    evidenceItems,
+    omittedEvidenceCount: count(source, "omittedEvidenceCount", "heatmap cell evidence result"),
+    provenance: stringArray(source.provenance, "heatmap cell evidence result.provenance", MAX_WARNING_COUNT),
+  };
 }
 
 export function parseEventDetailDto(value: unknown): EventDetailDto {
