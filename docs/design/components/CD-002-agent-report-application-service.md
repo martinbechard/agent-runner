@@ -30,11 +30,11 @@ The initial dynamic scope is Codex-only. The Tauri workspace, explicit CLI strea
 
 The Heatmap uses one additive, discriminated `query_snapshot_time_range` operation family. A `matrix` request returns only matrix data. A `cell_evidence` request returns only the selected row-period evidence ledger. Both variants derive their `snapshot_id` and `revision_id` from the same retained snapshot-revision handle and use one shared pure semantic calculation over its parsed run.
 
-This design describes intended behavior. Its design mode is **PLANNED_DEVELOPMENT**.
+This design documents the implemented module. Its design mode is **EXISTING_IMPLEMENTATION**.
 
 ## Authoritative Sources
 
-The permitted source inventory is complete for this planned module.
+The permitted source inventory is complete for this implemented module.
 
 | Source category | Durable source | Authority in this design |
 | --- | --- | --- |
@@ -45,13 +45,15 @@ The permitted source inventory is complete for this planned module.
 | Resolved product decisions | Runtime-supplied user decisions on 2026-08-12 | Preserved classic CLI and MCP `generate_report`, separate shared streamlined directory/summary export, Codex-only initial dynamics, Tauri-only workspace, independent local MCP and CLI, and no standalone browser |
 | Backlog requirement | [Modularize report tool for concurrent maintenance](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) | Separation of shared report behavior from large compatibility code |
 | Project configuration | [`pyproject.toml`](../../../tools/report/pyproject.toml) | Python 3.11 or later, package boundary, test runner, and installed entry points |
+| Current implementation | [`application_service.py`](../../../tools/report/src/agent_report/application_service.py) | Implemented service contracts, DTOs, state, validation, Heatmap semantics, and dependency boundaries |
+| Current owned tests | [`test_application_service.py`](../../../tools/report/tests/test_application_service.py) | Implemented unit and contract coverage for this component |
 | Relevant technology guidance | Python standard library typing, dataclasses, threading, HMAC, JSON, and base64url facilities | Allowed implementation mechanisms within the accepted Python boundary |
 | Current compatibility evidence | [`mcp_server.py`](../../../tools/report/src/agent_report/mcp_server.py), [`mcp_report.py`](../../../tools/report/src/agent_report/mcp_report.py), [`cli.py`](../../../tools/report/src/agent_report/cli.py) | Current MCP and CLI contracts only; not authority for intended snapshot operations |
 | Current test evidence | [`test_mcp_server.py`](../../../tools/report/tests/test_mcp_server.py), [`test_mcp_report.py`](../../../tools/report/tests/test_mcp_report.py), [`test_cli.py`](../../../tools/report/tests/test_cli.py) | Retained surface behavior only |
 | Accepted Heatmap delivery plan | [`PLAN-012`](../../plans/PLAN-012-agent-report-dynamic-heatmap-parity.json), SHA-256 `b711b01c519585aa0c155e7c0025ff796387caab7f46d7b1ec80cbaab1fe8bc2` | Cross-language discriminated union, immutable correlation, semantic algorithms, bounds, no-cache-migration boundary, and verification facets |
 | Independent review | [RVW-012](../../reviews/RVW-012-cd-002-agent-report-application-service-checklist.md) | Earlier correction requirements; the superseding decision replaces its additive MCP `generate_report` schema finding with exact-schema preservation |
-| Planned dependency design | [CD-003](CD-003-agent-report-normalized-event-cache.md) | Cache internals remain dependency-owned; this document does not derive its service contract from sibling module designs |
-| Procedures and runtime evidence | [Agent Report README](../../../tools/report/README.md); runtime evidence is not required for planned contracts | Current commands and packaging context |
+| Dependency design | [CD-003](CD-003-agent-report-normalized-event-cache.md) | Cache internals remain dependency-owned; this document does not derive its service contract from sibling module designs |
+| Procedures | [Agent Report README](../../../tools/report/README.md) | Current commands and packaging context; fresh integrated delivery evidence remains required |
 
 The runtime-supplied user decisions supersede conflicting earlier product choices only for export defaults and modes, initial dynamic adapter scope, workspace runtime, and standalone-browser scope. FR-001 wins for other actor-visible behavior. ARC-001 wins for system constraints. HLD-003 wins for component ownership and cross-module contracts. This design wins only for Application Service internals. Current code wins for statements labeled current behavior.
 
@@ -59,15 +61,15 @@ A specific accepted operation contract governs a general rule for that operation
 
 ## Related Code
 
-The planned owned implementation path is `tools/report/src/agent_report/application_service.py`. Related code is **Not yet identified** because the file is not implemented.
+The owned implementation is [`tools/report/src/agent_report/application_service.py`](../../../tools/report/src/agent_report/application_service.py).
 
 Existing MCP and CLI files are non-owned callers. CD-002 does not authorize changes to their retained public contracts.
 
 ## Related Tests
 
-The planned owned test path is `tools/report/tests/test_application_service.py`. Related tests are **Not yet identified** because the file is not implemented.
+The owned tests are [`tools/report/tests/test_application_service.py`](../../../tools/report/tests/test_application_service.py).
 
-Current MCP and CLI tests remain compatibility evidence. The Verification section identifies the exact planned test targets for CD-002.
+Current MCP and CLI tests remain compatibility evidence. The Verification section identifies the component and integrated evidence required for delivery.
 
 ## Related Backlog Items
 
@@ -1687,17 +1689,17 @@ The module performs no automatic retry and no rollback of an already published c
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This PLANNED_DEVELOPMENT module design incorporates the accepted Dev Architect reconciliation, PLAN-012 Heatmap contract, and applicable RVW-012 corrections. It defines the full Workspace operation semantics, canonical pages, discriminated Heatmap matrix and cell evidence, sequence and coordination results, bounded detail, cryptographic operation-ID validation, structured diagnostics, opaque source keys, native export results, exact lifecycle results, and retained-plus-snapshot MCP contract. Cache internals, generic Rust transport, UI projection, and export rendering remain outside CD-002.
+**ACCEPTED.** This EXISTING_IMPLEMENTATION module design incorporates the accepted Dev Architect reconciliation, PLAN-012 Heatmap contract, and applicable RVW-012 corrections. It defines the implemented Workspace operation semantics, canonical pages, discriminated Heatmap matrix and cell evidence, sequence and coordination results, bounded detail, cryptographic operation-ID validation, structured diagnostics, opaque source keys, native export results, exact lifecycle results, and retained-plus-snapshot MCP contract. Cache internals, generic Rust transport, UI projection, and export rendering remain outside CD-002.
 
 ## Implementation Readiness
 
-**BLOCKED.** The documentation contract is accepted, but implementation readiness remains blocked until the Application Service source and tests implement this reconciled operation, DTO, parsed-run semantic helper, registry, diagnostic, and MCP-adapter contract. If the parsed run cannot preserve an HM-F01 through HM-F15 distinction, implementation stops for Dev Architect reconciliation instead of migrating the cache or coercing missing evidence. CD-003 repository integration, CD-004 worker integration, CD-005 adapter projection, and CD-006 export integration require their independently owned implementations and verification; none is an authority for this service contract.
+**NOT DELIVERY-READY.** The Application Service source, contracts, semantic helper, and owned tests are implemented. Readiness now depends only on fresh integrated verification with CD-003 and CD-004, package and entry-point verification, CD-005 UX projection evidence, platform evidence, CD-006 export integration, and the final delivery gates below. If fresh evidence reveals that the parsed run cannot preserve an HM-F01 through HM-F15 distinction, return that gap for Dev Architect reconciliation instead of migrating the cache or coercing missing evidence.
 
 Production cache-maintenance defaults are **BLOCKED** by OQ-02. Non-Codex dynamic behavior and a standalone-browser runtime are outside the accepted initial scope. Neither blocks the defined CD-002 source and unit-test scope.
 
 ## Verification
 
-The planned test module declares these exact doubles: `FakeDiscoveryPort`, `FakeNormalizationPort`, `FakeEventRepositoryPort`, `FakeQueryPort`, `FakeExportRendererPort`, `FakePublicationPort`, `FakeClock`, `FakeIdFactory`, `RecordingLogger`, `RecordingProgressSink`, and `ManualCancellationToken`.
+The test module declares these exact doubles: `FakeDiscoveryPort`, `FakeNormalizationPort`, `FakeEventRepositoryPort`, `FakeQueryPort`, `FakeExportRendererPort`, `FakePublicationPort`, `FakeClock`, `FakeIdFactory`, `RecordingLogger`, `RecordingProgressSink`, and `ManualCancellationToken`.
 
 It declares these exact test functions:
 

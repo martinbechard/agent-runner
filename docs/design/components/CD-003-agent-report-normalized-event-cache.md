@@ -28,7 +28,7 @@ The version-1 Heatmap does not add cached Heatmap facets. The Application Servic
 
 The parsed run and its immutable `HeatmapPricingAuthority` are process-local derived evidence. Normalization creates the authority by calling classic `_cost_for_response` exactly once per response. Neither value is serialized into SQLite, restored after restart, or copied into a second cache. A restart reparses the authoritative JSONL and recreates the authority before a new snapshot read handle is available.
 
-This design defines intended behavior in **PLANNED_DEVELOPMENT** mode. The planned implementation does not yet exist. The design therefore uses accepted parent contracts and justified module propositions for delegated internals.
+This design documents the implemented module in **EXISTING_IMPLEMENTATION** mode. Accepted parent contracts remain authoritative for actor-visible and cross-module requirements; executable source and tests establish current repository behavior.
 
 ### Justified Module Propositions
 
@@ -50,7 +50,7 @@ Each proposition stays within the Event Repository boundary delegated by [HLD-00
 
 ### Design Mode And Source Inventory
 
-| Source category permitted by PLANNED_DEVELOPMENT | Durable source | Use |
+| Source category permitted by EXISTING_IMPLEMENTATION | Durable source | Use |
 | --- | --- | --- |
 | Accepted functional specification | [FR-001](../../requirements/functional/FR-001-agent-report-dynamic-app-and-static-export.md) | Privacy, cache location, rebuild, purge, stale-source, cancellation, and actor-visible recovery outcomes |
 | Accepted architecture | [ARC-001](../../architecture/ARC-001-agent-report-dynamic-app-and-static-export.md) | ARC-07 through ARC-10, ARC-14, persistence boundary, source authority, and cache separation |
@@ -58,12 +58,12 @@ Each proposition stays within the Event Repository boundary delegated by [HLD-00
 | Accepted decisions | Dev Architect packet recorded by ARC-001 and HLD-003 | Python ownership, SQLite WAL, runtime path, component split, and atomicity |
 | Backlog requirements | [Modularization backlog item](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) | Existing Python decomposition pressure |
 | Project configuration | `tools/report/pyproject.toml` | Python 3.11 or later, package root, and pytest root |
-| Current implementation | Not yet identified for `agent_report.event_cache` | Planned behavior only; current code cannot prove repository behavior |
-| Current tests | Not yet identified for `test_event_cache.py` | Planned verification only |
+| Current implementation | [`event_cache.py`](../../../tools/report/src/agent_report/event_cache.py) | Implemented schema-version-1 repository, migrations, queries, publication, recovery, retention, and read-handle boundary |
+| Current tests | [`test_event_cache.py`](../../../tools/report/tests/test_event_cache.py) | Implemented unit, SQLite integration, failure, recovery, and schema-regression coverage |
 | Current privacy and metric semantics | [CD-001](CD-001-codex-rollout-metrics.md) | Sanitized summaries, bounded previews, ciphertext opacity, evidence labels, and measured counters |
 | Accepted Heatmap delivery plan | [`PLAN-012`](../../plans/PLAN-012-agent-report-dynamic-heatmap-parity.json), SHA-256 `b711b01c519585aa0c155e7c0025ff796387caab7f46d7b1ec80cbaab1fe8bc2` | Retained parsed-run-handle coherence, unchanged schema/migrations, privacy, stop condition, and regression obligations |
 | Procedures | [Agent Report README](../../../tools/report/README.md) | Current tool invocation and validation context |
-| Retained runtime evidence | Not required for the planned contracts | No runtime claim is made for the planned module |
+| Delivery evidence | Verification section | Fresh integrated, package, and platform evidence remains required before delivery readiness |
 
 FR-001 governs actor-visible outcomes. ARC-001 governs system constraints. HLD-003 governs component ownership and cross-module contracts. This design governs only delegated Event Repository internals. Current code governs only claims labeled as current behavior.
 
@@ -71,7 +71,7 @@ A specific accepted operation contract governs a general principle for that oper
 
 ## Related Code
 
-The planned primary implementation path is `tools/report/src/agent_report/event_cache.py`, in namespace `agent_report.event_cache`. It does not yet exist.
+The primary implementation is [`tools/report/src/agent_report/event_cache.py`](../../../tools/report/src/agent_report/event_cache.py), in namespace `agent_report.event_cache`.
 
 The module owns the derived runtime database at `~/.codex/agent-report/report-events-v1.sqlite3`. SQLite may create `report-events-v1.sqlite3-wal` and `report-events-v1.sqlite3-shm`. MP-06 also assigns `report-events-v1.sqlite3.lock`, verified stages named `.report-events-v1.sqlite3.rebuild-<32 lowercase hexadecimal characters>`, and harmless recovery quarantines named `.report-events-v1.sqlite3.old-family-<32 lowercase hexadecimal characters>-wal` or `-shm` to the module.
 
@@ -79,7 +79,7 @@ No generated source, standalone migration folder, configuration file, or script 
 
 ## Related Tests
 
-The planned test path is `tools/report/tests/test_event_cache.py`. It does not yet exist.
+The owned tests are [`tools/report/tests/test_event_cache.py`](../../../tools/report/tests/test_event_cache.py).
 
 The test module owns temporary SQLite fixtures for schema 0, schema 1, a corrupt database, and a simulated newer schema. It also owns sanitized event builders and deterministic cancellation checks. Test scenarios are specified in Verification.
 
@@ -106,7 +106,7 @@ Recheck this design when the normalized record model, privacy filter, source fin
 
 Every migration must preserve the no-raw-body invariant and must add a matching schema fixture and migration test. A maintainer must update `LATEST_SCHEMA_VERSION`, `MIGRATIONS`, the schema ledger, the API ledger, and Verification in one change. This Heatmap delivery is not such a migration: `LATEST_SCHEMA_VERSION`, `MIGRATIONS`, every schema-version-1 table, and every persisted column remain unchanged.
 
-The last meaningful source review is 2026-08-13. It covers FR-001, ARC-001, HLD-003, PLAN-012, CD-001, `tools/report/pyproject.toml`, and the absence of the planned source and test files.
+The last meaningful source review is 2026-08-13. It covers FR-001, ARC-001, HLD-003, PLAN-012, CD-001, `tools/report/pyproject.toml`, `event_cache.py`, and `test_event_cache.py`.
 
 ## Requirements Coverage
 
@@ -225,10 +225,10 @@ The module does not own discovery, source reads, JSONL parsing, privacy transfor
 
 | Caller | Reason for calling | Boundary |
 | --- | --- | --- |
-| Planned `agent_report.application_service` | Compare sources, open or refresh snapshots, query events, resolve internal cursors, close snapshots, and request explicit maintenance. | HLD-003 CR-10; caller design is planned as `CD-002-agent-report-application-service.md` and is not yet identified as a file. |
-| Planned Normalization Core integration | Publish a complete sanitized normalized partition for one stable source revision. | HLD-003 CR-09; current normalization remains in `tools/report/scripts/run-timeline.py` until its planned integration exists. |
-| Planned `agent_report.report_worker` composition root | Open the repository with validated cache policy and cancellation checks. | HLD-003 worker boundary; caller design is planned as `CD-004-agent-report-worker-protocol.md` and is not yet identified as a file. |
-| Planned Tauri cache-maintenance command through the Application Service | Request diagnostics, explicit purge, quota enforcement, rebuild, or recovery. | ARC-05 and HLD-003 OP-41. Tauri does not execute repository SQL. |
+| `agent_report.application_service` | Compare sources, open or refresh snapshots, query events, resolve internal cursors, close snapshots, and request explicit maintenance. | HLD-003 CR-10 and [CD-002](CD-002-agent-report-application-service.md). |
+| Normalization Core integration | Publish a complete sanitized normalized partition for one stable source revision. | HLD-003 CR-09 and the current Agent Report Core boundary. |
+| `agent_report.report_worker` composition root | Open the repository with validated cache policy and cancellation checks. | HLD-003 worker boundary and [CD-004](CD-004-agent-report-worker-protocol.md). |
+| Tauri cache-maintenance command through the Application Service | Request diagnostics, explicit purge, quota enforcement, rebuild, or recovery. | ARC-05 and HLD-003 OP-41. Tauri does not execute repository SQL. |
 | `tools/report/tests/test_event_cache.py` | Verify every public contract, schema invariant, and failure path. | Direct unit and temporary-filesystem integration tests. |
 
 MCP and the webview are not direct callers. Their adapters receive bounded service DTOs and never receive the cache path.
@@ -1431,11 +1431,11 @@ Expected errors are raised synchronously before a success result. No repository 
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This PLANNED_DEVELOPMENT design traces the Event Repository assignment, FR-001 cache rules, ARC-001 constraints, HLD-003 CR-09/CR-10 and DEC-05 boundaries, PLAN-012, the resolved production policy, exact placement, schema, migrations, types, signatures, state, atomicity, privacy, errors, portability, and planned verification. It keeps Heatmap semantic evidence and the immutable normalization-time `HeatmapPricingAuthority` in the retained parsed-run handle and keeps schema version 1 unchanged. It corrects every RVW-013 finding: non-mutating newer-schema rejection, complete SQLite-family rebuild publication, native POSIX and Windows locking, complete canonical digest and privacy contracts, independent retention selectors, and the missing public-API and failure tests. Each delegated internal choice is a justified module proposition and does not replace an upstream actor-visible or cross-module decision.
+**ACCEPTED.** This EXISTING_IMPLEMENTATION design traces the implemented Event Repository to FR-001 cache rules, ARC-001 constraints, HLD-003 CR-09/CR-10 and DEC-05 boundaries, PLAN-012, the resolved production policy, exact placement, schema, migrations, types, signatures, state, atomicity, privacy, errors, portability, and verification obligations. It keeps Heatmap semantic evidence and the immutable normalization-time `HeatmapPricingAuthority` in the retained parsed-run handle and keeps schema version 1 unchanged. Each delegated internal choice remains within the repository boundary and does not replace an upstream actor-visible or cross-module decision.
 
 ## Implementation Readiness
 
-**READY.** The exact accepted production default, override boundary, schema inspection order, native lock behavior, WAL-family replacement protocol, digest inputs, structural privacy registry, retained parsed-run-and-pricing-authority handle boundary, unchanged schema-version-1 contract, retention semantics, failure states, and test obligations are defined. Implementation and test execution remain planned work. If parsed-run or pricing-authority evidence is insufficient for a Heatmap facet, Heatmap implementation is blocked for Dev Architect reconciliation; that condition does not authorize a cache migration.
+**NOT DELIVERY-READY.** The Event Repository source, schema-version-1 contract, migrations, retained parsed-run-and-pricing-authority boundary, and owned tests are implemented. Readiness now depends only on fresh integrated Application Service and Worker verification, package verification, native Linux/macOS/Windows locking and replacement evidence, and the final delivery gates below. A verification failure involving insufficient parsed-run or pricing-authority evidence returns for Dev Architect reconciliation and never authorizes a cache migration or schema version 2.
 
 ## Verification
 
@@ -1501,7 +1501,7 @@ Integration verification also requires these gates:
 
 1. Run `python -m pytest tests/test_event_cache.py` from `tools/report`.
 2. Run `python -m pytest tests` from `tools/report` to catch CLI and MCP privacy regressions.
-3. Run the same sanitized fixture through CLI, MCP, and Tauri Application Service adapters after their planned modules exist. Compare normalized event IDs, snapshot bindings, and privacy fields.
+3. Run the same sanitized fixture through CLI, MCP, and Tauri Application Service adapters. Compare normalized event IDs, snapshot bindings, and privacy fields.
 4. Inspect a temporary `report-events-v1.sqlite3` for privacy-bounded content and a temporary `rollout-discovery-v2.sqlite3` for metadata-only content.
 5. Cancel normalization, source replacement, snapshot publication, cursor-only purge, combined purge, quota enforcement, compaction, rebuild staging, and every pre-critical-section rebuild seam.
 6. Run native multiprocess cache suites on Linux x64, Windows x64, and Apple Silicon macOS. Verify POSIX `flock`, `os.replace`, and directory `fsync`; Windows `LockFileEx`, `UnlockFileEx`, and write-through `MoveFileExW`; WAL coherence; crash release; and stale-WAL exclusion.
