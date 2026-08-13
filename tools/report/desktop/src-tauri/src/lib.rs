@@ -3140,7 +3140,7 @@ mod tests {
 
         let heatmap = project(
             "query_snapshot_time_range",
-            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","query_kind":"matrix","mode":"tokens","from_time":"2026-08-12T14:00:00Z","to_time":"2026-08-12T15:00:00Z","requested_resolution_minutes":5,"actual_resolution_minutes":5,"maximum_rows":25,"omitted_row_count":0,"row_order":"token_contract","total_cell_count":1,"rows":[{"row_id":"token:uncached_input","row_kind":"token_measure","label":"Uncached input","scale":{"availability":"available","minimum":0,"maximum":1,"basis":"visible_row_maximum"},"cells":[{"start_time":"2026-08-12T14:00:00Z","end_time":"2026-08-12T15:00:00Z","value":1,"formatted_value":"1","value_state":"measured","applicable_zero":false,"contributing_evidence_count":1,"normalized_intensity":1,"supporting_text":null}]}],"provenance":["normalized"]}),
+            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","query_kind":"matrix","mode":"tokens","from_time":"2026-08-12T14:00:00Z","to_time":"2026-08-12T15:00:00Z","requested_resolution_minutes":5,"actual_resolution_minutes":5,"maximum_rows":25,"omitted_row_count":0,"row_order":"token_contract","total_cell_count":1,"rows":[{"row_id":"token:uncached_input","row_key":"uncached_input_tokens","row_order_index":0,"row_kind":"token_measure","label":"Uncached input","scale":{"availability":"available","minimum":0,"maximum":1,"basis":"visible_row_maximum"},"cells":[{"start_time":"2026-08-12T14:00:00Z","end_time":"2026-08-12T15:00:00Z","value":1,"formatted_value":"1","value_state":"measured","applicable_zero":false,"contributing_evidence_count":1,"normalized_intensity":1,"supporting_text":null}]}],"provenance":["normalized"]}),
         );
         assert_exact_keys(
             &heatmap,
@@ -3161,13 +3161,27 @@ mod tests {
                 "provenance",
             ],
         );
+        assert_exact_keys(
+            &heatmap["rows"][0],
+            &[
+                "rowId",
+                "rowKey",
+                "rowOrderIndex",
+                "rowKind",
+                "label",
+                "scale",
+                "cells",
+            ],
+        );
         assert_eq!(heatmap["rows"][0]["cells"][0]["value"], 1);
 
         let evidence = project(
             "query_snapshot_time_range",
-            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","query_kind":"cell_evidence","mode":"tokens","row_id":"token:uncached_input","row_label":"Uncached input","period_start_time":"2026-08-12T14:00:00Z","period_end_time":"2026-08-12T14:05:00Z","value":null,"formatted_value":"Unavailable","value_state":"unavailable","applicable_zero":false,"evidence_items":[{"event_id":null,"occurred_at":"2026-08-12T14:00:00Z","value":null,"formatted_value":"Unavailable","duration_ms":null,"label":"main · gpt-5 · high","preview":null,"evidence_method":"unavailable","value_state":"unavailable","has_detail":false}],"omitted_evidence_count":0,"provenance":["normalized"]}),
+            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","query_kind":"cell_evidence","mode":"tokens","row_id":"token:uncached_input","row_key":"uncached_input_tokens","row_order_index":0,"row_label":"Uncached input","period_start_time":"2026-08-12T14:00:00Z","period_end_time":"2026-08-12T14:05:00Z","value":null,"formatted_value":"Unavailable","value_state":"unavailable","applicable_zero":false,"evidence_items":[{"event_id":null,"occurred_at":"2026-08-12T14:00:00Z","value":null,"formatted_value":"Unavailable","duration_ms":null,"label":"main · gpt-5 · high","preview":null,"evidence_method":"unavailable","value_state":"unavailable","has_detail":false}],"omitted_evidence_count":0,"provenance":["normalized"]}),
         );
         assert_eq!(evidence["revisionId"], "revision-1");
+        assert_eq!(evidence["rowKey"], "uncached_input_tokens");
+        assert_eq!(evidence["rowOrderIndex"], 0);
         assert_eq!(evidence["evidenceItems"][0]["value"], Value::Null);
         assert_eq!(
             evidence["evidenceItems"][0]["evidenceMethod"],

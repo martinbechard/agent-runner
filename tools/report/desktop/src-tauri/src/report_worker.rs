@@ -34,6 +34,36 @@ pub const MAX_HEATMAP_CELLS: usize = 2_000;
 /// The largest selected-cell evidence ledger accepted from the Application Service.
 pub const MAX_HEATMAP_EVIDENCE_ITEMS: usize = 100;
 
+const MAX_HEATMAP_LABEL_ESCAPED_BYTES: usize = 256;
+const MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES: usize = 64;
+const MAX_HEATMAP_SUPPORTING_TEXT_ESCAPED_BYTES: usize = 80;
+const MAX_HEATMAP_PREVIEW_ESCAPED_BYTES: usize = 4_096;
+const MAX_HEATMAP_PROVENANCE_ITEMS: usize = 32;
+const MAX_HEATMAP_PROVENANCE_ESCAPED_BYTES: usize = 256;
+const MAX_HEATMAP_ROWS: usize = 200;
+
+const WALL_TIME_ROW_KEYS: [&str; 8] = [
+    "model_inference",
+    "tool_execution",
+    "test_process",
+    "agent_wait",
+    "user_pause",
+    "watchdog",
+    "approval_infrastructure",
+    "unattributed",
+];
+
+const TOKEN_ROW_KEYS: [&str; 8] = [
+    "uncached_input_tokens",
+    "cached_input_tokens",
+    "reasoning_tokens",
+    "output_tokens",
+    "tool_calls",
+    "context_average",
+    "context_maximum",
+    "cost",
+];
+
 const MIN_RECORD_BYTES: usize = 4_096;
 const MAX_MESSAGE_CHARS: usize = 512;
 const STDERR_LINE_BYTES: usize = 4_096;
@@ -1423,15 +1453,37 @@ fn validate_heatmap_matrix_result(
         ));
     }
     let mut row_ids = HashSet::new();
+    let mut row_keys = HashSet::new();
+    let mut wall_time_order = WallTimeRowOrder::default();
+    let mut model_cost_seen = false;
     let mut actual_total = 0usize;
-    for row in rows {
+    for (row_index, row) in rows.iter().enumerate() {
         let row = row.as_object().ok_or_else(|| {
             protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap matrix row")
         })?;
+        let declared_index = usize::try_from(unsigned_field_value(row, "row_order_index")?)
+            .map_err(|_| {
+                protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap row order index")
+            })?;
+        if declared_index != row_index || declared_index >= MAX_HEATMAP_ROWS {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "invalid Heatmap row order index",
+            ));
+        }
+        let row_key = string_field_value(row, "row_key")?;
+        let row_kind = string_field_value(row, "row_kind")?;
+        validate_heatmap_row_order(
+            mode,
+            row_key,
+            row_kind,
+            row_index,
+            &mut wall_time_order,
+            &mut model_cost_seen,
+        )?;
         actual_total = actual_total
             .checked_add(validate_heatmap_matrix_row(
                 row,
-                mode,
                 &range_start,
                 &range_end,
                 actual_resolution,
@@ -1443,6 +1495,12 @@ fn validate_heatmap_matrix_result(
             return Err(protocol_error(
                 "REPORT_WORKER_PROTOCOL",
                 "duplicate Heatmap row id",
+            ));
+        }
+        if !row_keys.insert(row_key) {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "duplicate Heatmap row key",
             ));
         }
     }
@@ -1457,35 +1515,34 @@ fn validate_heatmap_matrix_result(
 
 fn validate_heatmap_matrix_row(
     row: &Map<String, Value>,
-    mode: &str,
     range_start: &DateTime<FixedOffset>,
     range_end: &DateTime<FixedOffset>,
     actual_resolution_minutes: u64,
 ) -> Result<usize, SupervisorError> {
-    exact_keys(row, &["row_id", "row_kind", "label", "scale", "cells"])?;
+    exact_keys(
+        row,
+        &[
+            "row_id",
+            "row_key",
+            "row_order_index",
+            "row_kind",
+            "label",
+            "scale",
+            "cells",
+        ],
+    )?;
     validate_visible_string(string_field_value(row, "row_id")?, 1, 256, "Heatmap row id")?;
-    validate_bounded_string(row, "label", 256)?;
-    let row_kind = string_field_value(row, "row_kind")?;
-    let valid_kind = match mode {
-        "wall_time" => row_kind == "runtime_state",
-        "tokens" => matches!(row_kind, "token_measure" | "cost"),
-        "models" => matches!(row_kind, "model" | "cost"),
-        _ => false,
-    };
-    if !valid_kind {
-        return Err(protocol_error(
-            "REPORT_WORKER_PROTOCOL",
-            "invalid Heatmap row kind",
-        ));
-    }
-    let unavailable_scale = validate_heatmap_scale(object_field(row, "scale")?)?;
+    validate_json_escaped_string(row, "label", MAX_HEATMAP_LABEL_ESCAPED_BYTES)?;
+    let row_key = string_field_value(row, "row_key")?;
+    let scale = validate_heatmap_scale(object_field(row, "scale")?)?;
+    validate_heatmap_scale_for_row(row_key, scale)?;
     let cells = array_field(row, "cells")?;
     let mut previous_end: Option<DateTime<FixedOffset>> = None;
     for cell in cells {
         let cell = cell.as_object().ok_or_else(|| {
             protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap matrix cell")
         })?;
-        let (start, end) = validate_heatmap_cell(cell, unavailable_scale)?;
+        let (start, end) = validate_heatmap_cell(cell, scale)?;
         if start < *range_start
             || end > *range_end
             || (end - start).num_seconds() > actual_resolution_minutes as i64 * 60
@@ -1503,7 +1560,153 @@ fn validate_heatmap_matrix_row(
     Ok(cells.len())
 }
 
-fn validate_heatmap_scale(scale: &Map<String, Value>) -> Result<bool, SupervisorError> {
+#[derive(Default)]
+struct WallTimeRowOrder {
+    last_known_ordinal: Option<usize>,
+    last_runtime_suffix: Option<String>,
+    runtime_started: bool,
+}
+
+fn validate_heatmap_row_order(
+    mode: &str,
+    row_key: &str,
+    row_kind: &str,
+    row_index: usize,
+    wall_time: &mut WallTimeRowOrder,
+    model_cost_seen: &mut bool,
+) -> Result<(), SupervisorError> {
+    validate_heatmap_row_key_mode(mode, row_key, row_kind)?;
+    match mode {
+        "tokens" => {
+            if TOKEN_ROW_KEYS.get(row_index).copied() != Some(row_key) {
+                return Err(protocol_error(
+                    "REPORT_WORKER_PROTOCOL",
+                    "invalid token Heatmap row order",
+                ));
+            }
+        }
+        "wall_time" => {
+            if let Some(ordinal) = WALL_TIME_ROW_KEYS
+                .iter()
+                .position(|known| *known == row_key)
+            {
+                if wall_time.runtime_started
+                    || wall_time
+                        .last_known_ordinal
+                        .is_some_and(|previous| ordinal <= previous)
+                {
+                    return Err(protocol_error(
+                        "REPORT_WORKER_PROTOCOL",
+                        "invalid wall-time Heatmap row order",
+                    ));
+                }
+                wall_time.last_known_ordinal = Some(ordinal);
+            } else {
+                let suffix = runtime_row_suffix(row_key)?;
+                if wall_time
+                    .last_runtime_suffix
+                    .as_deref()
+                    .is_some_and(|previous| suffix <= previous)
+                {
+                    return Err(protocol_error(
+                        "REPORT_WORKER_PROTOCOL",
+                        "invalid runtime Heatmap row order",
+                    ));
+                }
+                wall_time.runtime_started = true;
+                wall_time.last_runtime_suffix = Some(suffix.to_owned());
+            }
+        }
+        "models" => {
+            if *model_cost_seen {
+                return Err(protocol_error(
+                    "REPORT_WORKER_PROTOCOL",
+                    "model Heatmap row follows cost",
+                ));
+            }
+            if row_key == "cost" {
+                *model_cost_seen = true;
+            }
+        }
+        _ => unreachable!("Heatmap mode was validated before row validation"),
+    }
+    Ok(())
+}
+
+fn validate_heatmap_row_key_mode(
+    mode: &str,
+    row_key: &str,
+    row_kind: &str,
+) -> Result<(), SupervisorError> {
+    let valid = match mode {
+        "wall_time" => {
+            (WALL_TIME_ROW_KEYS.contains(&row_key) || runtime_row_suffix(row_key).is_ok())
+                && row_kind == "runtime_state"
+        }
+        "tokens" => {
+            TOKEN_ROW_KEYS.contains(&row_key)
+                && if row_key == "cost" {
+                    row_kind == "cost"
+                } else {
+                    row_kind == "token_measure"
+                }
+        }
+        "models" => {
+            if row_key == "cost" {
+                row_kind == "cost"
+            } else {
+                valid_model_row_key(row_key) && row_kind == "model"
+            }
+        }
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap row key or kind",
+        ))
+    }
+}
+
+fn runtime_row_suffix(row_key: &str) -> Result<&str, SupervisorError> {
+    let suffix = row_key.strip_prefix("runtime:").ok_or_else(|| {
+        protocol_error("REPORT_WORKER_PROTOCOL", "invalid runtime Heatmap row key")
+    })?;
+    let valid = !suffix.is_empty()
+        && suffix.len() <= 128
+        && !WALL_TIME_ROW_KEYS.contains(&suffix)
+        && suffix.chars().all(|character| {
+            !character.is_control() && !character.is_whitespace() && !character.is_uppercase()
+        });
+    if valid {
+        Ok(suffix)
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid runtime Heatmap row key",
+        ))
+    }
+}
+
+fn valid_model_row_key(row_key: &str) -> bool {
+    row_key.strip_prefix("model:").is_some_and(|digest| {
+        digest.len() == 24
+            && digest
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+    })
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HeatmapScaleWire {
+    VisibleMaximum,
+    ContextCapacity,
+    ContextCapacityUnavailable,
+}
+
+fn validate_heatmap_scale(scale: &Map<String, Value>) -> Result<HeatmapScaleWire, SupervisorError> {
     match string_field_value(scale, "availability")? {
         "available" => {
             exact_keys(scale, &["availability", "minimum", "maximum", "basis"])?;
@@ -1520,7 +1723,11 @@ fn validate_heatmap_scale(scale: &Map<String, Value>) -> Result<bool, Supervisor
                     "invalid available Heatmap scale",
                 ));
             }
-            Ok(false)
+            Ok(match string_field_value(scale, "basis")? {
+                "visible_row_maximum" => HeatmapScaleWire::VisibleMaximum,
+                "context_window_capacity" => HeatmapScaleWire::ContextCapacity,
+                _ => unreachable!("basis was validated above"),
+            })
         }
         "unavailable" => {
             exact_keys(scale, &["availability", "reason"])?;
@@ -1530,7 +1737,7 @@ fn validate_heatmap_scale(scale: &Map<String, Value>) -> Result<bool, Supervisor
                     "invalid unavailable Heatmap scale",
                 ));
             }
-            Ok(true)
+            Ok(HeatmapScaleWire::ContextCapacityUnavailable)
         }
         _ => Err(protocol_error(
             "REPORT_WORKER_PROTOCOL",
@@ -1539,9 +1746,32 @@ fn validate_heatmap_scale(scale: &Map<String, Value>) -> Result<bool, Supervisor
     }
 }
 
+fn validate_heatmap_scale_for_row(
+    row_key: &str,
+    scale: HeatmapScaleWire,
+) -> Result<(), SupervisorError> {
+    let context_row = matches!(row_key, "context_average" | "context_maximum");
+    let valid = if context_row {
+        matches!(
+            scale,
+            HeatmapScaleWire::ContextCapacity | HeatmapScaleWire::ContextCapacityUnavailable
+        )
+    } else {
+        scale == HeatmapScaleWire::VisibleMaximum
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap scale does not match the semantic row key",
+        ))
+    }
+}
+
 fn validate_heatmap_cell(
     cell: &Map<String, Value>,
-    unavailable_scale: bool,
+    scale: HeatmapScaleWire,
 ) -> Result<(DateTime<FixedOffset>, DateTime<FixedOffset>), SupervisorError> {
     exact_keys(
         cell,
@@ -1566,21 +1796,42 @@ fn validate_heatmap_cell(
         ));
     }
     let value = nullable_finite_number_field(cell, "value")?;
-    validate_bounded_string(cell, "formatted_value", 64)?;
+    validate_json_escaped_string(
+        cell,
+        "formatted_value",
+        MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES,
+    )?;
     let value_state = validate_heatmap_value_state(string_field_value(cell, "value_state")?)?;
     let applicable_zero = bool_field_value(cell, "applicable_zero")?;
     validate_value_state(value, value_state, applicable_zero)?;
     unsigned_field_value(cell, "contributing_evidence_count")?;
     let intensity = nullable_finite_number_field(cell, "normalized_intensity")?;
     if intensity.is_some_and(|value| !(0.0..=1.0).contains(&value))
-        || (unavailable_scale && intensity.is_some())
+        || (scale == HeatmapScaleWire::ContextCapacityUnavailable && intensity.is_some())
+        || (scale != HeatmapScaleWire::ContextCapacityUnavailable
+            && value.is_some() != intensity.is_some())
     {
         return Err(protocol_error(
             "REPORT_WORKER_PROTOCOL",
             "invalid Heatmap normalized intensity",
         ));
     }
-    nullable_bounded_string(cell, "supporting_text", 96)?;
+    let supporting_text = nullable_json_escaped_string(
+        cell,
+        "supporting_text",
+        MAX_HEATMAP_SUPPORTING_TEXT_ESCAPED_BYTES,
+    )?;
+    if scale == HeatmapScaleWire::ContextCapacityUnavailable
+        && (contains_percentage(string_field_value(cell, "formatted_value")?)
+            || supporting_text.is_some_and(|text| {
+                contains_percentage(text) || !valid_observed_token_support(text)
+            }))
+    {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "unavailable Heatmap context scale contains a percentage",
+        ));
+    }
     Ok((start, end))
 }
 
@@ -1596,6 +1847,8 @@ fn validate_heatmap_cell_evidence_result(
             "query_kind",
             "mode",
             "row_id",
+            "row_key",
+            "row_order_index",
             "row_label",
             "period_start_time",
             "period_end_time",
@@ -1624,9 +1877,23 @@ fn validate_heatmap_cell_evidence_result(
             "invalid Heatmap evidence period",
         ));
     }
-    validate_bounded_string(result, "row_label", 256)?;
+    validate_heatmap_evidence_row_key(
+        string_field_value(result, "mode")?,
+        string_field_value(result, "row_key")?,
+    )?;
+    if unsigned_field_value(result, "row_order_index")? >= MAX_HEATMAP_ROWS as u64 {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap row order index",
+        ));
+    }
+    validate_json_escaped_string(result, "row_label", MAX_HEATMAP_LABEL_ESCAPED_BYTES)?;
     let value = nullable_finite_number_field(result, "value")?;
-    validate_bounded_string(result, "formatted_value", 64)?;
+    validate_json_escaped_string(
+        result,
+        "formatted_value",
+        MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES,
+    )?;
     let value_state = validate_heatmap_value_state(string_field_value(result, "value_state")?)?;
     validate_value_state(
         value,
@@ -1663,6 +1930,23 @@ fn validate_heatmap_cell_evidence_result(
     validate_provenance(result)
 }
 
+fn validate_heatmap_evidence_row_key(mode: &str, row_key: &str) -> Result<(), SupervisorError> {
+    let valid = match mode {
+        "wall_time" => WALL_TIME_ROW_KEYS.contains(&row_key) || runtime_row_suffix(row_key).is_ok(),
+        "tokens" => TOKEN_ROW_KEYS.contains(&row_key),
+        "models" => row_key == "cost" || valid_model_row_key(row_key),
+        _ => false,
+    };
+    if valid {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap evidence row key",
+        ))
+    }
+}
+
 fn validate_heatmap_evidence_item(
     item: &Map<String, Value>,
 ) -> Result<DateTime<FixedOffset>, SupervisorError> {
@@ -1684,10 +1968,14 @@ fn validate_heatmap_evidence_item(
     let event_id = nullable_bounded_string(item, "event_id", 256)?;
     let occurred_at = parse_utc_instant(string_field_value(item, "occurred_at")?)?;
     let value = nullable_finite_number_field(item, "value")?;
-    validate_bounded_string(item, "formatted_value", 64)?;
+    validate_json_escaped_string(
+        item,
+        "formatted_value",
+        MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES,
+    )?;
     nullable_unsigned_field_value(item, "duration_ms")?;
-    validate_bounded_string(item, "label", 256)?;
-    nullable_bounded_string(item, "preview", 4_096)?;
+    validate_json_escaped_string(item, "label", MAX_HEATMAP_LABEL_ESCAPED_BYTES)?;
+    nullable_json_escaped_string(item, "preview", MAX_HEATMAP_PREVIEW_ESCAPED_BYTES)?;
     if !matches!(
         string_field_value(item, "evidence_method")?,
         "measured" | "derived" | "inferred" | "estimated" | "unavailable"
@@ -1751,7 +2039,7 @@ fn validate_value_state(
 
 fn validate_provenance(value: &Map<String, Value>) -> Result<(), SupervisorError> {
     let provenance = array_field(value, "provenance")?;
-    if provenance.len() > 32 {
+    if provenance.len() > MAX_HEATMAP_PROVENANCE_ITEMS {
         return Err(protocol_error(
             "REPORT_WORKER_PROTOCOL",
             "Heatmap provenance limit exceeded",
@@ -1761,7 +2049,9 @@ fn validate_provenance(value: &Map<String, Value>) -> Result<(), SupervisorError
         let item = item.as_str().ok_or_else(|| {
             protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap provenance")
         })?;
-        if item.is_empty() || item.len() > 256 {
+        if item.is_empty()
+            || json_escaped_content_bytes(item) > MAX_HEATMAP_PROVENANCE_ESCAPED_BYTES
+        {
             return Err(protocol_error(
                 "REPORT_WORKER_PROTOCOL",
                 "invalid Heatmap provenance",
@@ -2003,17 +2293,55 @@ fn nullable_finite_number_field(
     }
 }
 
-fn validate_bounded_string(
+fn validate_json_escaped_string(
     value: &Map<String, Value>,
     key: &'static str,
-    maximum_bytes: usize,
+    maximum_escaped_bytes: usize,
 ) -> Result<(), SupervisorError> {
     let field = string_field_value(value, key)?;
-    if field.len() <= maximum_bytes {
+    if json_escaped_content_bytes(field) <= maximum_escaped_bytes {
         Ok(())
     } else {
         Err(protocol_error("REPORT_WORKER_PROTOCOL", key))
     }
+}
+
+fn nullable_json_escaped_string<'a>(
+    value: &'a Map<String, Value>,
+    key: &'static str,
+    maximum_escaped_bytes: usize,
+) -> Result<Option<&'a str>, SupervisorError> {
+    match value.get(key) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(field))
+            if !field.is_empty() && json_escaped_content_bytes(field) <= maximum_escaped_bytes =>
+        {
+            Ok(Some(field))
+        }
+        _ => Err(protocol_error("REPORT_WORKER_PROTOCOL", key)),
+    }
+}
+
+fn json_escaped_content_bytes(value: &str) -> usize {
+    serde_json::to_vec(value)
+        .map(|encoded| encoded.len().saturating_sub(2))
+        .unwrap_or(usize::MAX)
+}
+
+fn contains_percentage(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    value.contains(['%', '\u{066a}', '\u{fe6a}', '\u{ff05}']) || lower.contains("percent")
+}
+
+fn valid_observed_token_support(value: &str) -> bool {
+    value
+        .strip_suffix(" tokens observed")
+        .is_some_and(|number| {
+            !number.is_empty()
+                && number.bytes().all(|byte| {
+                    byte.is_ascii_digit() || matches!(byte, b',' | b'.' | b'K' | b'M' | b'B')
+                })
+        })
 }
 
 fn nullable_bounded_string<'a>(
@@ -3463,6 +3791,8 @@ mod heatmap_contract_tests {
             "total_cell_count": cell_count,
             "rows": [{
                 "row_id": "token:uncached_input",
+                "row_key": "uncached_input_tokens",
+                "row_order_index": 0,
                 "row_kind": "token_measure",
                 "label": "Uncached input",
                 "scale": {
@@ -3507,6 +3837,8 @@ mod heatmap_contract_tests {
             "query_kind": "cell_evidence",
             "mode": "tokens",
             "row_id": "token:uncached_input",
+            "row_key": "uncached_input_tokens",
+            "row_order_index": 0,
             "row_label": "Uncached input",
             "period_start_time": "2026-08-12T12:00:00Z",
             "period_end_time": "2026-08-12T12:05:00Z",
@@ -3523,6 +3855,113 @@ mod heatmap_contract_tests {
         .clone()
     }
 
+    fn maximal_matrix_result() -> Map<String, Value> {
+        let start = DateTime::parse_from_rfc3339("2026-08-12T12:00:00Z")
+            .expect("fixture start")
+            .with_timezone(&Utc);
+        let formatted = "\\".repeat(MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES / 2);
+        let supporting = "\\".repeat(MAX_HEATMAP_SUPPORTING_TEXT_ESCAPED_BYTES / 2);
+        let label = "\\".repeat(MAX_HEATMAP_LABEL_ESCAPED_BYTES / 2);
+        let cells = (0..10)
+            .map(|offset| {
+                let cell_start = start + ChronoDuration::minutes(offset);
+                let cell_end = cell_start + ChronoDuration::minutes(1);
+                json!({
+                    "start_time": cell_start.to_rfc3339_opts(SecondsFormat::Secs, true),
+                    "end_time": cell_end.to_rfc3339_opts(SecondsFormat::Secs, true),
+                    "value": u64::MAX,
+                    "formatted_value": formatted,
+                    "value_state": "measured",
+                    "applicable_zero": false,
+                    "contributing_evidence_count": u64::MAX,
+                    "normalized_intensity": 0.9999999999999999,
+                    "supporting_text": supporting
+                })
+            })
+            .collect::<Vec<_>>();
+        let rows = (0..MAX_HEATMAP_ROWS)
+            .map(|index| {
+                json!({
+                    "row_id": format!("row_{index:024x}"),
+                    "row_key": format!("runtime:{index:03}_{}", "\\".repeat(124)),
+                    "row_order_index": index,
+                    "row_kind": "runtime_state",
+                    "label": label,
+                    "scale": {
+                        "availability": "available",
+                        "minimum": -1.7976931348623157e308_f64,
+                        "maximum": 1.7976931348623157e308_f64,
+                        "basis": "visible_row_maximum"
+                    },
+                    "cells": cells
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "snapshot_id": SNAPSHOT_ID,
+            "revision_id": "revision-1",
+            "query_kind": "matrix",
+            "mode": "wall_time",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T12:10:00Z",
+            "requested_resolution_minutes": 1,
+            "actual_resolution_minutes": 1,
+            "maximum_rows": MAX_HEATMAP_ROWS,
+            "omitted_row_count": 0,
+            "row_order": "runtime_state_contract",
+            "total_cell_count": MAX_HEATMAP_CELLS,
+            "rows": rows,
+            "provenance": vec![
+                "\\".repeat(MAX_HEATMAP_PROVENANCE_ESCAPED_BYTES / 2);
+                MAX_HEATMAP_PROVENANCE_ITEMS
+            ]
+        })
+        .as_object()
+        .expect("maximal matrix result")
+        .clone()
+    }
+
+    fn maximal_evidence_result() -> Map<String, Value> {
+        let mut result = evidence_result(MAX_HEATMAP_EVIDENCE_ITEMS);
+        result["row_label"] = json!("\\".repeat(MAX_HEATMAP_LABEL_ESCAPED_BYTES / 2));
+        result["formatted_value"] =
+            json!("\\".repeat(MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES / 2));
+        result["provenance"] = json!(vec![
+            "\\".repeat(MAX_HEATMAP_PROVENANCE_ESCAPED_BYTES / 2);
+            MAX_HEATMAP_PROVENANCE_ITEMS
+        ]);
+        for (index, item) in result["evidence_items"]
+            .as_array_mut()
+            .expect("evidence items")
+            .iter_mut()
+            .enumerate()
+        {
+            item["event_id"] = json!(format!("event_{index:0250}"));
+            item["value"] = json!(u64::MAX);
+            item["formatted_value"] =
+                json!("\\".repeat(MAX_HEATMAP_FORMATTED_VALUE_ESCAPED_BYTES / 2));
+            item["duration_ms"] = json!(u64::MAX);
+            item["label"] = json!("\\".repeat(MAX_HEATMAP_LABEL_ESCAPED_BYTES / 2));
+            item["preview"] = json!("\\".repeat(MAX_HEATMAP_PREVIEW_ESCAPED_BYTES / 2));
+            item["evidence_method"] = json!("measured");
+            item["value_state"] = json!("measured");
+            item["has_detail"] = json!(true);
+        }
+        result
+    }
+
+    fn matrix_envelope(result: Map<String, Value>) -> Value {
+        json!({
+            "protocol_version": WORKER_PROTOCOL_VERSION,
+            "operation_id": "op_75ffcf97671b4ccbaf96790c",
+            "type": "result",
+            "operation": "query_snapshot_time_range",
+            "snapshot_id": SNAPSHOT_ID,
+            "ok": true,
+            "result": result
+        })
+    }
+
     #[test]
     fn validates_exact_heatmap_variants_and_projects_values_losslessly() {
         let matrix = matrix_result(1);
@@ -3536,6 +3975,8 @@ mod heatmap_contract_tests {
         assert_eq!(projected["snapshotId"], SNAPSHOT_ID);
         assert_eq!(projected["revisionId"], "revision-1");
         assert!(projected.get("revision").is_none());
+        assert_eq!(projected["rowKey"], "uncached_input_tokens");
+        assert_eq!(projected["rowOrderIndex"], 0);
         assert_eq!(projected["evidenceItems"][0]["value"], Value::Null);
         assert_eq!(
             projected["evidenceItems"][0]["evidenceMethod"],
@@ -3649,6 +4090,242 @@ mod heatmap_contract_tests {
                 &oversized_evidence,
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn enforces_semantic_row_order_and_scale_correlation() {
+        let mut context_matrix = matrix_result(1);
+        let row_template = context_matrix["rows"][0].clone();
+        let context_rows = TOKEN_ROW_KEYS[..=5]
+            .iter()
+            .enumerate()
+            .map(|(index, row_key)| {
+                let mut row = row_template.clone();
+                row["row_id"] = json!(format!("row_{index:024x}"));
+                row["row_key"] = json!(row_key);
+                row["row_order_index"] = json!(index);
+                if *row_key == "context_average" {
+                    row["scale"] = json!({
+                        "availability": "unavailable",
+                        "reason": "context_capacity_unavailable"
+                    });
+                    row["cells"][0]["value"] = Value::Null;
+                    row["cells"][0]["formatted_value"] = json!("N/A");
+                    row["cells"][0]["value_state"] = json!("unavailable");
+                    row["cells"][0]["applicable_zero"] = json!(false);
+                    row["cells"][0]["normalized_intensity"] = Value::Null;
+                    row["cells"][0]["supporting_text"] = json!("200 tokens observed");
+                }
+                row
+            })
+            .collect::<Vec<_>>();
+        context_matrix["maximum_rows"] = json!(context_rows.len());
+        context_matrix["total_cell_count"] = json!(context_rows.len());
+        context_matrix["rows"] = json!(context_rows);
+        let mut context_arguments = matrix_arguments();
+        context_arguments["maximum_rows"] = json!(6);
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &context_arguments, &context_matrix)
+            .expect("valid unavailable context scale and nullable cells");
+
+        let mut skipped_token_prefix = matrix_result(1);
+        skipped_token_prefix["rows"][0]["row_key"] = json!("output_tokens");
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &matrix_arguments(),
+                &skipped_token_prefix,
+            )
+            .is_err()
+        );
+
+        let mut noncontiguous_index = matrix_result(1);
+        noncontiguous_index["rows"][0]["row_order_index"] = json!(1);
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &matrix_arguments(),
+                &noncontiguous_index,
+            )
+            .is_err()
+        );
+
+        assert!(
+            validate_heatmap_scale_for_row("context_average", HeatmapScaleWire::VisibleMaximum,)
+                .is_err()
+        );
+        assert!(
+            validate_heatmap_scale_for_row("output_tokens", HeatmapScaleWire::ContextCapacity,)
+                .is_err()
+        );
+        let mut unavailable_context_cell = matrix_result(1)["rows"][0]["cells"][0]
+            .as_object()
+            .expect("matrix cell")
+            .clone();
+        unavailable_context_cell["value"] = Value::Null;
+        unavailable_context_cell["formatted_value"] = json!("N/A");
+        unavailable_context_cell["value_state"] = json!("unavailable");
+        unavailable_context_cell["applicable_zero"] = json!(false);
+        unavailable_context_cell["normalized_intensity"] = Value::Null;
+        unavailable_context_cell["supporting_text"] = json!("200 tokens observed");
+        validate_heatmap_cell(
+            &unavailable_context_cell,
+            HeatmapScaleWire::ContextCapacityUnavailable,
+        )
+        .expect("valid unavailable context cell");
+        unavailable_context_cell["formatted_value"] = json!("50%");
+        assert!(
+            validate_heatmap_cell(
+                &unavailable_context_cell,
+                HeatmapScaleWire::ContextCapacityUnavailable,
+            )
+            .is_err()
+        );
+        unavailable_context_cell["formatted_value"] = json!("N/A");
+        unavailable_context_cell["supporting_text"] = json!("capacity unknown");
+        assert!(
+            validate_heatmap_cell(
+                &unavailable_context_cell,
+                HeatmapScaleWire::ContextCapacityUnavailable,
+            )
+            .is_err()
+        );
+        assert!(runtime_row_suffix("runtime:").is_err());
+        assert!(runtime_row_suffix("runtime:Unknown").is_err());
+        assert!(runtime_row_suffix("runtime:model_inference").is_err());
+        assert!(valid_model_row_key("model:0123456789abcdef01234567"));
+        assert!(!valid_model_row_key("model:0123456789ABCDEF01234567"));
+
+        let mut wall_order = WallTimeRowOrder::default();
+        let mut cost_seen = false;
+        validate_heatmap_row_order(
+            "wall_time",
+            "tool_execution",
+            "runtime_state",
+            0,
+            &mut wall_order,
+            &mut cost_seen,
+        )
+        .expect("known state may be absent from a returned prefix");
+        assert!(
+            validate_heatmap_row_order(
+                "wall_time",
+                "model_inference",
+                "runtime_state",
+                1,
+                &mut wall_order,
+                &mut cost_seen,
+            )
+            .is_err()
+        );
+
+        let mut runtime_order = WallTimeRowOrder::default();
+        validate_heatmap_row_order(
+            "wall_time",
+            "runtime:beta",
+            "runtime_state",
+            0,
+            &mut runtime_order,
+            &mut cost_seen,
+        )
+        .expect("first unknown runtime state");
+        assert!(
+            validate_heatmap_row_order(
+                "wall_time",
+                "runtime:alpha",
+                "runtime_state",
+                1,
+                &mut runtime_order,
+                &mut cost_seen,
+            )
+            .is_err()
+        );
+
+        let mut model_order = WallTimeRowOrder::default();
+        let mut model_cost_seen = false;
+        validate_heatmap_row_order(
+            "models",
+            "cost",
+            "cost",
+            0,
+            &mut model_order,
+            &mut model_cost_seen,
+        )
+        .expect("cost may be the only returned model row");
+        assert!(
+            validate_heatmap_row_order(
+                "models",
+                "model:0123456789abcdef01234567",
+                "model",
+                1,
+                &mut model_order,
+                &mut model_cost_seen,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn counts_json_escaped_content_at_exact_and_plus_one_boundaries() {
+        for (exact, too_large, maximum) in [
+            ("\\".repeat(40), "\\".repeat(40) + "x", 80),
+            ("\u{1}".repeat(13) + "xx", "\u{1}".repeat(13) + "xxx", 80),
+            ("é".repeat(40), "é".repeat(41), 80),
+        ] {
+            assert_eq!(json_escaped_content_bytes(&exact), maximum);
+            assert!(json_escaped_content_bytes(&too_large) > maximum);
+        }
+
+        let mut matrix = matrix_result(1);
+        matrix["rows"][0]["cells"][0]["supporting_text"] = json!("\\".repeat(40));
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &matrix_arguments(), &matrix)
+            .expect("exact escaped supporting-text boundary");
+        matrix["rows"][0]["cells"][0]["supporting_text"] = json!("\\".repeat(40) + "x");
+        assert!(
+            validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &matrix_arguments(), &matrix)
+                .is_err()
+        );
+
+        let mut evidence = evidence_result(1);
+        evidence["evidence_items"][0]["preview"] = json!("\u{1}".repeat(682) + "xxxx");
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &evidence_arguments(), &evidence)
+            .expect("exact escaped preview boundary");
+        evidence["evidence_items"][0]["preview"] = json!("\u{1}".repeat(682) + "xxxxx");
+        assert!(
+            validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &evidence_arguments(), &evidence,)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn proves_maximal_heatmap_variants_fit_one_complete_jsonl_record() {
+        let matrix = maximal_matrix_result();
+        let matrix_arguments = json!({
+            "query_kind": "matrix",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T12:10:00Z",
+            "mode": "wall_time",
+            "requested_resolution_minutes": 1,
+            "maximum_rows": MAX_HEATMAP_ROWS
+        })
+        .as_object()
+        .expect("matrix arguments")
+        .clone();
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &matrix_arguments, &matrix)
+            .expect("maximal 200 by 10 matrix");
+        let matrix_bytes = serde_json::to_vec(&matrix_envelope(matrix)).unwrap().len() + 1;
+        assert!(matrix_bytes <= MAX_WORKER_RECORD_BYTES, "{matrix_bytes}");
+
+        let evidence = maximal_evidence_result();
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &evidence_arguments(), &evidence)
+            .expect("maximal 100-item evidence result");
+        let evidence_bytes = serde_json::to_vec(&matrix_envelope(evidence))
+            .unwrap()
+            .len()
+            + 1;
+        assert!(
+            evidence_bytes <= MAX_WORKER_RECORD_BYTES,
+            "{evidence_bytes}"
         );
     }
 }
