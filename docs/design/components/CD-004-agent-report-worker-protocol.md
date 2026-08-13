@@ -138,10 +138,10 @@ The latest meaningful source review is 2026-08-13. The review used FR-001 HM-F01
 | HLD-003 OP-34 | INTENDED_BEHAVIOR | Worker or Supervisor emits one terminal cancelled outcome and preserves coherent state. | PC-06; PC-10; EP-03 through EP-06 | DEFINED | Service rollback checkpoints: CD-002 | Cooperative and forced cancellation tests |
 | HLD-003 CR-02 and TB-02 | INTENDED_BEHAVIOR | Tauri owns its spawned process; Supervisor validates version, framing, IDs, terminal cardinality, and bounded disclosure. | PC-07 through PC-11; Trust And Identity Boundaries | DEFINED | None | Rust protocol and process tests |
 | HLD-003 CR-03 and TB-03 | INTENDED_BEHAVIOR | Worker maps every configured operation to one exact named method on one process-local CD-002 service instance. | PC-01A; `WorkerRuntime`; PR-04 through PR-07 | DEFINED | Operation semantics and state transitions: CD-002 | Named-method dispatch and `ServiceResult` tests |
-| FR-001 HM-F01 through HM-F10; PLAN-012 cross-language inventory | INTENDED_BEHAVIOR | `query_snapshot_time_range` carries one exact `matrix|cell_evidence` discriminated request and result family. It preserves mode, row, value-state, scale, and immutable snapshot/revision semantics without a second evidence operation. | PC-01A Heatmap wire contract; `OperationBinding`; result correlation rules | DEFINED | Aggregation and formatting: CD-002; presentation: CD-005 | Exact-union, discriminant, field, scale, revision, and cross-language preservation tests |
+| FR-001 HM-F01 through HM-F10; PLAN-012 cross-language inventory | INTENDED_BEHAVIOR | `query_snapshot_time_range` carries one exact `matrix|cell_evidence` discriminated request and result family. It preserves mode, exact semantic `row_key` catalog, `row_order_index`, value state, scale, and immutable snapshot/revision semantics without a second evidence operation. | PC-01A Heatmap wire contract; `OperationBinding`; result correlation rules | DEFINED | Aggregation and formatting: CD-002; presentation: CD-005 | Exact-union, semantic-row, discriminant, field, scale, revision, and cross-language preservation tests |
 | FR-001 HM-F11 and HM-F13 | INTENDED_BEHAVIOR | Matrix records contain no evidence ledger or eager detail. Cell-evidence records contain at most 100 chronological sanitized items and an exact omitted count. | PC-01A Heatmap wire contract; PR-04 through PR-07; INV-19 | DEFINED | Evidence calculation and sanitation: CD-002 | Matrix-exclusion, evidence-cap, chronology, privacy, and streaming tests |
-| FR-001 HM-F12; JFP-HM-03 | INTENDED_BEHAVIOR | Preserve the exact mode, row ID, period boundaries, requested and actual resolution, snapshot range, and revision fields required for selection, drilldown, step-back, breadcrumbs, adjacent-period movement, scrolling, period controls, and disabled boundaries. | PC-01A Heatmap wire contract; lossless snake-case to camel-case projection | OUT_OF_SCOPE | CD-005 owns pointer, keyboard, focus, navigation-history, visible-control, and disabled-boundary behavior. CD-004 transports the required selectors and results but does not implement UI interaction. | Worker/Rust field-preservation tests; CD-005 pointer, keyboard, navigation, and accessibility tests |
-| FR-001 HM-F14 | INTENDED_BEHAVIOR | Matrix results contain at most 2,000 cells. Every request and result also stays below the protocol's strict 1 MiB record limit. | Protocol Constants; PC-01A; INV-02 and INV-19 | DEFINED | Coarsening and row omission: CD-002 | 2,000-cell, 2,001-rejection, and worst-case encoded-record tests |
+| FR-001 HM-F12; JFP-HM-03 | INTENDED_BEHAVIOR | Preserve the exact mode, row ID, echoed semantic row key and order index, period boundaries, requested and actual resolution, snapshot range, and revision fields required for selection, drilldown, step-back, breadcrumbs, adjacent-period movement, scrolling, period controls, and disabled boundaries. | PC-01A Heatmap wire contract; lossless snake-case to camel-case projection | OUT_OF_SCOPE | CD-005 owns pointer, keyboard, focus, navigation-history, visible-control, and disabled-boundary behavior. CD-004 transports the required selectors and results but does not implement UI interaction. | Worker/Rust field-preservation and evidence-correlation tests; CD-005 pointer, keyboard, navigation, and accessibility tests |
+| FR-001 HM-F14 | INTENDED_BEHAVIOR | Matrix results contain at most 2,000 cells. Every complete request and result JSONL record, including its line feed, is no greater than 1,048,576 bytes. | Protocol Constants; PC-01A; INV-02 and INV-19 | DEFINED | Coarsening and row omission: CD-002 | 2,000-cell, 2,001-rejection, and worst-case encoded-record tests |
 | FR-001 HM-F15; JFP-HM-01 and JFP-HM-02 | INTENDED_BEHAVIOR | Preserve losslessly the mode, friendly row label, local-period source instants, formatted and raw nullable values, value state, `applicable_zero`, scale availability and reason, scale basis and bounds, normalized intensity, supporting text, `evidence_method`, and selection-bound evidence identity. Missing evidence never becomes zero. Unknown context capacity retains unavailable scale, N/A reason, null intensity, and no percentage or fallback. | PC-01A Heatmap wire contract; exact serializer; Rust generic-map validation and camel-case projection | DEFINED | CD-002 owns semantic calculation. CD-005 owns actor-visible wording, local-time formatting, non-color rendering, selection state, and contextual UX review. | Python and Rust exact-field, null, discriminant, scale-union, N/A, and case-projection tests; CD-005 wording and non-color tests |
 | FR-001 retained MCP compatibility; PLAN-012 compatibility boundary | CURRENT_BEHAVIOR and INTENDED_BEHAVIOR | The Worker snapshot binding is named `query_snapshot_time_range`. Retained MCP `query_time_range` remains separate and never enters this Worker dispatch table. | `OperationName`; PC-01A; INV-20 | DEFINED | Retained MCP implementation and schema: MCP adapter | Exhaustive operation inventory and retained-schema isolation tests |
 | ARC-01, ARC-03, ARC-05, ARC-06 | INTENDED_BEHAVIOR | Processing stays local; each process owns a service instance; Tauri owns native authority; webview data stays bounded. | Parent Context, PC-09, Trust And Identity Boundaries | DEFINED | UI DTO fields: CD-005 | Boundary and path tests |
@@ -807,13 +807,15 @@ The cell-evidence request arguments are exact:
 {
   "query_kind": "cell_evidence",
   "mode": "tokens",
-  "row_id": "token:uncached_input",
+  "row_id": "row_0123456789abcdef01234567",
   "period_start_time": "2026-08-13T12:00:00Z",
   "period_end_time": "2026-08-13T12:05:00Z"
 }
 ```
 
 `mode` is exactly `wall_time|tokens|models`. `query_kind` is exactly `matrix|cell_evidence`. Matrix resolution is exactly `1|5|15|30|60`. Matrix `maximum_rows` is an integer from 1 through 200. Both time ranges are non-empty, half-open UTC ranges. A request decoder rejects fields from the other variant, including a row selector on `matrix` and a matrix range, resolution, or row limit on `cell_evidence`.
+
+The selected-cell request keeps `row_id` as its only row selector. The result echoes the selected row's semantic `row_key` and zero-based `row_order_index`. The Rust and TypeScript consumers correlate those echoed values with the selected matrix row before they accept the evidence result. This check detects a stale or mismatched row even when a service-owned friendly label changes.
 
 The matrix result object has these exact fields in order:
 
@@ -833,7 +835,19 @@ The matrix result object has these exact fields in order:
 | `rows` | Ordered `HeatmapMatrixRow` array no longer than `maximum_rows` |
 | `provenance` | CD-002 bounded provenance array |
 
-`HeatmapMatrixRow` has `row_id`, `row_kind`, `label`, `scale`, and `cells` in that order. `row_kind` is exactly `runtime_state|token_measure|model|cost`. The label is the service-owned friendly label. The `scale` field is a true discriminated union:
+`HeatmapMatrixRow` has `row_id`, `row_key`, `row_order_index`, `row_kind`, `label`, `scale`, and `cells` in that order. `row_id` is opaque and revision-bound. `row_key` is the stable semantic key. `row_order_index` is a zero-based integer that equals the row's array index and is less than 200. `row_kind` is exactly `runtime_state|token_measure|model|cost`. The label is the service-owned friendly label.
+
+The semantic row catalogs and order are exact:
+
+| Mode | Exact `row_key` catalog and order |
+| --- | --- |
+| `wall_time` | Include present known keys in this order: `model_inference`, `tool_execution`, `test_process`, `agent_wait`, `user_pause`, `watchdog`, `approval_infrastructure`, `unattributed`. Then include present unknown-state keys as `runtime:<normalized-state>` in ascending suffix order. |
+| `tokens` | `uncached_input_tokens`, `cached_input_tokens`, `reasoning_tokens`, `output_tokens`, `tool_calls`, `context_average`, `context_maximum`, `cost`. |
+| `models` | One `model:<24-lowercase-hex-digest>` key per normalized model-and-effort identity in first-response occurrence order, followed by `cost`. |
+
+Known Wall time keys and `runtime:` keys use `row_kind="runtime_state"`. Token keys use `row_kind="token_measure"`, except `cost`, which uses `row_kind="cost"`. Model digest keys use `row_kind="model"`, and the final `cost` key uses `row_kind="cost"`. Keys are unique within a result. The Worker and Supervisor validate the catalog, kind, and order from `row_key` and `row_order_index`; they never derive semantics from `label`.
+
+The `scale` field is a true discriminated union:
 
 ```text
 {availability:"available", minimum:number, maximum:number,
@@ -842,7 +856,7 @@ The matrix result object has these exact fields in order:
 {availability:"unavailable", reason:"context_capacity_unavailable"}
 ```
 
-An available scale contains finite numeric bounds and one basis. An unavailable scale contains only `availability` and the exact N/A reason `context_capacity_unavailable`. The decoder and serializer reject nullable bounds, a basis on an unavailable variant, a reason on an available variant, an unknown reason, and every mixed cross-product.
+An available scale contains finite numeric bounds and one basis. An unavailable scale contains only `availability` and the exact N/A reason `context_capacity_unavailable`. The decoder and serializer reject nullable bounds, a basis on an unavailable variant, a reason on an available variant, an unknown reason, and every mixed cross-product. They validate context scale semantics only from `row_key`: `context_average` and `context_maximum` require `context_window_capacity` or the unavailable variant, and all other row keys require `visible_row_maximum`. A friendly label never selects scale rules.
 
 Each matrix cell has `start_time`, `end_time`, `value`, `formatted_value`, `value_state`, `applicable_zero`, `contributing_evidence_count`, `normalized_intensity`, and `supporting_text` in that order. `value` and `normalized_intensity` are finite numbers or null. `value_state` is exactly `measured|derived|partial|unavailable`. `applicable_zero` is boolean. The evidence count is a non-negative integer. `normalized_intensity` is null or a number from 0 through 1. An unavailable value has null `value`. Unknown context capacity uses the unavailable scale variant, null normalized intensity, no percentage, and no row-relative fallback. A separately evidenced observed token count can appear only in nullable `supporting_text`.
 
@@ -855,6 +869,8 @@ The cell-evidence result object has these exact fields in order:
 | `snapshot_id`, `revision_id` | Service-owned identifiers from the same immutable read lease; `snapshot_id` must equal the request-envelope selector |
 | `query_kind` | Literal `cell_evidence` |
 | `mode`, `row_id` | Must equal the request |
+| `row_key` | Stable semantic key for the selected row; must equal the matrix row retained in selection state and be valid for `mode` |
+| `row_order_index` | Zero-based matrix row index; must equal the selected matrix row's index and be less than 200 |
 | `row_label` | Bounded service-owned friendly label |
 | `period_start_time`, `period_end_time` | Must equal the requested half-open period |
 | `value` | Raw finite numeric value or null |
@@ -867,7 +883,11 @@ The cell-evidence result object has these exact fields in order:
 
 `HeatmapEvidenceItem` has `event_id`, `occurred_at`, `value`, `formatted_value`, `duration_ms`, `label`, `preview`, `evidence_method`, `value_state`, and `has_detail` in that order. `event_id`, raw numeric `value`, `duration_ms`, and sanitized `preview` are nullable. `evidence_method` is exactly `measured|derived|inferred|estimated|unavailable`. `value_state` uses its separate four-value literal. Items sort by `occurred_at` and then stable snapshot source order. `has_detail=true` requires a non-null deterministic event ID. The service streams matching evidence, retains only the first 100 ordered items, and increments `omitted_evidence_count` for the remainder. It never loads full event detail or creates previews for omitted items.
 
-The Worker checks cancellation while decoding, before service dispatch, during service-owned streamed aggregation through the supplied token, before result serialization, and before the terminal write. Cancellation emits one `cancelled` terminal record and no partial matrix or evidence result. The strict 1 MiB record limit applies after compact UTF-8 encoding, including the newline. A valid worst-case 2,000-cell matrix and a valid 100-item evidence result must each encode below that limit. Oversize is a bounded terminal protocol error, not a truncated success.
+Heatmap string limits count UTF-8 bytes after JSON escaping and exclude the surrounding quotation marks. A row or evidence label is at most 256 escaped-content bytes. A matrix cell `formatted_value` is at most 64 bytes, and nullable `supporting_text` is at most 80 bytes. A selected-cell result or evidence-item `formatted_value` is at most 64 bytes. A nullable evidence `preview` is at most 4,096 bytes. `provenance` contains at most 32 non-empty items, each at most 256 escaped-content bytes. The serializer applies these field limits before it applies the record limit.
+
+The immutable pricing assessment stays inside the read-lease-owned service calculation. When cost is relevant, the Worker transports only the resulting cell and evidence semantics: raw nullable value, formatted value, value state, applicability, supporting text, and evidence method. The wire schema does not contain a pricing table, model-price mapping, pricing assessment object, or raw pricing input.
+
+The Worker checks cancellation while decoding, before service dispatch, during service-owned streamed aggregation through the supplied token, before result serialization, and before the terminal write. Cancellation emits one `cancelled` terminal record and no partial matrix or evidence result. The strict record limit applies to the complete compact UTF-8 JSONL record, including its line feed: the record must be no greater than 1,048,576 bytes. A valid worst-case 2,000-cell matrix and a valid 100-item evidence result must each satisfy that limit. Oversize is a bounded terminal protocol error, not a truncated success.
 
 `WarningRecord`, `ReportScope`, summary types, every filter and sort, every row type, heatmap types, sequence groups, detail disclosures, export omissions, and nested `SnapshotMetadata` use every CD-002 field in declaration order. No field is renamed, omitted, added, or flattened. Enum literals and nullable fields remain as CD-002 declares them.
 
@@ -881,7 +901,7 @@ The nested wire schemas are exact:
 | `AgentRow` | `agent_id`, nullable nickname and role, state, nullable start and last-activity times, turn count, event count |
 | `TurnRow` | `turn_id`, `agent_id`, start time, nullable end time, state, event count, nullable summary |
 | `EventRow` | `event_id`, occurrence time, nullable agent and turn IDs, kind, label, evidence, nullable opaque `source_key`, `has_detail` |
-| `HeatmapMatrixRow` | `row_id`, `row_kind`, friendly `label`, true available/unavailable `scale` union, and ordered bounded cells |
+| `HeatmapMatrixRow` | `row_id`, stable semantic `row_key`, zero-based `row_order_index`, `row_kind`, friendly `label`, true available/unavailable `scale` union, and ordered bounded cells |
 | `HeatmapEvidenceItem` | Nullable deterministic event identity, time, raw nullable value, formatted value, nullable duration, friendly label, sanitized nullable preview, evidence method, value state, and detail availability |
 | `SequenceRow` | Sequence/group IDs, occurrence time, nullable endpoint IDs and labels, kind, label, evidence, nullable event ID, repeat count, reasoning availability |
 | `CoordinationRow` | Coordination identity and time, nullable work-item/delegated-root/agent IDs, operation, label, evidence, nullable event ID |
@@ -1298,8 +1318,8 @@ flowchart TD
   EvidenceFields -- No --> ContractError
   MatrixFields -- Yes --> MatrixCall[Call service matrix variant with cancellation token]
   EvidenceFields -- Yes --> EvidenceCall[Call service evidence variant with cancellation token]
-  MatrixCall --> MatrixResult{Matching matrix, lease identity, at most 2,000 cells, no ledger, below 1 MiB?}
-  EvidenceCall --> EvidenceResult{Matching evidence, lease identity, at most 100 items, exact omission, below 1 MiB?}
+  MatrixCall --> MatrixResult{Matching matrix, lease identity, at most 2,000 cells, no ledger, complete record at most 1,048,576 bytes?}
+  EvidenceCall --> EvidenceResult{Matching evidence, lease identity, at most 100 items, exact omission, complete record at most 1,048,576 bytes?}
   MatrixResult -- No --> ServiceContract[Terminal service-contract error]
   EvidenceResult -- No --> ServiceContract
   MatrixResult -- Yes --> MatrixTerminal[One matrix result]
@@ -1328,7 +1348,7 @@ flowchart TD
 - **INV-16:** Only the Recovery Coordinator changes Supervisor lifecycle, replaces a generation, completes an observer, or reaps a process.
 - **INV-17:** Worker wire cancellation never contains the host-only `forced` field.
 - **INV-18:** Child stderr bytes never enter native diagnostics without allowlist mapping to fixed text.
-- **INV-19:** A `matrix` result has at most 2,000 cells and no evidence ledger. A `cell_evidence` result has at most 100 ordered items and no eager full detail. Each compact record remains below 1 MiB.
+- **INV-19:** A `matrix` result has at most 2,000 cells and no evidence ledger. A `cell_evidence` result has at most 100 ordered items and no eager full detail. Each complete compact JSONL record, including its line feed, is no greater than 1,048,576 bytes.
 - **INV-20:** The Worker accepts only snapshot `query_snapshot_time_range`. Retained MCP `query_time_range` never crosses this protocol boundary.
 
 ## Configuration
@@ -1485,11 +1505,15 @@ OQ-01 through OQ-04 do not add a CD-004 blocker. This BLOCKED decision concerns 
 - `test_query_snapshot_time_range_accepts_only_exact_matrix_and_cell_evidence_requests`
 - `test_query_snapshot_time_range_serializes_the_matching_exact_result_variant`
 - `test_heatmap_scale_is_a_true_available_or_unavailable_union`
+- `test_heatmap_semantic_row_keys_indices_catalogs_and_label_independent_scales`
+- `test_heatmap_cell_evidence_echoes_selected_row_key_and_order_index`
 - `test_heatmap_result_preserves_raw_nullable_values_evidence_method_and_revision_identity`
 - `test_heatmap_matrix_has_at_most_2000_cells_and_no_evidence_ledger`
 - `test_heatmap_cell_evidence_streams_at_most_100_chronological_items_and_exact_omission`
 - `test_heatmap_streaming_does_not_materialize_eager_previews_or_event_details`
-- `test_worst_case_valid_matrix_and_evidence_records_are_each_below_one_mibibyte`
+- `test_heatmap_json_escaped_content_caps_accept_boundary_and_reject_overflow`
+- `test_heatmap_adversarial_quotes_reverse_solidi_controls_and_multibyte_unicode_use_escaped_utf8_bytes`
+- `test_worst_case_valid_matrix_and_evidence_records_are_each_at_most_1048576_bytes_with_line_feed`
 - `test_heatmap_cancellation_emits_no_partial_result_and_one_cancelled_terminal`
 - `test_retained_query_time_range_is_absent_from_worker_operation_bindings`
 - `test_sequence_coordination_detail_refresh_close_and_export_results_match_cd002`
@@ -1536,8 +1560,12 @@ Service doubles expose barriers before return, before simulated atomic commit, a
 - `query_snapshot_time_range_validates_exact_discriminants_bounds_and_correlation`
 - `query_snapshot_time_range_preserves_python_fields_in_exact_camel_case_projection`
 - `query_snapshot_time_range_rejects_mixed_scale_variants_nonfinite_values_and_wrong_revision`
+- `query_snapshot_time_range_validates_semantic_row_catalog_order_and_label_independent_scale_correlation`
+- `query_snapshot_time_range_rejects_mismatched_evidence_row_key_and_order_index`
 - `query_snapshot_time_range_accepts_2000_cells_rejects_2001_and_bounds_100_evidence_items`
-- `query_snapshot_time_range_worst_case_records_remain_below_one_mibibyte`
+- `counts_json_escaped_content_at_exact_and_plus_one_boundaries`
+- `query_snapshot_time_range_adversarial_escape_and_multibyte_boundaries_match_python`
+- `query_snapshot_time_range_complete_jsonl_plus_lf_accepts_1048576_and_rejects_1048577_bytes`
 - `query_snapshot_time_range_cancellation_preserves_one_terminal_outcome`
 - `worker_inventory_excludes_retained_mcp_query_time_range`
 - `tauri_command_adapter_projects_source_keys_and_published_targets_through_private_registries`
