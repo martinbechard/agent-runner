@@ -28,6 +28,12 @@ pub const WORKER_PROTOCOL_VERSION: u32 = 1;
 /// The hard maximum for one Worker JSONL record, including its line feed.
 pub const MAX_WORKER_RECORD_BYTES: usize = 1_048_576;
 
+/// The largest matrix result accepted from the Application Service.
+pub const MAX_HEATMAP_CELLS: usize = 2_000;
+
+/// The largest selected-cell evidence ledger accepted from the Application Service.
+pub const MAX_HEATMAP_EVIDENCE_ITEMS: usize = 100;
+
 const MIN_RECORD_BYTES: usize = 4_096;
 const MAX_MESSAGE_CHARS: usize = 512;
 const STDERR_LINE_BYTES: usize = 4_096;
@@ -147,6 +153,14 @@ pub enum AutomationSurfaceWire {
 pub enum ExportModeWire {
     Summary,
     Directory,
+}
+
+/// The two mutually exclusive snapshot Heatmap request and result variants.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeatmapQueryKindWire {
+    Matrix,
+    CellEvidence,
 }
 
 /// One trusted request sent from the Supervisor to the Worker.
@@ -1094,26 +1108,7 @@ fn validate_operation_arguments(
             unsigned_field(arguments, "page_size")?;
             Ok(())
         }
-        "query_time_range" => {
-            exact_keys(
-                arguments,
-                &[
-                    "from_time",
-                    "to_time",
-                    "measure",
-                    "requested_resolution_minutes",
-                    "group_by",
-                    "maximum_rows",
-                ],
-            )?;
-            string_field(arguments, "from_time")?;
-            string_field(arguments, "to_time")?;
-            string_field(arguments, "measure")?;
-            unsigned_field(arguments, "requested_resolution_minutes")?;
-            string_field(arguments, "group_by")?;
-            unsigned_field(arguments, "maximum_rows")?;
-            Ok(())
-        }
+        "query_snapshot_time_range" => validate_snapshot_heatmap_request(arguments).map(|_| ()),
         "query_sequence" => {
             exact_keys(arguments, &["filters", "sort", "cursor", "page_size"])?;
             let filters = object_field(arguments, "filters")?;
@@ -1176,6 +1171,651 @@ fn validate_operation_arguments(
             "unknown operation",
         )),
     }
+}
+
+fn validate_snapshot_heatmap_request(
+    arguments: &Map<String, Value>,
+) -> Result<HeatmapQueryKindWire, SupervisorError> {
+    let query_kind = match string_field_value(arguments, "query_kind")? {
+        "matrix" => HeatmapQueryKindWire::Matrix,
+        "cell_evidence" => HeatmapQueryKindWire::CellEvidence,
+        _ => {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "invalid Heatmap query kind",
+            ));
+        }
+    };
+    validate_heatmap_mode(string_field_value(arguments, "mode")?)?;
+    match query_kind {
+        HeatmapQueryKindWire::Matrix => {
+            exact_keys(
+                arguments,
+                &[
+                    "query_kind",
+                    "from_time",
+                    "to_time",
+                    "mode",
+                    "requested_resolution_minutes",
+                    "maximum_rows",
+                ],
+            )?;
+            validate_utc_range(arguments, "from_time", "to_time")?;
+            let resolution = unsigned_field_value(arguments, "requested_resolution_minutes")?;
+            if !matches!(resolution, 1 | 5 | 15 | 30 | 60) {
+                return Err(protocol_error(
+                    "REPORT_WORKER_PROTOCOL",
+                    "invalid Heatmap resolution",
+                ));
+            }
+            let maximum_rows = unsigned_field_value(arguments, "maximum_rows")?;
+            if !(1..=200).contains(&maximum_rows) {
+                return Err(protocol_error(
+                    "REPORT_WORKER_PROTOCOL",
+                    "invalid Heatmap row limit",
+                ));
+            }
+        }
+        HeatmapQueryKindWire::CellEvidence => {
+            exact_keys(
+                arguments,
+                &[
+                    "query_kind",
+                    "mode",
+                    "row_id",
+                    "period_start_time",
+                    "period_end_time",
+                ],
+            )?;
+            validate_visible_string(
+                string_field_value(arguments, "row_id")?,
+                1,
+                256,
+                "Heatmap row id",
+            )?;
+            validate_utc_range(arguments, "period_start_time", "period_end_time")?;
+        }
+    }
+    Ok(query_kind)
+}
+
+fn validate_heatmap_mode(mode: &str) -> Result<(), SupervisorError> {
+    if matches!(mode, "wall_time" | "tokens" | "models") {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap mode",
+        ))
+    }
+}
+
+fn validate_utc_range(
+    value: &Map<String, Value>,
+    start_key: &'static str,
+    end_key: &'static str,
+) -> Result<(), SupervisorError> {
+    let start = parse_utc_instant(string_field_value(value, start_key)?)?;
+    let end = parse_utc_instant(string_field_value(value, end_key)?)?;
+    if start < end {
+        Ok(())
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap time range",
+        ))
+    }
+}
+
+fn parse_utc_instant(value: &str) -> Result<DateTime<FixedOffset>, SupervisorError> {
+    let parsed = DateTime::parse_from_rfc3339(value)
+        .map_err(|_| protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap UTC instant"))?;
+    if parsed.offset().local_minus_utc() == 0 {
+        Ok(parsed)
+    } else {
+        Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap UTC instant",
+        ))
+    }
+}
+
+fn validate_snapshot_heatmap_result(
+    request_snapshot_id: Option<&str>,
+    arguments: &Map<String, Value>,
+    result: &Map<String, Value>,
+) -> Result<(), SupervisorError> {
+    let request_snapshot_id = request_snapshot_id.ok_or_else(|| {
+        protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap result has no request snapshot",
+        )
+    })?;
+    let request_kind = validate_snapshot_heatmap_request(arguments)?;
+    let result_snapshot_id = string_field_value(result, "snapshot_id")?;
+    if result_snapshot_id != request_snapshot_id {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap snapshot correlation mismatch",
+        ));
+    }
+    validate_visible_string(
+        string_field_value(result, "revision_id")?,
+        1,
+        256,
+        "Heatmap revision id",
+    )?;
+    let result_kind = match string_field_value(result, "query_kind")? {
+        "matrix" => HeatmapQueryKindWire::Matrix,
+        "cell_evidence" => HeatmapQueryKindWire::CellEvidence,
+        _ => {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "invalid Heatmap result kind",
+            ));
+        }
+    };
+    if result_kind != request_kind {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap result variant mismatch",
+        ));
+    }
+    let mode = string_field_value(result, "mode")?;
+    validate_heatmap_mode(mode)?;
+    if mode != string_field_value(arguments, "mode")? {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap mode correlation mismatch",
+        ));
+    }
+    match result_kind {
+        HeatmapQueryKindWire::Matrix => validate_heatmap_matrix_result(arguments, result),
+        HeatmapQueryKindWire::CellEvidence => {
+            validate_heatmap_cell_evidence_result(arguments, result)
+        }
+    }
+}
+
+fn validate_heatmap_matrix_result(
+    arguments: &Map<String, Value>,
+    result: &Map<String, Value>,
+) -> Result<(), SupervisorError> {
+    exact_keys(
+        result,
+        &[
+            "snapshot_id",
+            "revision_id",
+            "query_kind",
+            "mode",
+            "from_time",
+            "to_time",
+            "requested_resolution_minutes",
+            "actual_resolution_minutes",
+            "maximum_rows",
+            "omitted_row_count",
+            "row_order",
+            "total_cell_count",
+            "rows",
+            "provenance",
+        ],
+    )?;
+    for key in [
+        "from_time",
+        "to_time",
+        "requested_resolution_minutes",
+        "maximum_rows",
+    ] {
+        if result.get(key) != arguments.get(key) {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "Heatmap matrix selector mismatch",
+            ));
+        }
+    }
+    let range_start = parse_utc_instant(string_field_value(result, "from_time")?)?;
+    let range_end = parse_utc_instant(string_field_value(result, "to_time")?)?;
+    if range_start >= range_end {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap time range",
+        ));
+    }
+    let requested_resolution = unsigned_field_value(result, "requested_resolution_minutes")?;
+    let actual_resolution = unsigned_field_value(result, "actual_resolution_minutes")?;
+    if !matches!(actual_resolution, 1 | 5 | 15 | 30 | 60)
+        || actual_resolution < requested_resolution
+    {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap actual resolution",
+        ));
+    }
+    let maximum_rows = usize::try_from(unsigned_field_value(result, "maximum_rows")?)
+        .map_err(|_| protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap row limit"))?;
+    unsigned_field_value(result, "omitted_row_count")?;
+    let mode = string_field_value(result, "mode")?;
+    let expected_row_order = match mode {
+        "wall_time" => "runtime_state_contract",
+        "tokens" => "token_contract",
+        "models" => "model_first_occurrence_then_cost",
+        _ => unreachable!("mode was validated before matrix validation"),
+    };
+    if string_field_value(result, "row_order")? != expected_row_order {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap row order",
+        ));
+    }
+    let declared_total = usize::try_from(unsigned_field_value(result, "total_cell_count")?)
+        .map_err(|_| protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap cell count"))?;
+    if declared_total > MAX_HEATMAP_CELLS {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap cell limit exceeded",
+        ));
+    }
+    let rows = array_field(result, "rows")?;
+    if rows.len() > maximum_rows {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap row limit exceeded",
+        ));
+    }
+    let mut row_ids = HashSet::new();
+    let mut actual_total = 0usize;
+    for row in rows {
+        let row = row.as_object().ok_or_else(|| {
+            protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap matrix row")
+        })?;
+        actual_total = actual_total
+            .checked_add(validate_heatmap_matrix_row(
+                row,
+                mode,
+                &range_start,
+                &range_end,
+                actual_resolution,
+            )?)
+            .ok_or_else(|| {
+                protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap cell count")
+            })?;
+        if !row_ids.insert(string_field_value(row, "row_id")?) {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "duplicate Heatmap row id",
+            ));
+        }
+    }
+    if actual_total != declared_total || actual_total > MAX_HEATMAP_CELLS {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap cell total mismatch",
+        ));
+    }
+    validate_provenance(result)
+}
+
+fn validate_heatmap_matrix_row(
+    row: &Map<String, Value>,
+    mode: &str,
+    range_start: &DateTime<FixedOffset>,
+    range_end: &DateTime<FixedOffset>,
+    actual_resolution_minutes: u64,
+) -> Result<usize, SupervisorError> {
+    exact_keys(row, &["row_id", "row_kind", "label", "scale", "cells"])?;
+    validate_visible_string(string_field_value(row, "row_id")?, 1, 256, "Heatmap row id")?;
+    validate_bounded_string(row, "label", 256)?;
+    let row_kind = string_field_value(row, "row_kind")?;
+    let valid_kind = match mode {
+        "wall_time" => row_kind == "runtime_state",
+        "tokens" => matches!(row_kind, "token_measure" | "cost"),
+        "models" => matches!(row_kind, "model" | "cost"),
+        _ => false,
+    };
+    if !valid_kind {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap row kind",
+        ));
+    }
+    let unavailable_scale = validate_heatmap_scale(object_field(row, "scale")?)?;
+    let cells = array_field(row, "cells")?;
+    let mut previous_end: Option<DateTime<FixedOffset>> = None;
+    for cell in cells {
+        let cell = cell.as_object().ok_or_else(|| {
+            protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap matrix cell")
+        })?;
+        let (start, end) = validate_heatmap_cell(cell, unavailable_scale)?;
+        if start < *range_start
+            || end > *range_end
+            || (end - start).num_seconds() > actual_resolution_minutes as i64 * 60
+            || previous_end
+                .as_ref()
+                .is_some_and(|previous| start < *previous)
+        {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "Heatmap cells are not chronological",
+            ));
+        }
+        previous_end = Some(end);
+    }
+    Ok(cells.len())
+}
+
+fn validate_heatmap_scale(scale: &Map<String, Value>) -> Result<bool, SupervisorError> {
+    match string_field_value(scale, "availability")? {
+        "available" => {
+            exact_keys(scale, &["availability", "minimum", "maximum", "basis"])?;
+            let minimum = finite_number_field(scale, "minimum")?;
+            let maximum = finite_number_field(scale, "maximum")?;
+            if minimum > maximum
+                || !matches!(
+                    string_field_value(scale, "basis")?,
+                    "visible_row_maximum" | "context_window_capacity"
+                )
+            {
+                return Err(protocol_error(
+                    "REPORT_WORKER_PROTOCOL",
+                    "invalid available Heatmap scale",
+                ));
+            }
+            Ok(false)
+        }
+        "unavailable" => {
+            exact_keys(scale, &["availability", "reason"])?;
+            if string_field_value(scale, "reason")? != "context_capacity_unavailable" {
+                return Err(protocol_error(
+                    "REPORT_WORKER_PROTOCOL",
+                    "invalid unavailable Heatmap scale",
+                ));
+            }
+            Ok(true)
+        }
+        _ => Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap scale availability",
+        )),
+    }
+}
+
+fn validate_heatmap_cell(
+    cell: &Map<String, Value>,
+    unavailable_scale: bool,
+) -> Result<(DateTime<FixedOffset>, DateTime<FixedOffset>), SupervisorError> {
+    exact_keys(
+        cell,
+        &[
+            "start_time",
+            "end_time",
+            "value",
+            "formatted_value",
+            "value_state",
+            "applicable_zero",
+            "contributing_evidence_count",
+            "normalized_intensity",
+            "supporting_text",
+        ],
+    )?;
+    let start = parse_utc_instant(string_field_value(cell, "start_time")?)?;
+    let end = parse_utc_instant(string_field_value(cell, "end_time")?)?;
+    if start >= end {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap cell range",
+        ));
+    }
+    let value = nullable_finite_number_field(cell, "value")?;
+    validate_bounded_string(cell, "formatted_value", 64)?;
+    let value_state = validate_heatmap_value_state(string_field_value(cell, "value_state")?)?;
+    let applicable_zero = bool_field_value(cell, "applicable_zero")?;
+    validate_value_state(value, value_state, applicable_zero)?;
+    unsigned_field_value(cell, "contributing_evidence_count")?;
+    let intensity = nullable_finite_number_field(cell, "normalized_intensity")?;
+    if intensity.is_some_and(|value| !(0.0..=1.0).contains(&value))
+        || (unavailable_scale && intensity.is_some())
+    {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap normalized intensity",
+        ));
+    }
+    nullable_bounded_string(cell, "supporting_text", 96)?;
+    Ok((start, end))
+}
+
+fn validate_heatmap_cell_evidence_result(
+    arguments: &Map<String, Value>,
+    result: &Map<String, Value>,
+) -> Result<(), SupervisorError> {
+    exact_keys(
+        result,
+        &[
+            "snapshot_id",
+            "revision_id",
+            "query_kind",
+            "mode",
+            "row_id",
+            "row_label",
+            "period_start_time",
+            "period_end_time",
+            "value",
+            "formatted_value",
+            "value_state",
+            "applicable_zero",
+            "evidence_items",
+            "omitted_evidence_count",
+            "provenance",
+        ],
+    )?;
+    for key in ["row_id", "period_start_time", "period_end_time"] {
+        if result.get(key) != arguments.get(key) {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "Heatmap evidence selector mismatch",
+            ));
+        }
+    }
+    let period_start = parse_utc_instant(string_field_value(result, "period_start_time")?)?;
+    let period_end = parse_utc_instant(string_field_value(result, "period_end_time")?)?;
+    if period_start >= period_end {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap evidence period",
+        ));
+    }
+    validate_bounded_string(result, "row_label", 256)?;
+    let value = nullable_finite_number_field(result, "value")?;
+    validate_bounded_string(result, "formatted_value", 64)?;
+    let value_state = validate_heatmap_value_state(string_field_value(result, "value_state")?)?;
+    validate_value_state(
+        value,
+        value_state,
+        bool_field_value(result, "applicable_zero")?,
+    )?;
+    let items = array_field(result, "evidence_items")?;
+    if items.len() > MAX_HEATMAP_EVIDENCE_ITEMS {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap evidence limit exceeded",
+        ));
+    }
+    let mut previous_time: Option<DateTime<FixedOffset>> = None;
+    for item in items {
+        let item = item.as_object().ok_or_else(|| {
+            protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap evidence item")
+        })?;
+        let occurred_at = validate_heatmap_evidence_item(item)?;
+        if occurred_at < period_start
+            || occurred_at >= period_end
+            || previous_time
+                .as_ref()
+                .is_some_and(|previous| occurred_at < *previous)
+        {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "Heatmap evidence is not chronological",
+            ));
+        }
+        previous_time = Some(occurred_at);
+    }
+    unsigned_field_value(result, "omitted_evidence_count")?;
+    validate_provenance(result)
+}
+
+fn validate_heatmap_evidence_item(
+    item: &Map<String, Value>,
+) -> Result<DateTime<FixedOffset>, SupervisorError> {
+    exact_keys(
+        item,
+        &[
+            "event_id",
+            "occurred_at",
+            "value",
+            "formatted_value",
+            "duration_ms",
+            "label",
+            "preview",
+            "evidence_method",
+            "value_state",
+            "has_detail",
+        ],
+    )?;
+    let event_id = nullable_bounded_string(item, "event_id", 256)?;
+    let occurred_at = parse_utc_instant(string_field_value(item, "occurred_at")?)?;
+    let value = nullable_finite_number_field(item, "value")?;
+    validate_bounded_string(item, "formatted_value", 64)?;
+    nullable_unsigned_field_value(item, "duration_ms")?;
+    validate_bounded_string(item, "label", 256)?;
+    nullable_bounded_string(item, "preview", 4_096)?;
+    if !matches!(
+        string_field_value(item, "evidence_method")?,
+        "measured" | "derived" | "inferred" | "estimated" | "unavailable"
+    ) {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap evidence method",
+        ));
+    }
+    let value_state = validate_heatmap_value_state(string_field_value(item, "value_state")?)?;
+    validate_value_state(value, value_state, false)?;
+    if bool_field_value(item, "has_detail")? && event_id.is_none() {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap detail has no event identity",
+        ));
+    }
+    Ok(occurred_at)
+}
+
+#[derive(Clone, Copy)]
+enum HeatmapValueStateWire {
+    Measured,
+    Derived,
+    Partial,
+    Unavailable,
+}
+
+fn validate_heatmap_value_state(value: &str) -> Result<HeatmapValueStateWire, SupervisorError> {
+    match value {
+        "measured" => Ok(HeatmapValueStateWire::Measured),
+        "derived" => Ok(HeatmapValueStateWire::Derived),
+        "partial" => Ok(HeatmapValueStateWire::Partial),
+        "unavailable" => Ok(HeatmapValueStateWire::Unavailable),
+        _ => Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap value state",
+        )),
+    }
+}
+
+fn validate_value_state(
+    value: Option<f64>,
+    state: HeatmapValueStateWire,
+    applicable_zero: bool,
+) -> Result<(), SupervisorError> {
+    if matches!(state, HeatmapValueStateWire::Unavailable) && value.is_some()
+        || applicable_zero
+            && (!matches!(
+                state,
+                HeatmapValueStateWire::Measured | HeatmapValueStateWire::Derived
+            ) || value != Some(0.0))
+    {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "invalid Heatmap value state combination",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_provenance(value: &Map<String, Value>) -> Result<(), SupervisorError> {
+    let provenance = array_field(value, "provenance")?;
+    if provenance.len() > 32 {
+        return Err(protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap provenance limit exceeded",
+        ));
+    }
+    for item in provenance {
+        let item = item.as_str().ok_or_else(|| {
+            protocol_error("REPORT_WORKER_PROTOCOL", "invalid Heatmap provenance")
+        })?;
+        if item.is_empty() || item.len() > 256 {
+            return Err(protocol_error(
+                "REPORT_WORKER_PROTOCOL",
+                "invalid Heatmap provenance",
+            ));
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn project_snapshot_heatmap_result(
+    result: Map<String, Value>,
+) -> Result<Map<String, Value>, SupervisorError> {
+    fn project(value: Value) -> Result<Value, SupervisorError> {
+        match value {
+            Value::Array(values) => values
+                .into_iter()
+                .map(project)
+                .collect::<Result<Vec<_>, _>>()
+                .map(Value::Array),
+            Value::Object(values) => {
+                let mut output = Map::new();
+                for (key, value) in values {
+                    let mut projected = String::with_capacity(key.len());
+                    let mut uppercase = false;
+                    for character in key.chars() {
+                        if character == '_' {
+                            uppercase = true;
+                        } else if uppercase {
+                            projected.extend(character.to_uppercase());
+                            uppercase = false;
+                        } else {
+                            projected.push(character);
+                        }
+                    }
+                    if output.insert(projected, project(value)?).is_some() {
+                        return Err(protocol_error(
+                            "REPORT_WORKER_PROTOCOL",
+                            "Heatmap projection key collision",
+                        ));
+                    }
+                }
+                Ok(Value::Object(output))
+            }
+            scalar => Ok(scalar),
+        }
+    }
+
+    let projected = project(Value::Object(result))?;
+    projected.as_object().cloned().ok_or_else(|| {
+        protocol_error(
+            "REPORT_WORKER_PROTOCOL",
+            "Heatmap projection is not an object",
+        )
+    })
 }
 
 fn validate_scope(value: &Map<String, Value>) -> Result<(), SupervisorError> {
@@ -1243,12 +1883,33 @@ fn object_field<'a>(
         .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
 }
 
+fn array_field<'a>(
+    value: &'a Map<String, Value>,
+    key: &'static str,
+) -> Result<&'a Vec<Value>, SupervisorError> {
+    value
+        .get(key)
+        .and_then(Value::as_array)
+        .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
 fn string_field(value: &Map<String, Value>, key: &'static str) -> Result<(), SupervisorError> {
     value
         .get(key)
         .and_then(Value::as_str)
         .filter(|item| !item.is_empty())
         .map(|_| ())
+        .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
+fn string_field_value<'a>(
+    value: &'a Map<String, Value>,
+    key: &'static str,
+) -> Result<&'a str, SupervisorError> {
+    value
+        .get(key)
+        .and_then(Value::as_str)
+        .filter(|field| !field.is_empty())
         .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
 }
 
@@ -1281,12 +1942,92 @@ fn unsigned_field(value: &Map<String, Value>, key: &'static str) -> Result<(), S
         .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
 }
 
+fn unsigned_field_value(
+    value: &Map<String, Value>,
+    key: &'static str,
+) -> Result<u64, SupervisorError> {
+    value
+        .get(key)
+        .and_then(Value::as_u64)
+        .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
+fn nullable_unsigned_field_value(
+    value: &Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<u64>, SupervisorError> {
+    match value.get(key) {
+        Some(Value::Null) => Ok(None),
+        Some(_) => unsigned_field_value(value, key).map(Some),
+        None => Err(protocol_error("REPORT_WORKER_PROTOCOL", key)),
+    }
+}
+
 fn bool_field(value: &Map<String, Value>, key: &'static str) -> Result<(), SupervisorError> {
     value
         .get(key)
         .and_then(Value::as_bool)
         .map(|_| ())
         .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
+fn bool_field_value(
+    value: &Map<String, Value>,
+    key: &'static str,
+) -> Result<bool, SupervisorError> {
+    value
+        .get(key)
+        .and_then(Value::as_bool)
+        .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
+fn finite_number_field(
+    value: &Map<String, Value>,
+    key: &'static str,
+) -> Result<f64, SupervisorError> {
+    value
+        .get(key)
+        .and_then(Value::as_f64)
+        .filter(|number| number.is_finite())
+        .ok_or_else(|| protocol_error("REPORT_WORKER_PROTOCOL", key))
+}
+
+fn nullable_finite_number_field(
+    value: &Map<String, Value>,
+    key: &'static str,
+) -> Result<Option<f64>, SupervisorError> {
+    match value.get(key) {
+        Some(Value::Null) => Ok(None),
+        Some(_) => finite_number_field(value, key).map(Some),
+        None => Err(protocol_error("REPORT_WORKER_PROTOCOL", key)),
+    }
+}
+
+fn validate_bounded_string(
+    value: &Map<String, Value>,
+    key: &'static str,
+    maximum_bytes: usize,
+) -> Result<(), SupervisorError> {
+    let field = string_field_value(value, key)?;
+    if field.len() <= maximum_bytes {
+        Ok(())
+    } else {
+        Err(protocol_error("REPORT_WORKER_PROTOCOL", key))
+    }
+}
+
+fn nullable_bounded_string<'a>(
+    value: &'a Map<String, Value>,
+    key: &'static str,
+    maximum_bytes: usize,
+) -> Result<Option<&'a str>, SupervisorError> {
+    match value.get(key) {
+        Some(Value::Null) => Ok(None),
+        Some(Value::String(field)) if !field.is_empty() && field.len() <= maximum_bytes => {
+            Ok(Some(field))
+        }
+        _ => Err(protocol_error("REPORT_WORKER_PROTOCOL", key)),
+    }
 }
 
 fn string_array_field(value: &Map<String, Value>, key: &str) -> Result<(), SupervisorError> {
@@ -1479,6 +2220,7 @@ impl WorkerSupervisor {
 struct ActiveOperation {
     operation: String,
     snapshot_id: Option<String>,
+    arguments: Map<String, Value>,
     observer: Arc<dyn OperationObserver>,
     progress: ProgressCoalescer,
 }
@@ -1786,6 +2528,7 @@ impl RecoveryCoordinator {
         }
         let operation = request.envelope.operation.clone();
         let snapshot_id = request.envelope.snapshot_id.clone();
+        let arguments = request.envelope.arguments.clone();
         let encoded = encode_json_line(&request.envelope, self.config.max_record_bytes)?;
         self.state.used_operation_ids.insert(operation_id.clone());
         self.state.operations.insert(
@@ -1793,6 +2536,7 @@ impl RecoveryCoordinator {
             ActiveOperation {
                 operation,
                 snapshot_id,
+                arguments,
                 observer,
                 progress: ProgressCoalescer::new(Duration::ZERO),
             },
@@ -1877,7 +2621,7 @@ impl RecoveryCoordinator {
             return;
         }
         let operation_id = worker_record_operation_id(&record).to_owned();
-        let Some(active) = self.state.operations.get_mut(&operation_id) else {
+        let Some(active) = self.state.operations.get(&operation_id) else {
             self.handle_generation_failure(
                 RestartReason::ProtocolFailure,
                 protocol_error("REPORT_WORKER_PROTOCOL", "unknown operation record"),
@@ -1893,8 +2637,22 @@ impl RecoveryCoordinator {
             );
             return;
         }
+        if let WorkerWireRecord::Result(value) = &record
+            && active.operation == "query_snapshot_time_range"
+            && let Err(error) = validate_snapshot_heatmap_result(
+                active.snapshot_id.as_deref(),
+                &active.arguments,
+                &value.result,
+            )
+        {
+            self.handle_generation_failure(RestartReason::ProtocolFailure, error);
+            return;
+        }
         match record {
             WorkerWireRecord::Progress(value) => {
+                let Some(active) = self.state.operations.get_mut(&operation_id) else {
+                    return;
+                };
                 let decision = active.progress.observe(value, Instant::now());
                 match decision {
                     Ok(ProgressDecision::Emit(value)) => {
@@ -2633,4 +3391,264 @@ pub fn force_terminate_process_tree(_tree: &ProcessTreeHandle) -> Result<(), Sup
         platform: "unsupported",
         message: "no process-tree termination implementation is available".to_owned(),
     })
+}
+
+#[cfg(test)]
+mod heatmap_contract_tests {
+    use super::*;
+    use chrono::{Duration as ChronoDuration, SecondsFormat, Utc};
+
+    const SNAPSHOT_ID: &str = "snap_46b9630e96ce4dc5a678a517";
+
+    fn matrix_arguments() -> Map<String, Value> {
+        json!({
+            "query_kind": "matrix",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-14T00:00:00Z",
+            "mode": "tokens",
+            "requested_resolution_minutes": 1,
+            "maximum_rows": 1
+        })
+        .as_object()
+        .expect("matrix arguments")
+        .clone()
+    }
+
+    fn evidence_arguments() -> Map<String, Value> {
+        json!({
+            "query_kind": "cell_evidence",
+            "mode": "tokens",
+            "row_id": "token:uncached_input",
+            "period_start_time": "2026-08-12T12:00:00Z",
+            "period_end_time": "2026-08-12T12:05:00Z"
+        })
+        .as_object()
+        .expect("evidence arguments")
+        .clone()
+    }
+
+    fn matrix_result(cell_count: usize) -> Map<String, Value> {
+        let start = DateTime::parse_from_rfc3339("2026-08-12T12:00:00Z")
+            .expect("fixture start")
+            .with_timezone(&Utc);
+        let cells = (0..cell_count)
+            .map(|offset| {
+                let cell_start = start + ChronoDuration::minutes(offset as i64);
+                let cell_end = cell_start + ChronoDuration::minutes(1);
+                json!({
+                    "start_time": cell_start.to_rfc3339_opts(SecondsFormat::Secs, true),
+                    "end_time": cell_end.to_rfc3339_opts(SecondsFormat::Secs, true),
+                    "value": 0.0,
+                    "formatted_value": "0",
+                    "value_state": "measured",
+                    "applicable_zero": true,
+                    "contributing_evidence_count": 0,
+                    "normalized_intensity": 0.0,
+                    "supporting_text": null
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "snapshot_id": SNAPSHOT_ID,
+            "revision_id": "revision-1",
+            "query_kind": "matrix",
+            "mode": "tokens",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-14T00:00:00Z",
+            "requested_resolution_minutes": 1,
+            "actual_resolution_minutes": 1,
+            "maximum_rows": 1,
+            "omitted_row_count": 0,
+            "row_order": "token_contract",
+            "total_cell_count": cell_count,
+            "rows": [{
+                "row_id": "token:uncached_input",
+                "row_kind": "token_measure",
+                "label": "Uncached input",
+                "scale": {
+                    "availability": "available",
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "basis": "visible_row_maximum"
+                },
+                "cells": cells
+            }],
+            "provenance": ["normalized events"]
+        })
+        .as_object()
+        .expect("matrix result")
+        .clone()
+    }
+
+    fn evidence_result(item_count: usize) -> Map<String, Value> {
+        let start = DateTime::parse_from_rfc3339("2026-08-12T12:00:00Z")
+            .expect("fixture start")
+            .with_timezone(&Utc);
+        let items = (0..item_count)
+            .map(|offset| {
+                json!({
+                    "event_id": null,
+                    "occurred_at": (start + ChronoDuration::seconds(offset as i64))
+                        .to_rfc3339_opts(SecondsFormat::Secs, true),
+                    "value": null,
+                    "formatted_value": "Unavailable",
+                    "duration_ms": null,
+                    "label": "main · gpt-5 · high",
+                    "preview": "x".repeat(4096),
+                    "evidence_method": "unavailable",
+                    "value_state": "unavailable",
+                    "has_detail": false
+                })
+            })
+            .collect::<Vec<_>>();
+        json!({
+            "snapshot_id": SNAPSHOT_ID,
+            "revision_id": "revision-1",
+            "query_kind": "cell_evidence",
+            "mode": "tokens",
+            "row_id": "token:uncached_input",
+            "row_label": "Uncached input",
+            "period_start_time": "2026-08-12T12:00:00Z",
+            "period_end_time": "2026-08-12T12:05:00Z",
+            "value": 1.0,
+            "formatted_value": "1",
+            "value_state": "measured",
+            "applicable_zero": false,
+            "evidence_items": items,
+            "omitted_evidence_count": 17,
+            "provenance": ["normalized events"]
+        })
+        .as_object()
+        .expect("evidence result")
+        .clone()
+    }
+
+    #[test]
+    fn validates_exact_heatmap_variants_and_projects_values_losslessly() {
+        let matrix = matrix_result(1);
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &matrix_arguments(), &matrix)
+            .expect("valid matrix");
+
+        let evidence = evidence_result(1);
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &evidence_arguments(), &evidence)
+            .expect("valid evidence");
+        let projected = project_snapshot_heatmap_result(evidence).expect("lossless projection");
+        assert_eq!(projected["snapshotId"], SNAPSHOT_ID);
+        assert_eq!(projected["revisionId"], "revision-1");
+        assert!(projected.get("revision").is_none());
+        assert_eq!(projected["evidenceItems"][0]["value"], Value::Null);
+        assert_eq!(
+            projected["evidenceItems"][0]["evidenceMethod"],
+            "unavailable"
+        );
+    }
+
+    #[test]
+    fn rejects_cross_variant_scale_and_identity_mismatches() {
+        let mut wrong_variant = matrix_result(1);
+        wrong_variant.insert("query_kind".to_owned(), json!("cell_evidence"));
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &matrix_arguments(),
+                &wrong_variant,
+            )
+            .is_err()
+        );
+
+        let mut mixed_scale = matrix_result(1);
+        mixed_scale["rows"][0]["scale"] = json!({
+            "availability": "unavailable",
+            "reason": "context_capacity_unavailable",
+            "minimum": 0.0
+        });
+        assert!(
+            validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &matrix_arguments(), &mixed_scale,)
+                .is_err()
+        );
+
+        let mut wrong_snapshot = matrix_result(1);
+        wrong_snapshot.insert("snapshot_id".to_owned(), json!("another-snapshot"));
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &matrix_arguments(),
+                &wrong_snapshot,
+            )
+            .is_err()
+        );
+
+        let mut absent_revision = matrix_result(1);
+        absent_revision.remove("revision_id");
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &matrix_arguments(),
+                &absent_revision,
+            )
+            .is_err()
+        );
+
+        let mut fractional_duration = evidence_result(1);
+        fractional_duration["evidence_items"][0]["duration_ms"] = json!(1.5);
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &evidence_arguments(),
+                &fractional_duration,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn enforces_heatmap_cardinality_and_compact_record_bounds() {
+        let matrix = matrix_result(MAX_HEATMAP_CELLS);
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &matrix_arguments(), &matrix)
+            .expect("2,000 cells remain valid");
+        let matrix_record = json!({
+            "protocol_version": WORKER_PROTOCOL_VERSION,
+            "operation_id": "op_75ffcf97671b4ccbaf96790c",
+            "type": "result",
+            "operation": "query_snapshot_time_range",
+            "snapshot_id": SNAPSHOT_ID,
+            "ok": true,
+            "result": matrix
+        });
+        assert!(serde_json::to_vec(&matrix_record).unwrap().len() + 1 < MAX_WORKER_RECORD_BYTES);
+
+        let oversized_matrix = matrix_result(MAX_HEATMAP_CELLS + 1);
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &matrix_arguments(),
+                &oversized_matrix,
+            )
+            .is_err()
+        );
+
+        let evidence = evidence_result(MAX_HEATMAP_EVIDENCE_ITEMS);
+        validate_snapshot_heatmap_result(Some(SNAPSHOT_ID), &evidence_arguments(), &evidence)
+            .expect("100 evidence items remain valid");
+        let evidence_record = json!({
+            "protocol_version": WORKER_PROTOCOL_VERSION,
+            "operation_id": "op_75ffcf97671b4ccbaf96790c",
+            "type": "result",
+            "operation": "query_snapshot_time_range",
+            "snapshot_id": SNAPSHOT_ID,
+            "ok": true,
+            "result": evidence
+        });
+        assert!(serde_json::to_vec(&evidence_record).unwrap().len() + 1 < MAX_WORKER_RECORD_BYTES);
+
+        let oversized_evidence = evidence_result(MAX_HEATMAP_EVIDENCE_ITEMS + 1);
+        assert!(
+            validate_snapshot_heatmap_result(
+                Some(SNAPSHOT_ID),
+                &evidence_arguments(),
+                &oversized_evidence,
+            )
+            .is_err()
+        );
+    }
 }

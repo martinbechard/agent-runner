@@ -212,15 +212,26 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
             }),
         ),
         (
-            "query_time_range",
+            "query_snapshot_time_range",
             Some(SNAPSHOT_ID),
             json!({
+                "query_kind": "matrix",
                 "from_time": "2026-08-12T12:00:00Z",
                 "to_time": "2026-08-12T13:00:00Z",
-                "measure": "wall_time",
+                "mode": "tokens",
                 "requested_resolution_minutes": 5,
-                "group_by": "agent",
                 "maximum_rows": 100
+            }),
+        ),
+        (
+            "query_snapshot_time_range",
+            Some(SNAPSHOT_ID),
+            json!({
+                "query_kind": "cell_evidence",
+                "mode": "tokens",
+                "row_id": "token:uncached_input",
+                "period_start_time": "2026-08-12T12:00:00Z",
+                "period_end_time": "2026-08-12T12:05:00Z"
             }),
         ),
         (
@@ -276,6 +287,62 @@ fn operation_bindings_accept_each_exact_path_free_argument_schema() {
         TrustedWorkerRequest::path_free(request)
             .unwrap_or_else(|error| panic!("{operation} must be bound: {error}"));
     }
+}
+
+#[test]
+fn snapshot_heatmap_rejects_legacy_mixed_and_unknown_request_fields() {
+    for arguments in [
+        json!({
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T13:00:00Z",
+            "measure": "wall_time",
+            "requested_resolution_minutes": 5,
+            "group_by": "agent",
+            "maximum_rows": 100
+        }),
+        json!({
+            "query_kind": "matrix",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T13:00:00Z",
+            "mode": "tokens",
+            "requested_resolution_minutes": 5,
+            "maximum_rows": 100,
+            "row_id": "token:uncached_input"
+        }),
+        json!({
+            "query_kind": "cell_evidence",
+            "mode": "tokens",
+            "row_id": "token:uncached_input",
+            "period_start_time": "2026-08-12T12:00:00Z",
+            "period_end_time": "2026-08-12T12:05:00Z",
+            "maximum_rows": 100
+        }),
+    ] {
+        let request = RequestEnvelope {
+            protocol_version: WORKER_PROTOCOL_VERSION,
+            operation_id: OPERATION_ID.to_owned(),
+            operation: "query_snapshot_time_range".to_owned(),
+            snapshot_id: Some(SNAPSHOT_ID.to_owned()),
+            arguments: map(arguments),
+        };
+        assert!(TrustedWorkerRequest::path_free(request).is_err());
+    }
+
+    let retained_mcp_operation = RequestEnvelope {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        operation_id: OPERATION_ID.to_owned(),
+        operation: "query_time_range".to_owned(),
+        snapshot_id: Some(SNAPSHOT_ID.to_owned()),
+        arguments: map(json!({
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T13:00:00Z",
+            "measure": "wall_time",
+            "requested_resolution_minutes": 5,
+            "group_by": "agent",
+            "maximum_rows": 100
+        })),
+    };
+    assert!(TrustedWorkerRequest::path_free(retained_mcp_operation).is_err());
 }
 
 #[test]
@@ -569,11 +636,11 @@ fn times_out_and_reaps_a_worker_that_never_completes_handshake() {
 
 #[cfg(unix)]
 #[test]
-fn cooperative_cancel_prevents_forced_termination() {
+fn snapshot_heatmap_cooperative_cancel_prevents_partial_or_forced_result() {
     let temp = TempDir::new().unwrap();
     let executable = worker_script(
         &temp,
-        "#!/bin/sh\nread -r handshake\nprintf '%s\\n' '{\"protocol_version\":1,\"operation_id\":\"op_000000000000000000000000\",\"type\":\"result\",\"operation\":\"worker_handshake\",\"snapshot_id\":null,\"ok\":true,\"result\":{\"worker_protocol_version\":1,\"worker_package_version\":\"0.10.2\"}}'\nwhile read -r line; do case \"$line\" in *'\"type\":\"cancel\"'*) printf '%s\\n' '{\"protocol_version\":1,\"operation_id\":\"op_75ffcf97671b4ccbaf96790c\",\"type\":\"cancelled\",\"operation\":\"get_summary\",\"snapshot_id\":\"snap_46b9630e96ce4dc5a678a517\",\"ok\":false,\"error\":{\"code\":\"REPORT_CANCELLED\",\"message\":\"Operation cancelled\",\"operation_id\":\"op_75ffcf97671b4ccbaf96790c\",\"recoverable\":true,\"current_source_revision\":null,\"preflight_required\":false,\"restart_from_first_page\":false}}' ;; esac; done\n",
+        "#!/bin/sh\nread -r handshake\nprintf '%s\\n' '{\"protocol_version\":1,\"operation_id\":\"op_000000000000000000000000\",\"type\":\"result\",\"operation\":\"worker_handshake\",\"snapshot_id\":null,\"ok\":true,\"result\":{\"worker_protocol_version\":1,\"worker_package_version\":\"0.10.2\"}}'\nwhile read -r line; do case \"$line\" in *'\"type\":\"cancel\"'*) printf '%s\\n' '{\"protocol_version\":1,\"operation_id\":\"op_75ffcf97671b4ccbaf96790c\",\"type\":\"cancelled\",\"operation\":\"query_snapshot_time_range\",\"snapshot_id\":\"snap_46b9630e96ce4dc5a678a517\",\"ok\":false,\"error\":{\"code\":\"REPORT_CANCELLED\",\"message\":\"Operation cancelled\",\"operation_id\":\"op_75ffcf97671b4ccbaf96790c\",\"recoverable\":true,\"current_source_revision\":null,\"preflight_required\":false,\"restart_from_first_page\":false}}' ;; esac; done\n",
     );
     let supervisor = WorkerSupervisor::spawn(
         WorkerLaunchSpec {
@@ -589,9 +656,16 @@ fn cooperative_cancel_prevents_forced_termination() {
     let request = TrustedWorkerRequest::path_free(RequestEnvelope {
         protocol_version: 1,
         operation_id: OPERATION_ID.to_owned(),
-        operation: "get_summary".to_owned(),
+        operation: "query_snapshot_time_range".to_owned(),
         snapshot_id: Some(SNAPSHOT_ID.to_owned()),
-        arguments: Map::new(),
+        arguments: map(json!({
+            "query_kind": "matrix",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T13:00:00Z",
+            "mode": "tokens",
+            "requested_resolution_minutes": 5,
+            "maximum_rows": 100
+        })),
     })
     .unwrap();
     supervisor.submit(request, observer.clone()).unwrap();
@@ -603,6 +677,50 @@ fn cooperative_cancel_prevents_forced_termination() {
     assert!(!cancelled.forced);
     std::thread::sleep(Duration::from_millis(150));
     supervisor.restart(RestartReason::Explicit).unwrap();
+    supervisor.shutdown().unwrap();
+}
+
+#[cfg(unix)]
+#[test]
+fn invalid_snapshot_heatmap_success_is_not_published_as_a_result() {
+    let temp = TempDir::new().unwrap();
+    let executable = worker_script(
+        &temp,
+        "#!/bin/sh\nread -r handshake\nprintf '%s\\n' '{\"protocol_version\":1,\"operation_id\":\"op_000000000000000000000000\",\"type\":\"result\",\"operation\":\"worker_handshake\",\"snapshot_id\":null,\"ok\":true,\"result\":{\"worker_protocol_version\":1,\"worker_package_version\":\"0.10.2\"}}'\nread -r request\nprintf '%s\\n' '{\"protocol_version\":1,\"operation_id\":\"op_75ffcf97671b4ccbaf96790c\",\"type\":\"result\",\"operation\":\"query_snapshot_time_range\",\"snapshot_id\":\"snap_46b9630e96ce4dc5a678a517\",\"ok\":true,\"result\":{\"snapshot_id\":\"snap_46b9630e96ce4dc5a678a517\",\"revision_id\":\"revision-1\",\"query_kind\":\"matrix\",\"mode\":\"tokens\"}}'\nwhile read -r line; do :; done\n",
+    );
+    let supervisor = WorkerSupervisor::spawn(
+        WorkerLaunchSpec {
+            executable,
+            arguments: vec![],
+            environment: BTreeMap::new(),
+        },
+        supervisor_config(temp.path()),
+    )
+    .unwrap();
+    supervisor.wait_until_ready().unwrap();
+    let observer = Arc::new(RecordingObserver::default());
+    let request = TrustedWorkerRequest::path_free(RequestEnvelope {
+        protocol_version: WORKER_PROTOCOL_VERSION,
+        operation_id: OPERATION_ID.to_owned(),
+        operation: "query_snapshot_time_range".to_owned(),
+        snapshot_id: Some(SNAPSHOT_ID.to_owned()),
+        arguments: map(json!({
+            "query_kind": "matrix",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T13:00:00Z",
+            "mode": "tokens",
+            "requested_resolution_minutes": 5,
+            "maximum_rows": 100
+        })),
+    })
+    .unwrap();
+    supervisor.submit(request, observer.clone()).unwrap();
+
+    let HostTerminalOutcome::Error(error) = observer.wait_for_terminal() else {
+        panic!("an invalid Heatmap success must not reach the result observer");
+    };
+    assert_eq!(error.error.code, "REPORT_WORKER_RESTARTED");
+    supervisor.wait_until_ready().unwrap();
     supervisor.shutdown().unwrap();
 }
 

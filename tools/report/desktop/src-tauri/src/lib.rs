@@ -41,7 +41,7 @@ use report_worker::{
     AutomationSurfaceWire, ExportModeWire, HostTerminalOutcome, OperationObserver, PathAuthority,
     ProgressEnvelope, RequestEnvelope, SanitizedDiagnostic, ServiceConfiguration, StructuredError,
     TrustedWorkerRequest, WORKER_PROTOCOL_VERSION, WorkerLaunchSpec, WorkerSupervisor,
-    WorkerSupervisorConfig,
+    WorkerSupervisorConfig, project_snapshot_heatmap_result,
 };
 
 static REPORT_WINDOW_COUNTER: AtomicU64 = AtomicU64::new(1);
@@ -450,6 +450,21 @@ fn required_string<'a>(
         .ok_or_else(|| NativeReportError::protocol("The command request is invalid.", operation_id))
 }
 
+fn exact_command_keys(
+    request: &Map<String, Value>,
+    keys: &[&str],
+    operation_id: Option<&str>,
+) -> Result<(), NativeReportError> {
+    if request.len() == keys.len() && keys.iter().all(|key| request.contains_key(*key)) {
+        Ok(())
+    } else {
+        Err(NativeReportError::protocol(
+            "The command request fields are invalid.",
+            operation_id,
+        ))
+    }
+}
+
 fn singleton(value: Option<&Value>) -> Value {
     value
         .and_then(Value::as_str)
@@ -554,14 +569,63 @@ fn wire_request(
                 "page_size": request.get("pageSize").cloned().unwrap_or(Value::Null)
             })
         }
-        "query_time_range" => json!({
-            "from_time": request.get("fromTime").cloned().unwrap_or(Value::Null),
-            "to_time": request.get("toTime").cloned().unwrap_or(Value::Null),
-            "measure": request.get("measure").cloned().unwrap_or(Value::Null),
-            "group_by": request.get("groupBy").cloned().unwrap_or(Value::Null),
-            "requested_resolution_minutes": request.get("requestedResolutionMinutes").cloned().unwrap_or(Value::Null),
-            "maximum_rows": request.get("maximumRows").cloned().unwrap_or(Value::Null)
-        }),
+        "query_snapshot_time_range" => {
+            let query_kind = required_string(request, "queryKind", Some(operation_id))?;
+            match query_kind {
+                "matrix" => {
+                    exact_command_keys(
+                        request,
+                        &[
+                            "operationId",
+                            "snapshotId",
+                            "queryKind",
+                            "fromTime",
+                            "toTime",
+                            "mode",
+                            "requestedResolutionMinutes",
+                            "maximumRows",
+                        ],
+                        Some(operation_id),
+                    )?;
+                    json!({
+                        "query_kind": query_kind,
+                        "from_time": request.get("fromTime").cloned().unwrap_or(Value::Null),
+                        "to_time": request.get("toTime").cloned().unwrap_or(Value::Null),
+                        "mode": request.get("mode").cloned().unwrap_or(Value::Null),
+                        "requested_resolution_minutes": request.get("requestedResolutionMinutes").cloned().unwrap_or(Value::Null),
+                        "maximum_rows": request.get("maximumRows").cloned().unwrap_or(Value::Null)
+                    })
+                }
+                "cell_evidence" => {
+                    exact_command_keys(
+                        request,
+                        &[
+                            "operationId",
+                            "snapshotId",
+                            "queryKind",
+                            "mode",
+                            "rowId",
+                            "periodStartTime",
+                            "periodEndTime",
+                        ],
+                        Some(operation_id),
+                    )?;
+                    json!({
+                        "query_kind": query_kind,
+                        "mode": request.get("mode").cloned().unwrap_or(Value::Null),
+                        "row_id": request.get("rowId").cloned().unwrap_or(Value::Null),
+                        "period_start_time": request.get("periodStartTime").cloned().unwrap_or(Value::Null),
+                        "period_end_time": request.get("periodEndTime").cloned().unwrap_or(Value::Null)
+                    })
+                }
+                _ => {
+                    return Err(NativeReportError::protocol(
+                        "The Heatmap query kind is invalid.",
+                        Some(operation_id),
+                    ));
+                }
+            }
+        }
         "query_sequence" => {
             let filters = request
                 .get("filters")
@@ -1076,11 +1140,32 @@ fn project_worker_result(
                 project_page_rows(operation, page);
             }
         }
-        "query_time_range" => {
-            let revision = result.remove("revision_id").ok_or_else(|| {
-                NativeReportError::protocol("The heatmap result is invalid.", None)
+        "query_snapshot_time_range" => {
+            let snapshot_id = result
+                .get("snapshot_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The Heatmap result is invalid.", None)
+                })?;
+            let revision_id = result
+                .get("revision_id")
+                .and_then(Value::as_str)
+                .ok_or_else(|| {
+                    NativeReportError::protocol("The Heatmap result is invalid.", None)
+                })?;
+            let revisions = state.snapshot_revisions.lock().map_err(|_| {
+                NativeReportError::protocol("The snapshot revision registry is unavailable.", None)
             })?;
-            result.insert("revision".to_owned(), revision);
+            if revisions.get(snapshot_id).map(String::as_str) != Some(revision_id) {
+                return Err(NativeReportError::protocol(
+                    "The Heatmap result revision is stale.",
+                    None,
+                ));
+            }
+            drop(revisions);
+            return project_snapshot_heatmap_result(result)
+                .map(Value::Object)
+                .map_err(|_| NativeReportError::protocol("The Heatmap result is invalid.", None));
         }
         "get_event_details" => {
             let revision = result.remove("revision_id").ok_or_else(|| {
@@ -1476,8 +1561,11 @@ async fn list_events(app: AppHandle, request: Value) -> Result<Value, NativeRepo
 }
 
 #[tauri::command]
-async fn query_time_range(app: AppHandle, request: Value) -> Result<Value, NativeReportError> {
-    execute_path_free(app, "query_time_range", request).await
+async fn query_snapshot_time_range(
+    app: AppHandle,
+    request: Value,
+) -> Result<Value, NativeReportError> {
+    execute_path_free(app, "query_snapshot_time_range", request).await
 }
 
 #[tauri::command]
@@ -2776,7 +2864,7 @@ pub fn run() {
             list_agents,
             list_turns,
             list_events,
-            query_time_range,
+            query_snapshot_time_range,
             query_sequence,
             query_coordination,
             get_event_details,
@@ -3051,16 +3139,16 @@ mod tests {
         );
 
         let heatmap = project(
-            "query_time_range",
-            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","measure":"wall_time","group_by":"agent","from_time":"2026-08-12T14:00:00Z","to_time":"2026-08-12T15:00:00Z","requested_resolution_minutes":5,"actual_resolution_minutes":5,"maximum_rows":25,"omitted_row_count":0,"row_order":"activity_descending_id_ascending","total_cell_count":1,"rows":[{"row_id":"agent","label":"Agent","scale":{"minimum":0,"maximum":1,"color_semantic":"sequential_nonnegative","basis":"visible_row_maximum"},"cells":[{"start_time":"2026-08-12T14:00:00Z","end_time":"2026-08-12T15:00:00Z","value":1,"count":1,"evidence":"measured","primary_label":"1","secondary_label":null}]}],"provenance":["normalized"]}),
+            "query_snapshot_time_range",
+            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","query_kind":"matrix","mode":"tokens","from_time":"2026-08-12T14:00:00Z","to_time":"2026-08-12T15:00:00Z","requested_resolution_minutes":5,"actual_resolution_minutes":5,"maximum_rows":25,"omitted_row_count":0,"row_order":"token_contract","total_cell_count":1,"rows":[{"row_id":"token:uncached_input","row_kind":"token_measure","label":"Uncached input","scale":{"availability":"available","minimum":0,"maximum":1,"basis":"visible_row_maximum"},"cells":[{"start_time":"2026-08-12T14:00:00Z","end_time":"2026-08-12T15:00:00Z","value":1,"formatted_value":"1","value_state":"measured","applicable_zero":false,"contributing_evidence_count":1,"normalized_intensity":1,"supporting_text":null}]}],"provenance":["normalized"]}),
         );
         assert_exact_keys(
             &heatmap,
             &[
                 "snapshotId",
-                "revision",
-                "measure",
-                "groupBy",
+                "revisionId",
+                "queryKind",
+                "mode",
                 "fromTime",
                 "toTime",
                 "requestedResolutionMinutes",
@@ -3072,6 +3160,18 @@ mod tests {
                 "rows",
                 "provenance",
             ],
+        );
+        assert_eq!(heatmap["rows"][0]["cells"][0]["value"], 1);
+
+        let evidence = project(
+            "query_snapshot_time_range",
+            serde_json::json!({"snapshot_id":snapshot_id,"revision_id":"revision-1","query_kind":"cell_evidence","mode":"tokens","row_id":"token:uncached_input","row_label":"Uncached input","period_start_time":"2026-08-12T14:00:00Z","period_end_time":"2026-08-12T14:05:00Z","value":null,"formatted_value":"Unavailable","value_state":"unavailable","applicable_zero":false,"evidence_items":[{"event_id":null,"occurred_at":"2026-08-12T14:00:00Z","value":null,"formatted_value":"Unavailable","duration_ms":null,"label":"main · gpt-5 · high","preview":null,"evidence_method":"unavailable","value_state":"unavailable","has_detail":false}],"omitted_evidence_count":0,"provenance":["normalized"]}),
+        );
+        assert_eq!(evidence["revisionId"], "revision-1");
+        assert_eq!(evidence["evidenceItems"][0]["value"], Value::Null);
+        assert_eq!(
+            evidence["evidenceItems"][0]["evidenceMethod"],
+            "unavailable"
         );
 
         let sequence = project(
@@ -3374,8 +3474,12 @@ mod tests {
                 ),
             ),
             (
-                "query_time_range",
-                serde_json::json!({"operationId":"op_75ffcf97671b4ccbaf96790c","snapshotId":"snap_46b9630e96ce4dc5a678a517","fromTime":"2026-08-12T12:00:00Z","toTime":"2026-08-12T13:00:00Z","measure":"wall_time","groupBy":"agent","requestedResolutionMinutes":5,"maximumRows":20}),
+                "query_snapshot_time_range",
+                serde_json::json!({"operationId":"op_75ffcf97671b4ccbaf96790c","snapshotId":"snap_46b9630e96ce4dc5a678a517","queryKind":"matrix","fromTime":"2026-08-12T12:00:00Z","toTime":"2026-08-12T13:00:00Z","mode":"tokens","requestedResolutionMinutes":5,"maximumRows":20}),
+            ),
+            (
+                "query_snapshot_time_range",
+                serde_json::json!({"operationId":"op_75ffcf97671b4ccbaf96790c","snapshotId":"snap_46b9630e96ce4dc5a678a517","queryKind":"cell_evidence","mode":"tokens","rowId":"token:uncached_input","periodStartTime":"2026-08-12T12:00:00Z","periodEndTime":"2026-08-12T12:05:00Z"}),
             ),
             (
                 "query_sequence",
@@ -3416,6 +3520,52 @@ mod tests {
                     .all(|key| !key.contains(char::is_uppercase))
             );
         }
+    }
+
+    #[test]
+    fn snapshot_heatmap_command_rejects_extra_fields_and_stale_revision_projection() {
+        let request = serde_json::json!({
+            "operationId": "op_75ffcf97671b4ccbaf96790c",
+            "snapshotId": "snap_46b9630e96ce4dc5a678a517",
+            "queryKind": "matrix",
+            "fromTime": "2026-08-12T12:00:00Z",
+            "toTime": "2026-08-12T13:00:00Z",
+            "mode": "tokens",
+            "requestedResolutionMinutes": 5,
+            "maximumRows": 20,
+            "rowId": "token:uncached_input"
+        });
+        assert!(wire_request("query_snapshot_time_range", request).is_err());
+
+        let retained = serde_json::json!({
+            "operationId": "op_75ffcf97671b4ccbaf96790c",
+            "snapshotId": "snap_46b9630e96ce4dc5a678a517"
+        });
+        assert!(wire_request("query_time_range", retained).is_err());
+
+        let state = NativeReportState::default();
+        state
+            .snapshot_revisions
+            .lock()
+            .expect("snapshot revision registry")
+            .insert(
+                "snap_46b9630e96ce4dc5a678a517".to_owned(),
+                "revision-2".to_owned(),
+            );
+        let stale = serde_json::json!({
+            "snapshot_id": "snap_46b9630e96ce4dc5a678a517",
+            "revision_id": "revision-1",
+            "query_kind": "matrix",
+            "mode": "tokens"
+        });
+        assert!(
+            project_worker_result(
+                "query_snapshot_time_range",
+                stale.as_object().expect("stale result").clone(),
+                &state,
+            )
+            .is_err()
+        );
     }
 
     #[test]
