@@ -242,6 +242,8 @@ export interface WorkspaceState {
 
 export interface HeatmapSelectedCell {
   readonly rowId: string;
+  readonly rowKey: string;
+  readonly rowOrderIndex: number;
   readonly rowLabel: string;
   readonly periodStartTime: string;
   readonly periodEndTime: string;
@@ -266,6 +268,8 @@ export interface HeatmapInteractionState {
 /** Confirm that a lazy evidence result still describes the selected matrix cell. */
 export function heatmapEvidenceMatchesSelection(selection: HeatmapSelectedCell, result: HeatmapCellEvidenceResultDto): boolean {
   return selection.rowId === result.rowId
+    && selection.rowKey === result.rowKey
+    && selection.rowOrderIndex === result.rowOrderIndex
     && selection.rowLabel === result.rowLabel
     && selection.periodStartTime === result.periodStartTime
     && selection.periodEndTime === result.periodEndTime
@@ -883,6 +887,8 @@ function heatmapRangeLabel(range: HeatmapRange): string {
 function heatmapSelectionFor(row: HeatmapMatrixResultDto["rows"][number], cell: HeatmapMatrixCellDto): HeatmapSelectedCell {
   return Object.freeze({
     rowId: row.rowId,
+    rowKey: row.rowKey,
+    rowOrderIndex: row.rowOrderIndex,
     rowLabel: row.label,
     periodStartTime: cell.startTime,
     periodEndTime: cell.endTime,
@@ -1426,7 +1432,12 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
       periodEndTime: selection.periodEndTime,
     };
     try {
-      const result = parseHeatmapResultDto(await invoke(WORKSPACE_COMMANDS.querySnapshotTimeRange, request), { ...request, revisionId: snapshot.revision });
+      const result = parseHeatmapResultDto(await invoke(WORKSPACE_COMMANDS.querySnapshotTimeRange, request), {
+        ...request,
+        revisionId: snapshot.revision,
+        rowKey: selection.rowKey,
+        rowOrderIndex: selection.rowOrderIndex,
+      });
       if (!isCurrent(operation.sequence, operation.id) || result.queryKind !== "cell_evidence") return;
       const selected = state.heatmapInteraction.selectedCell;
       if (selected === null) return;

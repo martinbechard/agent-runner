@@ -222,12 +222,14 @@ describe("heatmap, detail, export, and progress contracts", () => {
     requestedResolutionMinutes: 5,
     actualResolutionMinutes: 5,
     maximumRows: 100,
-    omittedRowCount: 0,
+    omittedRowCount: 7,
     rowOrder: "token_contract",
     totalCellCount: 2,
     rows: [
       {
         rowId: "token:uncached-input",
+        rowKey: "uncached_input_tokens",
+        rowOrderIndex: 0,
         rowKind: "token_measure",
         label: "Uncached input",
         scale: { availability: "available", minimum: 0, maximum: 2_000, basis: "visible_row_maximum" },
@@ -254,6 +256,8 @@ describe("heatmap, detail, export, and progress contracts", () => {
     queryKind: "cell_evidence" as const,
     mode: "tokens" as const,
     rowId: "token:context-maximum",
+    rowKey: "context_maximum",
+    rowOrderIndex: 6,
     rowLabel: "Context size (max)",
     periodStartTime: "2026-08-12T12:00:00Z",
     periodEndTime: "2026-08-12T12:05:00Z",
@@ -268,6 +272,18 @@ describe("heatmap, detail, export, and progress contracts", () => {
     omittedEvidenceCount: 3,
     provenance: ["Recorded responses"],
   };
+  const tokenRowKeys = ["uncached_input_tokens", "cached_input_tokens", "reasoning_tokens", "output_tokens", "tool_calls", "context_average", "context_maximum", "cost"] as const;
+  const emptyTokenRows = () => tokenRowKeys.map((rowKey, rowOrderIndex) => ({
+    rowId: `row-${rowOrderIndex}`,
+    rowKey,
+    rowOrderIndex,
+    rowKind: rowKey === "cost" ? "cost" as const : "token_measure" as const,
+    label: `Row ${rowOrderIndex}`,
+    scale: rowKey === "context_average" || rowKey === "context_maximum"
+      ? { availability: "available" as const, minimum: 0, maximum: 1, basis: "context_window_capacity" as const }
+      : { availability: "available" as const, minimum: 0, maximum: 1, basis: "visible_row_maximum" as const },
+    cells: [],
+  }));
 
   it("accepts exact matrix and cell-evidence variants plus adjacent result contracts", () => {
     const parsedMatrix = parseHeatmapResultDto(matrixResult, { ...matrixRequest, revisionId: "revision-1" });
@@ -275,7 +291,7 @@ describe("heatmap, detail, export, and progress contracts", () => {
     if (parsedMatrix.queryKind !== "matrix") throw new Error("Expected a matrix result");
     expect(parsedMatrix.rows[0]?.cells[1]).toMatchObject({ valueState: "partial", applicableZero: false, normalizedIntensity: 0.6 });
 
-    const parsedEvidence = parseHeatmapResultDto(evidenceResult, { ...evidenceRequest, revisionId: "revision-1" });
+    const parsedEvidence = parseHeatmapResultDto(evidenceResult, { ...evidenceRequest, revisionId: "revision-1", rowKey: "context_maximum", rowOrderIndex: 6 });
     expect(parsedEvidence).toMatchObject({ queryKind: "cell_evidence", revisionId: "revision-1", value: null, omittedEvidenceCount: 3 });
     if (parsedEvidence.queryKind !== "cell_evidence") throw new Error("Expected a cell-evidence result");
     expect(parsedEvidence.evidenceItems.map((item) => item.evidenceMethod)).toEqual(["measured", "unavailable"]);
@@ -294,14 +310,83 @@ describe("heatmap, detail, export, and progress contracts", () => {
     expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], scale: { availability: "unavailable", reason: "context_capacity_unavailable", minimum: 0 } }] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("unexpected");
     expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, valueState: "unavailable", applicableZero: true }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("applicableZero");
     expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], cells: [{ ...matrixResult.rows[0]!.cells[0]!, normalizedIntensity: null }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("required for a usable value");
-    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], rowId: "token:context-maximum", label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" }, cells: [{ ...matrixResult.rows[0]!.cells[0]!, normalizedIntensity: 0.1 }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("normalizedIntensity");
-    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], rowId: "token:context-maximum", label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" }, cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, formattedValue: "50%", valueState: "unavailable", applicableZero: false, normalizedIntensity: null }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("percentage");
-    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...matrixResult.rows[0], rowId: "token:context-maximum", label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" }, cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, formattedValue: "Unavailable", valueState: "unavailable", applicableZero: false, normalizedIntensity: null, supportingText: "50%" }] }], totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("percentage");
-    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[1], hasDetail: true }] }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("eventId");
-    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[0], durationMs: 1.5 }] }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("non-negative integer");
-    expect(() => parseHeatmapResultDto({ ...evidenceResult, value: 0, formattedValue: "0", valueState: "derived", applicableZero: false }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("complete zero");
-    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[1], value: 1 }] }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("null when unavailable");
-    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [...evidenceResult.evidenceItems].reverse() }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("chronological");
+    const contextRow = { ...matrixResult.rows[0], rowId: "token:context-maximum", rowKey: "context_maximum", rowOrderIndex: 0, label: "Context size (max)", scale: { availability: "unavailable", reason: "context_capacity_unavailable" } as const };
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...contextRow, cells: [{ ...matrixResult.rows[0]!.cells[0]!, normalizedIntensity: 0.1 }] }], omittedRowCount: 7, totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("normalizedIntensity");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...contextRow, cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, formattedValue: "50%", valueState: "unavailable", applicableZero: false, normalizedIntensity: null }] }], omittedRowCount: 7, totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("percentage");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, rows: [{ ...contextRow, cells: [{ ...matrixResult.rows[0]!.cells[0]!, value: null, formattedValue: "Unavailable", valueState: "unavailable", applicableZero: false, normalizedIntensity: null, supportingText: "50%" }] }], omittedRowCount: 7, totalCellCount: 1 }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("percentage");
+    const evidenceBinding = { ...evidenceRequest, revisionId: "revision-1", rowKey: "context_maximum", rowOrderIndex: 6 } as const;
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, rowKey: "context_average" }, evidenceBinding)).toThrow("rowKey");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, rowOrderIndex: 5 }, evidenceBinding)).toThrow("rowOrderIndex");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[1], hasDetail: true }] }, evidenceBinding)).toThrow("eventId");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[0], durationMs: 1.5 }] }, evidenceBinding)).toThrow("non-negative integer");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, value: 0, formattedValue: "0", valueState: "derived", applicableZero: false }, evidenceBinding)).toThrow("complete zero");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [{ ...evidenceResult.evidenceItems[1], value: 1 }] }, evidenceBinding)).toThrow("null when unavailable");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems: [...evidenceResult.evidenceItems].reverse() }, evidenceBinding)).toThrow("chronological");
+  });
+
+  it("correlates scale basis to semantic row keys without reading labels or opaque IDs", () => {
+    const rows = emptyTokenRows();
+    const base = { ...matrixResult, rows, omittedRowCount: 0, totalCellCount: 0 };
+    expect(parseHeatmapResultDto(base, { ...matrixRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    expect(() => parseHeatmapResultDto({ ...base, rows: rows.map((row, index) => index === 0 ? { ...row, scale: { availability: "available", minimum: 0, maximum: 1, basis: "context_window_capacity" } } : row) }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("scale basis");
+    expect(() => parseHeatmapResultDto({ ...base, rows: rows.map((row, index) => index === 5 ? { ...row, scale: { availability: "available", minimum: 0, maximum: 1, basis: "visible_row_maximum" } } : row) }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("scale basis");
+  });
+
+  it("validates service order from rowKey and rowOrderIndex without sorting", () => {
+    const tokenRows = emptyTokenRows();
+    const tokenBase = { ...matrixResult, rows: tokenRows, omittedRowCount: 0, totalCellCount: 0 };
+    expect(() => parseHeatmapResultDto({ ...tokenBase, rows: tokenRows.map((row, index) => index === 0 ? { ...row, rowKey: "cached_input_tokens" } : index === 1 ? { ...row, rowKey: "uncached_input_tokens" } : row) }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("exact contract order");
+    expect(() => parseHeatmapResultDto({ ...tokenBase, rows: tokenRows.map((row, index) => index === 1 ? { ...row, rowOrderIndex: 0 } : row) }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("contiguous");
+    expect(() => parseHeatmapResultDto({ ...tokenBase, rows: tokenRows.map((row, index) => index === 1 ? { ...row, rowId: tokenRows[0]!.rowId } : row) }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("duplicate row identity");
+
+    const wallRequest = { ...matrixRequest, mode: "wall_time" as const };
+    const wallRows = ["model_inference", "tool_execution", "runtime:alpha", "runtime:zeta"].map((rowKey, rowOrderIndex) => ({ ...tokenRows[0]!, rowId: `wall-${rowOrderIndex}`, rowKey, rowOrderIndex, rowKind: "runtime_state" as const }));
+    const wallBase = { ...matrixResult, mode: "wall_time", rowOrder: "runtime_state_contract", rows: wallRows, omittedRowCount: 0, totalCellCount: 0 };
+    expect(parseHeatmapResultDto(wallBase, { ...wallRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    expect(() => parseHeatmapResultDto({ ...wallBase, rows: [wallRows[1], wallRows[0], wallRows[2], wallRows[3]].map((row, rowOrderIndex) => ({ ...row!, rowOrderIndex })) }, { ...wallRequest, revisionId: "revision-1" })).toThrow("runtime rows");
+    expect(() => parseHeatmapResultDto({ ...wallBase, rows: [wallRows[0], wallRows[1], wallRows[3], wallRows[2]].map((row, rowOrderIndex) => ({ ...row!, rowOrderIndex })) }, { ...wallRequest, revisionId: "revision-1" })).toThrow("ascending");
+
+    const modelRequest = { ...matrixRequest, mode: "models" as const };
+    const modelRows = ["model:0123456789abcdef01234567", "model:89abcdef0123456701234567", "cost"].map((rowKey, rowOrderIndex) => ({ ...tokenRows[0]!, rowId: `model-${rowOrderIndex}`, rowKey, rowOrderIndex, rowKind: rowKey === "cost" ? "cost" as const : "model" as const }));
+    const modelBase = { ...matrixResult, mode: "models", rowOrder: "model_first_occurrence_then_cost", rows: modelRows, omittedRowCount: 0, totalCellCount: 0 };
+    expect(parseHeatmapResultDto(modelBase, { ...modelRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    expect(() => parseHeatmapResultDto({ ...modelBase, rows: [modelRows[0], modelRows[2], modelRows[1]].map((row, rowOrderIndex) => ({ ...row!, rowOrderIndex })) }, { ...modelRequest, revisionId: "revision-1" })).toThrow("Cost row");
+  });
+
+  it("enforces escaped-content UTF-8 byte limits and the transport record bound", () => {
+    const escaped = (bytes: number) => "\"".repeat(bytes / 2);
+    const evidenceBinding = { ...evidenceRequest, revisionId: "revision-1", rowKey: "context_maximum", rowOrderIndex: 6 } as const;
+    const boundedMatrix = {
+      ...matrixResult,
+      rows: [{
+        ...matrixResult.rows[0],
+        label: escaped(256),
+        cells: [{ ...matrixResult.rows[0]!.cells[0]!, formattedValue: escaped(64), supportingText: escaped(80) }],
+      }],
+      totalCellCount: 1,
+      provenance: Array.from({ length: 32 }, () => escaped(256)),
+    };
+    expect(parseHeatmapResultDto(boundedMatrix, { ...matrixRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    expect(() => parseHeatmapResultDto({ ...boundedMatrix, rows: [{ ...boundedMatrix.rows[0]!, label: `${escaped(256)}a` }] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("256-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedMatrix, rows: [{ ...boundedMatrix.rows[0]!, cells: [{ ...boundedMatrix.rows[0]!.cells[0]!, formattedValue: `${escaped(64)}a` }] }] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("64-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedMatrix, rows: [{ ...boundedMatrix.rows[0]!, cells: [{ ...boundedMatrix.rows[0]!.cells[0]!, supportingText: `${escaped(80)}a` }] }] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("80-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedMatrix, provenance: [...boundedMatrix.provenance, "extra"] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("32-item");
+    expect(() => parseHeatmapResultDto({ ...boundedMatrix, provenance: [`${escaped(256)}a`] }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("256-byte");
+
+    const boundedEvidence = {
+      ...evidenceResult,
+      rowLabel: escaped(256),
+      formattedValue: escaped(64),
+      evidenceItems: [{ ...evidenceResult.evidenceItems[0]!, label: escaped(256), formattedValue: escaped(64), preview: escaped(4_096) }],
+      provenance: Array.from({ length: 32 }, () => escaped(256)),
+    };
+    expect(parseHeatmapResultDto(boundedEvidence, evidenceBinding).queryKind).toBe("cell_evidence");
+    expect(() => parseHeatmapResultDto({ ...boundedEvidence, rowLabel: `${escaped(256)}a` }, evidenceBinding)).toThrow("256-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedEvidence, formattedValue: `${escaped(64)}a` }, evidenceBinding)).toThrow("64-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedEvidence, evidenceItems: [{ ...boundedEvidence.evidenceItems[0]!, label: `${escaped(256)}a` }] }, evidenceBinding)).toThrow("256-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedEvidence, evidenceItems: [{ ...boundedEvidence.evidenceItems[0]!, formattedValue: `${escaped(64)}a` }] }, evidenceBinding)).toThrow("64-byte");
+    expect(() => parseHeatmapResultDto({ ...boundedEvidence, evidenceItems: [{ ...boundedEvidence.evidenceItems[0]!, preview: `${escaped(4_096)}a` }] }, evidenceBinding)).toThrow("4096-byte");
+    expect(() => parseHeatmapResultDto({ ...matrixResult, oversized: "x".repeat(1_048_576) }, { ...matrixRequest, revisionId: "revision-1" })).toThrow("transport record bound");
   });
 
   it("accepts exactly 2,000 matrix cells and 100 evidence items, then rejects one more", () => {
@@ -323,8 +408,9 @@ describe("heatmap, detail, export, and progress contracts", () => {
     expect(() => parseHeatmapResultDto({ ...largeResult, totalCellCount: 2_001, rows: [{ ...largeResult.rows[0], cells: boundedCells }] }, { ...largeRequest, revisionId: "revision-1" })).toThrow("2,000");
 
     const evidenceItems = Array.from({ length: 101 }, (_, index) => ({ ...evidenceResult.evidenceItems[0], eventId: `event-${index}`, occurredAt: new Date(Date.parse(evidenceRequest.periodStartTime) + index * 1_000).toISOString() }));
-    expect(parseHeatmapResultDto({ ...evidenceResult, evidenceItems: evidenceItems.slice(0, 100) }, { ...evidenceRequest, revisionId: "revision-1" }).queryKind).toBe("cell_evidence");
-    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems }, { ...evidenceRequest, revisionId: "revision-1" })).toThrow("100");
+    const evidenceBinding = { ...evidenceRequest, revisionId: "revision-1", rowKey: "context_maximum", rowOrderIndex: 6 } as const;
+    expect(parseHeatmapResultDto({ ...evidenceResult, evidenceItems: evidenceItems.slice(0, 100) }, evidenceBinding).queryKind).toBe("cell_evidence");
+    expect(() => parseHeatmapResultDto({ ...evidenceResult, evidenceItems }, evidenceBinding)).toThrow("100");
   });
 
   it("rejects export paths, progress mismatch, and disclosure overflow", () => {

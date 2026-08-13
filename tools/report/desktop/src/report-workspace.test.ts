@@ -306,6 +306,8 @@ describe("heatmap bounds", () => {
   it("accepts synchronized evidence only for the exact selected matrix cell", () => {
     const selection = {
       rowId: "row-1",
+      rowKey: "uncached_input_tokens",
+      rowOrderIndex: 0,
       rowLabel: "Uncached input",
       periodStartTime: completeCell.startTime,
       periodEndTime: completeCell.endTime,
@@ -321,6 +323,8 @@ describe("heatmap bounds", () => {
       queryKind: "cell_evidence" as const,
       mode: "tokens" as const,
       rowId: selection.rowId,
+      rowKey: selection.rowKey,
+      rowOrderIndex: selection.rowOrderIndex,
       rowLabel: selection.rowLabel,
       periodStartTime: selection.periodStartTime,
       periodEndTime: selection.periodEndTime,
@@ -343,6 +347,8 @@ describe("heatmap bounds", () => {
       queryKind: "cell_evidence" as const,
       mode: "tokens" as const,
       rowId: "row-1",
+      rowKey: "uncached_input_tokens",
+      rowOrderIndex: 0,
       rowLabel: "Uncached input",
       periodStartTime: completeCell.startTime,
       periodEndTime: completeCell.endTime,
