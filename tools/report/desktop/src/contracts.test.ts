@@ -160,6 +160,36 @@ describe("paged workspace contracts", () => {
     expect(parseCoordinationPageDto(page("query_coordination", coordinationFilters, coordinationSort, [{ coordinationId: "coordination-1", occurredAt: "2026-08-12T12:00:00Z", workItemId: "item-1", delegatedRootId: null, agentId: "agent-1", operation: "claim", label: "Claimed", evidence: "inferred", eventId: "event-1" }]), { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_coordination", filters: coordinationFilters, sort: coordinationSort }).items[0]?.evidence).toBe("inferred");
   });
 
+  it("accepts reordered turn filter and sort object keys from native serialization", () => {
+    const reorderedFilters = { state: null, agentId: null };
+    const reorderedSort = { tieBreakDirection: "ascending", tieBreakKey: "turn_id", direction: "ascending", key: "started_at" };
+    const result = parseTurnPageDto(
+      page("list_turns", reorderedFilters, reorderedSort, [{ turnId: "turn-1", agentId: "agent-1", startedAt: "2026-08-12T12:00:00Z", endedAt: null, state: "running", eventCount: 2, summary: null }]),
+      { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_turns", filters: turnFilters, sort: turnSort },
+    );
+    expect(result.appliedFilters).toBe(turnFilters);
+    expect(result.appliedSort).toBe(turnSort);
+  });
+
+  it("accepts reordered event metadata while retaining exact array order and value types", () => {
+    const reorderedFilters = { toTime: null, fromTime: null, kind: null, turnId: null, agentId: null };
+    const reorderedSort = { tieBreakDirection: "ascending", tieBreakKey: "event_id", direction: "ascending", key: "occurred_at" };
+    expect(parseEventPageDto(
+      page("list_events", reorderedFilters, reorderedSort, []),
+      { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_events", filters: eventFilters, sort: eventSort },
+    ).items).toEqual([]);
+
+    const orderedSequenceFilters: SequenceFiltersDto = { ...sequenceFilters, eventKinds: ["message", "tool"] };
+    expect(() => parseSequencePageDto(
+      { page: page("query_sequence", { ...orderedSequenceFilters, eventKinds: ["tool", "message"] }, sequenceSort, []), groups: [] },
+      { snapshotId: "snapshot-1", revision: "revision-1", operation: "query_sequence", filters: orderedSequenceFilters, sort: sequenceSort },
+    )).toThrow("applied metadata");
+    expect(() => parseTurnPageDto(
+      page("list_turns", { state: null, agentId: "null" }, turnSort, []),
+      { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_turns", filters: turnFilters, sort: turnSort },
+    )).toThrow("applied metadata");
+  });
+
   it("rejects response binding mismatch, oversized pages, chronology, and hierarchy defects", () => {
     expect(() => parseAgentPageDto(page("list_agents", { ...agentFilters, query: "changed" }, agentSort, []), { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_agents", filters: agentFilters, sort: agentSort })).toThrow("applied metadata");
     expect(() => parseAgentPageDto({ ...page("list_agents", agentFilters, agentSort, []), pageSize: 501 }, { snapshotId: "snapshot-1", revision: "revision-1", operation: "list_agents", filters: agentFilters, sort: agentSort })).toThrow("outside 1 through 500");

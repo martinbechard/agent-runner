@@ -615,8 +615,33 @@ function oneOf<T extends string>(value: unknown, values: readonly T[], label: st
   return value as T;
 }
 
-function deepEqual(left: unknown, right: unknown): boolean {
-  return JSON.stringify(left) === JSON.stringify(right);
+const MAX_STRUCTURAL_EQUALITY_DEPTH = 16;
+const MAX_STRUCTURAL_EQUALITY_NODES = 1_024;
+
+function boundedStructuralEqual(left: unknown, right: unknown): boolean {
+  let remainingNodes = MAX_STRUCTURAL_EQUALITY_NODES;
+
+  function compare(leftValue: unknown, rightValue: unknown, depth: number): boolean {
+    remainingNodes -= 1;
+    if (remainingNodes < 0 || depth > MAX_STRUCTURAL_EQUALITY_DEPTH) return false;
+    if (Object.is(leftValue, rightValue)) return true;
+    if (typeof leftValue !== typeof rightValue || leftValue === null || rightValue === null) return false;
+    if (Array.isArray(leftValue) || Array.isArray(rightValue)) {
+      if (!Array.isArray(leftValue) || !Array.isArray(rightValue) || leftValue.length !== rightValue.length) return false;
+      for (let index = 0; index < leftValue.length; index += 1) {
+        if ((index in leftValue) !== (index in rightValue) || !compare(leftValue[index], rightValue[index], depth + 1)) return false;
+      }
+      return true;
+    }
+    if (!isRecord(leftValue) || !isRecord(rightValue)) return false;
+    if (Object.prototype.toString.call(leftValue) !== Object.prototype.toString.call(rightValue)) return false;
+    const leftKeys = Object.keys(leftValue);
+    const rightKeys = Object.keys(rightValue);
+    if (leftKeys.length !== rightKeys.length) return false;
+    return leftKeys.every((key) => Object.hasOwn(rightValue, key) && compare(leftValue[key], rightValue[key], depth + 1));
+  }
+
+  return compare(left, right, 0);
 }
 
 function parseNullableOpaque(value: unknown, key: string, source: Record<string, unknown>, label: string): string | null {
@@ -853,7 +878,7 @@ function parsePageBase<F, S, O extends CursorPageOperation, T>(value: unknown, e
   scanBoundary(value);
   const result = record(value, `${expected.operation} page`);
   if (result.snapshotId !== expected.snapshotId || result.revision !== expected.revision || result.operation !== expected.operation) throw new Error(`${expected.operation} page binding does not match the active request`);
-  if (!deepEqual(result.appliedFilters, expected.filters) || !deepEqual(result.appliedSort, expected.sort)) throw new Error(`${expected.operation} page applied metadata does not match the active request`);
+  if (!boundedStructuralEqual(result.appliedFilters, expected.filters) || !boundedStructuralEqual(result.appliedSort, expected.sort)) throw new Error(`${expected.operation} page applied metadata does not match the active request`);
   const pageSize = count(result, "pageSize", `${expected.operation} page`);
   if (pageSize < 1 || pageSize > MAX_PAGE_SIZE) throw new Error(`${expected.operation} page.pageSize is outside 1 through 500`);
   if (!Array.isArray(result.items) || result.items.length > pageSize) throw new Error(`${expected.operation} page.items exceeds pageSize`);
