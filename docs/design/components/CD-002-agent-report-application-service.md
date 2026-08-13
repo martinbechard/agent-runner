@@ -28,7 +28,7 @@ The module does not own normalized-cache schema or transactions, worker transpor
 
 The initial dynamic scope is Codex-only. The Tauri workspace, explicit CLI streamlined export, and MCP snapshot tools use the same service semantics. The service contract includes the complete Workspace filter, sort, summary, Heatmap matrix, selected-cell evidence, sequence, coordination, detail, refresh, close, and streamlined export semantics. The current classic CLI path and MCP `generate_report` remain adapter-and-renderer compatibility paths outside this service export operation. MCP forensic operations do not require export.
 
-The Heatmap uses one additive, discriminated `query_snapshot_time_range` operation family. A `matrix` request returns only matrix data. A `cell_evidence` request returns only the selected row-period evidence ledger. Both variants derive their `snapshot_id` and `revision_id` from the same immutable read lease and use one shared pure semantic calculation over the lease-bound parsed run.
+The Heatmap uses one additive, discriminated `query_snapshot_time_range` operation family. A `matrix` request returns only matrix data. A `cell_evidence` request returns only the selected row-period evidence ledger. Both variants derive their `snapshot_id` and `revision_id` from the same retained snapshot-revision handle and use one shared pure semantic calculation over its parsed run.
 
 This design describes intended behavior. Its design mode is **PLANNED_DEVELOPMENT**.
 
@@ -118,7 +118,7 @@ The latest meaningful source review is 2026-08-13. The configured terminology sn
 | FR-001 FR-02; HLD OP-17 | INTENDED_BEHAVIOR | `open_snapshot` consumes an accepted preflight binding and returns one coherent opaque snapshot | `OpenSnapshotRequest`, `SnapshotMetadata`; `REPORT_SCOPE_CONFLICT` on changed source | DEFINED | Normalization and atomic revision publication belong to Core and Event Repository | Open, reuse, stale preflight, privacy, and cancellation tests |
 | FR-001 FR-03; HLD OP-18 | INTENDED_BEHAVIOR | `get_summary` returns bounded goal, state, scope, metrics, provenance, warnings, and recent activity | `SummaryResult`; query guard | DEFINED | Summary calculations come from the query dependency; UI rendering is CD-005 | Bounded summary and privacy tests |
 | FR-001 FR-03; HLD OP-19 through OP-21 | INTENDED_BEHAVIOR | Agent, turn, and event lists use stable operation-specific order, opaque bound cursors, default 100, and accepted page sizes 1 through 500 | Three list request types, three row types, `PageResult`, cursor codec | DEFINED | Virtualization and presentation sort state belong to CD-005 | Page boundaries, stable order, cursor mismatch, and reload tests |
-| FR-001 HM-F01 through HM-F15; accepted JFP-HM-01 through JFP-HM-03; HLD-003 DEC-05 and DEC-06 | INTENDED_BEHAVIOR | `query_snapshot_time_range` is one discriminated `matrix|cell_evidence` family. It returns exact-revision classic Heatmap semantics, distinct evidence states, a true available/unavailable scale union, bounded lazy evidence, and supported-resolution coarsening. | `HeatmapSnapshotQueryRequest`, `HeatmapSnapshotQueryResult`, shared pure semantic helper, immutable read-lease identity, and Heatmap bounds | DEFINED | Retained MCP `query_time_range` remains unchanged. CD-003 stores existing normalized list/detail data but does not migrate Heatmap facets. CD-005 owns interaction and presentation. | HM-F01 through HM-F15 facet tests, JFP-HM-01 through JFP-HM-03 review, correlation, privacy, payload, and retained-schema tests |
+| FR-001 HM-F01 through HM-F15; accepted JFP-HM-01 through JFP-HM-03; HLD-003 DEC-05 and DEC-06 | INTENDED_BEHAVIOR | `query_snapshot_time_range` is one discriminated `matrix|cell_evidence` family. It returns exact-revision classic Heatmap semantics, distinct evidence states, a true available/unavailable scale union, bounded lazy evidence, and supported-resolution coarsening. | `HeatmapSnapshotQueryRequest`, `HeatmapSnapshotQueryResult`, shared pure semantic helper, immutable retained-handle identity, and Heatmap bounds | DEFINED | Retained MCP `query_time_range` remains unchanged. CD-003 stores existing normalized list/detail data but does not migrate Heatmap facets. CD-005 owns interaction and presentation. | HM-F01 through HM-F15 facet tests, JFP-HM-01 through JFP-HM-03 review, correlation, privacy, payload, and retained-schema tests |
 | FR-001 FR-03; HLD OP-23 | INTENDED_BEHAVIOR | Sequence queries return bounded delegation and communication rows for an exact snapshot, focus, filter, grouping, and cursor | `SequenceQueryRequest`, `SequenceRow`, `PageResult` | DEFINED | Sequence rendering belongs to CD-005 and CD-006 | Sequence filtering, grouping, cursor, and privacy tests |
 | FR-001 FR-03; HLD OP-24 | INTENDED_BEHAVIOR | Coordination queries return evidence-derived rows and label prose-derived decisions as inferred | `CoordinationQueryRequest`, `CoordinationRow`; evidence invariant | DEFINED | Visual grouping belongs to CD-005 | Work-item filter, agent filter, inference-label, and cursor tests |
 | FR-001 FR-03; HLD OP-25 | INTENDED_BEHAVIOR | Event detail is lazy, bounded, sanitized, and returns event-not-found without closing the snapshot | `EventDetailsRequest`, `EventDetail`; `REPORT_EVENT_NOT_FOUND` | DEFINED | Disclosure rendering belongs to CD-005; raw normalization belongs to Core | Malformed, stale, absent, bounded, ciphertext, and redaction tests |
@@ -847,7 +847,9 @@ def _map_dependency_failure(operation_id: str, failure: DependencyFailure) -> Re
 def _safe_internal_error(operation_id: str) -> ReportError: raise NotImplementedError
 ```
 
-`_acquire_read` runs under the service condition lock. It requires status `ready` and no active mutation. It captures immutable `snapshot_id`, `revision_id`, and `read_handle` values and increments `active_readers` before returning the lease. A result uses only those captured values. It never reads correlation from a mutable pending handle. `_ReadLease.__exit__` decrements the count in a `finally` path and notifies the condition.
+`_SnapshotState.read_handle` is one retained immutable snapshot-revision handle. The service creates it during `open_snapshot`, retains it across repeated queries, and releases it only after replacement, `close_snapshot`, or service shutdown.
+
+`_ReadLease` is a separate per-operation reader guard. `_acquire_read` runs under the service condition lock. It requires status `ready` and no active mutation. It captures the retained handle, increments `active_readers`, and returns the guard. A result uses only the captured handle values. `_ReadLease.__exit__` decrements `active_readers` and notifies the condition. It never calls `EventRepositoryPort.release_read`.
 
 `_acquire_mutation` runs under the same lock. Refresh, export, and close use `require_no_readers=True`. They return `REPORT_SNAPSHOT_CONFLICT` without side effects when a reader or mutation exists. `_MutationLease.__exit__` clears `mutation_active`, restores `ready` unless close committed, and notifies the condition.
 
@@ -991,7 +993,7 @@ class ApplicationServiceDependencies:
 | --- | --- | --- |
 | `DiscoveryPort` | `preflight(scope: ReportScope, roots: Sequence[Path], cancellation: CancellationToken, progress: ProgressSink | None) -> DiscoveredScope`; `recheck(scope: ReportScope, roots: Sequence[Path], cancellation: CancellationToken, progress: ProgressSink | None) -> DiscoveredScope` | Sole Rust discovery adapter; returns bounded identity, counts, and source revision without transcript bodies |
 | `NormalizationPort` | `normalize(discovered: DiscoveredScope, parser_version: str, pricing_digest: str, formatter_digest: str, cancellation: CancellationToken, progress: ProgressSink | None) -> NormalizedRevision` | Python Core; preserves privacy and evidence semantics before repository publication |
-| `EventRepositoryPort` | `known_event_count(source_revision: str) -> int | None`; `reuse_or_publish(revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision`; `open_read(snapshot_id: str, revision_id: str, run: CodexRunMetrics) -> SnapshotReadHandle`; `release_read(handle: SnapshotReadHandle) -> None` | CD-003 owns schema, migration, WAL, transactions, invalidation, physical paths, and binding validation. The lease-bound parsed run is transient and does not add a schema field. |
+| `EventRepositoryPort` | `known_event_count(source_revision: str) -> int | None`; `reuse_or_publish(revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision`; `open_read(snapshot_id: str, revision_id: str, run: CodexRunMetrics) -> SnapshotReadHandle`; `release_read(handle: SnapshotReadHandle) -> None` | CD-003 owns schema, migration, WAL, transactions, invalidation, physical paths, and binding validation. `open_read` creates one retained snapshot-revision handle. `release_read` ends that retained handle once after replacement or close, not after each query. |
 | `QueryPort` | `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, and `get_event_details` with the corresponding request/result types and a `SnapshotReadHandle` first parameter | Existing Python report semantics plus one shared pure classic-Heatmap semantic helper. It returns privacy-bounded values only. |
 | `ExportRendererPort` | `stage(handle: SnapshotReadHandle, request: ResolvedExportRequest, cancellation: CancellationToken, progress: ProgressSink | None) -> StagedExport` | CD-006 receives a non-optional `summary|directory` mode and owns content, size caps, omissions, manifest layout, staging cleanup, and rendering |
 | `PublicationPort` | `publish(staged: StagedExport, target: Path, replace: bool, cancellation: CancellationToken) -> ExportResult`; `discard(staged: StagedExport) -> None` | Surface adapter validates output authority and owns atomic destination replacement |
@@ -1005,10 +1007,10 @@ The port failure sets are exhaustive:
 | --- | --- | --- | --- |
 | `DiscoveryPort.preflight`, `recheck` | `DiscoveryFailure` | `not_found -> REPORT_NOT_FOUND`; `invalid_root -> REPORT_INVALID_REQUEST`; `protocol|read -> REPORT_DISCOVERY_FAILED`; `cancelled -> REPORT_CANCELLED` | Use typed `recoverable`; no state publication; log operation, dependency `discovery`, and kind only |
 | `NormalizationPort.normalize` | `NormalizationFailure` | `source_conflict -> REPORT_SCOPE_CONFLICT`; `parse -> REPORT_GENERATION_FAILED`; `privacy -> REPORT_PRIVACY_FAILED`; `cancelled -> REPORT_CANCELLED` | A source conflict sets `preflight_required=true` and carries only `current_source_revision`; no repository publication |
-| `EventRepositoryPort.known_event_count`, `open_read` | `RepositoryFailure` | `schema_newer|binding_conflict -> REPORT_SNAPSHOT_CONFLICT`; `read|publish -> REPORT_GENERATION_FAILED`; `cancelled -> REPORT_CANCELLED` | Preserve current snapshot; release any newly opened handle in the caller cleanup path; log dependency `repository` and kind only |
+| `EventRepositoryPort.known_event_count`, `open_read` | `RepositoryFailure` | `schema_newer|binding_conflict -> REPORT_SNAPSHOT_CONFLICT`; `read|publish -> REPORT_GENERATION_FAILED`; `cancelled -> REPORT_CANCELLED` | Preserve the current retained handle. Release a newly opened replacement only if publication or swap fails; log dependency `repository` and kind only. |
 | `EventRepositoryPort.reuse_or_publish` | `RepositoryFailure` | `schema_newer|binding_conflict -> REPORT_SCOPE_CONFLICT`; `read|publish -> REPORT_GENERATION_FAILED`; `cancelled -> REPORT_CANCELLED` | Binding conflict sets `preflight_required=true` and may carry only `current_source_revision`; no service binding swap |
-| `EventRepositoryPort.release_read` | `RepositoryFailure` | Every kind becomes `REPORT_INTERNAL_ERROR` for an operation result or a bounded shutdown log after the result | Service marks the handle release attempted exactly once; no retry and no raw exception disclosure |
-| Every `QueryPort` operation | `QueryFailure` | `invalid_request -> REPORT_INVALID_REQUEST`; `event_not_found -> REPORT_EVENT_NOT_FOUND`; `read -> REPORT_GENERATION_FAILED`; `privacy -> REPORT_PRIVACY_FAILED`; `cancelled -> REPORT_CANCELLED` | Read lease releases in `finally`; snapshot remains open; log dependency `query` and kind only |
+| `EventRepositoryPort.release_read` | `RepositoryFailure` | Every kind becomes `REPORT_INTERNAL_ERROR` for refresh/close or a bounded shutdown log | Service attempts release exactly once per retained handle after replacement, close, or shutdown; ordinary query cleanup never calls it. |
+| Every `QueryPort` operation | `QueryFailure` | `invalid_request -> REPORT_INVALID_REQUEST`; `event_not_found -> REPORT_EVENT_NOT_FOUND`; `read -> REPORT_GENERATION_FAILED`; `privacy -> REPORT_PRIVACY_FAILED`; `cancelled -> REPORT_CANCELLED` | Per-operation reader guard exits in `finally` and decrements `active_readers`; the retained handle and snapshot remain open; log dependency `query` and kind only |
 | `ExportRendererPort.stage` | `ExportRenderFailure` | `invalid_request -> REPORT_INVALID_REQUEST`; `privacy -> REPORT_PRIVACY_FAILED`; `render -> REPORT_EXPORT_FAILED`; `cancelled -> REPORT_CANCELLED` | No publication; discard a returned stage if later validation fails; preserve snapshot and prior target |
 | `PublicationPort.publish` | `PublicationFailure` | `unauthorized_target|replace_required -> REPORT_INVALID_REQUEST`; `write -> REPORT_WRITE_FAILED`; `cancelled -> REPORT_CANCELLED` | Attempt `discard` once; preserve prior target; log dependency `publisher` and kind only |
 | `PublicationPort.discard` | `PublicationFailure` | Every kind is cleanup-only and does not replace the primary operation error | Log operation, dependency `publisher`, kind, and `cleanup=true`; never disclose staging identity or path |
@@ -1017,7 +1019,7 @@ The port failure sets are exhaustive:
 
 Unexpected exceptions from any port bypass typed fields. `_safe_internal_error` returns `REPORT_INTERNAL_ERROR` with the fixed message `The report operation failed unexpectedly.` The logger receives only the operation ID, dependency name, and exception class name.
 
-`DiscoveredScope`, `NormalizedRevision`, `PublishedRevision`, `SnapshotReadHandle`, and `StagedExport` are application-facing protocols. They expose only the identifiers, counts, versions, and release methods required above. `CodexRunMetrics` is the Core-owned parsed-run model whose classic semantic evidence is established by committed `a8eef62` `run-timeline.py`; CD-002 consumes the lease-bound value and does not redefine or persist it. Concrete storage and rendering data remain dependency-owned.
+`DiscoveredScope`, `NormalizedRevision`, `PublishedRevision`, `SnapshotReadHandle`, and `StagedExport` are application-facing protocols. They expose only the identifiers, counts, versions, and release methods required above. `CodexRunMetrics` is the Core-owned parsed-run model whose classic semantic evidence is established by committed `a8eef62` `run-timeline.py`; CD-002 consumes the retained-handle-bound value and does not redefine or persist it. Concrete storage and rendering data remain dependency-owned.
 
 Their complete application-facing contracts are:
 
@@ -1133,11 +1135,11 @@ All operations are synchronous in Python. A worker or asynchronous adapter runs 
 | --- | --- | --- | --- | --- |
 | `preflight_report` | Authorized local caller; explicit `ReportScope`; root ID required; booleans are independent | Service validates protocol, operation ID, configured roots, and root ID. Discovery validates roots and protocol. Service owns `Preflighting`. | `PreflightResult`; bounded counts and warnings; no path or transcript body | Read-only discovery and known-event lookup. Completion is a signed opaque token. Invalid input, discovery failure, privacy failure, or cancellation creates no snapshot. |
 | `open_snapshot` | Authorized caller; exact `ReportScope` and opaque preflight token | Service verifies token integrity, explicit scope equality, versions, and current discovery revision. Service owns `Opening`. | `SnapshotMetadata`; immutable binding and no cache path | A scope or source mismatch returns `REPORT_SCOPE_CONFLICT` with current revision and `preflight_required=true`. Normalization precedes repository publication. Failure or cancellation publishes no partial revision or snapshot. |
-| `get_summary` | Snapshot holder; exact snapshot ID | Service acquires a read lease before it exposes the exact read handle. Query Port validates normalized data. | `SummaryResult`; exact revision, title, goal, state, scope label, observation, live state, range, grouped metrics, recent activity, and structured warnings | Read-only. The lease releases in `finally`. Close rejects while the lease exists. Missing or stale snapshot, cancellation, dependency failure, or privacy failure leaves snapshot open. |
+| `get_summary` | Snapshot holder; exact snapshot ID | Service acquires a per-operation reader guard before it exposes the retained snapshot-revision handle. Query Port validates normalized data. | `SummaryResult`; exact revision, title, goal, state, scope label, observation, live state, range, grouped metrics, recent activity, and structured warnings | Read-only. The guard decrements `active_readers` in `finally`; it does not release the retained handle. Close rejects while the guard exists. Missing or stale snapshot, cancellation, dependency failure, or privacy failure leaves snapshot open. |
 | `list_agents` | Snapshot holder; exact query/state filters, requested stable sort, opaque cursor, page size 1-500 | Service owns bounds, accepted sort keys, and cursor binding. Default sort is `last_activity_at descending, agent_id ascending`. | Canonical `PageResult[AgentRow, AgentFilters, AgentSort]`; exact revision, applied filter values, and applied sort values are explicit | Read-only. Malformed input is `REPORT_INVALID_REQUEST`; cross-operation, filter, sort, page-size, snapshot, or revision cursor mismatch is `REPORT_CURSOR_CONFLICT`. |
 | `list_turns` | Snapshot holder; exact agent/state filters, requested stable sort, cursor, page size 1-500 | Default sort is `started_at ascending, turn_id ascending`. Other rules match `list_agents`. | Canonical `PageResult[TurnRow, TurnFilters, TurnSort]` | Read-only; query error does not replace caller or service state. |
 | `list_events` | Snapshot holder; exact agent/turn/kind/time filters, requested stable sort, cursor, page size 1-500 | Default sort is `occurred_at ascending, event_id ascending`. Other rules match `list_agents`. | Canonical `PageResult[EventRow, EventFilters, EventSort]`; each row can carry a nullable snapshot-scoped opaque `source_key` | Read-only; cache path and raw record remain absent. Tauri alone projects `source_key` to `sourceRef`. |
-| `query_snapshot_time_range` | Snapshot holder; exact `matrix|cell_evidence` discriminator. Matrix selects an aware half-open range, one `wall_time|tokens|models` mode, a supported resolution, and the row maximum. Cell evidence selects one returned row and period in the same mode. | Service validates the exact variant, acquires one immutable read lease, and derives `snapshot_id`, `revision_id`, and semantic data from that lease. Matrix chooses the nearest supported coarser resolution and deterministically omits trailing rows when 2,000 cells cannot otherwise fit. Cell evidence has a fixed 100-item cap. | Discriminated `HeatmapMatrixResult|HeatmapCellEvidenceResult`. Matrix has rows and cells but no evidence ledger. Cell evidence has one chronological ledger but no matrix. Both include bounded provenance and exact raw nullable values, formatting, applicability, and evidence state. | Read-only. Matrix streams no previews or full details. Cell evidence retains the first 100 chronological safe items and counts all omitted matches. Each encoded result must remain below 1,048,576 bytes. Retained MCP `query_time_range` remains separate and unchanged. |
+| `query_snapshot_time_range` | Snapshot holder; exact `matrix|cell_evidence` discriminator. Matrix selects an aware half-open range, one `wall_time|tokens|models` mode, a supported resolution, and the row maximum. Cell evidence selects one returned row and period in the same mode. | Service validates the exact variant, acquires a per-operation reader guard over the retained immutable handle, and derives `snapshot_id`, `revision_id`, and semantic data from that handle. Matrix chooses the nearest supported coarser resolution and deterministically omits trailing rows when 2,000 cells cannot otherwise fit. Cell evidence has a fixed 100-item cap. | Discriminated `HeatmapMatrixResult|HeatmapCellEvidenceResult`. Matrix has rows and cells but no evidence ledger. Cell evidence has one chronological ledger but no matrix. Both include bounded provenance and exact raw nullable values, formatting, applicability, and evidence state. | Read-only. Guard cleanup decrements `active_readers` but retains the handle for later queries. Matrix streams no previews or full details. Cell evidence retains the first 100 chronological safe items and counts all omitted matches. Each encoded result must remain below 1,048,576 bytes. Retained MCP `query_time_range` remains separate and unchanged. |
 | `query_sequence` | Snapshot holder; exact focus, event kinds, `none|repeated_messages|delegation|agent` grouping, reasoning flag, requested chronological sort, cursor, and page size | Service binds cursor to every selector and supplies the group hierarchy. Default sort is `occurred_at ascending, sequence_id ascending`. | `SequenceResult`; canonical page metadata, groups, endpoints, repeat count, reasoning availability, evidence, and event selectors are explicit | Read-only. Invalid focus, grouping, hierarchy, cursor, or page uses structured request, contract, or cursor error. |
 | `query_coordination` | Snapshot holder; exact work-item, delegated-root, agent, operation, evidence filters, requested chronological sort, cursor, and page size | Service binds cursor to every selector. Default sort is `occurred_at ascending, coordination_id ascending`. | Canonical `PageResult[CoordinationRow, CoordinationFilters, CoordinationSort]`; grouping selectors, operation, event selector, and evidence are explicit | Read-only. A missing canonical work-item or delegated-root ID does not authorize invention; nullable IDs remain explicit. Prose-derived decisions have `evidence="inferred"`. |
 | `get_event_details` | Snapshot holder; exact deterministic opaque event ID | Service validates non-empty selectors. Query Port resolves only within the bound revision. | `EventDetail`; exact revision, title, optional summary, structured disclosures, evidence, provenance, and nullable opaque `source_key` | Read-only. Missing or stale event returns `REPORT_EVENT_NOT_FOUND`. The snapshot remains open. Tauri projects `source_key` to a webview `sourceRef`. |
@@ -1146,11 +1148,11 @@ All operations are synchronous in Python. A worker or asynchronous adapter runs 
 | `close_snapshot` | Snapshot holder; exact snapshot ID | Service acquires a close mutation lease only when `active_readers == 0` and no mutation exists. Otherwise it returns recoverable `REPORT_SNAPSHOT_CONFLICT` before removal. Service owns `SnapshotReady -> Closing -> Ready`. | `CloseSnapshotResult`; second close returns `closed=false` without error | Removes state and releases the handle exactly once after exclusive acquisition. It does not purge a cache or source. Unknown IDs are idempotent close results; malformed IDs are invalid requests. |
 | `close` | Composition root during shutdown | Service atomically rejects new leases, waits until every active reader and mutation drains, then removes states and releases handles exactly once | No return value | Idempotent. The caller requests cancellation before `close()` when bounded shutdown is required. The service does not terminate a worker process or purge derived data. |
 
-Every summary, list, time-range, sequence, coordination, and event-detail operation follows the same read-lease rule. No Query Port receives a handle before the count increments, and no close releases a handle before the count returns to zero.
+Every summary, list, Heatmap, sequence, coordination, and event-detail operation follows the same reader-guard rule. No Query Port receives the retained handle before `active_readers` increments. Query cleanup only decrements that count. Refresh or close releases a retained handle only after the count returns to zero.
 
 ### Heatmap Semantic Contract
 
-`query_snapshot_time_range` uses one pure semantic implementation for both result variants. The implementation reads only `SnapshotReadHandle.run` while the matching read lease is active. It does not reconstruct Heatmap meaning from normalized event-cache rows. It traverses agents and responses in stable snapshot source order and performs bounded streaming aggregation. Matrix processing does not create previews or event details. Cell-evidence processing retains only the first 100 chronological safe items while it counts later matches.
+`query_snapshot_time_range` uses one pure semantic implementation for both result variants. The implementation reads only `SnapshotReadHandle.run` while its per-operation reader guard is active. It does not reconstruct Heatmap meaning from normalized event-cache rows. Repeated queries can use the same retained handle. The helper traverses agents and responses in stable snapshot source order and performs bounded streaming aggregation. Matrix processing does not create previews or event details. Cell-evidence processing retains only the first 100 chronological safe items while it counts later matches.
 
 The mode rows and order are exact:
 
@@ -1205,7 +1207,7 @@ The service validates these constraints before the affected dependency call or s
 | Heatmap discriminator and mode | `query_kind` is exactly `matrix|cell_evidence`. `mode` is exactly `wall_time|tokens|models`. Fields from the other variant are forbidden. | The service rejects unknown, missing, or mixed variant fields before semantic aggregation. Dynamic queries reject the retained MCP atomic measures. |
 | Matrix selectors | Aware half-open `from_time|to_time`, `requested_resolution_minutes` in `1|5|15|30|60`, and `maximum_rows` from 1 through 200. | The result echoes the applied selectors, returns at most 2,000 cells, and uses only a supported actual resolution. |
 | Cell-evidence selectors | Opaque revision-bound `row_id` returned by the matrix; exact aware half-open `period_start_time|period_end_time` returned by the matrix; matching mode and snapshot. | Clients do not synthesize row IDs or periods. The evidence cap is fixed at 100 and is not a request field. A stale or mismatched selection fails instead of returning another cell's data. |
-| Heatmap result union | `query_kind` selects exactly one result shape. `snapshot_id` and `revision_id` equal the acquired read lease. Raw numeric fields and `normalized_intensity` are finite or null. Counts are nonnegative. Collections and provenance are bounded. | Matrix contains no evidence ledger or full detail. Cell evidence contains no matrix. Each serialized terminal result is less than 1,048,576 bytes and is never truncated. |
+| Heatmap result union | `query_kind` selects exactly one result shape. `snapshot_id` and `revision_id` equal the retained handle captured by the per-operation reader guard. Raw numeric fields and `normalized_intensity` are finite or null. Counts are nonnegative. Collections and provenance are bounded. | Matrix contains no evidence ledger or full detail. Cell evidence contains no matrix. Each serialized terminal result is less than 1,048,576 bytes and is never truncated. |
 | Heatmap scale | `available` requires finite numeric minimum and maximum plus `visible_row_maximum|context_window_capacity`. `unavailable` requires only `reason="context_capacity_unavailable"` and forbids basis or numeric scale fields. | Nullable or mixed cross-products are invalid. Unknown context capacity uses `unavailable`; `normalized_intensity` is null and no percentage or fallback scale is returned. |
 | Heatmap strings and provenance | `formatted_value` at most 64 UTF-8 bytes; row/evidence label at most 256; supporting text at most 96; nullable preview at most 4,096; at most 32 provenance items of 256 bytes each. | Overflow fails before a result is returned. The service does not truncate a semantic value, preview, or provenance item to satisfy the worker bound. |
 | `surface` | Required exact `tauri`, `cli`, or `mcp` | Unsupported values are invalid before rendering |
@@ -1288,7 +1290,7 @@ The MCP adapter registers these distinct snapshot tools: `preflight_report`, `op
 | MP-12 | Make `close_snapshot` reject active readers and make service `close()` drain leases after rejecting new work | HLD-003 requires coherent handle lifetime and allows the module to select concurrency internals | Gives interactive close a recoverable non-blocking result and gives composition-root shutdown deterministic ownership | Dev Documentation Writer within module lifecycle authority |
 | MP-13 | Require operation IDs to encode 96 cryptographically secure random bits as `op_` plus 24 lowercase hexadecimal characters. | Worker correlation, cancellation, and one-time output grants use the same identifier. | A predictable identifier cannot safely bind concurrent cancellation and publication authority. | Dev Architect accepted UI/service/worker reconciliation |
 | MP-14 | Return snapshot-scoped opaque `source_key` values from the service and native published targets from export; let Tauri project both through private registries. | Tauri owns native path authority, while the Worker must remain a generic service transport. | The split keeps paths out of the webview without teaching the generic Rust transport report semantics. | Dev Architect accepted UI/service/worker reconciliation |
-| MP-15 | Compute both Heatmap variants through one pure semantic helper over `SnapshotReadHandle.run`; do not add a second evidence operation or migrate the normalized event cache. | HLD-003 DEC-05 and DEC-06 plus PLAN-012 bind semantic evidence to one immutable parsed-run lease. | One calculation preserves matrix/evidence agreement, avoids semantic loss in schema-v1 rows, and keeps retained list/detail cache behavior stable. | Dev Architect accepted Heatmap reconciliation |
+| MP-15 | Compute both Heatmap variants through one pure semantic helper over `SnapshotReadHandle.run`; do not add a second evidence operation or migrate the normalized event cache. | HLD-003 DEC-05 and DEC-06 plus PLAN-012 bind semantic evidence to one immutable retained parsed-run handle. | One calculation preserves matrix/evidence agreement, avoids semantic loss in schema-v1 rows, and keeps retained list/detail cache behavior stable. | Dev Architect accepted Heatmap reconciliation |
 
 ## External And Asynchronous Effect Phases
 
@@ -1303,7 +1305,8 @@ The Python calls are synchronous, but discovery, normalization, repository publi
 | Refresh normalization and publication | Changed source revision | Current snapshot binding | Application Service | Application Service | Normalization and Event Repository Ports | New binding appears only after atomic publication; cancellation or failure retains old binding | Explicit retry; no partial swap | New `PublishedRevision`, then service binding swap | CR-08 through CR-10; INTENDED_BEHAVIOR |
 | Export lease and staging | Validated `export_snapshot` with no active reader or mutation | Snapshot revision and prior target | Caller | Application Service | Export Renderer Port | Lease conflict returns before staging; later progress may be visible; render failure returns no success and preserves target | Service requests staging discard; caller retries | Exclusive mutation lease, then `StagedExport` | CR-11; INTENDED_BEHAVIOR |
 | Export publication | Completed staging | Snapshot revision, prior target, staged artifact | Application Service | Application Service | Surface Publication Port | Success becomes visible after atomic replace; write or cancellation preserves prior target | Publisher removes or isolates staging | `ExportResult` | CR-12 and ARC-14; INTENDED_BEHAVIOR |
-| Query read lease | Validated snapshot query | Coherent repository revision and open snapshot | Caller | Application Service | Query Port | Result or structured error; close returns conflict while the lease exists | Lease releases in `finally`; caller retries close explicitly | Active-reader decrement under condition lock | HLD-003 CR-10; INTENDED_BEHAVIOR |
+| Query reader guard | Validated snapshot query | Coherent retained snapshot-revision handle | Caller | Application Service | Query Port | Result or structured error; close returns conflict while the guard exists | Guard decrements `active_readers` in `finally`; retained handle remains available for later queries | Active-reader decrement under condition lock | HLD-003 CR-10; INTENDED_BEHAVIOR |
+| Refresh handle swap | Changed revision is published and no reader remains | Current retained handle and new unopened replacement binding | Application Service | Application Service | Event Repository Port | The complete state swaps to the new retained handle; failure preserves the current handle | Release the old handle exactly once after the swap; release an uninstalled replacement once on failure | New state points only to the new handle | HLD-003 DEC-05 and CR-10; INTENDED_BEHAVIOR |
 | Close exclusivity | Validated `close_snapshot` | Coherent repository revision remains | Caller | Application Service | Application Service state owner | Active reader or mutation returns `REPORT_SNAPSHOT_CONFLICT`; exclusive close removes state | Repeated close is an idempotent no-op | Exclusive close lease | FR-001 Closed state; HLD-003 OP-30; INTENDED_BEHAVIOR |
 | Close handle release | Exclusive close lease and removed service state | Coherent repository revision remains | Application Service | Application Service | Event Repository Port | Handle becomes unavailable only after all readers have ended; derived data remains | No automatic retry of a failed release | One release attempt and `CloseSnapshotResult` | HLD-003 OP-30 and CR-10; INTENDED_BEHAVIOR |
 
@@ -1347,13 +1350,13 @@ class ApplicationService:
 - `_SnapshotState.mutation_active` permits at most one refresh, export, or close transition per snapshot.
 - `_token_codec: _OpaqueTokenCodec` holds one per-instance integrity key. It encodes preflight and cursor claims but stores no source content.
 
-`_SnapshotState` contains the exact fields declared in Runtime Path. A read lease owns one increment of `active_readers`. A mutation lease owns `mutation_active=True` and the matching status.
+`_SnapshotState` contains the exact fields declared in Runtime Path. It owns one retained `SnapshotReadHandle`. A `_ReadLease` is only a per-operation reader guard and owns one increment of `active_readers`. A mutation lease owns `mutation_active=True` and the matching status.
 
 Source JSONL and `state_5.sqlite` are authoritative. `PublishedRevision` is a derived coherent value owned by the repository. Service DTOs and cursors are transient derived values. The service persists none of them.
 
 A snapshot becomes stale only when an explicit refresh or a dependency conflict establishes changed source revisions. The service does not poll. A cursor is invalid when its integrity check fails or its snapshot, revision, operation, normalized filters, canonical sort, page size, or continuation binding differs.
 
-On query failure, the read lease still releases and the current snapshot survives. On refresh failure, the old `_SnapshotState` survives. On export failure, the snapshot and prior published target survive. A rejected close changes no state. No failed result replaces state or cache.
+On query failure, the reader guard still decrements `active_readers`, and the retained handle survives. On refresh failure, the old `_SnapshotState` and handle survive. On export failure, the snapshot and prior published target survive. A rejected close changes no state. No failed result replaces state or cache.
 
 ## Processing Rules
 
@@ -1382,22 +1385,22 @@ On query failure, the read lease still releases and the current snapshot survive
 
 1. The service validates filters, range, page size, and cursor syntax.
 2. `_acquire_read` resolves the exact open snapshot and increments its active-reader count under `_state_changed`.
-3. The service validates the cursor against the leased revision and selectors.
-4. The Query Port reads only the leased handle.
+3. The service validates the cursor against the retained handle's captured revision and selectors.
+4. The Query Port reads only the retained handle captured by the reader guard.
 5. The service verifies bounds, privacy, evidence labels, and absence of forbidden paths.
 6. A non-final page receives an opaque next cursor bound to all query facets.
-7. The service releases the read lease in `finally`, including on cancellation or failure.
+7. The service exits the reader guard in `finally`, including on cancellation or failure. This decrements `active_readers` and does not release the retained handle.
 8. The service returns the value without changing snapshot or repository state.
 
 ### Heatmap Matrix And Cell Evidence
 
 1. The service validates the request discriminator and only the fields for that variant.
-2. The service acquires one read lease and captures its immutable `snapshot_id`, `revision_id`, and parsed run.
+2. The service acquires one per-operation reader guard and captures the retained handle's immutable `snapshot_id`, `revision_id`, and parsed run.
 3. For `matrix`, the service selects the nearest supported resolution and ordered rows that fit 2,000 cells.
 4. The pure semantic helper streams intervals, responses, tools, usage, price evidence, and identity fallbacks from the parsed run.
 5. For `cell_evidence`, the same helper selects the returned row and period, retains 100 chronological safe items, and counts omissions.
 6. The service validates evidence states, raw nullable values, formatting, scale union, privacy, correlation, and the 1,048,576-byte encoded bound.
-7. The service releases the read lease in `finally` and returns exactly one discriminated result.
+7. The service exits the reader guard in `finally`, retains the handle for later queries, and returns exactly one discriminated result.
 
 If parsed-run evidence cannot distinguish applicable zero from missing timing, usage, price, coverage, or capacity, the operation stops. The design gap returns to Dev Architect. The implementation must not coerce absence to zero, query mutable pending state, or add an event-cache migration.
 
@@ -1409,8 +1412,8 @@ If parsed-run evidence cannot distinguish applicable zero from missing timing, u
 4. A changed source revision runs normalization and repository publication.
 5. The service opens the new read handle with the new published revision and its privacy-valid parsed run.
 6. The service atomically swaps the complete `_SnapshotState` binding.
-7. The service releases the old handle only after the swap and after its active read leases drain.
-8. Every error or cancellation retains the old state and releases the lease.
+7. Because refresh requires `active_readers == 0`, the service releases the old retained handle exactly once after the swap.
+8. Every error or cancellation retains the old state and exits the mutation lease.
 
 ### Export And Close
 
@@ -1418,7 +1421,7 @@ If parsed-run evidence cannot distinguish applicable zero from missing timing, u
 2. The operation acquires the exclusive mutation lease only when no reader exists and captures the exact read handle.
 3. The Export Renderer stages the non-optional `ResolvedExportRequest` from that handle.
 4. The Publication Port validates authority and atomically publishes the stage.
-5. The service returns success only after publication and releases the lease on every path.
+5. The service returns success only after publication and exits the mutation lease on every path.
 6. `close_snapshot` requests a close mutation lease with `require_no_readers=True`.
 7. An active reader or mutation returns `REPORT_SNAPSHOT_CONFLICT` before state removal.
 8. Exclusive close removes the state, releases its read handle exactly once, and leaves derived repository data intact.
@@ -1458,18 +1461,19 @@ sequenceDiagram
     Service-->>Caller: SnapshotMetadata
   end
   Caller->>Service: query_snapshot_time_range(matrix selectors)
-  Service->>Service: acquire read lease and increment active_readers
+  Service->>Service: guard retained handle and increment active_readers
   Service->>Query: stream matrix from captured handle.run
   Query-->>Service: bounded matrix without evidence ledger
-  Service->>Service: release read lease in finally
+  Service->>Service: decrement active_readers; retain handle
   Service-->>Caller: correlated matrix result
   Caller->>Service: query_snapshot_time_range(cell_evidence selector)
-  Service->>Service: acquire matching read lease
+  Service->>Service: guard same retained handle
   Service->>Query: stream selected row-period evidence from handle.run
   Query-->>Service: at most 100 items and exact omitted count
-  Service->>Service: release read lease in finally
+  Service->>Service: decrement active_readers; retain handle
   Service-->>Caller: correlated cell-evidence result
   Caller->>Service: refresh_snapshot(snapshot)
+  Service->>Service: require active_readers = 0 before mutation
   Service->>Discovery: recheck(stored scope)
   alt Unchanged
     Service-->>Caller: existing coherent metadata
@@ -1477,6 +1481,10 @@ sequenceDiagram
     Service->>Core: normalize changed sources
     Service->>Repo: publish new revision
     Repo-->>Service: new published revision
+    Service->>Repo: open_read(new revision and parsed run)
+    Repo-->>Service: new retained handle
+    Service->>Service: swap complete snapshot state
+    Service->>Repo: release_read(old handle) exactly once
     Service-->>Caller: new coherent metadata
   else Cancelled or failed
     Service-->>Caller: structured terminal error and old snapshot
@@ -1497,7 +1505,7 @@ sequenceDiagram
   participant Repo as Event Repository
   Reader->>Service: query(snapshot)
   Service->>Service: active_readers = active_readers + 1
-  Service->>Repo: read with leased handle
+  Service->>Repo: read with retained handle under reader guard
   Closer->>Service: close_snapshot(snapshot)
   alt Reader is active
     Service-->>Closer: REPORT_SNAPSHOT_CONFLICT
@@ -1507,7 +1515,7 @@ sequenceDiagram
     Closer->>Service: retry close_snapshot(snapshot)
   end
   Service->>Service: acquire exclusive close lease and remove state
-  Service->>Repo: release_read(handle)
+  Service->>Repo: release_read(retained handle) exactly once
   Repo-->>Service: release complete
   Service-->>Closer: CloseSnapshotResult
 ```
@@ -1551,11 +1559,11 @@ stateDiagram-v2
 - A matrix result contains at most 2,000 total cells. It enforces the requested row maximum and discloses mode, exact row order, supported actual resolution, scales, evidence states, and omissions.
 - A cell-evidence result contains at most 100 chronological items and reports the exact omitted count. A matrix never contains that ledger or full event detail.
 - Heatmap scale availability is a discriminated union. Unknown context capacity has `reason="context_capacity_unavailable"`, null `normalized_intensity`, no percentage, and no row-relative fallback.
-- Both Heatmap variants derive `snapshot_id`, `revision_id`, and semantic evidence from one acquired read lease. They never read mutable pending-handle or latest-run state.
+- Both Heatmap variants derive `snapshot_id`, `revision_id`, and semantic evidence from one retained snapshot-revision handle protected by a per-operation reader guard. They never read mutable pending-handle or latest-run state.
 - Every Heatmap result is privacy-bounded, finite-or-null where numeric, and less than 1,048,576 encoded bytes. The service never truncates a terminal result to fit.
 - Queries never replace a snapshot or repository revision.
-- Every query owns one read lease from before handle capture through its `finally` cleanup.
-- A handle is released only after `active_readers == 0` and no mutation owns the snapshot.
+- Every query owns one `_ReadLease` reader guard from before handle capture through `finally`. Exiting the guard does not release the retained repository handle.
+- A retained handle is released exactly once only after `active_readers == 0` and refresh replacement, snapshot close, or service shutdown owns the snapshot.
 - A query, refresh, export, or close request that cannot acquire its required lease returns `REPORT_SNAPSHOT_CONFLICT` without waiting.
 - `close_snapshot` is non-blocking. It returns `REPORT_SNAPSHOT_CONFLICT` when exclusive close is unavailable.
 - `close()` blocks after rejecting new leases until all existing leases drain, then releases each remaining handle once.
@@ -1686,13 +1694,14 @@ It declares these exact test functions:
 | `test_heatmap_request_and_result_unions_reject_cross_variant_fields()` | Exact `matrix|cell_evidence` discriminants and shape separation |
 | `test_heatmap_results_take_snapshot_and_revision_from_read_lease()` | Immutable lease correlation; mutable pending state cannot alter either identifier |
 | `test_heatmap_matrix_and_cell_evidence_use_one_pure_semantic_helper()` | Shared parsed-run algorithms and agreement between a selected cell and its evidence result |
+| `test_two_heatmap_queries_reuse_handle_then_refresh_and_close_release_once()` | Matrix and cell-evidence queries reuse one retained handle; refresh swaps after readers drain and releases the old handle once; close releases the replacement once |
 | `test_heatmap_missing_semantic_distinction_fails_without_zero_or_cache_fallback()` | Parsed-run insufficiency stops the query with a concrete internal design gap; no zero coercion, normalized-cache inference, or migration path runs |
 | `test_heatmap_worst_case_union_results_remain_below_worker_line_limit()` | Sanitized worst-case matrix and 100-row evidence results are each strictly below 1,048,576 encoded bytes |
 | `test_query_sequence_returns_canonical_page_and_exact_group_hierarchy` | OP-23 selector, sort, endpoint, repetition, and reasoning completeness |
 | `test_query_coordination_returns_exact_applied_values_and_labels_inference` | OP-24 filter, sort, row, and epistemic-label completeness |
 | `test_get_event_details_is_lazy_bounded_structured_and_returns_only_opaque_source_key` | OP-25 privacy, disclosures, provenance, and source-registry boundary |
 | `test_get_event_details_not_found_preserves_open_snapshot` | Exact not-found behavior |
-| `test_each_query_family_holds_read_lease_until_finally_cleanup` | Summary, list, Heatmap matrix, Heatmap cell evidence, sequence, coordination, and detail handle lifetime |
+| `test_each_query_family_holds_reader_guard_until_finally_cleanup` | Summary, list, Heatmap matrix, Heatmap cell evidence, sequence, coordination, and detail increment/decrement `active_readers` without releasing the retained handle |
 | `test_close_snapshot_rejects_each_active_query_family_without_releasing_handle` | Query-close race safety and recoverable conflict |
 | `test_close_snapshot_retry_releases_handle_once_after_reader_finishes` | Non-blocking close retry and exact release count |
 | `test_active_reader_rejects_refresh_and_export_without_side_effects` | Exclusive mutation lease across every handle-using operation |
@@ -1734,12 +1743,13 @@ The integration and regression gates are:
 4. Run the same snapshot fixture operations through Tauri Worker, MCP snapshot tools, and CLI service mode. Normalize only surface envelopes before comparison.
 5. Cancel discovery, normalization, every query family, refresh, export staging, and publication. Confirm that no partial revision, service state, or target becomes visible.
 6. Inject safe dependency failures and unexpected exceptions. Confirm exact structured codes and the absence of source, cache, staging, transcript, argument, result, secret, and ciphertext content.
-7. Hold every query family at its Query Port boundary. Confirm that `close_snapshot` returns `REPORT_SNAPSHOT_CONFLICT`, releases no handle, and succeeds exactly once after the query releases its lease.
+7. Hold every query family at its Query Port boundary. Confirm that `close_snapshot` returns `REPORT_SNAPSHOT_CONFLICT`, releases no handle, and succeeds exactly once after the query exits its reader guard.
 8. Omit CLI report mode and confirm classic interactive HTML. Exercise explicit CLI directory and summary. Omit MCP `export_snapshot.report_mode` and confirm directory; request summary explicitly. Confirm that invalid streamlined modes fail before renderer submission and that `generate_report` remains classic.
-9. Run one snapshot fixture through service matrix and cell-evidence requests. Confirm exact read-lease `snapshot_id` and `revision_id`, mode and row agreement, raw nullable evidence values, `evidence_method`, and no cross-variant fields.
+9. Run one snapshot fixture through service matrix and cell-evidence requests. Confirm exact retained-handle `snapshot_id` and `revision_id`, mode and row agreement, raw nullable evidence values, `evidence_method`, and no cross-variant fields.
 10. Compare every HM-F01 through HM-F15 and JFP-HM-01 through JFP-HM-03 facet with its named test row above. A feature-name-only test does not establish semantic coverage.
 11. Encode the worst-case matrix and 100-row cell-evidence union fixtures. Confirm that each complete result is strictly smaller than 1,048,576 bytes and that no field or item is truncated to pass.
 12. Compare the retained FastMCP `query_time_range` schema, defaults, six atomic measures, responses, 1,000-event cap, IDs, errors, and cancellation before and after this implementation. Confirm that it never calls `query_snapshot_time_range`.
+13. Run two sequential Heatmap variants over one retained handle. Refresh after both guards exit, assert one old-handle release, then close and assert one replacement-handle release. Confirm every per-operation cleanup changes only `active_readers`.
 
 ```mermaid
 flowchart LR
