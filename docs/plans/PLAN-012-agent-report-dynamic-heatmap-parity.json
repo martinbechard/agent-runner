@@ -1,0 +1,399 @@
+{
+  "schema": "mcp-agent-ops-hierarchy-plan",
+  "version": 1,
+  "title": "Agent Report dynamic Heatmap parity",
+  "theme": "default",
+  "themesFolder": null,
+  "htmlFilename": "PLAN-012-agent-report-dynamic-heatmap-parity.html",
+  "rootLabel": "Agent Report dynamic Heatmap parity",
+  "items": [
+    {
+      "text": "Lock authority, boundary, and compatibility",
+      "complete": true,
+      "children": [
+        {
+          "text": "Treat FR-001 HM-F01 through HM-F15 and accepted JFP-HM-01 through JFP-HM-03 as functional authority; use only the committed a8eef62 version of tools/report/scripts/run-timeline.py as classic semantic evidence.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Protect unrelated work in CD-001, docs/project-taxonomy.md, tools/report/README.md, Rust core discovery files, classic run-timeline.py and its test, and tools/report/uv.lock; do not edit, stage, revert, or reformat those paths.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Preserve retained MCP query_time_range exactly: thread selector, optional range, bucket_minutes, six atomic measures, include_events, defaults, result, error meanings, limits, and cancellation. It remains a separate operation and is never routed through query_snapshot_time_range.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Keep the cache schema unchanged. Parsed-run evidence is valid only while a snapshot read lease binds _ReadHandle.run to one immutable snapshot_id and revision; CD-003 documents this coherence boundary and no event-cache migration or backfill.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Select one discriminated query_snapshot_time_range family across ApplicationService, Python worker JSONL, Rust/Tauri, TypeScript, and FastMCP. Reject a separate Heatmap evidence operation. Rename only the snapshot-internal query_time_range path; never rename or route retained MCP query_time_range.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Complexity reasons: fifteen facets and three product decisions cross four runtime boundaries; the work adds a discriminated lazy-query contract, evidence states, bounded coarsening, accessibility, compatibility isolation, review, and packaged verification.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Reconcile design authorities before source work",
+      "complete": true,
+      "children": [
+        {
+          "text": "HLD-003 owner edits only HLD-003. Select one discriminated query_snapshot_time_range family with matrix and cell_evidence variants; reject a separate evidence operation; define dependency direction, supported-resolution coarsening, immutable read-lease snapshot/revision binding, parsed-run coherence, and no cache migration.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HLD-003 decides matrix requests return only matrix data and cell_evidence requests in the same operation family return only the selected row-period ledger. Double-click requests a finer matrix; selection separately requests cell evidence. Step back and breadcrumbs use bounded client history.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "CD-002 owner edits only CD-002. Define immutable Python contracts, read-lease-bound snapshot_id and revision results, parsed-run aggregation and applicability, friendly identities, evidence states, discriminated scale availability, formatting, coarsening, privacy, validation, cancellation, and streaming bounds.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "CD-003 owner edits only CD-003. Record _ReadHandle.run as the semantic source, keep SQLite schema and migration version unchanged, and retain cached normalized events for existing lists/details.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "CD-004 owner edits only CD-004. Replace the snapshot worker binding with query_snapshot_time_range and specify exact union validation, serialization, revision correlation, framing, bounds, and one terminal result.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "CD-005 owner edits only CD-005. Replace generic measure/grouping UI with Wall time, Tokens, and Models; specify matrix/evidence states, navigation, local period labels, partial/unavailable/N/A wording, keyboard operation, focus, and non-color semantics.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Dev Architect reviews this same plan and HLD-003 plus CD-002 through CD-005. Source work starts only after contracts, algorithms, compatibility boundaries, ownership, and gates are accepted.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Freeze the cross-language query and result inventory",
+      "complete": true,
+      "children": [
+        {
+          "text": "Literals: HeatmapMode=wall_time|tokens|models; HeatmapQueryKind=matrix|cell_evidence; HeatmapValueState=measured|derived|partial|unavailable; HeatmapScaleAvailability=available|unavailable; available scale basis=visible_row_maximum|context_window_capacity; resolutions=1|5|15|30|60.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Matrix request: snapshot_id, query_kind=matrix, from_time, to_time, mode, requested_resolution_minutes, maximum_rows. Rust maps exact camelCase Tauri fields to snake_case worker fields; TypeScript uses an equivalent readonly discriminated type.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Cell-evidence request: snapshot_id, query_kind=cell_evidence, mode, row_id, period_start_time, period_end_time. The evidence cap is protocol-fixed at 100 and cannot be expanded by a caller.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Matrix result: immutable read-lease snapshot_id and revision_id, query_kind=matrix, mode, from_time, to_time, requested_resolution_minutes, actual_resolution_minutes, maximum_rows, omitted_row_count, mode-specific row_order, total_cell_count, rows, bounded provenance. The service derives both identifiers from the acquired read lease, never mutable pending-handle state.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Matrix row: row_id, row_kind=runtime_state|token_measure|model|cost, friendly label, a discriminated scale, and ordered cells. Scale is exactly available with numeric minimum, numeric maximum, and basis=visible_row_maximum|context_window_capacity, or unavailable with availability=unavailable and a bounded N/A reason; nullable-field cross-products are invalid.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Matrix cell: start_time, end_time, nullable numeric value, formatted_value, value_state, applicable_zero, contributing_evidence_count, nullable normalized intensity, nullable supporting_text. Unknown capacity has null intensity and no percentage.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Cell-evidence result: immutable read-lease snapshot_id and revision_id, query_kind=cell_evidence, mode, row_id, friendly row_label, period_start_time, period_end_time, raw nullable numeric value, formatted_value, value_state, applicable_zero, evidence_items, omitted_evidence_count, bounded provenance. The service never reads identity from mutable pending-handle state.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Evidence item: nullable deterministic event_id, occurred_at, raw nullable numeric value, formatted_value, nullable duration_ms, friendly label, bounded sanitized preview, evidence_method, value_state, and has_detail. Items are chronological, at most 100, and path/transcript/secret/ciphertext safe.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Python dataclasses are service authority; report_worker serializes exact snake_case; Rust validates and projects exact camelCase; contracts.ts rejects unknown/missing fields, invalid discriminants, non-finite numbers, bounds, correlation mismatches, and path-shaped content.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "FastMCP exposes only the additive discriminated schema through mcp_server.py and mcp_report.py. Schema snapshots prove retained query_time_range is unchanged and dynamic queries do not invoke static generation or export.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Implement Python semantics with red-green-refactor",
+      "complete": true,
+      "children": [
+        {
+          "text": "Python owner controls application_service.py, mcp_report.py, report_worker.py, mcp_server.py, test_application_service.py, test_mcp_report.py, test_report_worker.py, and test_mcp_server.py only. Start with failing contract and compatibility tests.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Add mode/query/value literals, discriminated available/unavailable scale dataclasses, matrix/evidence dataclasses, exact validation, supported-resolution coarsening, immutable read-lease snapshot/revision binding, cancellation, privacy, streaming bounds, and bounded serialization in application_service.py.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Replace generic event-cache grouping with one shared pure classic-semantic aggregation and formatting helper over read-lease-bound _ReadHandle.run. Matrix and cell_evidence paths both consume it. Traverse agents/responses in stable source order, merge intervals, calculate token rows, normalize model/effort, and preserve price/evidence status through streaming bounded processing without eager preview or detail materialization.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Use parsed inference/runtime/activity evidence only while the run-bound read lease and immutable revision remain coherent. Distinguish applicable zero from missing evidence. If the run cannot preserve a required distinction, stop and return the concrete gap to Dev Architect; do not coerce absence to zero or add a cache migration.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Change only the snapshot worker binding and service method to query_snapshot_time_range. Validate exact matrix/cell_evidence combinations and serialize the exact result union; preserve all other bindings.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Update mcp_report.py and mcp_server.py solely for the additive public signature, request construction, result projection, and focused tests. Retained query_time_range implementation and schema remain untouched.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Run focused Python tests after each slice, then all four focused modules. Refactor only after green; add no fixture system, simulator, harness, or test library.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Prove every functional facet and accepted decision",
+      "complete": false,
+      "children": [
+        {
+          "text": "HM-F01: service and Workspace tests expose exactly three modes and reject atomic token measures dynamically; retained MCP atomic measures still pass.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F02: Python tests cover present known states in fixed order, absent-state omission, ascending unknown states with friendly labels, unavailable timing, complete zero, and range overlap.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F03: Python and contract tests assert the exact eight Tokens rows and order.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F04: tests cover response model/effort, uniform non-mixed thread fallbacks, mixed non-fallback, Unknown model, no-effort label, distinct efforts, first occurrence across stable agent order, and Cost last.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F05: tests cover half-open clipping, touching/nested/multi-agent overlap, union without double count, partial usable intervals, unavailable timing, and complete zero.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F06: tests cover completion buckets; token sums; completed tool counts; positive context average/max; recorded/API-equivalent cost subtotal; processed-token model sums; missing contributors.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F07: Python and TypeScript tests cover duration, compact number, integer tool count, context token/known-capacity percentage, classic cost precision, partial prefix, zero, and unavailable formatting.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F08: tests cover stable agent traversal, main/default roles, nickname/assignment fallback and duplicate suppression, model-effort labels, headings, cells, evidence headings, and accessible names.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F09 plus JFP-HM-01: tests distinguish measured/derived zero from partial/unavailable for every row family; no missing timing, usage, price, or capacity becomes zero. UX review evaluates wording.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F10 plus JFP-HM-02: tests cover the true scale discriminator, valid available numeric variants, rejection of mixed/nullable cross-products, known capacity, unavailable N/A scale, null cell intensity, no percentage/fallback, optional token supporting text, disclosure, and accessible N/A descriptions.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F11: matrix has no evidence ledger or full details; cell_evidence streams at most 100 chronological rows and exact omission without eager preview/detail materialization; full detail remains a separate existing lazy event-detail action within the same query_snapshot_time_range design boundary.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F12 plus JFP-HM-03: Workspace tests cover select, double-click/Drill down, context-menu/Step back, breadcrumb, Previous/Next, horizontal controls, five periods, keyboard, reset, and disabled boundaries.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F13: tests cover time, value, optional duration, bounded sanitized preview, token agent/model prefixes, friendly runtime/tool/model labels, availability, privacy, chronology, and optional detail identity.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F14: tests cover 2,000 acceptance, 2,001 rejection, nearest supported coarser resolution, actual resolution, deterministic row omission/count, and HLD-accepted extreme-range behavior.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "HM-F15: Workspace tests and browser verification cover row, local period, mode, formatted value, availability, scale basis, selection, focus, and synchronized evidence without color dependence.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Independent UX review inspects all modes, zero/partial/unavailable/N/A, selected evidence, disabled navigation, keyboard focus, narrow layout, and reduced motion; findings return to the TypeScript owner.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Implement and test Rust worker and Tauri boundary",
+      "complete": true,
+      "children": [
+        {
+          "text": "Rust owner controls desktop/src-tauri/src/report_worker.rs, desktop/src-tauri/src/lib.rs, and existing focused Rust tests only. Do not edit Cargo manifests, Rust core, or discovery tests.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Start with failing inventory, exact-key, discriminated-request, result-projection, and correlation tests. Assert snapshot query_time_range is absent after migration.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Validate matrix/cell_evidence shapes, discriminated scale variants, arrays, 2,000 cells, 100 evidence rows, raw nullable values, evidence_method, literals, immutable correlation, cancellation, and one terminal outcome. Add a worst-case union serialization test with sanitized previews and 100 evidence rows proving every matrix and cell_evidence JSONL result stays below the existing 1 MiB worker line limit.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Rename the Tauri command/projection and convert exact camelCase requests to snake_case worker data and exact results back to camelCase without paths or unrelated command changes.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Run cargo fmt --check and focused tests from tools/report, then full workspace Rust tests and clippy if installed; do not install missing components.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Implement and test TypeScript contracts, state, interactions, and styles",
+      "complete": true,
+      "children": [
+        {
+          "text": "TypeScript owner controls contracts.ts, contracts.test.ts, report-workspace.ts, report-workspace.test.ts, and styles.css only. Do not edit package manifests, lockfiles, README, or classic renderer.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Start with failing parser tests for request/result unions, modes, row orders, value states, applicable_zero, raw nullable evidence values, evidence_method, available/unavailable scale discriminators, nullable intensity, 2,000/100 limits, immutable correlation, ordering, formatted fields, and privacy.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Replace generic state with querySnapshotTimeRange, HeatmapMode, separate matrix/evidence loads, immutable range history, selected binding, stale rejection, and exact refresh rebinding.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Render mode/period controls, matrix, row legends, visible Drill down/Step back, Previous/Next, breadcrumbs, horizontal scroll, selected summary, and synchronized evidence ledger with browser-local period labels.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Add pure tested formatting, N/A, navigation, accessibility, and state helpers. Vitest has no DOM environment; add no DOM library or custom harness. Pointer/focus/assistive proof belongs to browser/package verification.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Change styles.css only for semantic states, N/A intensity, focus, selection, controls, ledger, overflow, narrow layout, and reduced motion. Color is supplementary.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Run focused Vitest after each slice, then npm test and npm run build from tools/report/desktop.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    },
+    {
+      "text": "Integrate, review, verify, package, and hand off",
+      "complete": false,
+      "children": [
+        {
+          "text": "Integrate accepted design commits, then Python, Rust, and TypeScript candidates in dependency order. Resolve only task overlap and preserve protected dirty paths.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Run one snapshot fixture through service, worker, Tauri, Workspace, and MCP matrix/cell_evidence requests; prove every result preserves the immutable read-lease snapshot_id and revision and compare equivalent semantic fields after only case/envelope projection.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Run retained compatibility before and after: exact FastMCP query_time_range schema/defaults, responses, 1,000-event cap, IDs, errors, cancellation, and untouched classic generation.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Fresh-context code review checks semantics, intervals/evidence, compatibility, privacy, bounds, cancellation, no cache migration, comments, tests, and protected paths. Apply scoped findings.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Fresh-context UX review returns PASS or findings for JFP-HM-01..03 and HM-F12/HM-F15. Apply findings and rerun focused frontend/build/browser checks.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Independent verifier runs focused and full Python, Rust, and TypeScript gates; fmt/check/test/clippy when available; npm build; schema comparison; privacy scan; diff inspection; and the worst-case matrix/cell_evidence union payload test proving each worker JSONL line remains below 1 MiB.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Browser verification covers three modes, five periods, coarsening, over-100 evidence, zero/partial/unavailable/N/A, pointer, visible controls, keyboard grid/focus, local time, scroll, narrow view, and stale refresh.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Build the sidecar and Tauri package with repository scripts, launch the macOS artifact, repeat critical matrix/evidence/accessibility flow, and record bundle/log evidence. Windows is omitted unless executed on Windows.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Commit only accepted design/source/test/style paths. Confirm clean task scope while listing preserved unrelated modifications; never stage protected paths.",
+          "complete": true,
+          "children": []
+        },
+        {
+          "text": "Return candidate commits, branch, paths, tests/build/package evidence, review/UX verdicts, omissions, clean-scope evidence, and this plan path. Dev Orchestrator owns final integration, lifecycle, Commit delivery, and publication.",
+          "complete": true,
+          "children": []
+        }
+      ]
+    }
+  ]
+}

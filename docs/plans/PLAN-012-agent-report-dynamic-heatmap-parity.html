@@ -1,0 +1,494 @@
+<!doctype html>
+<html lang="en" data-theme="default">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Agent Report dynamic Heatmap parity</title>
+  <style>
+/*
+ * Copyright (c) 2026 Martin.Bechard@DevConsult.ca
+ * AI attribution: Generated with AI assistance.
+ * Summary: Defines the shared responsive layout and interaction styles for hierarchical HTML documents.
+ * Design: docs/design/high-level/architecture.md
+ * Test plan: docs/reference/test-plan.md
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+[hidden] {
+  display: none !important;
+}
+
+body {
+  margin: 0;
+  color: var(--text);
+  background: var(--background);
+  font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  line-height: 1.5;
+}
+
+button {
+  color: inherit;
+  font: inherit;
+}
+
+.hierarchy-document {
+  width: min(1100px, calc(100% - 2rem));
+  margin: 2rem auto;
+  padding: clamp(1rem, 3vw, 2rem);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.document-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding-bottom: 1.25rem;
+  border-bottom: 1px solid var(--border);
+}
+
+h1 {
+  margin: 0;
+  color: var(--heading);
+  font-size: clamp(1.5rem, 3vw, 2.25rem);
+  letter-spacing: -0.025em;
+}
+
+.tree-controls {
+  display: grid;
+  justify-items: end;
+  gap: 0.55rem;
+}
+
+.tree-control-row,
+.tree-actions,
+.tree-levels {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.tree-control-row {
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+.tree-actions,
+.tree-levels {
+  gap: 0.3rem;
+}
+
+.tree-actions button,
+.tree-levels button {
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--control);
+  cursor: pointer;
+}
+
+.tree-actions button {
+  display: inline-grid;
+  width: 2rem;
+  height: 2rem;
+  place-items: center;
+  padding: 0;
+}
+
+.tree-action-icon {
+  width: 1rem;
+  height: 1rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+[data-action="copy"].is-success {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+[data-action="copy"].is-error {
+  color: var(--number);
+  border-color: var(--number);
+}
+
+.tree-actions button:hover,
+.tree-actions button:focus-visible,
+.tree-levels button:hover,
+.tree-levels button:focus-visible {
+  border-color: var(--accent);
+  outline: none;
+}
+
+.tree-level-label {
+  margin-right: 0.15rem;
+  color: var(--muted);
+  font-size: 0.78rem;
+  font-weight: 650;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.tree-levels button {
+  min-width: 2rem;
+  height: 2rem;
+  padding: 0.25rem 0.45rem;
+  font-size: 0.82rem;
+}
+
+.tree-levels button[aria-pressed="true"] {
+  color: var(--surface);
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.hierarchy-tree,
+.tree-children {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.hierarchy-tree {
+  padding-top: 1rem;
+}
+
+.tree-children {
+  margin-left: 0.7rem;
+  padding-left: 1.25rem;
+  border-left: 1px solid var(--branch);
+}
+
+.tree-node {
+  position: relative;
+}
+
+.node-line {
+  min-height: 2.15rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.25rem 0;
+}
+
+.tree-toggle {
+  display: inline-flex;
+  max-width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.2rem 0.35rem;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+  text-align: left;
+}
+
+.tree-toggle:hover,
+.tree-toggle:focus-visible {
+  background: var(--hover);
+  outline: 2px solid transparent;
+}
+
+.tree-chevron {
+  width: 0.55rem;
+  height: 0.55rem;
+  flex: 0 0 auto;
+  border-right: 2px solid var(--accent);
+  border-bottom: 2px solid var(--accent);
+  transform: rotate(45deg) translateY(-2px);
+  transition: transform 120ms ease;
+}
+
+.tree-toggle[aria-expanded="false"] .tree-chevron {
+  transform: rotate(-45deg);
+}
+
+.tree-checkbox {
+  display: inline-grid;
+  place-items: center;
+  width: 1.05rem;
+  height: 1.05rem;
+  flex: 0 0 auto;
+  margin: 0 0.1rem 0 0.2rem;
+  color: var(--surface);
+  border: 1.5px solid var(--muted);
+  border-radius: 3px;
+  background: var(--surface);
+  pointer-events: none;
+}
+
+.tree-checkbox.is-checked {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
+.tree-checkbox.is-checked::after {
+  content: "✓";
+  font-size: 0.78rem;
+  font-weight: 800;
+  line-height: 1;
+}
+
+.tree-number {
+  flex: 0 0 auto;
+  color: var(--accent);
+  font-variant-numeric: tabular-nums;
+  font-weight: 750;
+}
+
+.tree-key {
+  color: var(--key);
+  font-weight: 650;
+  overflow-wrap: anywhere;
+}
+
+.tree-line-content {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.tree-separator {
+  color: var(--muted);
+}
+
+.tree-value {
+  min-width: 0;
+  padding: 0.1rem 0.35rem;
+  border-radius: 5px;
+  overflow-wrap: anywhere;
+}
+
+.copy-status {
+  min-height: 1.2em;
+  color: var(--muted);
+  font-size: 0.78rem;
+}
+
+.type-string {
+  color: var(--string);
+}
+
+.type-number {
+  color: var(--number);
+}
+
+.type-boolean {
+  color: var(--boolean);
+  font-weight: 650;
+}
+
+.type-null {
+  color: var(--muted);
+  font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .hierarchy-document {
+    width: 100%;
+    margin: 0;
+    border: 0;
+    border-radius: 0;
+  }
+
+  .document-header {
+    flex-direction: column;
+  }
+
+  .tree-controls {
+    justify-items: start;
+  }
+
+  .tree-children {
+    margin-left: 0.25rem;
+    padding-left: 0.8rem;
+  }
+}
+
+/*
+ * Copyright (c) 2026 Martin.Bechard@DevConsult.ca
+ * AI attribution: Generated with AI assistance.
+ * Summary: Provides a neutral light theme for general hierarchical documents.
+ * Design: docs/design/high-level/architecture.md
+ * Test plan: docs/reference/test-plan.md
+ */
+
+:root {
+  color-scheme: light;
+  --background: #f4f6f8;
+  --surface: #ffffff;
+  --control: #f8fafc;
+  --hover: #eef6ff;
+  --text: #26313d;
+  --heading: #111827;
+  --muted: #64748b;
+  --key: #1e3a5f;
+  --string: #276749;
+  --number: #9c4221;
+  --boolean: #6b46c1;
+  --accent: #2563eb;
+  --branch: #cbd5e1;
+  --border: #dbe2ea;
+  --border-strong: #c5cfdb;
+  --shadow: 0 18px 48px rgb(15 23 42 / 8%);
+}
+
+  </style>
+</head>
+<body>
+  <main class="hierarchy-document">
+    <header class="document-header">
+      <div>
+        <h1>Agent Report dynamic Heatmap parity</h1>
+      </div>
+      <div class="tree-controls">
+        <div class="tree-control-row">
+          <div class="tree-levels" aria-label="Expand tree to level">
+            <span class="tree-level-label">Levels</span>
+            <button type="button" data-level="1" aria-pressed="false" aria-label="Expand through level 1">1</button>
+            <button type="button" data-level="2" aria-pressed="false" aria-label="Expand through level 2">2</button>
+            <button type="button" data-level="3" aria-pressed="false" aria-label="Expand through level 3">3</button>
+            <button type="button" data-level="all" aria-pressed="true" aria-label="Expand all levels">All</button>
+          </div>
+          <div class="tree-actions" aria-label="Tree controls">
+            <button type="button" data-action="copy" aria-label="Copy content" title="Copy content"><svg class="tree-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg></button>
+            <button type="button" data-action="expand" aria-label="Expand all" title="Expand all"><svg class="tree-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 5v14"></path><path d="M5 12h14"></path></svg></button>
+            <button type="button" data-action="collapse" aria-label="Collapse all" title="Collapse all"><svg class="tree-action-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M5 12h14"></path></svg></button>
+          </div>
+        </div>
+        <span class="copy-status" role="status" aria-live="polite" data-copy-status></span>
+      </div>
+    </header>
+    <ul class="hierarchy-tree" role="tree" data-hierarchy-root><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><button type="button" class="tree-toggle" data-depth="0" aria-expanded="true" aria-controls="hierarchy-node-1"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-key">Agent Report dynamic Heatmap parity</span></span></button></div><ul class="tree-children" id="hierarchy-node-1" role="group"><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1 complete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-2"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">1</span> <span class="tree-key">Lock authority, boundary, and compatibility</span></span></button></div><ul class="tree-children" id="hierarchy-node-2" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1.1 complete"></span><span class="tree-line-content"><span class="tree-number">1.1</span> <span class="tree-value type-string">Treat FR-001 HM-F01 through HM-F15 and accepted JFP-HM-01 through JFP-HM-03 as functional authority; use only the committed a8eef62 version of tools/report/scripts/run-timeline.py as classic semantic evidence.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1.2 complete"></span><span class="tree-line-content"><span class="tree-number">1.2</span> <span class="tree-value type-string">Protect unrelated work in CD-001, docs/project-taxonomy.md, tools/report/README.md, Rust core discovery files, classic run-timeline.py and its test, and tools/report/uv.lock; do not edit, stage, revert, or reformat those paths.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1.3 complete"></span><span class="tree-line-content"><span class="tree-number">1.3</span> <span class="tree-value type-string">Preserve retained MCP query_time_range exactly: thread selector, optional range, bucket_minutes, six atomic measures, include_events, defaults, result, error meanings, limits, and cancellation. It remains a separate operation and is never routed through query_snapshot_time_range.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1.4 complete"></span><span class="tree-line-content"><span class="tree-number">1.4</span> <span class="tree-value type-string">Keep the cache schema unchanged. Parsed-run evidence is valid only while a snapshot read lease binds _ReadHandle.run to one immutable snapshot_id and revision; CD-003 documents this coherence boundary and no event-cache migration or backfill.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1.5 complete"></span><span class="tree-line-content"><span class="tree-number">1.5</span> <span class="tree-value type-string">Select one discriminated query_snapshot_time_range family across ApplicationService, Python worker JSONL, Rust/Tauri, TypeScript, and FastMCP. Reject a separate Heatmap evidence operation. Rename only the snapshot-internal query_time_range path; never rename or route retained MCP query_time_range.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="1.6 complete"></span><span class="tree-line-content"><span class="tree-number">1.6</span> <span class="tree-value type-string">Complexity reasons: fifteen facets and three product decisions cross four runtime boundaries; the work adds a discriminated lazy-query contract, evidence states, bounded coarsening, accessibility, compatibility isolation, review, and packaged verification.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2 complete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-3"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">2</span> <span class="tree-key">Reconcile design authorities before source work</span></span></button></div><ul class="tree-children" id="hierarchy-node-3" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.1 complete"></span><span class="tree-line-content"><span class="tree-number">2.1</span> <span class="tree-value type-string">HLD-003 owner edits only HLD-003. Select one discriminated query_snapshot_time_range family with matrix and cell_evidence variants; reject a separate evidence operation; define dependency direction, supported-resolution coarsening, immutable read-lease snapshot/revision binding, parsed-run coherence, and no cache migration.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.2 complete"></span><span class="tree-line-content"><span class="tree-number">2.2</span> <span class="tree-value type-string">HLD-003 decides matrix requests return only matrix data and cell_evidence requests in the same operation family return only the selected row-period ledger. Double-click requests a finer matrix; selection separately requests cell evidence. Step back and breadcrumbs use bounded client history.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.3 complete"></span><span class="tree-line-content"><span class="tree-number">2.3</span> <span class="tree-value type-string">CD-002 owner edits only CD-002. Define immutable Python contracts, read-lease-bound snapshot_id and revision results, parsed-run aggregation and applicability, friendly identities, evidence states, discriminated scale availability, formatting, coarsening, privacy, validation, cancellation, and streaming bounds.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.4 complete"></span><span class="tree-line-content"><span class="tree-number">2.4</span> <span class="tree-value type-string">CD-003 owner edits only CD-003. Record _ReadHandle.run as the semantic source, keep SQLite schema and migration version unchanged, and retain cached normalized events for existing lists/details.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.5 complete"></span><span class="tree-line-content"><span class="tree-number">2.5</span> <span class="tree-value type-string">CD-004 owner edits only CD-004. Replace the snapshot worker binding with query_snapshot_time_range and specify exact union validation, serialization, revision correlation, framing, bounds, and one terminal result.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.6 complete"></span><span class="tree-line-content"><span class="tree-number">2.6</span> <span class="tree-value type-string">CD-005 owner edits only CD-005. Replace generic measure/grouping UI with Wall time, Tokens, and Models; specify matrix/evidence states, navigation, local period labels, partial/unavailable/N/A wording, keyboard operation, focus, and non-color semantics.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="2.7 complete"></span><span class="tree-line-content"><span class="tree-number">2.7</span> <span class="tree-value type-string">Dev Architect reviews this same plan and HLD-003 plus CD-002 through CD-005. Source work starts only after contracts, algorithms, compatibility boundaries, ownership, and gates are accepted.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3 complete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-4"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">3</span> <span class="tree-key">Freeze the cross-language query and result inventory</span></span></button></div><ul class="tree-children" id="hierarchy-node-4" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.1 complete"></span><span class="tree-line-content"><span class="tree-number">3.1</span> <span class="tree-value type-string">Literals: HeatmapMode=wall_time|tokens|models; HeatmapQueryKind=matrix|cell_evidence; HeatmapValueState=measured|derived|partial|unavailable; HeatmapScaleAvailability=available|unavailable; available scale basis=visible_row_maximum|context_window_capacity; resolutions=1|5|15|30|60.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.2 complete"></span><span class="tree-line-content"><span class="tree-number">3.2</span> <span class="tree-value type-string">Matrix request: snapshot_id, query_kind=matrix, from_time, to_time, mode, requested_resolution_minutes, maximum_rows. Rust maps exact camelCase Tauri fields to snake_case worker fields; TypeScript uses an equivalent readonly discriminated type.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.3 complete"></span><span class="tree-line-content"><span class="tree-number">3.3</span> <span class="tree-value type-string">Cell-evidence request: snapshot_id, query_kind=cell_evidence, mode, row_id, period_start_time, period_end_time. The evidence cap is protocol-fixed at 100 and cannot be expanded by a caller.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.4 complete"></span><span class="tree-line-content"><span class="tree-number">3.4</span> <span class="tree-value type-string">Matrix result: immutable read-lease snapshot_id and revision_id, query_kind=matrix, mode, from_time, to_time, requested_resolution_minutes, actual_resolution_minutes, maximum_rows, omitted_row_count, mode-specific row_order, total_cell_count, rows, bounded provenance. The service derives both identifiers from the acquired read lease, never mutable pending-handle state.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.5 complete"></span><span class="tree-line-content"><span class="tree-number">3.5</span> <span class="tree-value type-string">Matrix row: row_id, row_kind=runtime_state|token_measure|model|cost, friendly label, a discriminated scale, and ordered cells. Scale is exactly available with numeric minimum, numeric maximum, and basis=visible_row_maximum|context_window_capacity, or unavailable with availability=unavailable and a bounded N/A reason; nullable-field cross-products are invalid.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.6 complete"></span><span class="tree-line-content"><span class="tree-number">3.6</span> <span class="tree-value type-string">Matrix cell: start_time, end_time, nullable numeric value, formatted_value, value_state, applicable_zero, contributing_evidence_count, nullable normalized intensity, nullable supporting_text. Unknown capacity has null intensity and no percentage.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.7 complete"></span><span class="tree-line-content"><span class="tree-number">3.7</span> <span class="tree-value type-string">Cell-evidence result: immutable read-lease snapshot_id and revision_id, query_kind=cell_evidence, mode, row_id, friendly row_label, period_start_time, period_end_time, raw nullable numeric value, formatted_value, value_state, applicable_zero, evidence_items, omitted_evidence_count, bounded provenance. The service never reads identity from mutable pending-handle state.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.8 complete"></span><span class="tree-line-content"><span class="tree-number">3.8</span> <span class="tree-value type-string">Evidence item: nullable deterministic event_id, occurred_at, raw nullable numeric value, formatted_value, nullable duration_ms, friendly label, bounded sanitized preview, evidence_method, value_state, and has_detail. Items are chronological, at most 100, and path/transcript/secret/ciphertext safe.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.9 complete"></span><span class="tree-line-content"><span class="tree-number">3.9</span> <span class="tree-value type-string">Python dataclasses are service authority; report_worker serializes exact snake_case; Rust validates and projects exact camelCase; contracts.ts rejects unknown/missing fields, invalid discriminants, non-finite numbers, bounds, correlation mismatches, and path-shaped content.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="3.10 complete"></span><span class="tree-line-content"><span class="tree-number">3.10</span> <span class="tree-value type-string">FastMCP exposes only the additive discriminated schema through mcp_server.py and mcp_report.py. Schema snapshots prove retained query_time_range is unchanged and dynamic queries do not invoke static generation or export.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4 complete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-5"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">4</span> <span class="tree-key">Implement Python semantics with red-green-refactor</span></span></button></div><ul class="tree-children" id="hierarchy-node-5" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.1 complete"></span><span class="tree-line-content"><span class="tree-number">4.1</span> <span class="tree-value type-string">Python owner controls application_service.py, mcp_report.py, report_worker.py, mcp_server.py, test_application_service.py, test_mcp_report.py, test_report_worker.py, and test_mcp_server.py only. Start with failing contract and compatibility tests.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.2 complete"></span><span class="tree-line-content"><span class="tree-number">4.2</span> <span class="tree-value type-string">Add mode/query/value literals, discriminated available/unavailable scale dataclasses, matrix/evidence dataclasses, exact validation, supported-resolution coarsening, immutable read-lease snapshot/revision binding, cancellation, privacy, streaming bounds, and bounded serialization in application_service.py.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.3 complete"></span><span class="tree-line-content"><span class="tree-number">4.3</span> <span class="tree-value type-string">Replace generic event-cache grouping with one shared pure classic-semantic aggregation and formatting helper over read-lease-bound _ReadHandle.run. Matrix and cell_evidence paths both consume it. Traverse agents/responses in stable source order, merge intervals, calculate token rows, normalize model/effort, and preserve price/evidence status through streaming bounded processing without eager preview or detail materialization.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.4 complete"></span><span class="tree-line-content"><span class="tree-number">4.4</span> <span class="tree-value type-string">Use parsed inference/runtime/activity evidence only while the run-bound read lease and immutable revision remain coherent. Distinguish applicable zero from missing evidence. If the run cannot preserve a required distinction, stop and return the concrete gap to Dev Architect; do not coerce absence to zero or add a cache migration.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.5 complete"></span><span class="tree-line-content"><span class="tree-number">4.5</span> <span class="tree-value type-string">Change only the snapshot worker binding and service method to query_snapshot_time_range. Validate exact matrix/cell_evidence combinations and serialize the exact result union; preserve all other bindings.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.6 complete"></span><span class="tree-line-content"><span class="tree-number">4.6</span> <span class="tree-value type-string">Update mcp_report.py and mcp_server.py solely for the additive public signature, request construction, result projection, and focused tests. Retained query_time_range implementation and schema remain untouched.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="4.7 complete"></span><span class="tree-line-content"><span class="tree-number">4.7</span> <span class="tree-value type-string">Run focused Python tests after each slice, then all four focused modules. Refactor only after green; add no fixture system, simulator, harness, or test library.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox" role="img" aria-label="5 incomplete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-6"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">5</span> <span class="tree-key">Prove every functional facet and accepted decision</span></span></button></div><ul class="tree-children" id="hierarchy-node-6" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.1 complete"></span><span class="tree-line-content"><span class="tree-number">5.1</span> <span class="tree-value type-string">HM-F01: service and Workspace tests expose exactly three modes and reject atomic token measures dynamically; retained MCP atomic measures still pass.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.2 complete"></span><span class="tree-line-content"><span class="tree-number">5.2</span> <span class="tree-value type-string">HM-F02: Python tests cover present known states in fixed order, absent-state omission, ascending unknown states with friendly labels, unavailable timing, complete zero, and range overlap.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.3 complete"></span><span class="tree-line-content"><span class="tree-number">5.3</span> <span class="tree-value type-string">HM-F03: Python and contract tests assert the exact eight Tokens rows and order.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.4 complete"></span><span class="tree-line-content"><span class="tree-number">5.4</span> <span class="tree-value type-string">HM-F04: tests cover response model/effort, uniform non-mixed thread fallbacks, mixed non-fallback, Unknown model, no-effort label, distinct efforts, first occurrence across stable agent order, and Cost last.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.5 complete"></span><span class="tree-line-content"><span class="tree-number">5.5</span> <span class="tree-value type-string">HM-F05: tests cover half-open clipping, touching/nested/multi-agent overlap, union without double count, partial usable intervals, unavailable timing, and complete zero.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.6 complete"></span><span class="tree-line-content"><span class="tree-number">5.6</span> <span class="tree-value type-string">HM-F06: tests cover completion buckets; token sums; completed tool counts; positive context average/max; recorded/API-equivalent cost subtotal; processed-token model sums; missing contributors.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.7 complete"></span><span class="tree-line-content"><span class="tree-number">5.7</span> <span class="tree-value type-string">HM-F07: Python and TypeScript tests cover duration, compact number, integer tool count, context token/known-capacity percentage, classic cost precision, partial prefix, zero, and unavailable formatting.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.8 complete"></span><span class="tree-line-content"><span class="tree-number">5.8</span> <span class="tree-value type-string">HM-F08: tests cover stable agent traversal, main/default roles, nickname/assignment fallback and duplicate suppression, model-effort labels, headings, cells, evidence headings, and accessible names.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.9 complete"></span><span class="tree-line-content"><span class="tree-number">5.9</span> <span class="tree-value type-string">HM-F09 plus JFP-HM-01: tests distinguish measured/derived zero from partial/unavailable for every row family; no missing timing, usage, price, or capacity becomes zero. UX review evaluates wording.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.10 complete"></span><span class="tree-line-content"><span class="tree-number">5.10</span> <span class="tree-value type-string">HM-F10 plus JFP-HM-02: tests cover the true scale discriminator, valid available numeric variants, rejection of mixed/nullable cross-products, known capacity, unavailable N/A scale, null cell intensity, no percentage/fallback, optional token supporting text, disclosure, and accessible N/A descriptions.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.11 complete"></span><span class="tree-line-content"><span class="tree-number">5.11</span> <span class="tree-value type-string">HM-F11: matrix has no evidence ledger or full details; cell_evidence streams at most 100 chronological rows and exact omission without eager preview/detail materialization; full detail remains a separate existing lazy event-detail action within the same query_snapshot_time_range design boundary.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.12 complete"></span><span class="tree-line-content"><span class="tree-number">5.12</span> <span class="tree-value type-string">HM-F12 plus JFP-HM-03: Workspace tests cover select, double-click/Drill down, context-menu/Step back, breadcrumb, Previous/Next, horizontal controls, five periods, keyboard, reset, and disabled boundaries.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.13 complete"></span><span class="tree-line-content"><span class="tree-number">5.13</span> <span class="tree-value type-string">HM-F13: tests cover time, value, optional duration, bounded sanitized preview, token agent/model prefixes, friendly runtime/tool/model labels, availability, privacy, chronology, and optional detail identity.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.14 complete"></span><span class="tree-line-content"><span class="tree-number">5.14</span> <span class="tree-value type-string">HM-F14: tests cover 2,000 acceptance, 2,001 rejection, nearest supported coarser resolution, actual resolution, deterministic row omission/count, and HLD-accepted extreme-range behavior.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox" role="img" aria-label="5.15 incomplete"></span><span class="tree-line-content"><span class="tree-number">5.15</span> <span class="tree-value type-string">HM-F15: Workspace tests and browser verification cover row, local period, mode, formatted value, availability, scale basis, selection, focus, and synchronized evidence without color dependence.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="5.16 complete"></span><span class="tree-line-content"><span class="tree-number">5.16</span> <span class="tree-value type-string">Independent UX review inspects all modes, zero/partial/unavailable/N/A, selected evidence, disabled navigation, keyboard focus, narrow layout, and reduced motion; findings return to the TypeScript owner.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="6 complete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-7"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">6</span> <span class="tree-key">Implement and test Rust worker and Tauri boundary</span></span></button></div><ul class="tree-children" id="hierarchy-node-7" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="6.1 complete"></span><span class="tree-line-content"><span class="tree-number">6.1</span> <span class="tree-value type-string">Rust owner controls desktop/src-tauri/src/report_worker.rs, desktop/src-tauri/src/lib.rs, and existing focused Rust tests only. Do not edit Cargo manifests, Rust core, or discovery tests.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="6.2 complete"></span><span class="tree-line-content"><span class="tree-number">6.2</span> <span class="tree-value type-string">Start with failing inventory, exact-key, discriminated-request, result-projection, and correlation tests. Assert snapshot query_time_range is absent after migration.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="6.3 complete"></span><span class="tree-line-content"><span class="tree-number">6.3</span> <span class="tree-value type-string">Validate matrix/cell_evidence shapes, discriminated scale variants, arrays, 2,000 cells, 100 evidence rows, raw nullable values, evidence_method, literals, immutable correlation, cancellation, and one terminal outcome. Add a worst-case union serialization test with sanitized previews and 100 evidence rows proving every matrix and cell_evidence JSONL result stays below the existing 1 MiB worker line limit.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="6.4 complete"></span><span class="tree-line-content"><span class="tree-number">6.4</span> <span class="tree-value type-string">Rename the Tauri command/projection and convert exact camelCase requests to snake_case worker data and exact results back to camelCase without paths or unrelated command changes.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="6.5 complete"></span><span class="tree-line-content"><span class="tree-number">6.5</span> <span class="tree-value type-string">Run cargo fmt --check and focused tests from tools/report, then full workspace Rust tests and clippy if installed; do not install missing components.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7 complete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-8"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">7</span> <span class="tree-key">Implement and test TypeScript contracts, state, interactions, and styles</span></span></button></div><ul class="tree-children" id="hierarchy-node-8" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.1 complete"></span><span class="tree-line-content"><span class="tree-number">7.1</span> <span class="tree-value type-string">TypeScript owner controls contracts.ts, contracts.test.ts, report-workspace.ts, report-workspace.test.ts, and styles.css only. Do not edit package manifests, lockfiles, README, or classic renderer.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.2 complete"></span><span class="tree-line-content"><span class="tree-number">7.2</span> <span class="tree-value type-string">Start with failing parser tests for request/result unions, modes, row orders, value states, applicable_zero, raw nullable evidence values, evidence_method, available/unavailable scale discriminators, nullable intensity, 2,000/100 limits, immutable correlation, ordering, formatted fields, and privacy.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.3 complete"></span><span class="tree-line-content"><span class="tree-number">7.3</span> <span class="tree-value type-string">Replace generic state with querySnapshotTimeRange, HeatmapMode, separate matrix/evidence loads, immutable range history, selected binding, stale rejection, and exact refresh rebinding.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.4 complete"></span><span class="tree-line-content"><span class="tree-number">7.4</span> <span class="tree-value type-string">Render mode/period controls, matrix, row legends, visible Drill down/Step back, Previous/Next, breadcrumbs, horizontal scroll, selected summary, and synchronized evidence ledger with browser-local period labels.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.5 complete"></span><span class="tree-line-content"><span class="tree-number">7.5</span> <span class="tree-value type-string">Add pure tested formatting, N/A, navigation, accessibility, and state helpers. Vitest has no DOM environment; add no DOM library or custom harness. Pointer/focus/assistive proof belongs to browser/package verification.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.6 complete"></span><span class="tree-line-content"><span class="tree-number">7.6</span> <span class="tree-value type-string">Change styles.css only for semantic states, N/A intensity, focus, selection, controls, ledger, overflow, narrow layout, and reduced motion. Color is supplementary.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="7.7 complete"></span><span class="tree-line-content"><span class="tree-number">7.7</span> <span class="tree-value type-string">Run focused Vitest after each slice, then npm test and npm run build from tools/report/desktop.</span></span></div></li></ul></li><li class="tree-node tree-branch" role="treeitem"><div class="node-line"><span class="tree-checkbox" role="img" aria-label="8 incomplete"></span><button type="button" class="tree-toggle" data-depth="1" aria-expanded="true" aria-controls="hierarchy-node-9"><span class="tree-chevron" aria-hidden="true"></span><span class="tree-line-content"><span class="tree-number">8</span> <span class="tree-key">Integrate, review, verify, package, and hand off</span></span></button></div><ul class="tree-children" id="hierarchy-node-9" role="group"><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.1 complete"></span><span class="tree-line-content"><span class="tree-number">8.1</span> <span class="tree-value type-string">Integrate accepted design commits, then Python, Rust, and TypeScript candidates in dependency order. Resolve only task overlap and preserve protected dirty paths.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.2 complete"></span><span class="tree-line-content"><span class="tree-number">8.2</span> <span class="tree-value type-string">Run one snapshot fixture through service, worker, Tauri, Workspace, and MCP matrix/cell_evidence requests; prove every result preserves the immutable read-lease snapshot_id and revision and compare equivalent semantic fields after only case/envelope projection.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.3 complete"></span><span class="tree-line-content"><span class="tree-number">8.3</span> <span class="tree-value type-string">Run retained compatibility before and after: exact FastMCP query_time_range schema/defaults, responses, 1,000-event cap, IDs, errors, cancellation, and untouched classic generation.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.4 complete"></span><span class="tree-line-content"><span class="tree-number">8.4</span> <span class="tree-value type-string">Fresh-context code review checks semantics, intervals/evidence, compatibility, privacy, bounds, cancellation, no cache migration, comments, tests, and protected paths. Apply scoped findings.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.5 complete"></span><span class="tree-line-content"><span class="tree-number">8.5</span> <span class="tree-value type-string">Fresh-context UX review returns PASS or findings for JFP-HM-01..03 and HM-F12/HM-F15. Apply findings and rerun focused frontend/build/browser checks.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.6 complete"></span><span class="tree-line-content"><span class="tree-number">8.6</span> <span class="tree-value type-string">Independent verifier runs focused and full Python, Rust, and TypeScript gates; fmt/check/test/clippy when available; npm build; schema comparison; privacy scan; diff inspection; and the worst-case matrix/cell_evidence union payload test proving each worker JSONL line remains below 1 MiB.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox" role="img" aria-label="8.7 incomplete"></span><span class="tree-line-content"><span class="tree-number">8.7</span> <span class="tree-value type-string">Browser verification covers three modes, five periods, coarsening, over-100 evidence, zero/partial/unavailable/N/A, pointer, visible controls, keyboard grid/focus, local time, scroll, narrow view, and stale refresh.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox" role="img" aria-label="8.8 incomplete"></span><span class="tree-line-content"><span class="tree-number">8.8</span> <span class="tree-value type-string">Build the sidecar and Tauri package with repository scripts, launch the macOS artifact, repeat critical matrix/evidence/accessibility flow, and record bundle/log evidence. Windows is omitted unless executed on Windows.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.9 complete"></span><span class="tree-line-content"><span class="tree-number">8.9</span> <span class="tree-value type-string">Commit only accepted design/source/test/style paths. Confirm clean task scope while listing preserved unrelated modifications; never stage protected paths.</span></span></div></li><li class="tree-node tree-leaf" role="treeitem"><div class="node-line"><span class="tree-checkbox is-checked" role="img" aria-label="8.10 complete"></span><span class="tree-line-content"><span class="tree-number">8.10</span> <span class="tree-value type-string">Return candidate commits, branch, paths, tests/build/package evidence, review/UX verdicts, omissions, clean-scope evidence, and this plan path. Dev Orchestrator owns final integration, lifecycle, Commit delivery, and publication.</span></span></div></li></ul></li></ul></li></ul>
+  </main>
+  <script>
+(() => {
+  const root = document.querySelector("[data-hierarchy-root]");
+  if (!root) return;
+  const levelControls = document.querySelectorAll("[data-level]");
+  const copyControl = document.querySelector('[data-action="copy"]');
+  const copyStatus = document.querySelector("[data-copy-status]");
+  let copyResetTimer;
+
+  const setExpanded = (button, expanded) => {
+    button.setAttribute("aria-expanded", String(expanded));
+    const children = document.getElementById(button.getAttribute("aria-controls"));
+    if (children) children.hidden = !expanded;
+  };
+
+  const setVisibleLevel = (level) => {
+    const visibleLevel = level === "all" ? Number.POSITIVE_INFINITY : Number(level);
+    root.querySelectorAll(".tree-toggle").forEach((button) => {
+      const depth = Number(button.getAttribute("data-depth"));
+      setExpanded(button, depth < visibleLevel);
+    });
+    levelControls.forEach((control) => {
+      control.setAttribute("aria-pressed", String(control.getAttribute("data-level") === level));
+    });
+  };
+
+  root.addEventListener("click", (event) => {
+    if (!(event.target instanceof Element)) return;
+    const button = event.target.closest(".tree-toggle");
+    if (!button || !root.contains(button)) return;
+    setExpanded(button, button.getAttribute("aria-expanded") !== "true");
+    levelControls.forEach((control) => control.setAttribute("aria-pressed", "false"));
+  });
+
+  document.querySelectorAll('[data-action="expand"], [data-action="collapse"]').forEach((control) => {
+    control.addEventListener("click", () => {
+      const level = control.getAttribute("data-action") === "expand" ? "all" : "1";
+      setVisibleLevel(level);
+    });
+  });
+
+  levelControls.forEach((control) => {
+    control.addEventListener("click", () => {
+      setVisibleLevel(control.getAttribute("data-level"));
+    });
+  });
+
+  const payloadText = () => {
+    const lines = [];
+    const appendList = (list, depth) => {
+      Array.from(list.children).forEach((node) => {
+        if (!(node instanceof Element) || !node.classList.contains("tree-node")) return;
+        const line = node.querySelector(":scope > .node-line .tree-line-content");
+        if (line) {
+          const marker = node.querySelector(":scope > .node-line > .tree-checkbox");
+          const completion = marker
+            ? marker.classList.contains("is-checked") ? "[x] " : "[ ] "
+            : "";
+          const text = line.textContent.replace(/\s+/g, " ").trim();
+          lines.push(`${"  ".repeat(depth)}${completion}${text}`);
+        }
+        const children = node.querySelector(":scope > .tree-children");
+        if (children) appendList(children, depth + 1);
+      });
+    };
+    appendList(root, 0);
+    return lines.join("\n");
+  };
+
+  const fallbackCopy = (payload) => {
+    const activeElement = document.activeElement;
+    const field = document.createElement("textarea");
+    field.value = payload;
+    field.setAttribute("readonly", "");
+    field.style.position = "fixed";
+    field.style.opacity = "0";
+    document.body.appendChild(field);
+    field.select();
+    const copied = document.execCommand("copy");
+    field.remove();
+    if (activeElement instanceof HTMLElement) activeElement.focus();
+    return copied;
+  };
+
+  const writePayload = async (payload) => {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      try {
+        await navigator.clipboard.writeText(payload);
+        return true;
+      } catch {
+        return fallbackCopy(payload);
+      }
+    }
+    return fallbackCopy(payload);
+  };
+
+  if (copyControl) {
+    copyControl.addEventListener("click", async () => {
+      const copied = await writePayload(payloadText());
+      const copyLabel = copied ? "Copied" : "Copy failed";
+      copyControl.setAttribute("aria-label", copyLabel);
+      copyControl.setAttribute("title", copyLabel);
+      copyControl.classList.toggle("is-success", copied);
+      copyControl.classList.toggle("is-error", !copied);
+      if (copyStatus) {
+        copyStatus.textContent = copied
+          ? "Hierarchy content copied."
+          : "Could not copy the hierarchy content. Select and copy it manually.";
+      }
+      window.clearTimeout(copyResetTimer);
+      copyResetTimer = window.setTimeout(() => {
+        copyControl.setAttribute("aria-label", "Copy content");
+        copyControl.setAttribute("title", "Copy content");
+        copyControl.classList.remove("is-success", "is-error");
+        if (copyStatus) copyStatus.textContent = "";
+      }, 2000);
+    });
+  }
+})();
+  </script>
+</body>
+</html>
