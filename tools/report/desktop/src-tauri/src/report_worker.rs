@@ -1678,7 +1678,7 @@ fn runtime_row_suffix(row_key: &str) -> Result<&str, SupervisorError> {
         && suffix.len() <= 128
         && !WALL_TIME_ROW_KEYS.contains(&suffix)
         && suffix.chars().all(|character| {
-            !character.is_control() && !character.is_whitespace() && !character.is_uppercase()
+            !character.is_control() && character != '\u{7f}' && !character.is_uppercase()
         });
     if valid {
         Ok(suffix)
@@ -4193,6 +4193,36 @@ mod heatmap_contract_tests {
         assert!(runtime_row_suffix("runtime:").is_err());
         assert!(runtime_row_suffix("runtime:Unknown").is_err());
         assert!(runtime_row_suffix("runtime:model_inference").is_err());
+        assert_eq!(
+            runtime_row_suffix("runtime:custom state").expect("canonical spaced runtime key"),
+            "custom state"
+        );
+        assert!(runtime_row_suffix("runtime:custom\nstate").is_err());
+        let mut custom_runtime_matrix = maximal_matrix_result();
+        custom_runtime_matrix["maximum_rows"] = json!(1);
+        custom_runtime_matrix["total_cell_count"] = json!(10);
+        custom_runtime_matrix["rows"]
+            .as_array_mut()
+            .expect("runtime rows")
+            .truncate(1);
+        custom_runtime_matrix["rows"][0]["row_key"] = json!("runtime:custom state");
+        let custom_runtime_arguments = json!({
+            "query_kind": "matrix",
+            "from_time": "2026-08-12T12:00:00Z",
+            "to_time": "2026-08-12T12:10:00Z",
+            "mode": "wall_time",
+            "requested_resolution_minutes": 1,
+            "maximum_rows": 1
+        })
+        .as_object()
+        .expect("custom runtime arguments")
+        .clone();
+        validate_snapshot_heatmap_result(
+            Some(SNAPSHOT_ID),
+            &custom_runtime_arguments,
+            &custom_runtime_matrix,
+        )
+        .expect("canonical spaced runtime row crosses the Worker boundary");
         assert!(valid_model_row_key("model:0123456789abcdef01234567"));
         assert!(!valid_model_row_key("model:0123456789ABCDEF01234567"));
 
