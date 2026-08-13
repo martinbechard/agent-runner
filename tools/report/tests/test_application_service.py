@@ -756,6 +756,7 @@ def test_preflight_defaults_to_root_only_and_keeps_relationship_flags_independen
     results = []
     for index, scope in enumerate(scopes):
         fixture.discovery.result = _discovered(tmp_path, scope)
+        fixture.discovery.recheck_result = fixture.discovery.result
         results.append(
             fixture.service.preflight_report(
                 _context(f"preflight-{index}"),
@@ -789,7 +790,7 @@ def test_process_local_composition_has_no_shared_mutable_state(tmp_path: Path) -
     assert second.repository.open_calls == 0
 
 
-def test_preflight_returns_bounded_counts_without_snapshot_mutation(
+def test_preflight_prepares_bounded_revision_without_snapshot_publication(
     tmp_path: Path,
 ) -> None:
     fixture = _service_fixture(tmp_path)
@@ -803,7 +804,7 @@ def test_preflight_returns_bounded_counts_without_snapshot_mutation(
     assert result.ok is True
     assert result.value.log_count == 1
     assert result.value.known_event_count == 7
-    assert fixture.normalization.calls == 0
+    assert fixture.normalization.calls == 1
     assert fixture.repository.publish_calls == 0
     assert fixture.repository.open_calls == 0
 
@@ -842,7 +843,7 @@ def test_preflight_token_is_short_and_unknown_tokens_are_rejected(
     assert len(preflight.value.preflight_token.encode("utf-8")) <= 256
     assert unknown.error.code == "REPORT_SCOPE_CONFLICT"
     assert unknown.error.preflight_required is True
-    assert fixture.discovery.recheck_calls == 0
+    assert fixture.discovery.recheck_calls == 1
 
 
 def test_preflight_token_expires_before_snapshot_work(tmp_path: Path) -> None:
@@ -864,8 +865,8 @@ def test_preflight_token_expires_before_snapshot_work(tmp_path: Path) -> None:
 
     assert expired.error.code == "REPORT_SCOPE_CONFLICT"
     assert expired.error.preflight_required is True
-    assert fixture.discovery.recheck_calls == 0
-    assert fixture.normalization.calls == 0
+    assert fixture.discovery.recheck_calls == 1
+    assert fixture.normalization.calls == 1
 
 
 def test_preflight_token_is_consumed_and_cannot_be_reused(tmp_path: Path) -> None:
@@ -896,7 +897,7 @@ def test_preflight_token_is_consumed_and_cannot_be_reused(tmp_path: Path) -> Non
     assert fixture.discovery.recheck_calls == 1
 
 
-def test_open_snapshot_rejects_changed_source_revision_with_scope_conflict(
+def test_open_snapshot_uses_preflight_revision_when_live_source_changes(
     tmp_path: Path,
 ) -> None:
     fixture = _service_fixture(tmp_path)
@@ -908,6 +909,8 @@ def test_open_snapshot_rejects_changed_source_revision_with_scope_conflict(
     fixture.discovery.recheck_result = _discovered(
         tmp_path, ReportScope("thread-1"), "source-2"
     )
+    preflight_observation = fixture.clock.now_utc()
+    fixture.clock.advance(seconds=30)
 
     result = fixture.service.open_snapshot(
         _context("open"),
@@ -917,11 +920,32 @@ def test_open_snapshot_rejects_changed_source_revision_with_scope_conflict(
         cancellation=ManualCancellationToken(),
     )
 
-    assert result.error is not None
+    assert result.ok is True
+    assert result.value.source_revision == "source-1"
+    assert result.value.observation_time == preflight_observation
+    assert fixture.discovery.recheck_calls == 1
+    assert fixture.normalization.calls == 1
+    assert fixture.repository.publish_calls == 1
+
+
+def test_preflight_rejects_source_change_during_revision_preparation(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path)
+    fixture.discovery.recheck_result = _discovered(
+        tmp_path, ReportScope("thread-1"), "source-2"
+    )
+
+    result = fixture.service.preflight_report(
+        _context("preflight-changing"),
+        PreflightReportRequest(ReportScope("thread-1")),
+        cancellation=ManualCancellationToken(),
+    )
+
     assert result.error.code == "REPORT_SCOPE_CONFLICT"
     assert result.error.current_source_revision == "source-2"
     assert result.error.preflight_required is True
-    assert fixture.normalization.calls == 0
+    assert fixture.normalization.calls == 1
     assert fixture.repository.publish_calls == 0
 
 
@@ -947,8 +971,8 @@ def test_open_snapshot_binds_scope_token_and_exact_source_revision(
 
     assert result.error.code == "REPORT_SCOPE_CONFLICT"
     assert result.error.preflight_required is True
-    assert fixture.discovery.recheck_calls == 0
-    assert fixture.normalization.calls == 0
+    assert fixture.discovery.recheck_calls == 1
+    assert fixture.normalization.calls == 1
     assert fixture.repository.publish_calls == 0
 
 
@@ -970,7 +994,7 @@ def test_open_snapshot_publishes_state_only_after_repository_commit(
     assert summary.value.snapshot_id == snapshot_id
 
 
-def test_open_snapshot_privacy_failure_publishes_no_revision_or_snapshot(
+def test_preflight_privacy_failure_publishes_no_revision_or_snapshot(
     tmp_path: Path,
 ) -> None:
     fixture = _service_fixture(tmp_path)
@@ -981,15 +1005,7 @@ def test_open_snapshot_privacy_failure_publishes_no_revision_or_snapshot(
         cancellation=ManualCancellationToken(),
     )
 
-    result = fixture.service.open_snapshot(
-        _context("open"),
-        OpenSnapshotRequest(
-            ReportScope("thread-1"), preflight.value.preflight_token, "source-1"
-        ),
-        cancellation=ManualCancellationToken(),
-    )
-
-    assert result.error.code == "REPORT_PRIVACY_FAILED"
+    assert preflight.error.code == "REPORT_PRIVACY_FAILED"
     assert fixture.repository.publish_calls == 0
     assert fixture.repository.open_calls == 0
 
@@ -1790,7 +1806,7 @@ def test_active_reader_rejects_refresh_and_export_without_side_effects(
 
     assert refresh.error.code == "REPORT_SNAPSHOT_CONFLICT"
     assert export.error.code == "REPORT_SNAPSHOT_CONFLICT"
-    assert fixture.discovery.recheck_calls == 1  # open only
+    assert fixture.discovery.recheck_calls == 1
     assert fixture.exporter.requests == []
 
 

@@ -1251,6 +1251,14 @@ class _PreflightClaims:
 
 
 @dataclass(frozen=True, slots=True)
+class _PreparedPreflight:
+    claims: _PreflightClaims
+    discovered: DiscoveredScope
+    normalized: NormalizedRevision
+    observation_time: datetime
+
+
+@dataclass(frozen=True, slots=True)
 class _CursorClaims:
     snapshot_id: str
     revision_id: str
@@ -1760,6 +1768,7 @@ class ApplicationService:
         self._state_lock = threading.RLock()
         self._state_changed = threading.Condition(self._state_lock)
         self._preflight_expiry: dict[str, datetime] = {}
+        self._prepared_preflights: dict[str, _PreparedPreflight] = {}
         try:
             integrity_key = dependencies.ids.new_token_key()
             self._token_codec = _OpaqueTokenCodec(integrity_key)
@@ -1810,6 +1819,51 @@ class ApplicationService:
                 or known_event_count < 0
             ):
                 return _failure(_safe_internal_error(context.operation_id))
+            normalized = self._dependencies.normalization.normalize(
+                discovered,
+                self._config.parser_version,
+                self._config.pricing_digest,
+                self._config.formatter_digest,
+                cancellation,
+                progress,
+            )
+            if (
+                not normalized.privacy_validated
+                or normalized.source_revision != discovered.source_revision
+            ):
+                return _failure(
+                    ReportError(
+                        code="REPORT_PRIVACY_FAILED",
+                        message="The normalized report revision failed privacy validation.",
+                        recoverable=False,
+                        operation_id=context.operation_id,
+                    )
+                )
+            if cancellation.is_cancelled():
+                return _failure(_cancelled(context.operation_id))
+            verified = self._dependencies.discovery.recheck(
+                request.scope,
+                self._config.authorized_source_roots,
+                cancellation,
+                progress,
+            )
+            validation = self._validate_discovered(verified, request.scope)
+            if validation is not None:
+                return _failure(self._with_operation(validation, context.operation_id))
+            if verified.source_revision != discovered.source_revision:
+                return _failure(
+                    ReportError(
+                        code="REPORT_SCOPE_CONFLICT",
+                        message="The report source changed during preflight.",
+                        recoverable=True,
+                        operation_id=context.operation_id,
+                        current_source_revision=verified.source_revision,
+                        preflight_required=True,
+                    )
+                )
+            observation_time = self._dependencies.clock.now_utc()
+            if not _aware_datetime(observation_time):
+                return _failure(_safe_internal_error(context.operation_id))
             warnings = _bounded_warnings(discovered.warnings)
             if warnings is None:
                 return _failure(_safe_internal_error(context.operation_id))
@@ -1832,10 +1886,17 @@ class ApplicationService:
                 while len(self._preflight_expiry) >= _MAX_PREFLIGHT_TOKENS:
                     oldest = next(iter(self._preflight_expiry))
                     del self._preflight_expiry[oldest]
+                    self._prepared_preflights.pop(oldest, None)
                     self._token_codec.invalidate_preflight(oldest)
                 token = self._token_codec.encode_preflight(claims)
                 self._preflight_expiry[token] = now + timedelta(
                     seconds=_PREFLIGHT_TOKEN_TTL_SECONDS
+                )
+                self._prepared_preflights[token] = _PreparedPreflight(
+                    claims,
+                    discovered,
+                    normalized,
+                    observation_time.astimezone(timezone.utc),
                 )
             return _success(
                 PreflightResult(
@@ -1892,7 +1953,7 @@ class ApplicationService:
         if cancellation.is_cancelled():
             return _failure(_cancelled(context.operation_id))
         try:
-            claims = self._consume_preflight(request.preflight_token)
+            prepared = self._consume_preflight(request.preflight_token)
         except _DEPENDENCY_FAILURE_CLASSES as failure:
             self._log_dependency_failure(
                 context.operation_id, "open_snapshot", "clock", failure
@@ -1903,7 +1964,7 @@ class ApplicationService:
                 context.operation_id, "open_snapshot", "clock", unexpected
             )
             return _failure(_safe_internal_error(context.operation_id))
-        if claims is None:
+        if prepared is None:
             return _failure(
                 ReportError(
                     code="REPORT_SCOPE_CONFLICT",
@@ -1913,6 +1974,7 @@ class ApplicationService:
                     preflight_required=True,
                 )
             )
+        claims = prepared.claims
         if (
             claims.scope != request.scope
             or claims.source_revision != request.source_revision
@@ -1933,48 +1995,10 @@ class ApplicationService:
             )
         handle: SnapshotReadHandle | None = None
         try:
-            discovered = self._dependencies.discovery.recheck(
-                request.scope,
-                self._config.authorized_source_roots,
-                cancellation,
-                progress,
-            )
-            validation = self._validate_discovered(discovered, request.scope)
-            if validation is not None:
-                return _failure(self._with_operation(validation, context.operation_id))
-            if discovered.source_revision != request.source_revision:
-                return _failure(
-                    ReportError(
-                        code="REPORT_SCOPE_CONFLICT",
-                        message="The report source changed after preflight.",
-                        recoverable=True,
-                        operation_id=context.operation_id,
-                        current_source_revision=discovered.source_revision,
-                        preflight_required=True,
-                    )
-                )
+            discovered = prepared.discovered
             if cancellation.is_cancelled():
                 return _failure(_cancelled(context.operation_id))
-            normalized = self._dependencies.normalization.normalize(
-                discovered,
-                self._config.parser_version,
-                self._config.pricing_digest,
-                self._config.formatter_digest,
-                cancellation,
-                progress,
-            )
-            if (
-                not normalized.privacy_validated
-                or normalized.source_revision != discovered.source_revision
-            ):
-                return _failure(
-                    ReportError(
-                        code="REPORT_PRIVACY_FAILED",
-                        message="The normalized report revision failed privacy validation.",
-                        recoverable=False,
-                        operation_id=context.operation_id,
-                    )
-                )
+            normalized = prepared.normalized
             if cancellation.is_cancelled():
                 return _failure(_cancelled(context.operation_id))
             try:
@@ -2007,7 +2031,7 @@ class ApplicationService:
             ):
                 return _failure(_safe_internal_error(context.operation_id))
             snapshot_id = self._dependencies.ids.new_snapshot_id()
-            observation_time = self._dependencies.clock.now_utc()
+            observation_time = prepared.observation_time
             if _validate_identifier(
                 snapshot_id, "snapshot_id"
             ) is not None or not _aware_datetime(observation_time):
@@ -2837,6 +2861,7 @@ class ApplicationService:
             states = tuple(self._snapshots.values())
             self._snapshots.clear()
             self._preflight_expiry.clear()
+            self._prepared_preflights.clear()
             self._token_codec.clear()
             for state in states:
                 state.status = "closed"
@@ -2857,7 +2882,7 @@ class ApplicationService:
                 )
         return None
 
-    def _consume_preflight(self, token: str) -> _PreflightClaims | None:
+    def _consume_preflight(self, token: str) -> _PreparedPreflight | None:
         now = self._dependencies.clock.now_utc()
         if not _aware_datetime(now):
             raise InfrastructureFailure(
@@ -2869,8 +2894,13 @@ class ApplicationService:
                 return None
             del self._preflight_expiry[token]
             try:
-                return self._token_codec.decode_preflight(token)
+                claims = self._token_codec.decode_preflight(token)
+                prepared = self._prepared_preflights.pop(token, None)
+                if prepared is None or prepared.claims != claims:
+                    return None
+                return prepared
             except _TokenDecodeError:
+                self._prepared_preflights.pop(token, None)
                 return None
             finally:
                 self._token_codec.invalidate_preflight(token)
@@ -2879,6 +2909,7 @@ class ApplicationService:
         for token, expires_at in tuple(self._preflight_expiry.items()):
             if expires_at <= now:
                 del self._preflight_expiry[token]
+                self._prepared_preflights.pop(token, None)
                 self._token_codec.invalidate_preflight(token)
 
     def _common_snapshot_gate(
