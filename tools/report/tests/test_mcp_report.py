@@ -911,6 +911,127 @@ def test_runtime_discovery_returns_typed_not_found_failure(tmp_path: Path) -> No
     assert captured.value.recoverable is True
 
 
+@pytest.mark.parametrize(
+    ("include_children", "include_collaborators", "expected"),
+    [
+        (False, False, (("root", "root"),)),
+        (True, False, (("root", "root"), ("child", "child"))),
+        (False, True, (("root", "root"), ("peer", "collaborator"))),
+        (True, True, (("root", "root"), ("child", "child"), ("peer", "collaborator"))),
+    ],
+)
+def test_runtime_discovery_matches_packaged_signature_and_independent_scope(
+    tmp_path: Path,
+    include_children: bool,
+    include_collaborators: bool,
+    expected: tuple[tuple[str, str], ...],
+) -> None:
+    paths = {name: tmp_path / f"{name}.jsonl" for name in ("root", "child", "peer")}
+    for name, path in paths.items():
+        path.write_text(name, encoding="utf-8")
+    identities = {
+        paths["root"]: ("root", "", "", "codex"),
+        paths["child"]: ("child", "root", "", "codex"),
+        paths["peer"]: ("peer", "outside", "", "codex"),
+    }
+
+    class PackagedRuntime:
+        @staticmethod
+        def _candidate_rollouts(_root: Path) -> list[Path]:
+            return list(paths.values())
+
+        @staticmethod
+        def _default_codex_discovery_index_path() -> Path:
+            return tmp_path / "index.sqlite3"
+
+        @staticmethod
+        def _discover_rollout_paths(
+            root_thread_id: str,
+            candidate_paths: list[Path],
+            *,
+            include_delegations: bool = False,
+            index_path: Path | None = None,
+        ) -> tuple[list[Path], list[str], None]:
+            assert root_thread_id == "root" and index_path is not None
+            selected = [paths["root"], paths["child"]]
+            if include_delegations:
+                selected.append(paths["peer"])
+            return selected, [], None
+
+        @staticmethod
+        def _rollout_identity(path: Path) -> tuple[str, str, str, str]:
+            return identities[path]
+
+    result = report_module._RuntimeDiscovery(PackagedRuntime()).preflight(  # type: ignore[arg-type]
+        service_types.ReportScope("root", include_children, include_collaborators),
+        (tmp_path,),
+        SimpleNamespace(is_cancelled=lambda: False),
+        None,
+    )
+
+    assert tuple((source.authorized_path.stem, source.relationship) for source in result.sources) == expected
+    assert result.child_count == sum(relationship == "child" for _, relationship in expected)
+    assert result.collaborator_count == sum(relationship == "collaborator" for _, relationship in expected)
+
+
+def test_runtime_normalization_calls_packaged_builder_without_include_children(
+    tmp_path: Path,
+) -> None:
+    source_path = tmp_path / "root.jsonl"
+    source_path.write_text("{}\n", encoding="utf-8")
+    calls: list[dict[str, object]] = []
+
+    class PackagedRuntime:
+        @staticmethod
+        def _default_codex_discovery_index_path() -> Path:
+            return tmp_path / "index.sqlite3"
+
+        @staticmethod
+        def build_codex_rollout_run(
+            root_thread_id: str,
+            sessions_root: list[Path],
+            *,
+            seal: bool = False,
+            allow_aborted: bool = False,
+            include_delegations: bool = False,
+            observed_at: datetime | None = None,
+            candidate_paths: list[Path] | None = None,
+            title: str = "",
+            thread_titles: dict[str, str] | None = None,
+            discovery_index_path: Path | None = None,
+            cancelled=None,
+            progress=None,
+            worker_progress=None,
+            workers: int = 1,
+        ) -> object:
+            calls.append({"root": root_thread_id, "delegations": include_delegations, "paths": candidate_paths or []})
+            return SimpleNamespace(threads=(), observed_at="2026-08-13T12:00:00Z", state="live", root_thread_id="root")
+
+        @staticmethod
+        def _cost_for_response(_thread: object, _response: object) -> object:
+            raise AssertionError("no responses")
+
+    source = service_types.DiscoveredSource(
+        "source-1", source_path, "source-revision", source_path.stat().st_size, "root"
+    )
+    discovered = service_types.DiscoveredScope(
+        service_types.ReportScope("root", False, True), "source-revision", (source,),
+        1, source.byte_count, 0, 0, 0, 1, (),
+    )
+    normalization = report_module._RuntimeNormalization(  # type: ignore[arg-type]
+        PackagedRuntime(), seal=False, allow_aborted=False, title="", thread_titles={}, workers=1,
+        pricing_version="pricing-v1",
+    )
+
+    result = normalization.normalize(
+        discovered, "parser-v1", "a" * 64, "b" * 64,
+        SimpleNamespace(is_cancelled=lambda: False), None,
+    )
+
+    assert calls == [{"root": "root", "delegations": True, "paths": [source_path]}]
+    assert result.run.root_thread_id == "root"
+
+
 def _runtime_query_run() -> SimpleNamespace:
     usage = SimpleNamespace(
         input_tokens=120,

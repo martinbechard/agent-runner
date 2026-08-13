@@ -305,7 +305,6 @@ class _RuntimeDiscovery:
             paths, diagnostics, _parent = self._runtime._discover_rollout_paths(
                 scope.root_thread_id,
                 candidates,
-                include_children=scope.include_children,
                 include_delegations=scope.include_collaborators,
                 index_path=self._runtime._default_codex_discovery_index_path(),
             )
@@ -313,16 +312,19 @@ class _RuntimeDiscovery:
             raise service_types.DiscoveryFailure(
                 "not_found", "The selected report task was not found.", True
             ) from error
+        scoped_paths = _select_rollout_scope(
+            self._runtime,
+            scope.root_thread_id,
+            paths,
+            include_children=scope.include_children,
+            include_collaborators=scope.include_collaborators,
+        )
         sources: list[service_types.DiscoveredSource] = []
         digest = hashlib.sha256()
-        for index, path in enumerate(paths):
+        for path, relationship in scoped_paths:
             stat = path.stat()
             revision = hashlib.sha256(path.read_bytes()).hexdigest()
             source_key = event_cache.source_key_for_path(path)
-            identity = self._runtime._rollout_identity(path)
-            relationship: service_types.SourceRelationship = "root"
-            if index:
-                relationship = "child" if identity and identity[1] else "collaborator"
             sources.append(
                 service_types.DiscoveredSource(
                     str(source_key), path, revision, stat.st_size, relationship
@@ -346,6 +348,50 @@ class _RuntimeDiscovery:
             len(sources),
             warnings,
         )
+
+
+def _select_rollout_scope(
+    runtime: ModuleType,
+    root_thread_id: str,
+    paths: list[Path],
+    *,
+    include_children: bool,
+    include_collaborators: bool,
+) -> list[tuple[Path, service_types.SourceRelationship]]:
+    """Project the classic related-thread closure onto independent scope flags."""
+
+    identities: dict[str, tuple[Path, str]] = {}
+    ordered: list[tuple[str, Path]] = []
+    for path in paths:
+        identity = runtime._rollout_identity(path)
+        if identity is None:
+            raise service_types.DiscoveryFailure(
+                "read", "The report relationship scope could not be resolved.", True
+            )
+        thread_id, parent_thread_id, _started_at, _source_store = identity
+        identities[thread_id] = (path, parent_thread_id)
+        ordered.append((thread_id, path))
+    if root_thread_id not in identities:
+        raise service_types.DiscoveryFailure(
+            "not_found", "The selected report task was not found.", True
+        )
+    descendants = {root_thread_id}
+    changed = True
+    while changed:
+        changed = False
+        for thread_id, (_path, parent_thread_id) in identities.items():
+            if thread_id not in descendants and parent_thread_id in descendants:
+                descendants.add(thread_id)
+                changed = True
+    selected: list[tuple[Path, service_types.SourceRelationship]] = []
+    for thread_id, path in ordered:
+        if thread_id == root_thread_id:
+            selected.append((path, "root"))
+        elif thread_id in descendants and include_children:
+            selected.append((path, "child"))
+        elif thread_id not in descendants and include_collaborators:
+            selected.append((path, "collaborator"))
+    return selected
 
 
 def _aware(value: str | None) -> datetime | None:
@@ -404,7 +450,6 @@ class _RuntimeNormalization:
                 ],
                 seal=self._seal,
                 allow_aborted=self._allow_aborted,
-                include_children=discovered.scope.include_children,
                 include_delegations=discovered.scope.include_collaborators,
                 title=self._title,
                 thread_titles=self._thread_titles,
