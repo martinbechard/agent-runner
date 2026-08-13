@@ -234,7 +234,7 @@ The Tauri dynamic workspace is the intended primary entry point for Codex analys
 | `list_agents` | Intended | Snapshot holder | Exact query and state filters; requested `last_activity_at|started_at|agent_id` sort; opaque cursor; page size 1 to 500 | Canonical page with exact revision, normalized applied filter and sort objects, and full agent rows; default 100 | Planned pagination tests |
 | `list_turns` | Intended | Snapshot holder | Exact agent and state filters; requested `started_at|ended_at|turn_id` sort; opaque cursor; page size 1 to 500 | Canonical page with exact revision, normalized applied filter and sort objects, and full turn rows | Planned pagination tests |
 | `list_events` | Intended | Snapshot holder | Exact agent, turn, kind, and half-open time filters; requested `occurred_at|event_id` sort; opaque cursor; page size 1 to 500 | Canonical page with full event fields and nullable opaque source reference; no native path | Planned pagination, detail, and path-privacy tests |
-| `query_time_range` | Intended snapshot operation; retained MCP schema remains unchanged | Snapshot holder | Snapshot ID, exact half-open range, measure, requested resolution, `agent|event_kind|work_item` grouping, and maximum rows | Exact-revision grouped heatmap with at most 2,000 cells, actual resolution, omitted-row count, deterministic row order, independent row scale and color semantics, labels, evidence, and provenance | Planned grouping, coarsening, scale, and MCP parity tests |
+| `query_snapshot_time_range` | Intended additive snapshot operation; it does not replace or change retained MCP `query_time_range` | Snapshot holder | Snapshot ID, exact half-open range, user-facing mode `wall_time|tokens|models`, requested 1, 5, 15, 30, or 60 minute resolution, and maximum rows. Wall time selects present runtime-state rows. Tokens selects the fixed token, tool, context, and cost rows. Models selects recorded model-and-effort rows plus Cost. | Exact-revision Heatmap with at most 2,000 cells, actual resolution, omitted-row count, stable mode-specific row order, measure-specific aggregation and formatting, friendly labels, explicit evidence state, per-row scale metadata, context capacity or fallback scale, bounded drilldown evidence, and provenance | Planned HM-F01 through HM-F15 mode, row, aggregation, formatting, evidence-state, scaling, drilldown, coarsening, interaction, and retained-MCP isolation tests |
 | `query_sequence` | Intended | Snapshot holder | Exact focus, event-kind, grouping, reasoning, chronological sort, cursor, and page-size fields | Canonical sequence page plus group hierarchy; rows include endpoints, labels, event identity, repetition, and reasoning availability | Planned sequence tests |
 | `query_coordination` | Intended | Snapshot holder | Exact work-item, delegated-root, agent, operation, and evidence filters; chronological sort, cursor, page size | Canonical coordination page with full operation, label, evidence, and event fields; inferred prose decisions are labeled | Planned coordination tests |
 | `get_event_details` | Intended snapshot operation; retained MCP schema remains unchanged | Snapshot holder | Snapshot ID and deterministic event ID | Exact-revision lazy detail with title, optional summary, bounded structured disclosures, evidence, provenance, and nullable opaque source reference | Planned detail and source-registry tests |
@@ -285,6 +285,63 @@ This specification excludes remote hosting, collaborative multi-user access, sou
 | Complete directory export | A `file://`-compatible report folder with a small index and paginated pre-rendered detail. |
 | Classic interactive report | The current rich Codex HTML report and sequence companion produced by `run-timeline.py`; it remains the CLI default and the renderer behind MCP `generate_report`. |
 | Measured, derived, inferred, unavailable | Evidence labels that distinguish direct telemetry from calculations, interpretation, and missing data. |
+| Heatmap mode | One of the three user-facing Heatmap choices: Wall time, Tokens, or Models. A mode selects a stable row family and its aggregation, formatting, scaling, and evidence rules. |
+| Heatmap period | One time bucket at the requested or service-coarsened resolution. Periods use local-time labels in the desktop and remain bound to the snapshot's exact UTC range. |
+| Per-row scale | The intensity domain calculated independently for one heatmap row. A darker cell means a larger value within that row, not necessarily a larger value than a cell in another row. |
+| Context capacity | The known model context window used as the fixed scale for Context size rows. When capacity is unavailable, the cell shows the token value without a percentage and does not invent a capacity. |
+| Heatmap drilldown | A bounded, on-demand view of one row and period. It shows the row value and a limited chronological evidence list without loading all event details into the heatmap response. |
+
+### Heatmap Functional Facets
+
+The Heatmap contract has three distinct authority classes. Classic-preserved semantics come from the current interactive HTML renderer and its tests. Accepted dynamic constraints come from this specification's existing snapshot, bounding, privacy, and accessibility decisions. Justified functional propositions close actor-visible gaps that neither authority decides.
+
+| Authority class | Heatmap scope |
+|---|---|
+| Classic-preserved semantics | The three mode labels; known runtime and token row labels and order; model-and-effort grouping and order; complete-evidence calculations and formatting; friendly labels; known-capacity and per-row scales; selection, pointer drilldown, step-back, breadcrumbs, adjacent-period movement, horizontal scrolling, and period controls. |
+| Accepted dynamic constraints | Exact snapshot revision and half-open range; no more than 2,000 cells; disclosed coarsening and omissions; bounded lazy drilldown and event detail; sanitized previews; non-color value semantics; keyboard equivalence; and no native-path disclosure. |
+| Justified functional propositions | Explicit zero, partial, and unavailable semantics; the unknown-context-capacity scale fallback; and visible keyboard-operable Drill down and Step back controls with disabled boundaries. |
+
+| ID | Functional contract |
+|---|---|
+| HM-F01 | Heatmap exposes exactly three user-facing modes: Wall time, Tokens, and Models. |
+| HM-F02 | Wall time contains only present runtime-state rows. Known states use this stable order: Model inference, Tool execution, Build / Test, Waiting for agent, User pause, Watchdog, Approval / infrastructure, and Unattributed. Any present state outside that set follows in ascending internal-state order and uses its title-cased identifier as the label. |
+| HM-F03 | Tokens contains Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), and Cost in that order. |
+| HM-F04 | Models contains one row for each normalized model-and-effort combination, followed by Cost. A response uses its recorded model, then a single non-mixed thread model, then Unknown model. It uses its recorded effort, then a single non-mixed thread effort, then no effort suffix. Distinct efforts remain separate rows. Model rows follow the first response occurrence while traversing agents and their responses in stable snapshot source order, then Cost. |
+| HM-F05 | A Wall time cell measures the union of matching runtime-state intervals that overlap the period. Overlapping intervals in the same state are not double-counted. |
+| HM-F06 | Token cells sum response-owned values completed in the period. Tool calls count completed calls. Context size (avg) averages positive observations. Context size (max) takes their maximum. Cost sums recorded or API-equivalent response estimates. A model row sums processed tokens for that model-and-effort combination. |
+| HM-F07 | Wall time uses duration formatting. Token and model values use compact numeric formatting. Tool calls use integer counts. Context rows show token value and capacity percentage when capacity is known. Cost uses currency formatting consistent with report precision. |
+| HM-F08 | Row headings, cell labels, drilldown headings, and accessible names use friendly labels rather than internal identifiers. Agents retain stable snapshot source order. The agent role is the recorded role, or main for a root without one, or default for a child without one. The chosen name is the recorded nickname, or the child assignment when no nickname exists. The label is `role (name)` when the chosen name exists and differs from both the role and the literal fallback name `root`; otherwise it is the role. A model label is `model · effort value` when normalized effort exists, model alone when it does not, and Unknown model when normalized model identity is unavailable. |
+| HM-F09 | A measured or derived applicable value of zero displays as zero in its measure-specific format. Missing timing, usage, or price evidence produces partial or unavailable value evidence under the matrix. Unknown model and effort use the fallback identities in HM-F04. Unknown context capacity changes only context scaling and percentage formatting under HM-F10. None of these gaps is converted to a measured zero. |
+| HM-F10 | Every non-context row uses its own maximum visible value as its intensity scale. Context rows use known context capacity. When context capacity is unavailable, a Context row falls back to its own maximum visible value, labels the scale as row-relative, and omits a capacity percentage. The UI discloses the scale basis and does not invite intensity comparison across different rows. |
+| HM-F11 | Initial Heatmap loading is bounded to the selected visible range and rows. Selecting a cell loads only its bounded chronological evidence. The drilldown returns at most 100 evidence rows and reports the omitted count. Full event detail remains a separate lazy action. |
+| HM-F12 | Heatmap preserves single-click selection, double-click next-level drilldown, right-click step-back, breadcrumb return, previous and next period movement, horizontal scroll controls, and 1, 5, 15, 30, and 60 minute period controls. Selecting a cell also exposes visible keyboard-operable Drill down and Step back buttons. Drill down is disabled at 1 minute. Step back is disabled when no parent period exists. Previous and Next are disabled when their target period is outside the snapshot range. |
+| HM-F13 | Drilldown evidence uses event time, measure-specific value, duration when known, and a bounded sanitized preview. Token-response evidence starts with the friendly agent label from HM-F08 and then the friendly model-and-effort label. Other rows use the friendly model-and-effort, runtime-state, or tool label that applies. Drilldown preserves privacy and availability labels. |
+| HM-F14 | A response contains no more than 2,000 cells across all returned rows. The service selects the nearest coarser supported resolution that meets the limit, returns the actual resolution, and reports omitted rows. |
+| HM-F15 | Cells expose row, local period, mode, formatted value, availability, and selection state without relying on color. The synchronized drilldown list preserves the same evidence for keyboard and assistive-technology users. |
+
+### Heatmap Value And Evidence-State Matrix
+
+Every cell returns exactly one value-evidence state: measured, derived, partial, or unavailable. Measured means the displayed value is one direct recorded value without calculation. Derived means the application calculated a complete value from recorded evidence. Partial means some applicable contributors are known and some are unavailable. A partial cell displays `Partial · <formatted known value>` and calculates that value only from usable contributors. Unavailable means no defensible value can be calculated; the cell displays `Unavailable` without a numeric value. The response also returns `applicable_zero`, which is true only when complete applicable evidence establishes zero. It qualifies a measured or derived state and is never a synonym for unavailable.
+
+| Mode and row family | Value and aggregation | Measured | Derived | Partial | Unavailable | `applicable_zero` |
+|---|---|---|---|---|---|---|
+| Wall time: each HM-F02 runtime state | Union of matching interval overlap within the period; no double counting | Not used because overlap is calculated | All applicable interval boundaries are usable; retain direct or inferred boundary provenance | Display the union of usable matching intervals when other matching intervals have missing or invalid timing | The state is applicable but no matching interval has usable timing | True when complete interval evidence has no overlap with the period; show `0ms` |
+| Tokens: Uncached input, Cached input, Reasoning, Output | Sum the corresponding response-owned usage completed in the period | One applicable response supplies one direct counter and no calculation or normalization is required | Complete counters require summing or a source-defined normalized calculation | Display the sum of usable counters when at least one applicable response lacks usable usage | Applicable responses exist but none has usable usage for the row | True when complete applicable response usage establishes zero; show compact `0` |
+| Tokens: Tool calls | Count recorded tool calls completed in the period | Not used because the cell is a count | The bounded tool-event set is complete | Display the count from known coverage when the snapshot identifies incomplete tool-event coverage | Tool-event coverage is unavailable for the period | True when complete tool-event coverage contains no calls; show integer `0` |
+| Tokens: Context size (avg) | Average positive recorded context-token observations | Not used because the cell is an average | All applicable positive usable observations are included | Display the average of usable positive observations when other applicable responses lack context evidence | No positive usable context observation exists | Never true; absence or a recorded nonpositive placeholder is unavailable, not context size zero |
+| Tokens: Context size (max) | Maximum positive recorded context-token observation | One applicable response supplies one positive direct observation | More than one complete positive observation requires a maximum calculation | Display the maximum usable positive observation when other applicable responses lack context evidence | No positive usable context observation exists | Never true; absence or a recorded nonpositive placeholder is unavailable, not context size zero |
+| Tokens or Models: Cost | Sum recorded response cost and supported API-equivalent estimates completed in the period | One applicable response supplies one fully recorded cost and no calculation is required | Complete supported evidence requires summing or an API-equivalent estimate; label the method | Display the subtotal of supported costs when another applicable response has missing usage or no supported price for its normalized model identity | No applicable response has defensible recorded or estimated cost | True when complete cost evidence establishes no cost; show `$0.00` |
+| Models: each model-and-effort row | Sum processed tokens for responses with that normalized model-and-effort identity | One matching response supplies one direct processed-token value | Complete matching usage requires summing or a source-defined processed-token calculation | Display the sum of usable processed-token values when another matching response lacks usage | The row identity exists but no matching response has usable processed-token evidence | True when complete matching response usage establishes zero; show compact `0` |
+
+Missing response effort does not make a model row partial or unavailable when the thread supplies one uniform non-mixed effort. Otherwise, it creates the model-only identity defined by HM-F04. Missing response model uses one uniform non-mixed thread model before it creates the Unknown model identity. The value state then depends on usage evidence. Unknown context capacity affects scale and percentage formatting, not the recorded context-token value.
+
+### Heatmap Functional Propositions
+
+| Proposition | Basis | Necessity | Decision owner |
+|---|---|---|---|
+| JFP-HM-01: Use the evidence-state matrix above and never coerce missing evidence to zero. | Existing provenance rules distinguish measured, derived, and unavailable evidence, while existing cost behavior can be partial. The classic Heatmap can currently render missing numeric inputs as zero. | Dynamic users must distinguish no activity from unavailable telemetry before comparing cells or cost. | Product owner may accept or revise this actor-visible evidence contract. |
+| JFP-HM-02: When context capacity is unknown, scale a Context row to its own visible maximum and omit the percentage. | Classic behavior uses known context capacity as the scale, but it does not define the unknown-capacity branch. | The Heatmap needs a usable non-deceptive fallback without inventing model capacity. | Product owner may accept or revise this actor-visible scale fallback. |
+| JFP-HM-03: Expose visible Drill down and Step back controls after cell selection in addition to pointer shortcuts. | Existing interaction uses double-click and right-click, while FR-10 requires keyboard operation and non-pointer access. | Keyboard and assistive-technology users need discoverable equivalents with explicit navigation boundaries. | Product owner may accept or revise this actor-visible control contract. |
 
 ## Workflows
 
@@ -315,10 +372,13 @@ This specification excludes remote hosting, collaborative multi-user access, sou
 2. The operator chooses Coordination, Heatmap, Timeline, Sequence, Agents, Turns, Tools, Model usage, Context and compaction, Inference, Runtime and waits, Work items and claims, or Provenance and diagnostics.
 3. The application requests only the selected view and visible page or time range.
 4. Large lists use virtualization and opaque cursor pagination.
-5. A grouped heatmap request returns no more than 2,000 total cells across all rows. The application labels any coarser returned resolution.
-6. The operator selects an event to load bounded details on demand.
-7. Raw argument or result disclosures remain absent until the operator opens them.
-8. The Coordination view groups evidence by canonical work item or delegated root when available. It marks reconstructed prose decisions as inferred.
+5. In Heatmap, the operator chooses Wall time, Tokens, or Models and a 1, 5, 15, 30, or 60 minute period.
+6. The application calls additive `query_snapshot_time_range` for only the visible range and mode-specific rows. The response contains no more than 2,000 cells and labels any coarser actual resolution or omitted rows.
+7. Each row uses its own disclosed scale. Context rows use known context capacity or the HM-F10 row-relative fallback. Zero and unavailable values remain visibly distinct.
+8. The operator selects a cell to request a bounded chronological drilldown. The operator can double-click or use the visible Drill down button to move to the next finer period. The operator can right-click, use the visible Step back button, use a breadcrumb, or use an adjacent-period control to navigate without loading the full event set.
+9. The operator selects one drilldown event to load full bounded event details on demand.
+10. Raw argument or result disclosures remain absent until the operator opens them.
+11. The Coordination view groups evidence by canonical work item or delegated root when available. It marks reconstructed prose decisions as inferred.
 
 ### Workflow 4: Refresh, Cancel, And Recover
 
@@ -406,6 +466,30 @@ This wireframe defines grouping, relative prominence, and the preflight-to-works
 ```
 
 When preflight is closed, the workspace occupies the main region. On narrow windows, the navigation becomes a disclosure above the active view; the selected scope and Refresh action remain visible.
+
+### Heatmap Layout And Interaction Contract
+
+This wireframe defines the three mode choices, period controls, row-specific scale disclosure, bounded drilldown, and existing navigation controls. It is illustrative of layout, but its labels and interaction states are contractual.
+
+```text
+┌────────────────────────────────────────────────────────────────────────────┐
+│ HEATMAP                                                                    │
+│ Measure [Wall time ▾]   Period [1 min] [5 min•] [15] [30] [1 hour]  [←][→] │
+│ Scale: per row · Context uses known capacity, else row-relative            │
+├───────────────────────┬──────────┬──────────┬──────────┬──────────┤
+│ Periods               │ 08:00    │ 08:05    │ 08:10    │ 08:15    │
+│ Model inference       │ 2m 10s   │ 4m 02s   │ 0ms      │ Unavail. │
+│ Tool execution        │ 34s      │ 1m 11s   │ 12s      │ 0ms      │
+│ Build / Test          │ 0ms      │ 45s      │ 3m 08s   │ 10s      │
+└───────────────────────┴──────────┴──────────┴──────────┴──────────┘
+  Drilldown path: 15 min › 5 min · 08:05–08:10
+  [Drill down] [Step back]                            [Previous] [Next]
+  Tool execution · 08:05–08:10 · 1m 11s
+  08:06 · Shell · 44s · bounded sanitized preview
+  08:08 · MCP call · 27s · bounded sanitized preview
+```
+
+Tokens replaces the runtime-state rows with Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), and Cost. Models replaces them with one friendly model-and-effort row per recorded combination and a final Cost row. The label `Unavail.` represents unavailable evidence and is never used for a measured zero. Drill down is disabled at 1 minute. Step back is disabled at 60 minutes or whenever no coarser parent is in the selection trail. Previous and Next are disabled when the adjacent period does not overlap the snapshot range.
 
 ### CLI Success And Failure
 
@@ -715,6 +799,30 @@ flowchart TD
   Lazy --> Choose
 ```
 
+### Heatmap Selection And Drilldown Workflow
+
+```mermaid
+stateDiagram-v2
+  [*] --> Configure
+  Configure --> Loading: Choose mode, period, and visible range
+  Loading --> Empty: No rows or periods
+  Empty --> Configure: Change mode, period, or range
+  Loading --> Overview: Render measured, derived, partial, unavailable, and zero cells
+  Overview --> CellSelected: Select cell
+  CellSelected --> CellSelected: Double-click or Drill down [period above 1 minute]
+  CellSelected --> CellSelected: Right-click, Step back, or ancestor breadcrumb [parent exists]
+  CellSelected --> CellSelected: Previous or Next [target overlaps snapshot]
+  CellSelected --> EventDetail: Open one evidence item
+  EventDetail --> CellSelected: Return to bounded drilldown
+  Overview --> Loading: Change mode, period, or range
+  CellSelected --> Loading: Change mode, period, or range
+  Overview --> Loading: Refresh
+  CellSelected --> Loading: Refresh
+  Loading --> CellSelected: Exact refreshed row and period remain valid
+```
+
+Drill down has no transition at 1 minute. Step back has no transition when no coarser parent exists. Previous and Next have no transition beyond the snapshot boundary. The corresponding visible controls are disabled in those states. A mode, period, or range change clears the selection. Refresh returns to CellSelected only when the exact row and period remain valid in the refreshed revision; otherwise, it returns to Overview. Opening EventDetail is a separate lazy request and does not add full detail to the Heatmap response.
+
 ### Refresh And Recovery Workflow
 
 ```mermaid
@@ -853,7 +961,7 @@ flowchart TD
 - Cursors are opaque, snapshot-bound, filter-bound, and sort-bound.
 - Cursor records are retained for seven days. Snapshot invalidation still makes a retained cursor unusable.
 - A stale, malformed, or cross-snapshot cursor returns a structured validation or conflict error.
-- Snapshot time-range queries return no more than 2,000 grouped heatmap cells across all rows. The service selects the nearest coarser supported resolution that meets the limit and reports it. The retained MCP `query_time_range` limit remains unchanged.
+- Additive `query_snapshot_time_range` returns no more than 2,000 heatmap cells across all rows. The service selects the nearest coarser supported resolution that meets the limit and reports it. Retained MCP `query_time_range` keeps its existing limit and behavior unchanged.
 - Retained MCP event inclusion remains capped at 1,000 events and reports `event_count` and `events_truncated`.
 - User-facing desktop times use the browser's local timezone. Offset-free MCP values use `AGENT_REPORT_TIMEZONE`.
 - Catalog date ranges are inclusive at the selected day or hour. MCP selection ranges remain half-open.
@@ -864,7 +972,12 @@ flowchart TD
 - Summary loads first and stays bounded.
 - Coordination, heatmap, timeline, sequence, agents, turns, tools, model usage, context and compaction, inference, runtime and waits, work items and claims, event details, and provenance and diagnostics are available for Codex snapshots.
 - Large row collections are virtualized and cursor-paged.
-- Heatmap cells preserve current click-to-select, double-click drill-down, right-click step-back, breadcrumb, period movement, per-row scaling, and color semantics.
+- Heatmap exposes exactly Wall time, Tokens, and Models. It implements HM-F01 through HM-F15 without exposing the underlying individual token measures as top-level modes.
+- Wall time rows are the present runtime states in HM-F02. Tokens uses the fixed HM-F03 rows. Models separates each recorded model-and-effort combination and appends Cost as defined by HM-F04.
+- Heatmap aggregation and formatting follow HM-F05 through HM-F07. Friendly labels follow HM-F08. A measured zero and unavailable evidence remain distinct under HM-F09.
+- Heatmap intensity is normalized independently within each non-context row. Context rows use known context capacity or the disclosed HM-F10 row-relative fallback. The UI provides value text so color intensity is not interpreted across rows.
+- Heatmap preserves single-click selection, double-click drilldown, right-click step-back, breadcrumb return, previous and next period movement, horizontal scroll, and all five period controls. It adds the visible keyboard-operable controls and disabled navigation boundaries in HM-F12. Drilldown and full event details remain bounded and lazy under HM-F11 through HM-F13.
+- Heatmap applies the 2,000-cell response limit and coarsening contract in HM-F14. Every cell and synchronized drilldown exposes the non-color semantics in HM-F15.
 - Sequence preserves zoom, fit, hierarchy collapse, agent focus, event filters, repeated-message grouping, reasoning bubbles, endpoint selection, and accessible event ledger behavior.
 - Titles prefer an explicit override, then a local Codex title, then the first genuine prompt, then a bounded untitled label.
 - The service returns only a nullable snapshot-scoped opaque `source_key`, never a path. Tauri builds a private authorized `source_key -> native path` registry from the discovery closure, projects the key to webview `sourceRef`, and resolves `open_source_location(snapshotId, sourceRef)` only through that registry.
@@ -944,6 +1057,13 @@ flowchart TD
 | Event ID disappears after live change | `REPORT_EVENT_NOT_FOUND` asks the caller to repeat the query. | Caller can refresh the query. |
 | Cursor is stale or belongs to another filter | Structured cursor conflict leaves the snapshot open. | Caller can restart from the first page. |
 | Requested grouped heatmap exceeds 2,000 total cells | Response identifies the coarser actual resolution and any omitted rows. | Operator can narrow the range or row limit. |
+| A Heatmap row has complete applicable evidence totaling zero | Cell shows zero with the row's duration, count, compact-number, or currency format and minimum intensity. Context size rows do not treat absent or nonpositive placeholders as zero. | Operator can inspect the bounded drilldown, which may contain zero-valued evidence or no contributing events. |
+| A Heatmap value cannot be calculated from available evidence | Cell shows unavailable or partial, names the missing timing, usage, or price evidence when safe, and does not display measured zero. | Other rows and periods remain usable. |
+| Context observations exist but context capacity is unknown | Context cell shows the compact token value without a percentage, labels capacity unavailable, and discloses the HM-F10 row-relative scale. | Operator can compare values in text but not interpret them as a percentage of the window. |
+| A response omits model or effort | The service uses the single non-mixed thread fallback. Without one, Models uses Unknown model or the model-only label. Missing identity does not become a zero or unavailable value. | The value evidence state depends on processed-token or pricing evidence for the normalized fallback identity. |
+| One model appears with several effort values | Models shows one friendly row for each normalized model-and-effort combination. | Operator can compare distinct rows; a response without effort uses a single non-mixed thread effort before it uses the model-only row. |
+| Heatmap drilldown has more than 100 matching evidence rows | Drilldown shows the first 100 chronological sanitized rows and the exact omitted count. | Operator can narrow the period, move to a finer supported period, or request individual event detail. |
+| Selected Heatmap cell becomes stale after refresh or mode change | Selection and drilldown are cleared or rebound only when the exact row and period remain valid in the new revision. | Operator can select a current cell without losing the last coherent snapshot. |
 | Encrypted reasoning or messages are present | UI shows size or opaque status without content. | Other metadata remains usable. |
 | Unsupported model pricing is present | Cost is unavailable or partial with an explicit label. | Token and timing evidence remains usable. |
 | Summary exceeds its cap | Bounded sections are omitted in a defined priority and omissions are listed. | Reader can use the directory export or app. |
@@ -957,11 +1077,11 @@ flowchart TD
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This specification reconciles current source evidence with the accepted Dev Architect packet and DEC-01 through DEC-04. It preserves classic CLI and MCP generation, keeps MCP as a first-class independent investigation surface, defines one shared streamlined Codex exporter, preserves separate non-Codex static adapters, and records the accepted cache, first-release, and runtime-surface policies.
+**ACCEPTED.** This specification reconciles current source evidence with the accepted Dev Architect packet and DEC-01 through DEC-04. It preserves classic CLI and MCP generation, including retained `query_time_range`. It keeps MCP as a first-class independent investigation surface, defines one shared streamlined Codex exporter, preserves separate non-Codex static adapters, and records the accepted cache, first-release, and runtime-surface policies. The Heatmap section accurately separates classic-preserved semantics, accepted dynamic constraints, and JFP-HM-01 through JFP-HM-03. Those propositions are documented proposals, not accepted product requirements.
 
 ## Implementation Readiness
 
-**BLOCKED.** The documentation contract is accepted. Implementation remains blocked until the Application Service, Worker, Tauri adapter and Workspace, Static Exporter, MCP adapter, and their tests implement the reconciled source contracts. Cache migration and platform evidence remain separate implementation gates.
+**BLOCKED.** The documentation contract is accepted as an accurate design record. Heatmap implementation remains blocked until the product owner accepts or revises JFP-HM-01 through JFP-HM-03. Implementation also remains blocked until the Application Service, Worker, Tauri adapter and Workspace, Static Exporter, MCP adapter, and planned tests implement the accepted contracts. Cache migration and platform evidence remain separate implementation gates.
 
 ## Verification
 
@@ -1022,16 +1142,46 @@ Scenario: A large snapshot opens a bounded summary and loads each analysis view 
 Steps:
 
 1. Open a fixture snapshot with more than 500 agents and enough one-minute grouped data to exceed 2,000 heatmap cells.
-2. Navigate every named view and page through rows.
-3. Open one tool event and one inferred coordination decision.
+2. Select Wall time and verify every present HM-F02 runtime-state row across zero, nonzero, and unavailable timing evidence.
+3. Select Tokens and verify every HM-F03 row, including sums, tool counts, positive-only context average and maximum, cost, formatting, and known or unavailable context capacity.
+4. Select Models and verify model-and-effort separation, processed-token aggregation, missing-effort fallback, Unknown model fallback, and Cost.
+5. Change among 1, 5, 15, 30, and 60 minute periods and request a range that forces service coarsening and omitted rows.
+6. Navigate every other named view and page through rows.
+7. Open a heatmap cell, exceed 100 matching evidence rows, drill down, step back, move to adjacent periods, and open one full event detail.
+8. Open one tool event and one inferred coordination decision.
 
 Assertions:
 
 - Initial load does not include all events, turns, raw results, or heatmap payloads.
 - Pages contain at most 500 items, use opaque cursors, and echo the exact revision plus normalized applied filter and sort objects.
-- The service returns at most 2,000 grouped heatmap cells, labels coarser resolution, and returns row grouping, ordering, omissions, independent scales, color semantics, labels, and evidence.
+- Heatmap exposes exactly Wall time, Tokens, and Models and no individual token measure as a fourth top-level mode.
+- Wall time, Tokens, and Models return the exact HM-F02 through HM-F04 row families and stable friendly-label order.
+- Every cell follows the HM-F05 through HM-F07 aggregation and formatting contract. Measured zero remains distinct from unavailable or partial evidence.
+- Each non-context row returns an independent scale. Context rows use known capacity, and unknown capacity produces token text without a fabricated percentage.
+- The service returns at most 2,000 heatmap cells, reports actual resolution and omissions, and preserves the exact snapshot revision.
+- Cell selection returns at most 100 chronological sanitized evidence rows plus an omitted count. Full event detail is not loaded until separately requested.
 - Sequence and coordination results contain their accepted group, endpoint, work-item, delegated-root, operation, evidence, event, repetition, and reasoning fields.
 - Raw detail loads only on request, inferred decisions are labeled, and source navigation uses only a snapshot-bound opaque reference in the webview.
+
+The dynamic Heatmap tests are planned. The following matrix assigns each facet to a behavior owner and test responsibility without claiming that a test file or passing result exists.
+
+| Facet | Planned behavior owner | Planned test responsibility | Test files | Status |
+|---|---|---|---|---|
+| HM-F01 | Application Service and Workspace | Operation-contract and presentation tests for exactly three modes | Not yet identified | Planned |
+| HM-F02 | Application Service | Aggregation tests for present known states, fixed known-state order, and ascending fallback-state order | Not yet identified | Planned |
+| HM-F03 | Application Service | Operation-contract tests for the exact Tokens rows and order | Not yet identified | Planned |
+| HM-F04 | Application Service | Normalization and ordering tests for missing model, missing effort, response and thread fallbacks, Unknown model, first occurrence, and final Cost | Not yet identified | Planned |
+| HM-F05 | Application Service | Interval-boundary and overlap-union tests | Not yet identified | Planned |
+| HM-F06 | Application Service | Token, tool, positive-context, cost, and processed-token aggregation tests | Not yet identified | Planned |
+| HM-F07 | Application Service and Workspace | Value projection and measure-specific formatting tests | Not yet identified | Planned |
+| HM-F08 | Application Service and Workspace | Agent and model label fallback, duplicate suppression, source-order, visible-label, and accessible-name tests | Not yet identified | Planned |
+| HM-F09 | Application Service and Workspace | Missing-timing, missing-usage, partial-cost-subtotal, applicable-zero, and unavailable-value tests | Not yet identified | Planned |
+| HM-F10 | Application Service and Workspace | Per-row scale, known-capacity scale, unknown-context-capacity fallback, omitted percentage, and accessible scale-description tests | Not yet identified | Planned |
+| HM-F11 | Application Service and Workspace | Initial-load, 100-row drilldown, omission-count, and separate event-detail tests | Not yet identified | Planned |
+| HM-F12 | Workspace | Pointer, visible-control, keyboard, breadcrumb, adjacent-period, scroll, period-control, 1-minute, top-level, and snapshot-boundary tests | Not yet identified | Planned |
+| HM-F13 | Application Service and Workspace | Chronology, token-response agent prefix, friendly evidence labels, sanitized preview, privacy, and availability tests | Not yet identified | Planned |
+| HM-F14 | Application Service | 2,000-cell bound, nearest-coarser resolution, actual-resolution, and omitted-row tests | Not yet identified | Planned |
+| HM-F15 | Workspace | Non-color semantics, focus, accessible-name, selection-state, and synchronized-ledger tests | Not yet identified | Planned |
 
 ### Verification Block FR-04: Refresh And Cancellation
 
@@ -1191,18 +1341,21 @@ Type: Testable
 
 Test files: `tools/report/desktop/src/contracts.test.ts`, `tools/report/tests/test_run_timeline.py`; dynamic workspace tests are not yet identified
 
-Status: Pass for current static semantics; Planned for dynamic parity
+Status: Planned for dynamic Heatmap parity. The named classic tests are source evidence for current interaction semantics, not passing evidence for the additive controls or HM-F15.
 
 Scenario: Keyboard and pointer users can navigate search, progress, tables, heatmaps, sequence evidence, disclosures, and errors.
 
 Steps:
 
 1. Navigate all controls and views with keyboard only.
-2. Exercise heatmap click, double-click, right-click, breadcrumb, and period movement.
+2. Exercise heatmap mode and period controls, horizontal scroll, click, double-click, right-click, visible Drill down, visible Step back, breadcrumb, previous-period, and next-period movement with zero and unavailable cells.
 3. Exercise sequence zoom, fit, collapse, focus, filters, grouping, event selection, and reasoning disclosures.
 
 Assertions:
 
 - Focus order, accessible names, live progress, empty state, and error state are observable.
 - Dynamic views preserve current interaction meaning.
+- Drill down is disabled at 1 minute. Step back is disabled when no coarser parent exists. Previous and Next are disabled beyond the snapshot range.
+- Every heatmap cell exposes its friendly row label, local period, mode, formatted value, availability state, selection state, and per-row scale basis in text or accessible description.
+- The synchronized drilldown ledger contains the same bounded evidence as the selected visual cell and reports omitted evidence without relying on color.
 - Event labels remain available in accessible text, independent of visual arrows or color.

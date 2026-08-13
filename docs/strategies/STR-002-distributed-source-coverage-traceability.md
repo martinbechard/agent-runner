@@ -213,6 +213,15 @@ Artifact-specific reviews should verify incoming source coverage in the format a
 - Unit or parser evidence presented as integration or frontend evidence.
 - Build and packaging evidence presented as user-workflow evidence.
 
+Coverage must be semantic, not merely nominal. A source unit such as a report view, workflow, or command should be decomposed into stable behavioral facets when its meaning depends on distinct data families, aggregation rules, labels, formatting, availability states, interactions, or accessibility behavior. A downstream statement that the named feature exists does not cover those facets. Each applicable facet needs an explicit preserved, changed, delegated, excluded, or unresolved disposition and corresponding downstream evidence.
+
+Reviews should therefore compare both directions:
+
+- Forward: every required source facet has a justified downstream disposition.
+- Backward: every implementation and test claim identifies the upstream facet it satisfies.
+
+This prevents a control-level match from hiding a semantic regression—for example, preserving a Heatmap route and period controls while replacing runtime duration, token, cost, context, and model-effort meanings with generic event counts.
+
 An aggregate verifier should evaluate a completed parent-to-child split separately from each child's local artifact review.
 
 ## Application To Agent Report
@@ -220,13 +229,13 @@ An aggregate verifier should evaluate a completed parent-to-child split separate
 The Agent Report traceability failure that motivated this note illustrates the required distinction:
 
 - The classic HTML heatmap supplied observable source behavior.
-- The functional specification preserved the relevant interactions.
+- The first functional specification preserved the relevant interactions but did not fully decompose the source's data families, row identities, aggregation, formatting, availability, and labeling semantics.
 - CD-005 described those interactions and named extensive planned tests.
-- The production frontend omitted most interactions.
+- The lower-level design and production code then reduced the underspecified content to generic measures and event-count-oriented labels, while the production frontend initially omitted most interactions.
 - The frontend test file exercised only constants and pure helpers.
 - HLD verification prose nevertheless cited that test file as FR-03 and FR-10 coverage.
 
-Under this strategy, the component review would identify missing production symbols and exact test cases. Aggregate implementation and acceptance verification would prevent the feature from being marked ready until the declared component, integration, frontend, and packaged evidence existed.
+Under this strategy, the functional review would first require stable source facets for the classic Wall time, Tokens, and Models modes and their row, aggregation, formatting, scale, evidence, and interaction rules. The component review would then identify missing production symbols and exact test cases. Aggregate implementation and acceptance verification would prevent the feature from being marked ready until every applicable facet had declared component, integration, frontend, and packaged evidence.
 
 ## Future Dev-Methodology Work
 
