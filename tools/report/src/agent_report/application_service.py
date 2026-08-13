@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import bisect
 import hashlib
 import hmac
 import json
@@ -27,6 +28,14 @@ PROTOCOL_VERSION: Final[int] = 1
 DEFAULT_PAGE_SIZE: Final[int] = 100
 MAX_PAGE_SIZE: Final[int] = 500
 MAX_HEATMAP_CELLS: Final[int] = 2_000
+MAX_HEATMAP_EVIDENCE_ITEMS: Final[int] = 100
+MAX_WORKER_RESULT_BYTES: Final[int] = 1_048_576
+MAX_HEATMAP_FORMATTED_VALUE_BYTES: Final[int] = 64
+MAX_HEATMAP_LABEL_BYTES: Final[int] = 256
+MAX_HEATMAP_SUPPORTING_TEXT_BYTES: Final[int] = 80
+MAX_HEATMAP_PREVIEW_BYTES: Final[int] = 4_096
+MAX_HEATMAP_PROVENANCE_ITEMS: Final[int] = 32
+MAX_HEATMAP_PROVENANCE_BYTES: Final[int] = 256
 # Retained as an import-compatible name for callers that used the original
 # narrow time-series contract. Protocol version 1 applies the same ceiling to
 # the canonical grouped heatmap.
@@ -70,31 +79,25 @@ TurnSortKey = Literal["started_at", "ended_at", "turn_id"]
 EventSortKey = Literal["occurred_at", "event_id"]
 SequenceSortKey = Literal["occurred_at", "sequence_id"]
 CoordinationSortKey = Literal["occurred_at", "coordination_id"]
-HeatmapGroupBy = Literal["agent", "event_kind", "work_item"]
-HeatmapColorSemantic = Literal["sequential_nonnegative", "diverging_signed"]
+HeatmapMode = Literal["wall_time", "tokens", "models"]
+HeatmapQueryKind = Literal["matrix", "cell_evidence"]
+HeatmapValueState = Literal["measured", "derived", "partial", "unavailable"]
+HeatmapScaleAvailability = Literal["available", "unavailable"]
 HeatmapScaleBasis = Literal["visible_row_maximum", "context_window_capacity"]
-TimeMeasure = Literal[
-    "wall_time",
-    "uncached_input_tokens",
-    "cached_input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cost_usd",
+HeatmapRowKind = Literal["runtime_state", "token_measure", "model", "cost"]
+HeatmapRowOrder = Literal[
+    "runtime_state_contract",
+    "token_contract",
+    "model_first_occurrence_then_cost",
 ]
+HeatmapEvidenceMethod = Literal[
+    "measured", "derived", "inferred", "estimated", "unavailable"
+]
+HeatmapResolutionMinutes = Literal[1, 5, 15, 30, 60]
 SourceRelationship = Literal["root", "child", "collaborator"]
 
 _EVIDENCE_KINDS: Final[frozenset[str]] = frozenset(
     {"measured", "derived", "inferred", "unavailable", "estimated"}
-)
-_TIME_MEASURES: Final[frozenset[str]] = frozenset(
-    {
-        "wall_time",
-        "uncached_input_tokens",
-        "cached_input_tokens",
-        "output_tokens",
-        "reasoning_tokens",
-        "cost_usd",
-    }
 )
 _GROUPINGS: Final[frozenset[str]] = frozenset(
     {"none", "repeated_messages", "delegation", "agent"}
@@ -111,7 +114,7 @@ _SEQUENCE_SORT_KEYS: Final[frozenset[str]] = frozenset({"occurred_at", "sequence
 _COORDINATION_SORT_KEYS: Final[frozenset[str]] = frozenset(
     {"occurred_at", "coordination_id"}
 )
-_HEATMAP_GROUPS: Final[frozenset[str]] = frozenset({"agent", "event_kind", "work_item"})
+_HEATMAP_MODES: Final[frozenset[str]] = frozenset({"wall_time", "tokens", "models"})
 _HEATMAP_RESOLUTIONS: Final[frozenset[int]] = frozenset({1, 5, 15, 30, 60})
 _SURFACES: Final[frozenset[str]] = frozenset({"tauri", "cli", "mcp"})
 _EVENT_ID_PATTERN: Final[re.Pattern[str]] = re.compile(r"evt_[0-9a-f]{24}\Z")
@@ -310,16 +313,31 @@ class ListEventsRequest:
 
 
 @dataclass(frozen=True, slots=True)
-class HeatmapQueryRequest:
-    """Request one bounded grouped heatmap for a supported measure."""
+class HeatmapMatrixRequest:
+    """Request one bounded mode-specific Heatmap matrix."""
 
     snapshot_id: str
+    query_kind: Literal["matrix"]
     from_time: datetime
     to_time: datetime
-    measure: TimeMeasure
-    requested_resolution_minutes: int
-    group_by: HeatmapGroupBy
+    mode: HeatmapMode
+    requested_resolution_minutes: HeatmapResolutionMinutes
     maximum_rows: int = 100
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapCellEvidenceRequest:
+    """Request bounded evidence for one matrix-returned row and period."""
+
+    snapshot_id: str
+    query_kind: Literal["cell_evidence"]
+    mode: HeatmapMode
+    row_id: str
+    period_start_time: datetime
+    period_end_time: datetime
+
+
+HeatmapSnapshotQueryRequest = HeatmapMatrixRequest | HeatmapCellEvidenceRequest
 
 
 @dataclass(frozen=True, slots=True)
@@ -586,36 +604,68 @@ class EventRow:
 
 
 @dataclass(frozen=True, slots=True)
-class HeatmapCell:
-    """Represent one bounded interval in a grouped heatmap row."""
+class AvailableHeatmapScale:
+    """Describe one numeric Heatmap scale with its valid comparison basis."""
 
-    start_time: datetime
-    end_time: datetime
-    value: int | float | None
-    count: int
-    evidence: EvidenceKind
-    primary_label: str
-    secondary_label: str | None
-
-
-@dataclass(frozen=True, slots=True)
-class HeatmapScale:
-    """Describe the value and color semantics for one heatmap row."""
-
+    availability: Literal["available"]
     minimum: int | float
     maximum: int | float
-    color_semantic: HeatmapColorSemantic
     basis: HeatmapScaleBasis
 
 
 @dataclass(frozen=True, slots=True)
-class HeatmapRow:
-    """Represent one deterministically ordered grouped heatmap row."""
+class UnavailableHeatmapScale:
+    """State why a context-capacity scale is unavailable."""
+
+    availability: Literal["unavailable"]
+    reason: Literal["context_capacity_unavailable"]
+
+
+HeatmapScale = AvailableHeatmapScale | UnavailableHeatmapScale
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapMatrixCell:
+    """Represent one bounded period with explicit value evidence semantics."""
+
+    start_time: datetime
+    end_time: datetime
+    value: int | float | None
+    formatted_value: str
+    value_state: HeatmapValueState
+    applicable_zero: bool
+    contributing_evidence_count: int
+    normalized_intensity: float | None
+    supporting_text: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapMatrixRow:
+    """Represent one ordered Heatmap row and its discriminated scale."""
 
     row_id: str
+    row_key: str
+    row_order_index: int
+    row_kind: HeatmapRowKind
     label: str
     scale: HeatmapScale
-    cells: Sequence[HeatmapCell]
+    cells: Sequence[HeatmapMatrixCell]
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapEvidenceItem:
+    """Expose one bounded chronological contributor without eager full detail."""
+
+    event_id: str | None
+    occurred_at: datetime
+    value: int | float | None
+    formatted_value: str
+    duration_ms: int | None
+    label: str
+    preview: str | None
+    evidence_method: HeatmapEvidenceMethod
+    value_state: HeatmapValueState
+    has_detail: bool
 
 
 @dataclass(frozen=True, slots=True)
@@ -705,23 +755,73 @@ class PageResult(Generic[T, F, S]):
 
 
 @dataclass(frozen=True, slots=True)
-class HeatmapResult:
-    """Return a bounded grouped heatmap with complete applied facets."""
+class HeatmapMatrixResult:
+    """Return only the bounded matrix variant of a snapshot Heatmap query."""
 
     snapshot_id: str
     revision_id: str
-    measure: TimeMeasure
-    group_by: HeatmapGroupBy
+    query_kind: Literal["matrix"]
+    mode: HeatmapMode
     from_time: datetime
     to_time: datetime
-    requested_resolution_minutes: int
-    actual_resolution_minutes: int
+    requested_resolution_minutes: HeatmapResolutionMinutes
+    actual_resolution_minutes: HeatmapResolutionMinutes
     maximum_rows: int
     omitted_row_count: int
-    row_order: Literal["activity_descending_id_ascending"]
+    row_order: HeatmapRowOrder
     total_cell_count: int
-    rows: Sequence[HeatmapRow]
+    rows: Sequence[HeatmapMatrixRow]
     provenance: Sequence[str]
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapCellEvidenceResult:
+    """Return only the bounded evidence variant of a snapshot Heatmap query."""
+
+    snapshot_id: str
+    revision_id: str
+    query_kind: Literal["cell_evidence"]
+    mode: HeatmapMode
+    row_id: str
+    row_key: str
+    row_order_index: int
+    row_label: str
+    period_start_time: datetime
+    period_end_time: datetime
+    value: int | float | None
+    formatted_value: str
+    value_state: HeatmapValueState
+    applicable_zero: bool
+    evidence_items: Sequence[HeatmapEvidenceItem]
+    omitted_evidence_count: int
+    provenance: Sequence[str]
+
+
+HeatmapSnapshotQueryResult = HeatmapMatrixResult | HeatmapCellEvidenceResult
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapCostAssessment:
+    """Capture one response cost calculated under the normalization pricing state."""
+
+    value_usd: float | None
+    evidence_method: HeatmapEvidenceMethod
+    bounded_method: str
+
+
+@dataclass(frozen=True, slots=True)
+class HeatmapPricingAuthority:
+    """Bind immutable response-cost lookups to one parsed-run revision."""
+
+    pricing_version: str
+    pricing_digest: str
+    assessments: tuple[tuple[int, int, HeatmapCostAssessment], ...]
+
+    def lookup(self, thread_index: int, response_index: int) -> HeatmapCostAssessment | None:
+        for candidate_thread, candidate_response, assessment in self.assessments:
+            if candidate_thread == thread_index and candidate_response == response_index:
+                return assessment
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -917,6 +1017,18 @@ class NormalizedRevision(Protocol):
 
         ...
 
+    @property
+    def run(self) -> object:
+        """Return the opaque parsed run bound to this normalized revision."""
+
+        ...
+
+    @property
+    def heatmap_pricing(self) -> HeatmapPricingAuthority:
+        """Return the immutable response-cost authority calculated for this run."""
+
+        ...
+
 
 @dataclass(frozen=True, slots=True)
 class PublishedRevision:
@@ -930,6 +1042,12 @@ class SnapshotReadHandle(Protocol):
     """Expose an opaque repository read binding for the service lease lifetime."""
 
     @property
+    def snapshot_id(self) -> str:
+        """Return the public snapshot identifier captured by this handle."""
+
+        ...
+
+    @property
     def revision_id(self) -> str:
         """Return the committed revision identifier."""
 
@@ -938,6 +1056,18 @@ class SnapshotReadHandle(Protocol):
     @property
     def source_revision(self) -> str:
         """Return the source revision represented by this handle."""
+
+        ...
+
+    @property
+    def run(self) -> object:
+        """Return the opaque parsed run bound to the immutable revision."""
+
+        ...
+
+    @property
+    def heatmap_pricing(self) -> HeatmapPricingAuthority:
+        """Return the pricing authority bound to the same immutable revision."""
 
         ...
 
@@ -1027,7 +1157,13 @@ class EventRepositoryPort(Protocol):
 
         ...
 
-    def open_read(self, revision_id: str) -> SnapshotReadHandle:
+    def open_read(
+        self,
+        snapshot_id: str,
+        revision_id: str,
+        run: object,
+        heatmap_pricing: HeatmapPricingAuthority,
+    ) -> SnapshotReadHandle:
         """Open one opaque read handle for a committed revision."""
 
         ...
@@ -1090,14 +1226,13 @@ class QueryPort(Protocol):
 
         ...
 
-    def query_time_range(
+    def query_snapshot_time_range(
         self,
         handle: SnapshotReadHandle,
-        request: HeatmapQueryRequest,
-        actual_resolution_minutes: int,
+        request: HeatmapSnapshotQueryRequest,
         cancellation: CancellationToken,
-    ) -> HeatmapResult:
-        """Return one bounded grouped heatmap result."""
+    ) -> HeatmapSnapshotQueryResult:
+        """Return one exact discriminated Heatmap query result."""
 
         ...
 
@@ -1350,11 +1485,25 @@ class _ReadLease:
         self._service = service
         self._snapshot_id = snapshot_id
         self._state = state
+        self._revision_id = state.revision_id
+        self._read_handle = state.read_handle
         self._released = False
 
     @property
     def state(self) -> _SnapshotState:
         return self._state
+
+    @property
+    def snapshot_id(self) -> str:
+        return self._snapshot_id
+
+    @property
+    def revision_id(self) -> str:
+        return self._revision_id
+
+    @property
+    def read_handle(self) -> SnapshotReadHandle:
+        return self._read_handle
 
     def __enter__(self) -> _SnapshotState:
         return self._state
@@ -1830,6 +1979,12 @@ class ApplicationService:
             if (
                 not normalized.privacy_validated
                 or normalized.source_revision != discovered.source_revision
+                or not _valid_heatmap_pricing_authority(
+                    normalized.heatmap_pricing,
+                    normalized.run,
+                    self._config.pricing_version,
+                    self._config.pricing_digest,
+                )
             ):
                 return _failure(
                     ReportError(
@@ -2024,17 +2179,25 @@ class ApplicationService:
                 return _failure(_safe_internal_error(context.operation_id))
             if cancellation.is_cancelled():
                 return _failure(_cancelled(context.operation_id))
-            handle = self._dependencies.repository.open_read(published.revision_id)
+            snapshot_id = self._dependencies.ids.new_snapshot_id()
+            if _validate_identifier(snapshot_id, "snapshot_id") is not None:
+                return _failure(_safe_internal_error(context.operation_id))
+            handle = self._dependencies.repository.open_read(
+                snapshot_id,
+                published.revision_id,
+                normalized.run,
+                normalized.heatmap_pricing,
+            )
             if (
-                handle.revision_id != published.revision_id
+                handle.snapshot_id != snapshot_id
+                or handle.revision_id != published.revision_id
                 or handle.source_revision != published.source_revision
+                or handle.run is not normalized.run
+                or handle.heatmap_pricing is not normalized.heatmap_pricing
             ):
                 return _failure(_safe_internal_error(context.operation_id))
-            snapshot_id = self._dependencies.ids.new_snapshot_id()
             observation_time = prepared.observation_time
-            if _validate_identifier(
-                snapshot_id, "snapshot_id"
-            ) is not None or not _aware_datetime(observation_time):
+            if not _aware_datetime(observation_time):
                 return _failure(_safe_internal_error(context.operation_id))
             if cancellation.is_cancelled():
                 return _failure(_cancelled(context.operation_id))
@@ -2292,108 +2455,56 @@ class ApplicationService:
             query,
         )
 
-    def query_time_range(
+    def query_snapshot_time_range(
         self,
         context: OperationContext,
-        request: HeatmapQueryRequest,
+        request: HeatmapSnapshotQueryRequest,
         *,
         cancellation: CancellationToken,
-    ) -> ServiceResult[HeatmapResult]:
-        """Return a grouped heatmap with at most 2,000 cells."""
+    ) -> ServiceResult[HeatmapSnapshotQueryResult]:
+        """Return a bounded matrix or one bounded cell-evidence result."""
 
         error = self._common_snapshot_gate(context, request.snapshot_id)
-        if error is None:
+        if error is None and request.mode not in _HEATMAP_MODES:
+            error = _invalid("The Heatmap mode is not supported.")
+        if error is None and isinstance(request, HeatmapMatrixRequest):
             error = _validate_range(request.from_time, request.to_time)
-        if error is None and request.measure not in _TIME_MEASURES:
-            error = _invalid("The requested time-series measure is not supported.")
-        if error is None and request.group_by not in _HEATMAP_GROUPS:
-            error = _invalid("The heatmap grouping is not supported.")
-        if error is None and (
-            isinstance(request.requested_resolution_minutes, bool)
-            or not isinstance(request.requested_resolution_minutes, int)
-            or request.requested_resolution_minutes not in _HEATMAP_RESOLUTIONS
-        ):
-            error = _invalid(
-                "requested_resolution_minutes must be one of 1, 5, 15, 30, or 60."
-            )
-        if error is None and (
-            isinstance(request.maximum_rows, bool)
-            or not isinstance(request.maximum_rows, int)
-            or not 1 <= request.maximum_rows <= 200
-        ):
-            error = _invalid("maximum_rows must be from 1 through 200.")
+            if error is None and request.query_kind != "matrix":
+                error = _invalid("query_kind must match the matrix request shape.")
+            if error is None and request.requested_resolution_minutes not in _HEATMAP_RESOLUTIONS:
+                error = _invalid("requested_resolution_minutes must be one of 1, 5, 15, 30, or 60.")
+            if error is None and (type(request.maximum_rows) is not int or not 1 <= request.maximum_rows <= 200):
+                error = _invalid("maximum_rows must be from 1 through 200.")
+        elif error is None and isinstance(request, HeatmapCellEvidenceRequest):
+            error = _validate_range(request.period_start_time, request.period_end_time)
+            if error is None and request.query_kind != "cell_evidence":
+                error = _invalid("query_kind must match the cell_evidence request shape.")
+            if error is None and _validate_identifier(request.row_id, "row_id") is not None:
+                error = _invalid("row_id must be an opaque matrix-returned identifier.")
+        elif error is None:
+            error = _invalid("The Heatmap query shape is not supported.")
         if error is not None:
             return _failure(self._with_operation(error, context.operation_id))
-        actual_resolution = request.requested_resolution_minutes
         lease_result = _acquire_read(self, request.snapshot_id)
         if not lease_result.ok:
-            return cast(ServiceResult[HeatmapResult], lease_result)
+            return cast(ServiceResult[HeatmapSnapshotQueryResult], lease_result)
         lease = cast(_ReadLease, lease_result.value)
-        with lease as state:
+        with lease:
             try:
                 result = self._run_query_call(
                     context,
-                    "query_time_range",
+                    "query_snapshot_time_range",
                     cancellation,
-                    lambda: self._dependencies.queries.query_time_range(
-                        state.read_handle,
-                        request,
-                        actual_resolution,
-                        cancellation,
+                    lambda: self._dependencies.queries.query_snapshot_time_range(
+                        lease.read_handle, request, cancellation
                     ),
                 )
-                coarsened_resolution = _actual_resolution_minutes(
-                    request.from_time,
-                    request.to_time,
-                    request.requested_resolution_minutes,
-                    self._config.max_heatmap_cells,
-                    len(result.rows),
-                )
-                if coarsened_resolution != actual_resolution:
-                    actual_resolution = coarsened_resolution
-                    result = self._run_query_call(
-                        context,
-                        "query_time_range",
-                        cancellation,
-                        lambda: self._dependencies.queries.query_time_range(
-                            state.read_handle,
-                            request,
-                            actual_resolution,
-                            cancellation,
-                        ),
-                    )
             except _OperationFailure as failure:
                 return _failure(failure.error)
-            validation = self._validate_heatmap(
-                result, request, actual_resolution, state.metadata
-            )
+            validation = self._validate_heatmap(result, request, lease.snapshot_id, lease.revision_id)
             if validation is not None:
                 return _failure(self._with_operation(validation, context.operation_id))
-            return _success(
-                replace(
-                    result,
-                    from_time=result.from_time.astimezone(timezone.utc),
-                    to_time=result.to_time.astimezone(timezone.utc),
-                    rows=tuple(
-                        replace(
-                            row,
-                            cells=tuple(
-                                replace(
-                                    cell,
-                                    start_time=cell.start_time.astimezone(timezone.utc),
-                                    end_time=cell.end_time.astimezone(timezone.utc),
-                                )
-                                for cell in row.cells
-                            ),
-                        )
-                        for row in result.rows
-                    ),
-                    provenance=cast(
-                        tuple[str, ...],
-                        _bounded_strings(result.provenance, MAX_PROVENANCE_ITEMS),
-                    ),
-                )
-            )
+            return _success(_normalize_heatmap_result(result))
 
     def query_sequence(
         self,
@@ -2594,6 +2705,12 @@ class ApplicationService:
                 if (
                     not normalized.privacy_validated
                     or normalized.source_revision != discovered.source_revision
+                    or not _valid_heatmap_pricing_authority(
+                        normalized.heatmap_pricing,
+                        normalized.run,
+                        self._config.pricing_version,
+                        self._config.pricing_digest,
+                    )
                 ):
                     return _failure(
                         ReportError(
@@ -2629,11 +2746,17 @@ class ApplicationService:
                 if cancellation.is_cancelled():
                     return _failure(_cancelled(context.operation_id))
                 new_handle = self._dependencies.repository.open_read(
-                    published.revision_id
+                    request.snapshot_id,
+                    published.revision_id,
+                    normalized.run,
+                    normalized.heatmap_pricing,
                 )
                 if (
-                    new_handle.revision_id != published.revision_id
+                    new_handle.snapshot_id != request.snapshot_id
+                    or new_handle.revision_id != published.revision_id
                     or new_handle.source_revision != published.source_revision
+                    or new_handle.run is not normalized.run
+                    or new_handle.heatmap_pricing is not normalized.heatmap_pricing
                 ):
                     return _failure(_safe_internal_error(context.operation_id))
                 observation_time = self._dependencies.clock.now_utc()
@@ -3232,81 +3355,117 @@ class ApplicationService:
 
     def _validate_heatmap(
         self,
-        result: HeatmapResult,
-        request: HeatmapQueryRequest,
-        actual_resolution: int,
-        metadata: SnapshotMetadata,
+        result: HeatmapSnapshotQueryResult,
+        request: HeatmapSnapshotQueryRequest,
+        snapshot_id: str,
+        revision_id: str,
     ) -> ReportError | None:
         if (
-            result.snapshot_id != metadata.snapshot_id
-            or result.revision_id != metadata.revision_id
-            or result.measure != request.measure
-            or result.group_by != request.group_by
-            or result.requested_resolution_minutes
-            != request.requested_resolution_minutes
-            or result.actual_resolution_minutes != actual_resolution
-            or result.maximum_rows != request.maximum_rows
-            or isinstance(result.omitted_row_count, bool)
-            or not isinstance(result.omitted_row_count, int)
-            or result.omitted_row_count < 0
-            or result.row_order != "activity_descending_id_ascending"
-            or isinstance(result.total_cell_count, bool)
-            or not isinstance(result.total_cell_count, int)
-            or result.total_cell_count < 0
-            or not _aware_datetime(result.from_time)
-            or not _aware_datetime(result.to_time)
-            or result.from_time.astimezone(timezone.utc)
-            != request.from_time.astimezone(timezone.utc)
-            or result.to_time.astimezone(timezone.utc)
-            != request.to_time.astimezone(timezone.utc)
-            or len(result.rows) > request.maximum_rows
-            or result.total_cell_count > self._config.max_heatmap_cells
-            or result.total_cell_count != sum(len(row.cells) for row in result.rows)
+            result.snapshot_id != snapshot_id
+            or result.revision_id != revision_id
+            or result.query_kind != request.query_kind
+            or result.mode != request.mode
         ):
             return _safe_internal_error("")
-        seen_rows: set[str] = set()
-        for row in result.rows:
+        if isinstance(request, HeatmapMatrixRequest) and isinstance(result, HeatmapMatrixResult):
             if (
-                _validate_identifier(row.row_id, "row_id") is not None
-                or row.row_id in seen_rows
-                or not _valid_row_texts(row.label)
-                or isinstance(row.scale.minimum, bool)
-                or not isinstance(row.scale.minimum, (int, float))
-                or isinstance(row.scale.maximum, bool)
-                or not isinstance(row.scale.maximum, (int, float))
-                or row.scale.minimum > row.scale.maximum
-                or row.scale.color_semantic
-                not in {"sequential_nonnegative", "diverging_signed"}
-                or row.scale.basis
-                not in {"visible_row_maximum", "context_window_capacity"}
+                result.from_time.astimezone(timezone.utc) != request.from_time.astimezone(timezone.utc)
+                or result.to_time.astimezone(timezone.utc) != request.to_time.astimezone(timezone.utc)
+                or result.requested_resolution_minutes != request.requested_resolution_minutes
+                or result.actual_resolution_minutes not in _HEATMAP_RESOLUTIONS
+                or result.maximum_rows != request.maximum_rows
+                or len(result.rows) > request.maximum_rows
+                or result.total_cell_count > self._config.max_heatmap_cells
+                or result.total_cell_count != sum(len(row.cells) for row in result.rows)
+                or result.omitted_row_count < 0
+                or result.row_order != (
+                    "runtime_state_contract" if request.mode == "wall_time" else
+                    "token_contract" if request.mode == "tokens" else
+                    "model_first_occurrence_then_cost"
+                )
             ):
                 return _safe_internal_error("")
-            seen_rows.add(row.row_id)
-            previous_end: datetime | None = None
-            for cell in row.cells:
+            seen_rows: set[str] = set()
+            for expected_index, row in enumerate(result.rows):
                 if (
-                    not _aware_datetime(cell.start_time)
-                    or not _aware_datetime(cell.end_time)
-                    or cell.start_time >= cell.end_time
-                    or (previous_end is not None and cell.start_time < previous_end)
-                    or isinstance(cell.count, bool)
-                    or not isinstance(cell.count, int)
-                    or cell.count < 0
-                    or cell.evidence not in _EVIDENCE_KINDS
-                    or not _valid_row_texts(cell.primary_label)
-                    or (
-                        cell.secondary_label is not None
-                        and not _valid_row_texts(cell.secondary_label)
-                    )
+                    row.row_id in seen_rows
+                    or not _valid_row_texts(row.row_id, row.label)
+                    or not _valid_heatmap_row_key(row.row_key, row.row_kind)
+                    or row.row_order_index != expected_index
+                    or not 0 <= row.row_order_index <= 199
+                    or _json_escaped_content_bytes(row.label) > MAX_HEATMAP_LABEL_BYTES
+                    or row.row_kind not in {"runtime_state", "token_measure", "model", "cost"}
+                    or not _valid_heatmap_scale(row.scale)
                 ):
                     return _safe_internal_error("")
-                previous_end = cell.end_time
-        if _bounded_strings(result.provenance, MAX_PROVENANCE_ITEMS) is None:
+                seen_rows.add(row.row_id)
+                for cell in row.cells:
+                    if (
+                        not _aware_datetime(cell.start_time)
+                        or not _aware_datetime(cell.end_time)
+                        or cell.start_time >= cell.end_time
+                        or not _valid_heatmap_value(cell.value)
+                        or cell.value_state not in {"measured", "derived", "partial", "unavailable"}
+                        or type(cell.applicable_zero) is not bool
+                        or cell.applicable_zero and (cell.value_state not in {"measured", "derived"} or cell.value != 0)
+                        or cell.value_state == "unavailable" and cell.value is not None
+                        or not _valid_nonnegative_integer(cell.contributing_evidence_count)
+                        or not _valid_heatmap_intensity(cell.normalized_intensity)
+                        or _json_escaped_content_bytes(cell.formatted_value) > MAX_HEATMAP_FORMATTED_VALUE_BYTES
+                        or (cell.supporting_text is not None and _json_escaped_content_bytes(cell.supporting_text) > MAX_HEATMAP_SUPPORTING_TEXT_BYTES)
+                    ):
+                        return _safe_internal_error("")
+        elif isinstance(request, HeatmapCellEvidenceRequest) and isinstance(result, HeatmapCellEvidenceResult):
+            if (
+                result.row_id != request.row_id
+                or not _valid_row_texts(result.row_id, result.row_label)
+                or not _valid_heatmap_row_key(result.row_key, "model" if result.mode == "models" and result.row_key != "cost" else "runtime_state" if result.mode == "wall_time" else "cost" if result.row_key == "cost" else "token_measure")
+                or not 0 <= result.row_order_index <= 199
+                or _json_escaped_content_bytes(result.row_label) > MAX_HEATMAP_LABEL_BYTES
+                or result.period_start_time.astimezone(timezone.utc) != request.period_start_time.astimezone(timezone.utc)
+                or result.period_end_time.astimezone(timezone.utc) != request.period_end_time.astimezone(timezone.utc)
+                or not _valid_heatmap_value(result.value)
+                or result.value_state not in {"measured", "derived", "partial", "unavailable"}
+                or result.value_state == "unavailable" and result.value is not None
+                or type(result.applicable_zero) is not bool
+                or result.applicable_zero and (result.value_state not in {"measured", "derived"} or result.value != 0)
+                or _json_escaped_content_bytes(result.formatted_value) > MAX_HEATMAP_FORMATTED_VALUE_BYTES
+                or len(result.evidence_items) > MAX_HEATMAP_EVIDENCE_ITEMS
+                or not _valid_nonnegative_integer(result.omitted_evidence_count)
+            ):
+                return _safe_internal_error("")
+            previous: datetime | None = None
+            for item in result.evidence_items:
+                if (
+                    not _aware_datetime(item.occurred_at)
+                    or previous is not None and item.occurred_at < previous
+                    or not _valid_heatmap_value(item.value)
+                    or item.value_state not in {"measured", "derived", "partial", "unavailable"}
+                    or item.evidence_method not in _EVIDENCE_KINDS
+                    or item.value_state == "unavailable" and item.value is not None
+                    or item.duration_ms is not None and not _valid_nonnegative_integer(item.duration_ms)
+                    or not _valid_row_texts(item.label)
+                    or _json_escaped_content_bytes(item.label) > MAX_HEATMAP_LABEL_BYTES
+                    or _json_escaped_content_bytes(item.formatted_value) > MAX_HEATMAP_FORMATTED_VALUE_BYTES
+                    or item.preview is not None and (_json_escaped_content_bytes(item.preview) > MAX_HEATMAP_PREVIEW_BYTES or _contains_absolute_path(item.preview))
+                    or type(item.has_detail) is not bool
+                    or item.has_detail and item.event_id is None
+                ):
+                    return _safe_internal_error("")
+                previous = item.occurred_at
+        else:
+            return _safe_internal_error("")
+        if (
+            _bounded_strings(result.provenance, MAX_HEATMAP_PROVENANCE_ITEMS) is None
+            or any(_json_escaped_content_bytes(item) > MAX_HEATMAP_PROVENANCE_BYTES for item in result.provenance)
+        ):
             return ReportError(
                 code="REPORT_PRIVACY_FAILED",
                 message="The heatmap provenance failed privacy validation.",
                 recoverable=False,
             )
+        if _heatmap_serialized_size(result) >= MAX_WORKER_RESULT_BYTES:
+            return _safe_internal_error("")
         return None
 
     def _normalize_event_detail(
@@ -3995,6 +4154,92 @@ def _valid_nonnegative_integer(value: object) -> bool:
     return not isinstance(value, bool) and isinstance(value, int) and value >= 0
 
 
+def _valid_heatmap_value(value: object) -> bool:
+    return value is None or (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+    )
+
+
+def _valid_heatmap_intensity(value: object) -> bool:
+    return value is None or (
+        not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(float(value))
+        and 0 <= float(value) <= 1
+    )
+
+
+def _valid_heatmap_scale(value: object) -> bool:
+    if isinstance(value, AvailableHeatmapScale):
+        return (
+            value.availability == "available"
+            and _valid_heatmap_value(value.minimum)
+            and value.minimum is not None
+            and _valid_heatmap_value(value.maximum)
+            and value.maximum is not None
+            and value.minimum <= value.maximum
+            and value.basis in {"visible_row_maximum", "context_window_capacity"}
+        )
+    return isinstance(value, UnavailableHeatmapScale) and value.availability == "unavailable" and value.reason == "context_capacity_unavailable"
+
+
+def _valid_heatmap_pricing_authority(
+    authority: object,
+    run: object,
+    pricing_version: str,
+    pricing_digest: str,
+) -> bool:
+    if (
+        not isinstance(authority, HeatmapPricingAuthority)
+        or type(authority.assessments) is not tuple
+        or authority.pricing_version != pricing_version
+        or authority.pricing_digest != pricing_digest
+    ):
+        return False
+    expected = [
+        (thread_index, response_index)
+        for thread_index, thread in enumerate(tuple(getattr(run, "threads", ()) or ()))
+        for response_index, _response in enumerate(tuple(getattr(thread, "responses", ()) or ()))
+    ]
+    if [(thread, response) for thread, response, _assessment in authority.assessments] != expected:
+        return False
+    return all(
+        isinstance(assessment, HeatmapCostAssessment)
+        and isinstance(assessment.bounded_method, str)
+        and _valid_heatmap_value(assessment.value_usd)
+        and (assessment.value_usd is None or assessment.value_usd >= 0)
+        and assessment.evidence_method in _EVIDENCE_KINDS
+        and (assessment.value_usd is None) == (assessment.evidence_method == "unavailable")
+        and _json_escaped_content_bytes(assessment.bounded_method) <= MAX_HEATMAP_PROVENANCE_BYTES
+        for _thread, _response, assessment in authority.assessments
+    )
+
+
+def _valid_heatmap_row_key(value: object, row_kind: HeatmapRowKind) -> bool:
+    if not isinstance(value, str):
+        return False
+    if row_kind == "runtime_state":
+        if value in {item[0] for item in _RUNTIME_ROWS}:
+            return True
+        return value.startswith("runtime:") and _valid_unknown_runtime_key(value[8:])
+    if row_kind == "model":
+        return bool(re.fullmatch(r"model:[0-9a-f]{24}", value))
+    if row_kind == "cost":
+        return value == "cost"
+    return value in {item[0] for item in _TOKEN_ROWS if item[1] == "token_measure"}
+
+
+def _valid_unknown_runtime_key(value: str) -> bool:
+    return (
+        bool(value)
+        and value == value.casefold()
+        and len(value.encode("utf-8")) <= 128
+        and all(character >= " " and character != "\x7f" for character in value)
+    )
+
+
 def _utc_or_none(value: datetime | None) -> datetime | None:
     if value is None or not _aware_datetime(value):
         return value
@@ -4029,6 +4274,513 @@ def _actual_resolution_minutes(
         duration_seconds * returned_rows / (maximum_cells * 60)
     )
     return max(requested_resolution_minutes, required_total_minutes)
+
+
+class _HeatmapSemanticGap(ValueError):
+    """Stop snapshot heatmap work when parsed evidence is semantically ambiguous."""
+
+
+@dataclass(frozen=True, slots=True)
+class _HeatmapRowSpec:
+    key: str
+    row_id: str
+    row_key: str
+    row_order_index: int
+    row_kind: HeatmapRowKind
+    label: str
+
+
+@dataclass(frozen=True, slots=True)
+class _HeatmapAggregate:
+    value: int | float | None
+    value_state: HeatmapValueState
+    applicable_zero: bool
+    evidence_count: int
+    evidence: tuple[HeatmapEvidenceItem, ...] = ()
+    omitted_evidence_count: int = 0
+
+
+_RUNTIME_ROWS: Final[tuple[tuple[str, str], ...]] = (
+    ("model_inference", "Model inference"),
+    ("tool_execution", "Tool execution"),
+    ("test_process", "Build / Test"),
+    ("agent_wait", "Waiting for agent"),
+    ("user_pause", "User pause"),
+    ("watchdog", "Watchdog"),
+    ("approval_infrastructure", "Approval / infrastructure"),
+    ("unattributed", "Unattributed"),
+)
+_TOKEN_ROWS: Final[tuple[tuple[str, HeatmapRowKind, str], ...]] = (
+    ("uncached_input_tokens", "token_measure", "Uncached input"),
+    ("cached_input_tokens", "token_measure", "Cached input"),
+    ("reasoning_tokens", "token_measure", "Reasoning"),
+    ("output_tokens", "token_measure", "Output"),
+    ("tool_calls", "token_measure", "Tool calls"),
+    ("context_average", "token_measure", "Context size (avg)"),
+    ("context_maximum", "token_measure", "Context size (max)"),
+    ("cost", "cost", "Cost"),
+)
+
+
+def _query_heatmap_semantics(
+    handle: SnapshotReadHandle,
+    request: HeatmapSnapshotQueryRequest,
+    cancellation: CancellationToken,
+) -> HeatmapSnapshotQueryResult:
+    """Aggregate one leased parsed run without cache or renderer dependencies."""
+
+    run = handle.run
+    rows = _heatmap_row_specs(run, handle.revision_id, request.mode)
+    if isinstance(request, HeatmapCellEvidenceRequest):
+        row = next(
+            (
+                item
+                for item in rows
+                if item.row_id == request.row_id and item.row_order_index <= 199
+            ),
+            None,
+        )
+        if row is None:
+            raise QueryFailure("invalid_request", "The Heatmap row is not valid for this snapshot revision and mode.", True)
+        aggregate = _heatmap_aggregate(
+            run,
+            handle.heatmap_pricing,
+            row,
+            request.period_start_time.astimezone(timezone.utc),
+            request.period_end_time.astimezone(timezone.utc),
+            cancellation,
+            include_evidence=True,
+        )
+        value, formatted, state, zero, _support = _heatmap_display(
+            run, row, aggregate
+        )
+        return HeatmapCellEvidenceResult(
+            handle.snapshot_id,
+            handle.revision_id,
+            "cell_evidence",
+            request.mode,
+            row.row_id,
+            row.row_key,
+            row.row_order_index,
+            row.label,
+            request.period_start_time.astimezone(timezone.utc),
+            request.period_end_time.astimezone(timezone.utc),
+            value,
+            formatted,
+            state,
+            zero,
+            aggregate.evidence,
+            aggregate.omitted_evidence_count,
+            ("parsed run semantic aggregation",),
+        )
+
+    start = request.from_time.astimezone(timezone.utc)
+    end = request.to_time.astimezone(timezone.utc)
+    selected = rows[: request.maximum_rows]
+    omitted = max(0, len(rows) - len(selected))
+    actual = request.requested_resolution_minutes
+    for candidate in sorted(_HEATMAP_RESOLUTIONS):
+        if candidate < request.requested_resolution_minutes:
+            continue
+        buckets = math.ceil((end - start).total_seconds() / (candidate * 60))
+        if buckets * len(selected) <= MAX_HEATMAP_CELLS:
+            actual = cast(HeatmapResolutionMinutes, candidate)
+            break
+    else:
+        actual = 60
+        buckets = math.ceil((end - start).total_seconds() / 3600)
+        if buckets > MAX_HEATMAP_CELLS:
+            raise QueryFailure("invalid_request", "The Heatmap range exceeds the 2,000-cell bound at 60-minute resolution.", True)
+        keep = MAX_HEATMAP_CELLS // buckets
+        omitted += max(0, len(selected) - keep)
+        selected = selected[:keep]
+
+    periods: list[tuple[datetime, datetime]] = []
+    cursor = start
+    resolution = timedelta(minutes=actual)
+    while cursor < end:
+        period_end = min(cursor + resolution, end)
+        periods.append((cursor, period_end))
+        cursor = period_end
+    matrix_rows: list[HeatmapMatrixRow] = []
+    for row in selected:
+        if cancellation.is_cancelled():
+            raise QueryFailure("cancelled", "The report operation was cancelled.", True)
+        aggregates = [
+            _heatmap_aggregate(run, handle.heatmap_pricing, row, period_start, period_end, cancellation, include_evidence=False)
+            for period_start, period_end in periods
+        ]
+        displayed = [_heatmap_display(run, row, item) for item in aggregates]
+        numeric = [float(item[0]) for item in displayed if item[0] is not None]
+        context_row = row.key in {"context_average", "context_maximum"}
+        capacity = _heatmap_context_capacity(run) if context_row else None
+        if context_row and capacity is None:
+            scale: HeatmapScale = UnavailableHeatmapScale(
+                "unavailable", "context_capacity_unavailable"
+            )
+        else:
+            maximum: int | float = capacity if capacity is not None else max(numeric, default=0)
+            scale = AvailableHeatmapScale("available", 0, maximum, "context_window_capacity" if context_row else "visible_row_maximum")
+        cells: list[HeatmapMatrixCell] = []
+        for (period_start, period_end), aggregate, display in zip(periods, aggregates, displayed):
+            value, formatted, state, zero, support = display
+            intensity = None
+            if isinstance(scale, AvailableHeatmapScale) and value is not None:
+                intensity = 0.0 if scale.maximum == 0 else min(1.0, max(0.0, float(value) / float(scale.maximum)))
+            cells.append(HeatmapMatrixCell(period_start, period_end, value, formatted, state, zero, aggregate.evidence_count, intensity, support))
+        matrix_rows.append(HeatmapMatrixRow(row.row_id, row.row_key, row.row_order_index, row.row_kind, row.label, scale, tuple(cells)))
+    order: HeatmapRowOrder = (
+        "runtime_state_contract" if request.mode == "wall_time" else
+        "token_contract" if request.mode == "tokens" else
+        "model_first_occurrence_then_cost"
+    )
+    return HeatmapMatrixResult(
+        handle.snapshot_id,
+        handle.revision_id,
+        "matrix",
+        request.mode,
+        start,
+        end,
+        request.requested_resolution_minutes,
+        actual,
+        request.maximum_rows,
+        omitted,
+        order,
+        sum(len(row.cells) for row in matrix_rows),
+        tuple(matrix_rows),
+        ("parsed run semantic aggregation",),
+    )
+
+
+def _heatmap_row_specs(run: object, revision_id: str, mode: HeatmapMode) -> tuple[_HeatmapRowSpec, ...]:
+    def spec(key: str, row_key: str, index: int, kind: HeatmapRowKind, label: str) -> _HeatmapRowSpec:
+        token = hashlib.sha256(f"{revision_id}\0{mode}\0{key}".encode()).hexdigest()[:24]
+        return _HeatmapRowSpec(key, f"row_{token}", row_key, index, kind, label)
+
+    if mode == "wall_time":
+        intervals = tuple(getattr(run, "runtime_intervals", ()) or ())
+        present = {str(getattr(item, "state", "")) for item in intervals if getattr(item, "state", "")}
+        present.update(str(getattr(item, "state", "")) for item in (getattr(run, "runtime_states", ()) or ()) if getattr(item, "state", ""))
+        ordered = [(key, key, label) for key, label in _RUNTIME_ROWS if key in present]
+        for key in sorted(
+            present - {item[0] for item in _RUNTIME_ROWS}, key=str.casefold
+        ):
+            normalized = key.casefold()
+            if not _valid_unknown_runtime_key(normalized):
+                raise _HeatmapSemanticGap(
+                    "unknown runtime state is not a bounded visible identifier"
+                )
+            ordered.append(
+                (key, f"runtime:{normalized}", key.replace("_", " ").title())
+            )
+        return tuple(spec(key, row_key, index, "runtime_state", label) for index, (key, row_key, label) in enumerate(ordered))
+    if mode == "tokens":
+        return tuple(spec(key, key, index, kind, label) for index, (key, kind, label) in enumerate(_TOKEN_ROWS))
+    identities: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    for thread in tuple(getattr(run, "threads", ()) or ()):
+        fallback_model = _heatmap_thread_fallback(getattr(thread, "model", ""), "Unknown model")
+        fallback_effort = _heatmap_thread_fallback(getattr(thread, "effort", ""), "")
+        for response in tuple(getattr(thread, "responses", ()) or ()):
+            model = str(getattr(response, "model", "") or fallback_model)
+            effort = str(getattr(response, "effort", "") or fallback_effort)
+            key = json.dumps([model, effort], separators=(",", ":"), ensure_ascii=False)
+            if key not in seen:
+                seen.add(key)
+                identities.append((key, model + (f" · effort {effort}" if effort else "")))
+    model_rows = [spec(key, "model:" + hashlib.sha256(key.encode()).hexdigest()[:24], index, "model", label) for index, (key, label) in enumerate(identities)]
+    return tuple(model_rows + [spec("cost", "cost", len(model_rows), "cost", "Cost")])
+
+
+def _heatmap_aggregate(
+    run: object,
+    heatmap_pricing: HeatmapPricingAuthority | None,
+    row: _HeatmapRowSpec,
+    start: datetime,
+    end: datetime,
+    cancellation: CancellationToken,
+    *,
+    include_evidence: bool,
+) -> _HeatmapAggregate:
+    if cancellation.is_cancelled():
+        raise QueryFailure("cancelled", "The report operation was cancelled.", True)
+    if row.row_kind == "runtime_state":
+        return _heatmap_runtime_aggregate(run, row, start, end, include_evidence)
+    values: list[float] = []
+    missing = 0
+    derived_value = row.key in {"tool_calls", "context_average"}
+    candidates: list[tuple[tuple[datetime, int, int], tuple[object, ...]]] = []
+    matched = 0
+    for thread_index, thread in enumerate(tuple(getattr(run, "threads", ()) or ())):
+        responses = tuple(getattr(thread, "responses", ()) or ())
+        for response_index, response in enumerate(responses):
+            if response_index % 256 == 0 and cancellation.is_cancelled():
+                raise QueryFailure("cancelled", "The report operation was cancelled.", True)
+            if row.key == "tool_calls":
+                continue
+            occurred = _heatmap_datetime(getattr(response, "completed_at", None) or getattr(response, "event_timestamp", None))
+            if occurred is None or not start <= occurred < end:
+                continue
+            model = str(getattr(response, "model", "") or _heatmap_thread_fallback(getattr(thread, "model", ""), "Unknown model"))
+            effort = str(getattr(response, "effort", "") or _heatmap_thread_fallback(getattr(thread, "effort", ""), ""))
+            identity = json.dumps([model, effort], separators=(",", ":"), ensure_ascii=False)
+            if row.row_kind == "model" and row.key != identity:
+                continue
+            if row.key == "cost":
+                assessment = heatmap_pricing.lookup(thread_index, response_index) if heatmap_pricing is not None else None
+                value = assessment.value_usd if assessment is not None else None
+                method = assessment.evidence_method if assessment is not None else "unavailable"
+                derived_value = derived_value or method in {"derived", "estimated", "inferred"}
+            elif row.row_kind == "model":
+                value = _heatmap_usage_value(_heatmap_response_usage(response), "processed_tokens")
+                method = "measured" if value is not None else "unavailable"
+            elif row.key in {"context_average", "context_maximum"}:
+                observed = getattr(response, "context_total_tokens", None)
+                value = observed if isinstance(observed, (int, float)) and observed > 0 else None
+                method = "measured" if value is not None else "unavailable"
+            else:
+                usage = _heatmap_response_usage(response)
+                value = _heatmap_usage_value(usage, row.key)
+                normalized = (
+                    row.key == "uncached_input_tokens" and int(getattr(usage, "cache_create_input_tokens", 0) or 0) > 0
+                ) or (
+                    row.key == "output_tokens" and int(getattr(usage, "reasoning_tokens", 0) or 0) > 0
+                )
+                method = "derived" if value is not None and normalized else "measured" if value is not None else "unavailable"
+                derived_value = derived_value or normalized
+            matched += 1
+            if value is None:
+                missing += 1
+            else:
+                values.append(float(value))
+            if include_evidence:
+                friendly = f"{_heatmap_agent_label(thread)} · {model + (f' · effort {effort}' if effort else '')}"
+                _heatmap_retain_candidate(candidates, occurred, thread_index, response_index, (response, value, friendly, method, row.key))
+        if row.key == "tool_calls":
+            for tool_index, tool in enumerate(tuple(getattr(thread, "tool_intervals", ()) or ())):
+                occurred = _heatmap_datetime(getattr(tool, "completed_at", None))
+                if occurred is None or not start <= occurred < end:
+                    continue
+                matched += 1
+                values.append(1.0)
+                if include_evidence:
+                    label = f"{_heatmap_agent_label(thread)} · {str(getattr(tool, 'tool_name', '') or 'Tool')}"
+                    _heatmap_retain_candidate(candidates, occurred, thread_index, len(responses) + tool_index, (tool, 1, label, "derived", row.key))
+    if row.key in {"context_average", "context_maximum"}:
+        value = (sum(values) / len(values) if row.key == "context_average" else max(values)) if values else None
+    else:
+        value = sum(values) if values else None
+    if matched == 0 and row.key in {"context_average", "context_maximum"}:
+        value, state, zero = None, "unavailable", False
+    elif matched == 0:
+        value = 0
+        state: HeatmapValueState = "derived"
+        zero = True
+    elif values and missing:
+        state, zero = "partial", False
+    elif values:
+        state, zero = "measured" if len(values) == 1 and not derived_value else "derived", value == 0
+    else:
+        state, zero = "unavailable", False
+    evidence = tuple(_heatmap_materialize_candidate(item[1], item[0][0]) for item in candidates)
+    return _HeatmapAggregate(_heatmap_number(value), state, zero, matched, evidence, max(0, matched - len(evidence)))
+
+
+def _heatmap_runtime_aggregate(run: object, row: _HeatmapRowSpec, start: datetime, end: datetime, include_evidence: bool) -> _HeatmapAggregate:
+    segments: list[tuple[datetime, datetime]] = []
+    candidates: list[tuple[tuple[datetime, int, int], tuple[object, ...]]] = []
+    matching = [item for item in tuple(getattr(run, "runtime_intervals", ()) or ()) if str(getattr(item, "state", "")) == row.key]
+    invalid = 0
+    valid = 0
+    for index, interval in enumerate(matching):
+        left = _heatmap_datetime(getattr(interval, "started_at", None))
+        right = _heatmap_datetime(getattr(interval, "completed_at", None))
+        if left is None or right is None or left >= right:
+            invalid += 1
+            continue
+        valid += 1
+        overlap_start, overlap_end = max(left, start), min(right, end)
+        if overlap_start < overlap_end:
+            segments.append((overlap_start, overlap_end))
+            if include_evidence:
+                duration = int((overlap_end - overlap_start).total_seconds() * 1000)
+                _heatmap_retain_candidate(candidates, overlap_start, 0, index, (interval, duration, row.label, "derived", row.key))
+    if not matching:
+        return _HeatmapAggregate(None, "unavailable", False, 0)
+    segments.sort()
+    merged: list[list[datetime]] = []
+    for left, right in segments:
+        if not merged or left >= merged[-1][1]:
+            merged.append([left, right])
+        else:
+            merged[-1][1] = max(merged[-1][1], right)
+    value = sum(int((right - left).total_seconds() * 1000) for left, right in merged)
+    state: HeatmapValueState = "partial" if invalid else "derived"
+    zero = value == 0 and not invalid
+    evidence = tuple(_heatmap_materialize_candidate(item[1], item[0][0]) for item in candidates)
+    usable = bool(segments) or valid > 0
+    return _HeatmapAggregate(value if usable else None, state if usable else "unavailable", zero, len(segments) + invalid, evidence, max(0, len(segments) + invalid - len(evidence)))
+
+
+def _heatmap_retain_candidate(candidates: list[tuple[tuple[datetime, int, int], tuple[object, ...]]], occurred: datetime, source: int, ordinal: int, payload: tuple[object, ...]) -> None:
+    item = ((occurred, source, ordinal), payload)
+    index = bisect.bisect_right([candidate[0] for candidate in candidates], item[0])
+    if index < MAX_HEATMAP_EVIDENCE_ITEMS:
+        candidates.insert(index, item)
+        if len(candidates) > MAX_HEATMAP_EVIDENCE_ITEMS:
+            candidates.pop()
+
+
+def _heatmap_materialize_candidate(payload: tuple[object, ...], occurred: datetime) -> HeatmapEvidenceItem:
+    source, value, label, method, key = payload
+    duration = getattr(source, "duration_ms", None)
+    preview_source = str(getattr(source, "detail", "") or getattr(source, "argument_summary", "") or "")
+    preview = _heatmap_bounded_text(preview_source, MAX_HEATMAP_PREVIEW_BYTES) if preview_source and not _contains_absolute_path(preview_source) else None
+    numeric = _heatmap_number(value if isinstance(value, (int, float)) else None)
+    state: HeatmapValueState = (
+        "unavailable" if numeric is None else
+        "derived" if method in {"derived", "inferred", "estimated"} else
+        "measured"
+    )
+    return HeatmapEvidenceItem(None, occurred, numeric, _heatmap_format_value(str(key), numeric, state), int(duration) if isinstance(duration, int) else None, _heatmap_bounded_text(str(label), MAX_HEATMAP_LABEL_BYTES), preview, cast(HeatmapEvidenceMethod, method), state, False)
+
+
+def _heatmap_response_usage(response: object) -> object | None:
+    reported = getattr(response, "reported_usage", None)
+    if reported is not None and any(float(getattr(reported, key, 0) or 0) for key in ("input_tokens", "cached_input_tokens", "uncached_input_tokens", "output_tokens", "reasoning_tokens", "processed_tokens")):
+        return reported
+    return getattr(response, "usage", None)
+
+
+def _heatmap_usage_value(usage: object | None, key: str) -> int | float | None:
+    if key in {"context_average", "context_maximum"}:
+        return None
+    if usage is None:
+        return None
+    if key == "uncached_input_tokens":
+        raw = getattr(usage, "direct_input_tokens", None)
+        if raw is None:
+            uncached = getattr(usage, "uncached_input_tokens", None)
+            if uncached is None:
+                return None
+            raw = max(0, int(uncached) - int(getattr(usage, "cache_create_input_tokens", 0) or 0))
+        return raw
+    if key == "output_tokens":
+        output = getattr(usage, "output_tokens", None)
+        return None if output is None else max(0, int(output) - int(getattr(usage, "reasoning_tokens", 0) or 0))
+    return getattr(usage, key, None)
+
+
+def _heatmap_context_capacity(run: object) -> int | None:
+    capacities = [int(getattr(response, "context_capacity", 0) or 0) for thread in tuple(getattr(run, "threads", ()) or ()) for response in tuple(getattr(thread, "responses", ()) or ())]
+    capacities.append(int(getattr(getattr(run, "context_summary", None), "capacity", 0) or 0))
+    maximum = max(capacities, default=0)
+    return maximum or None
+
+
+def _heatmap_display(run: object, row: _HeatmapRowSpec, aggregate: _HeatmapAggregate) -> tuple[int | float | None, str, HeatmapValueState, bool, str | None]:
+    value, state, zero = aggregate.value, aggregate.value_state, aggregate.applicable_zero
+    support = None
+    if row.key in {"context_average", "context_maximum"} and _heatmap_context_capacity(run) is None:
+        support = f"{_heatmap_compact(value)} tokens observed" if value is not None else None
+        value, state, zero = None, "unavailable", False
+    formatted = _heatmap_format_value(row.key, value, state)
+    capacity = _heatmap_context_capacity(run)
+    if row.key in {"context_average", "context_maximum"} and value is not None and capacity is not None:
+        base = f"{round(float(value) / capacity * 100)}%\n{_heatmap_compact(value)}"
+        formatted = f"Partial · {base}" if state == "partial" else base
+    return value, formatted, state, zero, support
+
+
+def _heatmap_format_value(key: str, value: int | float | None, state: HeatmapValueState) -> str:
+    if value is None or state == "unavailable":
+        return "Unavailable"
+    if key == "cost":
+        number = float(value)
+        rendered = "$0.00" if number == 0 else f"${number:.4f}" if number < 0.01 else f"${number:.2f}"
+    elif key in {item[0] for item in _RUNTIME_ROWS}:
+        rendered = _heatmap_duration(float(value))
+    else:
+        rendered = _heatmap_compact(value)
+    return f"Partial · {rendered}" if state == "partial" else rendered
+
+
+def _heatmap_compact(value: int | float | None) -> str:
+    if value is None:
+        return "N/A"
+    number = float(value)
+    for divisor, no_decimal, suffix in ((1_000_000_000, 10_000_000_000, "B"), (1_000_000, 10_000_000, "M"), (1_000, 10_000, "K")):
+        if abs(number) >= divisor:
+            digits = 0 if abs(number) >= no_decimal else 1
+            return f"{number / divisor:.{digits}f}{suffix}"
+    return f"{round(number):,}"
+
+
+def _heatmap_duration(value_ms: float) -> str:
+    if value_ms < 1_000:
+        return f"{round(value_ms)}ms"
+    if value_ms < 60_000:
+        digits = 1 if value_ms < 10_000 else 0
+        return f"{value_ms / 1_000:.{digits}f}s"
+    minutes = math.floor(value_ms / 60_000)
+    seconds = round((value_ms % 60_000) / 1_000)
+    return f"{minutes}m {seconds}s"
+
+
+def _heatmap_thread_fallback(value: object, fallback: str) -> str:
+    normalized = str(value or "")
+    return normalized if normalized and not normalized.startswith("mixed (") else fallback
+
+
+def _heatmap_agent_label(thread: object) -> str:
+    parent = str(getattr(thread, "parent_thread_id", "") or "")
+    role = str(getattr(thread, "agent_role", "") or ("main" if not parent else "default"))
+    name = str(getattr(thread, "agent_nickname", "") or getattr(thread, "task_title", "") or "root")
+    return f"{role} ({name})" if name not in {role, "root"} else role
+
+
+def _heatmap_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc) if _aware_datetime(value) else None
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(timezone.utc) if _aware_datetime(parsed) else None
+
+
+def _heatmap_number(value: object) -> int | float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value) if float(value).is_integer() else float(value)
+
+
+def _heatmap_bounded_text(value: str, maximum_bytes: int) -> str:
+    if _json_escaped_content_bytes(value) <= maximum_bytes:
+        return value
+    raise _HeatmapSemanticGap("Heatmap text exceeds its semantic contract bound")
+
+
+def _json_escaped_content_bytes(value: str) -> int:
+    return len(json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"))
+
+
+def _normalize_heatmap_result(result: HeatmapSnapshotQueryResult) -> HeatmapSnapshotQueryResult:
+    if isinstance(result, HeatmapMatrixResult):
+        return replace(result, from_time=result.from_time.astimezone(timezone.utc), to_time=result.to_time.astimezone(timezone.utc), rows=tuple(replace(row, cells=tuple(replace(cell, start_time=cell.start_time.astimezone(timezone.utc), end_time=cell.end_time.astimezone(timezone.utc)) for cell in row.cells)) for row in result.rows), provenance=tuple(result.provenance))
+    return replace(result, period_start_time=result.period_start_time.astimezone(timezone.utc), period_end_time=result.period_end_time.astimezone(timezone.utc), evidence_items=tuple(replace(item, occurred_at=item.occurred_at.astimezone(timezone.utc)) for item in result.evidence_items), provenance=tuple(result.provenance))
+
+
+def _heatmap_serialized_size(result: HeatmapSnapshotQueryResult) -> int:
+    def default(value: object) -> object:
+        if isinstance(value, datetime):
+            return value.isoformat().replace("+00:00", "Z")
+        if is_dataclass(value):
+            return {field.name: getattr(value, field.name) for field in fields(value)}
+        raise TypeError
+    return len((json.dumps(result, default=default, separators=(",", ":"), ensure_ascii=False) + "\n").encode("utf-8"))
 
 
 def resolve_automation_export_mode(

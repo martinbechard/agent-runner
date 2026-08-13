@@ -90,13 +90,19 @@ def test_generate_report_schema_hides_server_implementation_details() -> None:
         }
         assert set(by_name["query_snapshot_time_range"].parameters["properties"]) == {
             "snapshot_id",
+            "query_kind",
+            "mode",
             "from_time",
             "to_time",
-            "measure",
-            "group_by",
             "requested_resolution_minutes",
             "maximum_rows",
+            "row_id",
+            "period_start_time",
+            "period_end_time",
         }
+        assert by_name["query_snapshot_time_range"].parameters["required"] == [
+            "snapshot_id", "query_kind", "mode"
+        ]
         assert set(by_name["get_snapshot_event_details"].parameters["properties"]) == {
             "snapshot_id",
             "event_id",

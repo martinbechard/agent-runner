@@ -8,10 +8,11 @@
 from __future__ import annotations
 
 import threading
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from collections.abc import Callable
+from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -45,11 +46,15 @@ from agent_report.application_service import (
     ListAgentsRequest,
     ListEventsRequest,
     ListTurnsRequest,
-    HeatmapCell,
-    HeatmapQueryRequest,
-    HeatmapResult,
-    HeatmapRow,
-    HeatmapScale,
+    HeatmapCellEvidenceRequest,
+    HeatmapCellEvidenceResult,
+    HeatmapCostAssessment,
+    HeatmapPricingAuthority,
+    AvailableHeatmapScale,
+    HeatmapMatrixCell,
+    HeatmapMatrixRequest,
+    HeatmapMatrixResult,
+    HeatmapMatrixRow,
     MetricGroup,
     MetricValue,
     InfrastructureFailure,
@@ -81,6 +86,7 @@ from agent_report.application_service import (
     resolve_automation_export_mode,
     create_application_service,
     _map_dependency_failure,
+    _query_heatmap_semantics,
 )
 
 
@@ -165,12 +171,17 @@ class RecordingLogger:
 class _NormalizedRevision:
     source_revision: str
     privacy_validated: bool = True
+    run: object = None
+    heatmap_pricing: object = HeatmapPricingAuthority("pricing-1", "a" * 64, ())
 
 
 @dataclass(frozen=True)
 class _ReadHandle:
+    snapshot_id: str
     revision_id: str
     source_revision: str
+    run: object
+    heatmap_pricing: object = None
 
 
 @dataclass(frozen=True)
@@ -231,6 +242,7 @@ class FakeNormalizationPort:
         self.calls = 0
         self.failure: BaseException | None = None
         self.privacy_validated = True
+        self.last_revision = _NormalizedRevision("uninitialized")
 
     def normalize(
         self, discovered: DiscoveredScope, *_args: object
@@ -238,9 +250,10 @@ class FakeNormalizationPort:
         self.calls += 1
         if self.failure is not None:
             raise self.failure
-        return _NormalizedRevision(
+        self.last_revision = _NormalizedRevision(
             discovered.source_revision, privacy_validated=self.privacy_validated
         )
+        return self.last_revision
 
 
 class FakeEventRepositoryPort:
@@ -250,6 +263,7 @@ class FakeEventRepositoryPort:
         self.known_count: int | None = 7
         self.publish_calls = 0
         self.open_calls = 0
+        self.open_arguments: list[tuple[str, str, object, object]] = []
         self.released: list[_ReadHandle] = []
         self.failure: BaseException | None = None
         self.release_failure: BaseException | None = None
@@ -268,10 +282,13 @@ class FakeEventRepositoryPort:
             source_revision=revision.source_revision,
         )
 
-    def open_read(self, revision_id: str) -> _ReadHandle:
+    def open_read(
+        self, snapshot_id: str, revision_id: str, run: object, heatmap_pricing: object
+    ) -> _ReadHandle:
         self.open_calls += 1
+        self.open_arguments.append((snapshot_id, revision_id, run, heatmap_pricing))
         source_revision = "source-1" if revision_id == "revision-1" else "source-2"
-        return _ReadHandle(revision_id, source_revision)
+        return _ReadHandle(snapshot_id, revision_id, source_revision, run, heatmap_pricing)
 
     def release_read(self, handle: _ReadHandle) -> None:
         self.released.append(handle)
@@ -426,40 +443,45 @@ class FakeQueryPort:
             next_position=None,
         )
 
-    def query_time_range(
+    def query_snapshot_time_range(
         self,
         _handle: _ReadHandle,
-        request: HeatmapQueryRequest,
-        actual: int,
+        request: HeatmapMatrixRequest | HeatmapCellEvidenceRequest,
         _cancellation: object,
-    ) -> HeatmapResult:
+    ) -> HeatmapMatrixResult:
         self._hold_or_fail()
-        return HeatmapResult(
+        assert isinstance(request, HeatmapMatrixRequest)
+        return HeatmapMatrixResult(
             snapshot_id=request.snapshot_id,
             revision_id="revision-1",
-            measure=request.measure,
-            group_by=request.group_by,
+            query_kind="matrix",
+            mode=request.mode,
             from_time=request.from_time,
             to_time=request.to_time,
             requested_resolution_minutes=request.requested_resolution_minutes,
-            actual_resolution_minutes=actual,
+            actual_resolution_minutes=request.requested_resolution_minutes,
             maximum_rows=request.maximum_rows,
             omitted_row_count=0,
-            row_order="activity_descending_id_ascending",
+            row_order="runtime_state_contract",
             total_cell_count=1,
             rows=(
-                HeatmapRow(
-                    "agent-1",
-                    "Agent 1",
-                    HeatmapScale(0, 1, "sequential_nonnegative", "visible_row_maximum"),
+                HeatmapMatrixRow(
+                    "row_000000000000000000000001",
+                    "model_inference",
+                    0,
+                    "runtime_state",
+                    "Model inference",
+                    AvailableHeatmapScale("available", 0, 1, "visible_row_maximum"),
                     (
-                        HeatmapCell(
+                        HeatmapMatrixCell(
                             request.from_time,
                             request.to_time,
                             1,
-                            1,
+                            "1.0s",
                             "measured",
-                            "1",
+                            False,
+                            1,
+                            1.0,
                             None,
                         ),
                     ),
@@ -994,6 +1016,191 @@ def test_open_snapshot_publishes_state_only_after_repository_commit(
     assert summary.value.snapshot_id == snapshot_id
 
 
+def test_open_snapshot_supplies_generated_identity_and_normalized_run_to_read_handle(
+    tmp_path: Path,
+) -> None:
+    fixture = _service_fixture(tmp_path, prefix="lease")
+
+    snapshot_id = _open_snapshot(fixture)
+
+    assert snapshot_id == "lease-1"
+    assert fixture.repository.open_arguments == [
+        ("lease-1", "revision-1", fixture.normalization.last_revision.run, fixture.normalization.last_revision.heatmap_pricing)
+    ]
+
+
+def _heatmap_run(response_count: int = 1, *, context_capacity: int = 400) -> object:
+    responses = []
+    for index in range(response_count):
+        usage = SimpleNamespace(
+            input_tokens=100,
+            cached_input_tokens=20,
+            cache_create_input_tokens=5,
+            uncached_input_tokens=80,
+            output_tokens=30,
+            reasoning_tokens=10,
+            processed_tokens=130,
+        )
+        responses.append(
+            SimpleNamespace(
+                event_timestamp=(datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc) + timedelta(seconds=index)).isoformat(),
+                completed_at=(datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc) + timedelta(seconds=index)).isoformat(),
+                model="gpt-test",
+                effort="high",
+                usage=usage,
+                reported_usage=SimpleNamespace(),
+                context_total_tokens=200,
+                context_capacity=context_capacity,
+                recorded_cost_usd=0.25,
+                duration_ms=100,
+                detail=f"response {index}",
+            )
+        )
+    return SimpleNamespace(
+        threads=(SimpleNamespace(model="gpt-test", effort="high", responses=tuple(responses), tool_intervals=()),),
+        runtime_intervals=(SimpleNamespace(state="model_inference", started_at="2026-08-12T12:00:00Z", completed_at="2026-08-12T12:00:30Z", duration_ms=30_000, detail="inference"),),
+        runtime_states=(),
+        context_summary=SimpleNamespace(capacity=context_capacity),
+    )
+
+
+def test_heatmap_matrix_contract_has_exact_token_rows_and_revision_bound_ids() -> None:
+    handle = _ReadHandle("snapshot-1", "revision-1", "source-1", _heatmap_run())
+    result = _query_heatmap_semantics(
+        handle,
+        HeatmapMatrixRequest(
+            "snapshot-1", "matrix",
+            datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc),
+            datetime(2026, 8, 12, 12, 5, tzinfo=timezone.utc),
+            "tokens", 5, 100,
+        ),
+        ManualCancellationToken(),
+    )
+
+    assert isinstance(result, HeatmapMatrixResult)
+    assert result.query_kind == "matrix"
+    assert result.row_order == "token_contract"
+    assert [row.label for row in result.rows] == [
+        "Uncached input", "Cached input", "Reasoning", "Output", "Tool calls",
+        "Context size (avg)", "Context size (max)", "Cost",
+    ]
+    assert result.total_cell_count == 8
+    assert all(row.row_id.startswith("row_") for row in result.rows)
+    assert [row.row_key for row in result.rows] == [
+        "uncached_input_tokens", "cached_input_tokens", "reasoning_tokens",
+        "output_tokens", "tool_calls", "context_average", "context_maximum", "cost",
+    ]
+    assert [row.row_order_index for row in result.rows] == list(range(8))
+    assert all(item.preview is None for row in result.rows for item in ())
+    assert asdict(result)["query_kind"] == "matrix"
+
+
+def test_heatmap_cell_evidence_keeps_global_earliest_100_and_counts_omissions() -> None:
+    run = _heatmap_run(101)
+    handle = _ReadHandle("snapshot-1", "revision-1", "source-1", run)
+    matrix = cast(HeatmapMatrixResult, _query_heatmap_semantics(
+        handle,
+        HeatmapMatrixRequest("snapshot-1", "matrix", datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc), datetime(2026, 8, 12, 12, 5, tzinfo=timezone.utc), "models", 5, 100),
+        ManualCancellationToken(),
+    ))
+    result = _query_heatmap_semantics(
+        handle,
+        HeatmapCellEvidenceRequest("snapshot-1", "cell_evidence", "models", matrix.rows[0].row_id, datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc), datetime(2026, 8, 12, 12, 5, tzinfo=timezone.utc)),
+        ManualCancellationToken(),
+    )
+
+    assert isinstance(result, HeatmapCellEvidenceResult)
+    assert result.row_key == matrix.rows[0].row_key
+    assert result.row_order_index == 0
+    assert len(result.evidence_items) == 100
+    assert result.omitted_evidence_count == 1
+    assert [item.occurred_at for item in result.evidence_items] == sorted(item.occurred_at for item in result.evidence_items)
+    assert result.evidence_items[-1].occurred_at == datetime(2026, 8, 12, 12, 1, 39, tzinfo=timezone.utc)
+    assert asdict(result)["query_kind"] == "cell_evidence"
+
+
+def test_heatmap_cost_uses_immutable_pricing_authority_and_preserves_evidence_states() -> None:
+    run = _heatmap_run(4)
+    authority = HeatmapPricingAuthority(
+        "pricing-v1", "a" * 64,
+        (
+            (0, 0, HeatmapCostAssessment(0.0, "measured", "recorded response cost")),
+            (0, 1, HeatmapCostAssessment(0.25, "estimated", "API-equivalent estimate")),
+            (0, 2, HeatmapCostAssessment(None, "unavailable", "pricing unavailable")),
+            (0, 3, HeatmapCostAssessment(0.0, "measured", "recorded response cost")),
+        ),
+    )
+    handle = _ReadHandle("snapshot-1", "revision-1", "source-1", run, authority)
+    result = cast(HeatmapMatrixResult, _query_heatmap_semantics(
+        handle, HeatmapMatrixRequest("snapshot-1", "matrix", datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc), datetime(2026, 8, 12, 12, 5, tzinfo=timezone.utc), "tokens", 5, 100), ManualCancellationToken()
+    ))
+
+    cost = result.rows[-1].cells[0]
+    assert cost.value == 0.25
+    assert cost.value_state == "partial"
+    assert cost.formatted_value == "Partial · $0.25"
+    assert cost.applicable_zero is False
+
+
+def test_heatmap_hm_f05_unions_half_open_runtime_intervals_without_double_counting() -> None:
+    run = SimpleNamespace(
+        threads=(), context_summary=SimpleNamespace(capacity=0), runtime_states=(SimpleNamespace(state="watchdog"),),
+        runtime_intervals=(
+            SimpleNamespace(state="model_inference", started_at="2026-08-12T12:00:00Z", completed_at="2026-08-12T12:00:40Z", duration_ms=40_000, detail="first"),
+            SimpleNamespace(state="model_inference", started_at="2026-08-12T12:00:20Z", completed_at="2026-08-12T12:01:00Z", duration_ms=40_000, detail="second"),
+            SimpleNamespace(state="model_inference", started_at="missing", completed_at="missing", duration_ms=0, detail="unknown timing"),
+        ),
+    )
+    result = cast(HeatmapMatrixResult, _query_heatmap_semantics(
+        _ReadHandle("snapshot-1", "revision-1", "source-1", run),
+        HeatmapMatrixRequest("snapshot-1", "matrix", NOW := datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc), NOW + timedelta(minutes=2), "wall_time", 1, 100),
+        ManualCancellationToken(),
+    ))
+
+    inference, watchdog = result.rows
+    assert inference.cells[0].value == 60_000
+    assert inference.cells[0].value_state == "partial"
+    assert inference.cells[0].formatted_value == "Partial · 1m 0s"
+    assert inference.cells[1].value == 0
+    assert inference.cells[1].applicable_zero is False
+    assert watchdog.cells[0].value is None
+    assert watchdog.cells[0].formatted_value == "Unavailable"
+
+
+def test_heatmap_hm_f10_uses_unavailable_scale_for_unknown_context_capacity() -> None:
+    run = _heatmap_run(context_capacity=0)
+    result = cast(HeatmapMatrixResult, _query_heatmap_semantics(
+        _ReadHandle("snapshot-1", "revision-1", "source-1", run),
+        HeatmapMatrixRequest("snapshot-1", "matrix", datetime(2026, 8, 12, 12, 0, tzinfo=timezone.utc), datetime(2026, 8, 12, 12, 5, tzinfo=timezone.utc), "tokens", 5, 100),
+        ManualCancellationToken(),
+    ))
+
+    for row in result.rows[5:7]:
+        assert row.scale.availability == "unavailable"
+        assert row.cells[0].value is None
+        assert row.cells[0].formatted_value == "Unavailable"
+        assert row.cells[0].normalized_intensity is None
+        assert row.cells[0].supporting_text == "200 tokens observed"
+
+
+def test_heatmap_hm_f11_coarsens_supported_resolutions_and_omits_trailing_rows() -> None:
+    start = datetime(2026, 8, 1, tzinfo=timezone.utc)
+    handle = _ReadHandle("snapshot-1", "revision-1", "source-1", _heatmap_run())
+    coarsened = cast(HeatmapMatrixResult, _query_heatmap_semantics(
+        handle, HeatmapMatrixRequest("snapshot-1", "matrix", start, start + timedelta(minutes=5_000), "tokens", 1, 100), ManualCancellationToken()
+    ))
+    omitted = cast(HeatmapMatrixResult, _query_heatmap_semantics(
+        handle, HeatmapMatrixRequest("snapshot-1", "matrix", start, start + timedelta(minutes=120_000), "tokens", 1, 100), ManualCancellationToken()
+    ))
+
+    assert coarsened.actual_resolution_minutes == 30
+    assert coarsened.total_cell_count <= 2_000
+    assert omitted.actual_resolution_minutes == 60
+    assert len(omitted.rows) == 1
+    assert omitted.omitted_row_count == 7
+    assert omitted.total_cell_count == 2_000
+
+
 def test_preflight_privacy_failure_publishes_no_revision_or_snapshot(
     tmp_path: Path,
 ) -> None:
@@ -1261,34 +1468,35 @@ def test_list_events_rejects_cross_operation_and_cross_snapshot_cursors(
     assert cross_snapshot.error.code == "REPORT_CURSOR_CONFLICT"
 
 
-def test_query_time_range_returns_grouped_heatmap_with_bounded_cells_rows_scales_and_coarsening(
+def test_query_snapshot_time_range_returns_bounded_matrix_contract(
     tmp_path: Path,
 ) -> None:
     fixture = _service_fixture(tmp_path)
     snapshot_id = _open_snapshot(fixture)
     start = datetime(2026, 8, 1, tzinfo=timezone.utc)
 
-    result = fixture.service.query_time_range(
+    result = fixture.service.query_snapshot_time_range(
         _context("time"),
-        HeatmapQueryRequest(
+        HeatmapMatrixRequest(
             snapshot_id,
+            "matrix",
             start,
-            start + timedelta(minutes=4_001),
+            start + timedelta(minutes=5),
             "wall_time",
-            1,
-            "agent",
+            5,
             2,
         ),
         cancellation=ManualCancellationToken(),
     )
 
     assert result.ok is True
-    assert result.value.requested_resolution_minutes == 1
-    assert result.value.actual_resolution_minutes == 3
-    assert result.value.group_by == "agent"
+    assert result.value.query_kind == "matrix"
+    assert result.value.requested_resolution_minutes == 5
+    assert result.value.actual_resolution_minutes == 5
+    assert result.value.mode == "wall_time"
     assert result.value.maximum_rows == 2
     assert result.value.total_cell_count <= 2_000
-    assert result.value.rows[0].scale.color_semantic == "sequential_nonnegative"
+    assert result.value.rows[0].scale.availability == "available"
 
 
 def test_query_sequence_binds_focus_filters_grouping_and_cursor(tmp_path: Path) -> None:

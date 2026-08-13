@@ -10,7 +10,7 @@ import json
 import threading
 import time
 from dataclasses import fields, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, cast, get_args
 
@@ -35,11 +35,14 @@ from agent_report.application_service import (
     ExportOmission,
     ExportResult,
     ExportSnapshotRequest,
-    HeatmapCell,
-    HeatmapQueryRequest,
-    HeatmapResult,
-    HeatmapRow,
-    HeatmapScale,
+    AvailableHeatmapScale,
+    HeatmapCellEvidenceRequest,
+    HeatmapCellEvidenceResult,
+    HeatmapEvidenceItem,
+    HeatmapMatrixCell,
+    HeatmapMatrixRequest,
+    HeatmapMatrixResult,
+    HeatmapMatrixRow,
     ListAgentsRequest,
     ListEventsRequest,
     ListTurnsRequest,
@@ -77,6 +80,7 @@ from agent_report.report_worker import (
     CancelEnvelope,
     OperationName,
     RequestEnvelope,
+    ResultEnvelope,
     ThreadCancellationToken,
     WorkerConfig,
     WorkerProtocolError,
@@ -84,6 +88,7 @@ from agent_report.report_worker import (
     create_worker_runtime,
     decode_service_request,
     dispatch_service_operation,
+    encode_output_record,
     parse_input_line,
     serialize_service_value,
 )
@@ -111,7 +116,7 @@ def operation_requests() -> dict[str, RequestEnvelope]:
         "list_agents": request("list_agents", {"filters": {"query": "", "agent_ids": [], "roles": [], "states": []}, "sort": {"key": "last_activity_at", "direction": "descending", "tie_break_key": "agent_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
         "list_turns": request("list_turns", {"filters": {"turn_ids": [], "agent_ids": [], "states": [], "from_time": None, "to_time": None}, "sort": {"key": "started_at", "direction": "ascending", "tie_break_key": "turn_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
         "list_events": request("list_events", {"filters": event_filters, "sort": {"key": "occurred_at", "direction": "ascending", "tie_break_key": "event_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
-        "query_time_range": request("query_time_range", {"from_time": "2026-08-12T12:00:00Z", "to_time": "2026-08-12T13:00:00Z", "measure": "wall_time", "requested_resolution_minutes": 5, "group_by": "agent", "maximum_rows": 25}),
+        "query_snapshot_time_range": request("query_snapshot_time_range", {"query_kind": "matrix", "mode": "wall_time", "from_time": "2026-08-12T12:00:00Z", "to_time": "2026-08-12T13:00:00Z", "requested_resolution_minutes": 5, "maximum_rows": 25}),
         "query_sequence": request("query_sequence", {"filters": {"focus_agent_id": None, "event_filters": event_filters, "grouping": "none", "include_reasoning": False}, "sort": {"key": "occurred_at", "direction": "ascending", "tie_break_key": "sequence_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
         "query_coordination": request("query_coordination", {"filters": {"work_item_id": None, "delegated_root_id": None, "agent_id": None, "operation": None, "evidence": None}, "sort": {"key": "occurred_at", "direction": "ascending", "tie_break_key": "coordination_id", "tie_break_direction": "ascending"}, "cursor": None, "page_size": 25}),
         "get_event_details": request("get_event_details", {"event_id": "evt_0123456789abcdef01234567"}),
@@ -140,7 +145,7 @@ def test_operation_bindings_are_exhaustive_and_decoders_construct_exact_types() 
         "preflight_report": PreflightReportRequest, "open_snapshot": OpenSnapshotRequest,
         "get_summary": SnapshotRequest, "list_agents": ListAgentsRequest,
         "list_turns": ListTurnsRequest, "list_events": ListEventsRequest,
-        "query_time_range": HeatmapQueryRequest, "query_sequence": SequenceQueryRequest,
+        "query_snapshot_time_range": HeatmapMatrixRequest, "query_sequence": SequenceQueryRequest,
         "query_coordination": CoordinationQueryRequest, "get_event_details": EventDetailsRequest,
         "refresh_snapshot": RefreshSnapshotRequest, "export_snapshot": ExportSnapshotRequest,
         "close_snapshot": CloseSnapshotRequest,
@@ -148,7 +153,7 @@ def test_operation_bindings_are_exhaustive_and_decoders_construct_exact_types() 
     assert set(OPERATION_BINDINGS) == set(get_args(OperationName)) == set(expected)
     for name, envelope in operation_requests().items():
         assert type(decode_service_request(envelope)) is expected[name]
-        assert OPERATION_BINDINGS[name].request_type is expected[name]  # type: ignore[index]
+        assert expected[name] in OPERATION_BINDINGS[name].request_types  # type: ignore[index]
         assert OPERATION_BINDINGS[name].method_name == name  # type: ignore[index]
 
 
@@ -202,7 +207,7 @@ def test_each_wire_operation_calls_only_its_exact_named_service_method() -> None
         method, context, value, keywords = calls[-1]
         assert method == name
         assert context.operation_id == OPERATION_ID  # type: ignore[attr-defined]
-        assert type(value) is OPERATION_BINDINGS[name].request_type  # type: ignore[index]
+        assert type(value) in OPERATION_BINDINGS[name].request_types  # type: ignore[index]
         expected = set() if name == "close_snapshot" else {"cancellation"}
         if name in {"preflight_report", "open_snapshot", "refresh_snapshot", "export_snapshot"}:
             expected.add("progress")
@@ -268,10 +273,10 @@ def test_every_operation_serializes_its_exact_cd002_result_schema() -> None:
             ["events"], [SignificantActivity("evt_0123456789abcdef01234567", NOW, "Safe", "measured")], [],
         ),
         **page_values,
-        "query_time_range": HeatmapResult(
-            SNAPSHOT_ID, "revision", "wall_time", "agent", NOW, NOW, 5, 5, 25, 0,
-            "activity_descending_id_ascending", 1,
-            [HeatmapRow("agent", "Agent", HeatmapScale(0, 2.0, "sequential_nonnegative", "visible_row_maximum"), [HeatmapCell(NOW, NOW, 1.5, 1, "measured", "One", None)])],
+        "query_snapshot_time_range": HeatmapMatrixResult(
+            SNAPSHOT_ID, "revision", "matrix", "wall_time", NOW, NOW + timedelta(minutes=5), 5, 5, 25, 0,
+            "runtime_state_contract", 1,
+            [HeatmapMatrixRow("row_0123456789abcdef01234567", "model_inference", 0, "runtime_state", "Agent", AvailableHeatmapScale("available", 0, 2.0, "visible_row_maximum"), [HeatmapMatrixCell(NOW, NOW + timedelta(minutes=5), 1.5, "1.5s", "measured", False, 1, 0.75, None)])],
             ["events"],
         ),
         "get_event_details": EventDetail(
@@ -369,12 +374,87 @@ def test_serializer_rejects_wrong_nested_type_nonfinite_naive_and_bool_integer()
         with pytest.raises(WorkerProtocolError, match="invalid result"):
             serialize_service_value(envelope, value)
 
-    time_value = HeatmapResult(
-        SNAPSHOT_ID, "revision", "wall_time", "agent", NOW.replace(tzinfo=None), NOW,
-        5, 5, 25, 0, "activity_descending_id_ascending", 0, [], [],
+    time_value = HeatmapMatrixResult(
+        SNAPSHOT_ID, "revision", "matrix", "wall_time", NOW.replace(tzinfo=None), NOW,
+        5, 5, 25, 0, "runtime_state_contract", 0, [], [],
     )
     with pytest.raises(WorkerProtocolError, match="invalid result"):
-        serialize_service_value(operation_requests()["query_time_range"], time_value)
+        serialize_service_value(operation_requests()["query_snapshot_time_range"], time_value)
+
+
+def test_heatmap_canonical_serialized_variants_have_exact_fields_and_fit_jsonl_bound() -> None:
+    matrix_envelope = operation_requests()["query_snapshot_time_range"]
+    matrix = HeatmapMatrixResult(
+        SNAPSHOT_ID, "revision", "matrix", "tokens", NOW, NOW + timedelta(minutes=5),
+        5, 5, 100, 0, "token_contract", 1,
+        [HeatmapMatrixRow("row_0123456789abcdef01234567", "output_tokens", 3, "token_measure", "Output", AvailableHeatmapScale("available", 0, 10, "visible_row_maximum"), [HeatmapMatrixCell(NOW, NOW + timedelta(minutes=5), 10, "10", "measured", False, 1, 1.0, None)])],
+        ["parsed run semantic aggregation"],
+    )
+    evidence_envelope = request(
+        "query_snapshot_time_range",
+        {"query_kind": "cell_evidence", "mode": "tokens", "row_id": "row_0123456789abcdef01234567", "period_start_time": "2026-08-12T12:00:00Z", "period_end_time": "2026-08-12T12:05:00Z"},
+    )
+    evidence = HeatmapCellEvidenceResult(
+        SNAPSHOT_ID, "revision", "cell_evidence", "tokens", "row_0123456789abcdef01234567", "output_tokens", 3, "Output",
+        NOW, NOW + timedelta(minutes=5), 10, "10", "measured", False,
+        [HeatmapEvidenceItem(None, NOW, 10, "10", 50, "Agent · response", "safe" * 1_000, "measured", "measured", False) for _ in range(100)],
+        1, ["parsed run semantic aggregation"],
+    )
+
+    matrix_json = serialize_service_value(matrix_envelope, matrix)
+    evidence_json = serialize_service_value(evidence_envelope, evidence)
+    assert list(matrix_json) == [field.name for field in fields(HeatmapMatrixResult)]
+    assert list(evidence_json) == [field.name for field in fields(HeatmapCellEvidenceResult)]
+    assert "evidence_items" not in matrix_json and "rows" not in evidence_json
+    assert len((json.dumps(matrix_json, separators=(",", ":")) + "\n").encode()) < 1_048_576
+    assert len((json.dumps(evidence_json, separators=(",", ":")) + "\n").encode()) < 1_048_576
+    for payload in (matrix_json, evidence_json):
+        line = encode_output_record(
+            ResultEnvelope(PROTOCOL_VERSION, OPERATION_ID, "result", "query_snapshot_time_range", SNAPSHOT_ID, True, payload)
+        )
+        assert line.endswith(b"\n") and len(line) < 1_048_576
+
+
+def test_heatmap_json_escaped_content_caps_accept_boundary_and_reject_overflow() -> None:
+    envelope = operation_requests()["query_snapshot_time_range"]
+    cell = HeatmapMatrixCell(
+        NOW, NOW + timedelta(minutes=5), 1, '"' * 32, "measured", False, 1, 1.0, "\\" * 40
+    )
+    row = HeatmapMatrixRow(
+        "row_0123456789abcdef01234567", "output_tokens", 3, "token_measure",
+        '"' * 128, AvailableHeatmapScale("available", 0, 1, "visible_row_maximum"), [cell],
+    )
+    matrix = HeatmapMatrixResult(
+        SNAPSHOT_ID, "revision", "matrix", "tokens", NOW, NOW + timedelta(minutes=5),
+        5, 5, 100, 0, "token_contract", 1, [row], ['"' * 128],
+    )
+
+    assert serialize_service_value(envelope, matrix)["query_kind"] == "matrix"
+    for invalid in (
+        replace(matrix, rows=[replace(row, label='"' * 129)]),
+        replace(matrix, rows=[replace(row, cells=[replace(cell, formatted_value='"' * 33)])]),
+        replace(matrix, rows=[replace(row, cells=[replace(cell, supporting_text="\\" * 41)])]),
+        replace(matrix, provenance=['"' * 129]),
+    ):
+        with pytest.raises(WorkerProtocolError, match="invalid result"):
+            serialize_service_value(envelope, invalid)
+
+    evidence_envelope = request(
+        "query_snapshot_time_range",
+        {"query_kind": "cell_evidence", "mode": "tokens", "row_id": row.row_id, "period_start_time": "2026-08-12T12:00:00Z", "period_end_time": "2026-08-12T12:05:00Z"},
+    )
+    item = HeatmapEvidenceItem(None, NOW, 1, "1", None, "Evidence", '"' * 2_048, "measured", "measured", False)
+    evidence = HeatmapCellEvidenceResult(
+        SNAPSHOT_ID, "revision", "cell_evidence", "tokens", row.row_id, row.row_key,
+        row.row_order_index, row.label, NOW, NOW + timedelta(minutes=5), 1, "1",
+        "measured", False, [item], 0, ["parsed"],
+    )
+    assert serialize_service_value(evidence_envelope, evidence)["query_kind"] == "cell_evidence"
+    with pytest.raises(WorkerProtocolError, match="invalid result"):
+        serialize_service_value(
+            evidence_envelope,
+            replace(evidence, evidence_items=[replace(item, preview='"' * 2_049)]),
+        )
 
 
 class Clock:

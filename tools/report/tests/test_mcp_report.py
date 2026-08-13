@@ -1038,10 +1038,72 @@ class _RuntimeQueryRepository:
 def _runtime_query_handle() -> SimpleNamespace:
     return SimpleNamespace(
         run=_runtime_query_run(),
+        heatmap_pricing=service_types.HeatmapPricingAuthority("pricing-v1", "a" * 64, ()),
         cache_snapshot_id="cache-snapshot",
-        public_snapshot_id="snap_1234567890abcdef12345678",
+        snapshot_id="snap_1234567890abcdef12345678",
         revision_id="revision-1",
     )
+
+
+def test_read_handle_binds_public_snapshot_and_revision_immutably() -> None:
+    run = _runtime_query_run()
+    handle = report_module._ReadHandle(
+        "snapshot-public", "revision-1", "source-1", "snapshot-cache", run,
+        service_types.HeatmapPricingAuthority("pricing-v1", "a" * 64, ()),
+        service_types.ReportScope("agent-root")
+    )
+
+    assert handle.snapshot_id == "snapshot-public"
+    assert handle.run is run
+    with pytest.raises(AttributeError):
+        handle.snapshot_id = "changed"
+
+
+def test_runtime_heatmap_query_is_a_thin_delegate_to_shared_semantics(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sentinel = object()
+    calls: list[tuple[object, object, object]] = []
+    monkeypatch.setattr(
+        service_types,
+        "_query_heatmap_semantics",
+        lambda handle, request, cancellation: calls.append((handle, request, cancellation)) or sentinel,
+    )
+    queries = report_module._RuntimeQueries(_RuntimeQueryRepository())  # type: ignore[arg-type]
+    handle, request, cancellation = object(), object(), object()
+
+    assert queries.query_snapshot_time_range(handle, request, cancellation) is sentinel
+    assert calls == [(handle, request, cancellation)]
+
+
+def test_normalization_freezes_classic_pricing_once_against_later_global_mutation() -> None:
+    calls: list[tuple[object, object]] = []
+    price = {"value": 0.125, "status": "estimated"}
+
+    class Runtime:
+        @staticmethod
+        def _cost_for_response(thread: object, response: object) -> object:
+            calls.append((thread, response))
+            return SimpleNamespace(
+                total_cost=price["value"],
+                status=price["status"],
+                method='API "equivalent"\\estimate',
+            )
+
+    first, second = object(), object()
+    thread = SimpleNamespace(responses=(first, second))
+    authority = report_module._capture_heatmap_pricing(  # type: ignore[arg-type]
+        Runtime(), SimpleNamespace(threads=(thread,)), "pricing-v1", "a" * 64
+    )
+    price.update(value=99.0, status="recorded")
+
+    assert calls == [(thread, first), (thread, second)]
+    assert authority.lookup(0, 0) == service_types.HeatmapCostAssessment(
+        0.125, "estimated", 'API "equivalent"\\estimate'
+    )
+    assert authority.lookup(0, 1).value_usd == 0.125  # type: ignore[union-attr]
+    assert authority.pricing_version == "pricing-v1"
+    assert authority.pricing_digest == "a" * 64
 
 
 def test_runtime_summary_exposes_every_fr03_metric_group_from_normalized_run() -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import json
+import math
 import re
 import secrets
 import hashlib
@@ -246,6 +247,7 @@ class _NormalizedRun:
     source_revision: str
     privacy_validated: bool
     run: object
+    heatmap_pricing: service_types.HeatmapPricingAuthority
     scope: service_types.ReportScope
     sources: tuple[event_cache.SourceRevision, ...]
     records: tuple[
@@ -256,14 +258,15 @@ class _NormalizedRun:
     ]
 
 
-@dataclass(slots=True)
+@dataclass(frozen=True, slots=True)
 class _ReadHandle:
+    snapshot_id: str
     revision_id: str
     source_revision: str
     cache_snapshot_id: str
     run: object
+    heatmap_pricing: service_types.HeatmapPricingAuthority
     scope: service_types.ReportScope
-    public_snapshot_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -370,6 +373,7 @@ class _RuntimeNormalization:
         title: str,
         thread_titles: Mapping[str, str],
         workers: int,
+        pricing_version: str = "unavailable",
     ) -> None:
         self._runtime = runtime
         self._seal = seal
@@ -377,6 +381,7 @@ class _RuntimeNormalization:
         self._title = title
         self._thread_titles = dict(thread_titles)
         self._workers = workers
+        self._pricing_version = pricing_version
 
     def normalize(
         self,
@@ -516,10 +521,14 @@ class _RuntimeNormalization:
             records.append((cached, tuple(grouped[source.source_key])))
         records.sort(key=lambda item: str(item[0].source_key))
         cache_sources = [item[0] for item in records]
+        heatmap_pricing = _capture_heatmap_pricing(
+            self._runtime, run, self._pricing_version, pricing_digest
+        )
         return _NormalizedRun(
             discovered.source_revision,
             True,
             run,
+            heatmap_pricing,
             discovered.scope,
             tuple(cache_sources),
             tuple(records),
@@ -534,8 +543,7 @@ class _RepositoryAdapter:
     ) -> None:
         self._repository = repository
         self._config = config
-        self._runs: dict[str, tuple[str, str, object, service_types.ReportScope]] = {}
-        self.pending_handle: _ReadHandle | None = None
+        self._runs: dict[str, tuple[str, str, object, service_types.HeatmapPricingAuthority, service_types.ReportScope]] = {}
 
     def known_event_count(self, source_revision: str) -> int | None:
         return None
@@ -572,18 +580,21 @@ class _RepositoryAdapter:
             cache_snapshot_id,
             revision.source_revision,
             revision.run,
+            revision.heatmap_pricing,
             revision.scope,
         )
         return service_types.PublishedRevision(
             str(binding.revision_id), revision.source_revision
         )
 
-    def open_read(self, revision_id: str) -> _ReadHandle:
-        snapshot_id, source_revision, run, scope = self._runs[revision_id]
-        self._repository.get_snapshot(event_cache.SnapshotId(snapshot_id))
-        handle = _ReadHandle(revision_id, source_revision, snapshot_id, run, scope)
-        self.pending_handle = handle
-        return handle
+    def open_read(self, snapshot_id: str, revision_id: str, run: object, heatmap_pricing: service_types.HeatmapPricingAuthority) -> _ReadHandle:
+        cache_snapshot_id, source_revision, published_run, published_pricing, scope = self._runs[revision_id]
+        self._repository.get_snapshot(event_cache.SnapshotId(cache_snapshot_id))
+        if published_run is not run or published_pricing is not heatmap_pricing:
+            raise service_types.RepositoryFailure(
+                "binding_conflict", "The normalized run does not match the published revision.", True
+            )
+        return _ReadHandle(snapshot_id, revision_id, source_revision, cache_snapshot_id, run, heatmap_pricing, scope)
 
     def release_read(self, handle: _ReadHandle) -> None:
         return None
@@ -594,14 +605,10 @@ class _RepositoryAdapter:
 
 class _Ids:
     def __init__(self, repository: _RepositoryAdapter) -> None:
-        self._repository = repository
+        del repository
 
     def new_snapshot_id(self) -> str:
-        value = "snap_" + secrets.token_hex(12)
-        if self._repository.pending_handle is not None:
-            self._repository.pending_handle.public_snapshot_id = value
-            self._repository.pending_handle = None
-        return value
+        return "snap_" + secrets.token_hex(12)
 
     def new_token_key(self) -> bytes:
         return secrets.token_bytes(32)
@@ -645,6 +652,67 @@ def _bounded_text(value: object, limit: int = 512) -> str:
     if len(compact) <= limit:
         return compact
     return compact[: limit - 1].rstrip() + "…"
+
+
+def _bounded_json_content(value: str, maximum_bytes: int) -> str:
+    """Bound a safe method description by encoded JSON string-content bytes."""
+
+    if len(json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8")) <= maximum_bytes:
+        return value
+    retained = ""
+    for character in value:
+        candidate = retained + character
+        if len(json.dumps(candidate, ensure_ascii=False)[1:-1].encode("utf-8")) > maximum_bytes:
+            break
+        retained = candidate
+    return retained
+
+
+def _capture_heatmap_pricing(
+    runtime: ModuleType,
+    run: object,
+    pricing_version: str,
+    pricing_digest: str,
+) -> service_types.HeatmapPricingAuthority:
+    """Evaluate classic response pricing once and freeze revision-bound lookups."""
+
+    assessments: list[tuple[int, int, service_types.HeatmapCostAssessment]] = []
+    for thread_index, thread in enumerate(getattr(run, "threads", ())):
+        for response_index, response in enumerate(getattr(thread, "responses", ())):
+            cost = runtime._cost_for_response(thread, response)
+            status = str(getattr(cost, "status", "") or "").casefold()
+            evidence_method: service_types.HeatmapEvidenceMethod = (
+                "measured" if status == "recorded" else
+                "estimated" if status == "estimated" else
+                "derived" if status == "derived" else
+                "unavailable"
+            )
+            raw_value = getattr(cost, "total_cost", None)
+            value = (
+                float(raw_value)
+                if isinstance(raw_value, (int, float))
+                and not isinstance(raw_value, bool)
+                and math.isfinite(float(raw_value))
+                and float(raw_value) >= 0
+                else None
+            )
+            if value is None:
+                evidence_method = "unavailable"
+            assessments.append((
+                thread_index,
+                response_index,
+                service_types.HeatmapCostAssessment(
+                    value,
+                    evidence_method,
+                    _bounded_json_content(
+                        str(getattr(cost, "method", "unavailable") or "unavailable"),
+                        256,
+                    ),
+                ),
+            ))
+    return service_types.HeatmapPricingAuthority(
+        pricing_version, pricing_digest, tuple(assessments)
+    )
 
 
 def _evidence_kind(value: object) -> service_types.EvidenceKind:
@@ -1039,92 +1107,8 @@ class _RuntimeQueries:
         )
         return _slice(cast(list[object], rows), after, limit)
 
-    def query_time_range(
-        self, handle, request, actual_resolution_minutes, cancellation
-    ):  # type: ignore[no-untyped-def]
-        filters = service_types.EventFilters(
-            from_time=request.from_time, to_time=request.to_time
-        )
-        events = self._stored_events(handle, filters)
-        grouped: dict[str, list[object]] = {}
-        for event in events:
-            key = (
-                event.record.agent_id
-                if request.group_by == "agent"
-                else event.record.kind
-                if request.group_by == "event_kind"
-                else event.record.work_item_id
-            )
-            grouped.setdefault(key or "unassigned", []).append(event)
-        rows = []
-        for key, values in sorted(
-            grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])
-        )[: request.maximum_rows]:
-            buckets: dict[datetime, list[object]] = {}
-            resolution = timedelta(minutes=actual_resolution_minutes)
-            for item in values:
-                offset = item.record.timestamp_utc - request.from_time
-                bucket_number = int(
-                    offset.total_seconds() // resolution.total_seconds()
-                )
-                bucket_start = request.from_time + bucket_number * resolution
-                buckets.setdefault(bucket_start, []).append(item)
-            cells = []
-            for bucket_start, bucket_events in sorted(buckets.items()):
-                measured_values = [
-                    value
-                    for item in bucket_events
-                    for value in (self._event_measure(item.record, request.measure),)
-                    if value is not None
-                ]
-                cells.append(
-                    service_types.HeatmapCell(
-                        bucket_start,
-                        min(bucket_start + resolution, request.to_time),
-                        sum(measured_values) if measured_values else None,
-                        len(bucket_events),
-                        "measured" if measured_values else "unavailable",
-                        f"{len(bucket_events)} events",
-                        None,
-                    )
-                )
-            scale_values = [cell.value for cell in cells if cell.value is not None]
-            rows.append(
-                service_types.HeatmapRow(
-                    key,
-                    key,
-                    service_types.HeatmapScale(
-                        0,
-                        max(scale_values, default=0),
-                        "sequential_nonnegative",
-                        "visible_row_maximum",
-                    ),
-                    tuple(cells),
-                )
-            )
-        return service_types.HeatmapResult(
-            request.snapshot_id,
-            handle.revision_id,
-            request.measure,
-            request.group_by,
-            request.from_time,
-            request.to_time,
-            request.requested_resolution_minutes,
-            actual_resolution_minutes,
-            request.maximum_rows,
-            max(0, len(grouped) - len(rows)),
-            "activity_descending_id_ascending",
-            sum(len(row.cells) for row in rows),
-            tuple(rows),
-            ("normalized event cache",),
-        )
-
-    @staticmethod
-    def _event_measure(record, measure):  # type: ignore[no-untyped-def]
-        if measure == "wall_time":
-            return record.duration_ms
-        value = getattr(record, measure)
-        return float(value) if measure == "cost_usd" and value is not None else value
+    def query_snapshot_time_range(self, handle, request, cancellation):  # type: ignore[no-untyped-def]
+        return service_types._query_heatmap_semantics(handle, request, cancellation)
 
     def query_sequence(self, handle, request, after, cancellation):  # type: ignore[no-untyped-def]
         run = handle.run
@@ -1321,7 +1305,7 @@ class _RuntimeQueries:
             return None
         record = item.record
         return service_types.EventDetail(
-            handle.public_snapshot_id,
+            handle.snapshot_id,
             handle.revision_id,
             event_id,
             record.timestamp_utc,
@@ -1873,6 +1857,7 @@ def create_production_application_service(
             title=title,
             thread_titles=thread_titles or {},
             workers=workers,
+            pricing_version=config.pricing_version,
         ),
         repository_adapter,
         _RuntimeQueries(repository),
@@ -2306,31 +2291,41 @@ class ReportGenerator:
         self,
         *,
         snapshot_id: str,
-        from_time: str,
-        to_time: str,
-        measure: service_types.TimeMeasure,
-        group_by: service_types.HeatmapGroupBy,
-        requested_resolution_minutes: int,
+        query_kind: service_types.HeatmapQueryKind,
+        mode: service_types.HeatmapMode,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        requested_resolution_minutes: int | None = None,
         maximum_rows: int = 100,
+        row_id: str | None = None,
+        period_start_time: str | None = None,
+        period_end_time: str | None = None,
         cancelled: Callable[[], bool] | None = None,
     ) -> dict[str, object]:
-        """Return the grouped snapshot heatmap without overloading the retained tool."""
+        """Return one discriminated snapshot Heatmap query result."""
 
         try:
-            start = self._parse_timestamp(from_time, "from_time")
-            end = self._parse_timestamp(to_time, "to_time")
+            if query_kind == "matrix":
+                if from_time is None or to_time is None or requested_resolution_minutes is None:
+                    raise ValueError("matrix queries require from_time, to_time, and requested_resolution_minutes")
+                request: service_types.HeatmapSnapshotQueryRequest = service_types.HeatmapMatrixRequest(
+                    snapshot_id, "matrix", self._parse_timestamp(from_time, "from_time"),
+                    self._parse_timestamp(to_time, "to_time"), mode,
+                    cast(service_types.HeatmapResolutionMinutes, requested_resolution_minutes), maximum_rows,
+                )
+            elif query_kind == "cell_evidence":
+                if row_id is None or period_start_time is None or period_end_time is None:
+                    raise ValueError("cell_evidence queries require row_id, period_start_time, and period_end_time")
+                request = service_types.HeatmapCellEvidenceRequest(
+                    snapshot_id, "cell_evidence", mode, row_id,
+                    self._parse_timestamp(period_start_time, "period_start_time"),
+                    self._parse_timestamp(period_end_time, "period_end_time"),
+                )
+            else:
+                raise ValueError("query_kind must be matrix or cell_evidence")
         except ValueError as error:
             return self._error("REPORT_INVALID_REQUEST", str(error))
-        request = service_types.HeatmapQueryRequest(
-            snapshot_id,
-            start,
-            end,
-            measure,
-            requested_resolution_minutes,
-            group_by,
-            maximum_rows,
-        )
-        result = self._service().query_time_range(
+        result = self._service().query_snapshot_time_range(
             self._operation_context(),
             request,
             cancellation=_CallableCancellation(cancelled),

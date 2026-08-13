@@ -48,11 +48,26 @@ from .application_service import (
     ExportOmission,
     ExportResult,
     ExportSnapshotRequest,
-    HeatmapCell,
-    HeatmapQueryRequest,
-    HeatmapResult,
-    HeatmapRow,
+    AvailableHeatmapScale,
+    HeatmapCellEvidenceRequest,
+    HeatmapCellEvidenceResult,
+    HeatmapEvidenceItem,
+    HeatmapMatrixCell,
+    HeatmapMatrixRequest,
+    HeatmapMatrixResult,
+    HeatmapMatrixRow,
     HeatmapScale,
+    HeatmapSnapshotQueryRequest,
+    HeatmapSnapshotQueryResult,
+    MAX_HEATMAP_CELLS,
+    MAX_HEATMAP_EVIDENCE_ITEMS,
+    MAX_HEATMAP_FORMATTED_VALUE_BYTES,
+    MAX_HEATMAP_LABEL_BYTES,
+    MAX_HEATMAP_PREVIEW_BYTES,
+    MAX_HEATMAP_PROVENANCE_BYTES,
+    MAX_HEATMAP_PROVENANCE_ITEMS,
+    MAX_HEATMAP_SUPPORTING_TEXT_BYTES,
+    UnavailableHeatmapScale,
     ListAgentsRequest,
     ListEventsRequest,
     ListTurnsRequest,
@@ -82,7 +97,6 @@ from .application_service import (
     SignificantActivity,
     SummaryResult,
     TimeRange,
-    TimeMeasure,
     TurnFilters,
     TurnRow,
     TurnSort,
@@ -103,20 +117,20 @@ _VISIBLE_SNAPSHOT = re.compile(r"[!-~]{1,128}\Z")
 JsonValue: TypeAlias = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
 OperationName = Literal[
     "preflight_report", "open_snapshot", "get_summary", "list_agents", "list_turns",
-    "list_events", "query_time_range", "query_sequence", "query_coordination",
+    "list_events", "query_snapshot_time_range", "query_sequence", "query_coordination",
     "get_event_details", "refresh_snapshot", "export_snapshot", "close_snapshot",
 ]
 ServiceMethodName = OperationName
 ServiceRequestValue = (
     PreflightReportRequest | OpenSnapshotRequest | SnapshotRequest | ListAgentsRequest
-    | ListTurnsRequest | ListEventsRequest | HeatmapQueryRequest | SequenceQueryRequest
+    | ListTurnsRequest | ListEventsRequest | HeatmapSnapshotQueryRequest | SequenceQueryRequest
     | CoordinationQueryRequest | EventDetailsRequest | RefreshSnapshotRequest
     | ExportSnapshotRequest | CloseSnapshotRequest
 )
 ServiceResultValue = (
     PreflightResult | SnapshotMetadata | SummaryResult | PageResult[AgentRow, AgentFilters, AgentSort]
     | PageResult[TurnRow, TurnFilters, TurnSort] | PageResult[EventRow, EventFilters, EventSort]
-    | HeatmapResult | SequenceResult | PageResult[CoordinationRow, CoordinationFilters, CoordinationSort] | EventDetail
+    | HeatmapSnapshotQueryResult | SequenceResult | PageResult[CoordinationRow, CoordinationFilters, CoordinationSort] | EventDetail
     | RefreshSnapshotResult | ExportResult | CloseSnapshotResult
 )
 PageRowValue = AgentRow | TurnRow | EventRow | SequenceRow | CoordinationRow
@@ -267,9 +281,9 @@ class OperationSlot:
 
 @dataclass(frozen=True, slots=True)
 class OperationBinding:
-    request_type: type[ServiceRequestValue]
+    request_types: tuple[type[object], ...]
     method_name: ServiceMethodName
-    result_type: type[ServiceResultValue]
+    result_types: tuple[type[object], ...]
     page_item_type: type[PageRowValue] | None
     serialize_result: ResultSerializer
 
@@ -282,19 +296,19 @@ def _default_serializer(value: ServiceResultValue) -> dict[str, JsonValue]:
 
 
 OPERATION_BINDINGS: Final[dict[OperationName, OperationBinding]] = {
-    "preflight_report": OperationBinding(PreflightReportRequest, "preflight_report", PreflightResult, None, _default_serializer),
-    "open_snapshot": OperationBinding(OpenSnapshotRequest, "open_snapshot", SnapshotMetadata, None, _default_serializer),
-    "get_summary": OperationBinding(SnapshotRequest, "get_summary", SummaryResult, None, _default_serializer),
-    "list_agents": OperationBinding(ListAgentsRequest, "list_agents", PageResult, AgentRow, _default_serializer),
-    "list_turns": OperationBinding(ListTurnsRequest, "list_turns", PageResult, TurnRow, _default_serializer),
-    "list_events": OperationBinding(ListEventsRequest, "list_events", PageResult, EventRow, _default_serializer),
-    "query_time_range": OperationBinding(HeatmapQueryRequest, "query_time_range", HeatmapResult, None, _default_serializer),
-    "query_sequence": OperationBinding(SequenceQueryRequest, "query_sequence", SequenceResult, SequenceRow, _default_serializer),
-    "query_coordination": OperationBinding(CoordinationQueryRequest, "query_coordination", PageResult, CoordinationRow, _default_serializer),
-    "get_event_details": OperationBinding(EventDetailsRequest, "get_event_details", EventDetail, None, _default_serializer),
-    "refresh_snapshot": OperationBinding(RefreshSnapshotRequest, "refresh_snapshot", RefreshSnapshotResult, None, _default_serializer),
-    "export_snapshot": OperationBinding(ExportSnapshotRequest, "export_snapshot", ExportResult, None, _default_serializer),
-    "close_snapshot": OperationBinding(CloseSnapshotRequest, "close_snapshot", CloseSnapshotResult, None, _default_serializer),
+    "preflight_report": OperationBinding((PreflightReportRequest,), "preflight_report", (PreflightResult,), None, _default_serializer),
+    "open_snapshot": OperationBinding((OpenSnapshotRequest,), "open_snapshot", (SnapshotMetadata,), None, _default_serializer),
+    "get_summary": OperationBinding((SnapshotRequest,), "get_summary", (SummaryResult,), None, _default_serializer),
+    "list_agents": OperationBinding((ListAgentsRequest,), "list_agents", (PageResult,), AgentRow, _default_serializer),
+    "list_turns": OperationBinding((ListTurnsRequest,), "list_turns", (PageResult,), TurnRow, _default_serializer),
+    "list_events": OperationBinding((ListEventsRequest,), "list_events", (PageResult,), EventRow, _default_serializer),
+    "query_snapshot_time_range": OperationBinding((HeatmapMatrixRequest, HeatmapCellEvidenceRequest), "query_snapshot_time_range", (HeatmapMatrixResult, HeatmapCellEvidenceResult), None, _default_serializer),
+    "query_sequence": OperationBinding((SequenceQueryRequest,), "query_sequence", (SequenceResult,), SequenceRow, _default_serializer),
+    "query_coordination": OperationBinding((CoordinationQueryRequest,), "query_coordination", (PageResult,), CoordinationRow, _default_serializer),
+    "get_event_details": OperationBinding((EventDetailsRequest,), "get_event_details", (EventDetail,), None, _default_serializer),
+    "refresh_snapshot": OperationBinding((RefreshSnapshotRequest,), "refresh_snapshot", (RefreshSnapshotResult,), None, _default_serializer),
+    "export_snapshot": OperationBinding((ExportSnapshotRequest,), "export_snapshot", (ExportResult,), None, _default_serializer),
+    "close_snapshot": OperationBinding((CloseSnapshotRequest,), "close_snapshot", (CloseSnapshotResult,), None, _default_serializer),
 }
 if set(OPERATION_BINDINGS) != set(get_args(OperationName)):
     raise RuntimeError("Operation bindings do not match OperationName")
@@ -589,18 +603,28 @@ def decode_service_request(request: RequestEnvelope) -> ServiceRequestValue:
                 snapshot_id, _event_filters(data["filters"]), _event_sort(data["sort"]),
                 _nullable_string(data["cursor"], "cursor"), _u64(data["page_size"], "page_size"),
             )
-        if operation == "query_time_range":
-            data = _require_object(arguments, {"from_time", "to_time", "measure", "requested_resolution_minutes", "group_by", "maximum_rows"}, "arguments")
-            measure = _string(data["measure"], "measure")
-            if measure not in get_args(TimeMeasure):
-                raise _protocol_error("Invalid measure.")
-            group_by = _one_of(data["group_by"], {"agent", "event_kind", "work_item"}, "group_by")
-            return HeatmapQueryRequest(
-                snapshot_id, _datetime(data["from_time"], "from_time"),
-                _datetime(data["to_time"], "to_time"), cast(TimeMeasure, measure),
-                _u64(data["requested_resolution_minutes"], "requested_resolution_minutes"),
-                cast(typing.Any, group_by), _u64(data["maximum_rows"], "maximum_rows"),
-            )
+        if operation == "query_snapshot_time_range":
+            if not isinstance(arguments, dict):
+                raise _protocol_error("arguments must be an object.")
+            query_kind = _string(arguments.get("query_kind"), "query_kind")
+            mode = _one_of(arguments.get("mode"), {"wall_time", "tokens", "models"}, "mode")
+            if query_kind == "matrix":
+                data = _require_object(arguments, {"query_kind", "mode", "from_time", "to_time", "requested_resolution_minutes", "maximum_rows"}, "arguments")
+                return HeatmapMatrixRequest(
+                    snapshot_id, "matrix", _datetime(data["from_time"], "from_time"),
+                    _datetime(data["to_time"], "to_time"), cast(typing.Any, mode),
+                    cast(typing.Any, _u64(data["requested_resolution_minutes"], "requested_resolution_minutes")),
+                    _u64(data["maximum_rows"], "maximum_rows"),
+                )
+            if query_kind == "cell_evidence":
+                data = _require_object(arguments, {"query_kind", "mode", "row_id", "period_start_time", "period_end_time"}, "arguments")
+                return HeatmapCellEvidenceRequest(
+                    snapshot_id, "cell_evidence", cast(typing.Any, mode),
+                    _string(data["row_id"], "row_id"),
+                    _datetime(data["period_start_time"], "period_start_time"),
+                    _datetime(data["period_end_time"], "period_end_time"),
+                )
+            raise _protocol_error("Invalid query_kind.")
         if operation == "query_sequence":
             data = _require_object(arguments, {"filters", "sort", "cursor", "page_size"}, "arguments")
             filters = _require_object(
@@ -672,7 +696,7 @@ def dispatch_service_operation(
     if binding is None:
         raise WorkerProtocolError("REPORT_WORKER_UNKNOWN_OPERATION", "The requested operation is not supported.", operation_id=request.operation_id)
     value = decode_service_request(request)
-    if type(value) is not binding.request_type:
+    if type(value) not in binding.request_types:
         raise _contract_error()
     method = getattr(service, binding.method_name)
     context = OperationContext(request.protocol_version, request.operation_id)
@@ -689,9 +713,11 @@ _ALLOWED_DATACLASSES: Final[set[type[object]]] = {
     WarningRecord, ReportScope, AgentFilters, AgentSort, TurnFilters, TurnSort,
     EventFilters, EventSort, SequenceFilters, SequenceSort, CoordinationFilters,
     CoordinationSort, MetricValue, MetricGroup, TimeRange, SignificantActivity,
-    AgentRow, TurnRow, EventRow, HeatmapCell, HeatmapScale, HeatmapRow,
+    AgentRow, TurnRow, EventRow, AvailableHeatmapScale, UnavailableHeatmapScale,
+    HeatmapMatrixCell, HeatmapMatrixRow, HeatmapEvidenceItem,
     SequenceRow, SequenceGroup, CoordinationRow, Disclosure, ExportOmission,
-    PreflightResult, SnapshotMetadata, SummaryResult, PageResult, HeatmapResult,
+    PreflightResult, SnapshotMetadata, SummaryResult, PageResult,
+    HeatmapMatrixResult, HeatmapCellEvidenceResult,
     SequenceResult, EventDetail, RefreshSnapshotResult, ExportResult,
     CloseSnapshotResult, ProgressEnvelope, ResultEnvelope, ErrorEnvelope,
     CancelledEnvelope, StructuredError,
@@ -827,7 +853,7 @@ def _validate_page(
 def _validate_binding_value(
     operation: OperationName, binding: OperationBinding, value: ServiceResultValue
 ) -> None:
-    if type(value) is not binding.result_type:
+    if type(value) not in binding.result_types:
         raise _contract_error()
     if operation == "query_sequence":
         sequence = cast(SequenceResult, value)
@@ -856,6 +882,8 @@ def serialize_service_value(request: RequestEnvelope, value: ServiceResultValue)
         raise _contract_error()
     _validate_binding_value(operation, binding, value)
     _validate_dataclass(value)
+    if isinstance(value, (HeatmapMatrixResult, HeatmapCellEvidenceResult)):
+        _validate_heatmap_wire_bounds(value)
     if type(value) is SnapshotMetadata:
         if value.protocol_version != request.protocol_version:
             raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
@@ -869,12 +897,57 @@ def serialize_service_value(request: RequestEnvelope, value: ServiceResultValue)
         if value.snapshot.snapshot_id != request.snapshot_id or value.snapshot.protocol_version != request.protocol_version:
             raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
     elif request.operation in {
-        "get_summary", "query_time_range", "get_event_details", "export_snapshot", "close_snapshot"
+        "get_summary", "query_snapshot_time_range", "get_event_details", "export_snapshot", "close_snapshot"
     } and getattr(value, "snapshot_id") != request.snapshot_id:
         raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
     if type(value) is ExportResult and value.operation_id != request.operation_id:
         raise WorkerProtocolError("REPORT_WORKER_SERVICE_CONTRACT", "The service returned a correlation mismatch.", recoverable=False)
-    return binding.serialize_result(value)
+    encoded = binding.serialize_result(value)
+    if len((json.dumps(encoded, ensure_ascii=False, separators=(",", ":")) + "\n").encode("utf-8")) >= MAX_RECORD_BYTES:
+        raise _contract_error()
+    return encoded
+
+
+def _escaped_content_bytes(value: str) -> int:
+    return len(json.dumps(value, ensure_ascii=False)[1:-1].encode("utf-8"))
+
+
+def _validate_heatmap_wire_bounds(
+    value: HeatmapMatrixResult | HeatmapCellEvidenceResult,
+) -> None:
+    if (
+        len(value.provenance) > MAX_HEATMAP_PROVENANCE_ITEMS
+        or any(_escaped_content_bytes(item) > MAX_HEATMAP_PROVENANCE_BYTES for item in value.provenance)
+    ):
+        raise _contract_error()
+    if isinstance(value, HeatmapMatrixResult):
+        if value.total_cell_count > MAX_HEATMAP_CELLS:
+            raise _contract_error()
+        for row in value.rows:
+            if _escaped_content_bytes(row.label) > MAX_HEATMAP_LABEL_BYTES:
+                raise _contract_error()
+            for cell in row.cells:
+                if (
+                    _escaped_content_bytes(cell.formatted_value) > MAX_HEATMAP_FORMATTED_VALUE_BYTES
+                    or cell.supporting_text is not None
+                    and _escaped_content_bytes(cell.supporting_text) > MAX_HEATMAP_SUPPORTING_TEXT_BYTES
+                ):
+                    raise _contract_error()
+        return
+    if (
+        len(value.evidence_items) > MAX_HEATMAP_EVIDENCE_ITEMS
+        or _escaped_content_bytes(value.row_label) > MAX_HEATMAP_LABEL_BYTES
+        or _escaped_content_bytes(value.formatted_value) > MAX_HEATMAP_FORMATTED_VALUE_BYTES
+    ):
+        raise _contract_error()
+    for item in value.evidence_items:
+        if (
+            _escaped_content_bytes(item.label) > MAX_HEATMAP_LABEL_BYTES
+            or _escaped_content_bytes(item.formatted_value) > MAX_HEATMAP_FORMATTED_VALUE_BYTES
+            or item.preview is not None
+            and _escaped_content_bytes(item.preview) > MAX_HEATMAP_PREVIEW_BYTES
+        ):
+            raise _contract_error()
 
 
 def _safe_message(message: object, fallback: str) -> str:
@@ -1260,8 +1333,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    HeatmapCell,
-    HeatmapQueryRequest,
-    HeatmapResult,
-    HeatmapRow,
-    HeatmapScale,

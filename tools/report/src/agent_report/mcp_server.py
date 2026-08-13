@@ -338,25 +338,31 @@ def create_server() -> FastMCP:
     async def query_snapshot_time_range(
         ctx: Context,
         snapshot_id: str,
-        from_time: str,
-        to_time: str,
-        measure: service_types.TimeMeasure,
-        group_by: service_types.HeatmapGroupBy,
-        requested_resolution_minutes: int,
+        query_kind: service_types.HeatmapQueryKind,
+        mode: service_types.HeatmapMode,
+        from_time: str | None = None,
+        to_time: str | None = None,
+        requested_resolution_minutes: int | None = None,
         maximum_rows: int = 100,
+        row_id: str | None = None,
+        period_start_time: str | None = None,
+        period_end_time: str | None = None,
     ) -> dict[str, object]:
-        """Return a grouped heatmap for an open snapshot."""
+        """Return a matrix or bounded cell evidence for an open snapshot."""
 
         return await snapshot_call(
             ctx,
             "query_snapshot_time_range",
             snapshot_id=snapshot_id,
+            query_kind=query_kind,
+            mode=mode,
             from_time=from_time,
             to_time=to_time,
-            measure=measure,
-            group_by=group_by,
             requested_resolution_minutes=requested_resolution_minutes,
             maximum_rows=maximum_rows,
+            row_id=row_id,
+            period_start_time=period_start_time,
+            period_end_time=period_end_time,
         )
 
     @server.tool
