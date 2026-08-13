@@ -35,18 +35,19 @@ The authoritative input set is:
 | Source category | Durable source | Use in this design |
 | --- | --- | --- |
 | Accepted functional specification | [FR-001](../../requirements/functional/FR-001-agent-report-dynamic-app-and-static-export.md) | Actor-visible progress, cancellation, recovery, privacy, and atomic-publication outcomes |
+| Accepted delivery plan | [PLAN-012](../../plans/PLAN-012-agent-report-dynamic-heatmap-parity.json) | Exact discriminated Heatmap operation family, cross-language field inventory, limits, compatibility isolation, and facet verification |
 | Accepted architecture | [ARC-001](../../architecture/ARC-001-agent-report-dynamic-app-and-static-export.md) | Local processing, Tauri native authority, worker boundary, read-only sources, atomicity, startup validation, and compatibility |
 | Owning high-level design | [HLD-003](../high-level/HLD-003-agent-report-dynamic-app-and-static-export.md) | Component ownership, exact paths, OP-31 through OP-34, CR-02, CR-03, TB-02, TB-03, lifecycle, and minimum cross-module fields |
 | Accepted dependency module design | [CD-002](CD-002-agent-report-application-service.md) | Named service methods, request/result dataclasses, `OperationContext`, `CancellationToken`, `ProgressSink`, and returned `ServiceResult[T]` failures |
 | Independent review evidence | [RVW-014](../../reviews/RVW-014-cd-004-agent-report-worker-protocol-checklist.md) | Eight required contract, safety, verification, and readiness corrections |
 | Accepted decisions | Dev Architect reconciliation packet accepted for `/root/report_app_architecture` | Python-owned operation schemas, generic Rust result transport, cryptographic operation IDs, structured diagnostics, Tauri-only registry projections, long-lived process, cancellation escalation, and placement |
-| Backlog requirement | [Modularize report tool for concurrent maintenance](../../feature-backlog/modularize-report-tool-for-concurrent-maintenance.md) | Separation from the monolithic Python renderer |
+| Backlog requirement | [Modularize report tool for concurrent maintenance](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) | Separation from the monolithic Python renderer |
 | Project configuration | `tools/report/pyproject.toml`, `tools/report/desktop/src-tauri/Cargo.toml` | Python 3.11 or later, Rust crate, Serde, Tauri, and packaging boundaries |
 | Relevant technology guidance | Python and Rust project configuration in ARC-001 | Standard-library Python worker and Serde-based Rust framing |
 | Current implementation evidence | Not authoritative for planned protocol behavior | Existing Tauri process launch, progress parsing, diagnostics, and process-tree termination are compatibility evidence only |
 | Procedures and runtime evidence | [Agent Report README](../../../tools/report/README.md); retained runtime evidence is not required | Current build and test entry points |
 
-FR-001 wins for actor-visible behavior. ARC-001 wins for system-wide authority and constraints. HLD-003 wins for component ownership and cross-module fields. CD-002 wins for the exact in-process service API and expected-failure model. This module design wins only for Worker and Supervisor internals. Current source wins only for statements explicitly labeled as current behavior.
+FR-001 wins for actor-visible behavior. ARC-001 wins for system-wide authority and constraints. HLD-003 wins for component ownership and cross-module fields. CD-002 wins for the exact in-process service API and expected-failure model. PLAN-012 supplies the accepted Heatmap cross-language field inventory while HLD-003 and CD-002 reconcile that inventory. This module design wins only for Worker and Supervisor internals. Current source wins only for statements explicitly labeled as current behavior.
 
 ## Related Code
 
@@ -83,7 +84,7 @@ Current renderer cancellation and process-tree tests in `tools/report/desktop/sr
 
 ## Related Backlog Items
 
-- [Modularize report tool for concurrent maintenance](../../feature-backlog/modularize-report-tool-for-concurrent-maintenance.md) explains the required Python boundary.
+- [Modularize report tool for concurrent maintenance](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) explains the required Python boundary.
 - No separate accepted backlog item for CD-004 is identified.
 
 ## Related Wiki Pages
@@ -92,6 +93,8 @@ Current renderer cancellation and process-tree tests in `tools/report/desktop/sr
 - [ARC-001](../../architecture/ARC-001-agent-report-dynamic-app-and-static-export.md) defines the system boundary and native authority.
 - [HLD-003](../high-level/HLD-003-agent-report-dynamic-app-and-static-export.md) defines the parent subsystem and cross-module contracts.
 - [CD-001](CD-001-codex-rollout-metrics.md) defines established discovery, privacy, diagnostics, and packaging behavior.
+- [CD-002](CD-002-agent-report-application-service.md) defines the process-local request and result types that the Worker preserves.
+- [CD-005](CD-005-agent-report-dynamic-workspace.md) consumes the exact camel-case Tauri projection of the Worker result union.
 - No project wiki page is identified.
 
 ## Open Questions
@@ -109,9 +112,9 @@ The four HLD-003 product questions remain outside this module's decision authori
 
 ## Maintenance Notes
 
-Recheck this design when HLD-003 changes the operation envelope, progress fields, process ownership, cancellation policy, snapshot lifecycle, or path authority. Recheck it when `application_service.py`, the Tauri sidecar composition root, package versions, process-tree behavior, or diagnostics policy changes.
+Recheck this design when HLD-003 changes the operation envelope, progress fields, process ownership, cancellation policy, snapshot lifecycle, Heatmap union, or path authority. Recheck it when `application_service.py`, the Tauri sidecar composition root, package versions, process-tree behavior, or diagnostics policy changes.
 
-The latest meaningful source review is 2026-08-12. The review used FR-001, ARC-001, HLD-003, project configuration, and current Tauri process-management evidence.
+The latest meaningful source review is 2026-08-13. The review used FR-001 HM-F01 through HM-F15, PLAN-012, ARC-001, HLD-003, project configuration, and current Tauri process-management evidence.
 
 ## Requirements Coverage
 
@@ -135,6 +138,10 @@ The latest meaningful source review is 2026-08-12. The review used FR-001, ARC-0
 | HLD-003 OP-34 | INTENDED_BEHAVIOR | Worker or Supervisor emits one terminal cancelled outcome and preserves coherent state. | PC-06; PC-10; EP-03 through EP-06 | DEFINED | Service rollback checkpoints: CD-002 | Cooperative and forced cancellation tests |
 | HLD-003 CR-02 and TB-02 | INTENDED_BEHAVIOR | Tauri owns its spawned process; Supervisor validates version, framing, IDs, terminal cardinality, and bounded disclosure. | PC-07 through PC-11; Trust And Identity Boundaries | DEFINED | None | Rust protocol and process tests |
 | HLD-003 CR-03 and TB-03 | INTENDED_BEHAVIOR | Worker maps every configured operation to one exact named method on one process-local CD-002 service instance. | PC-01A; `WorkerRuntime`; PR-04 through PR-07 | DEFINED | Operation semantics and state transitions: CD-002 | Named-method dispatch and `ServiceResult` tests |
+| FR-001 HM-F01 through HM-F10; PLAN-012 cross-language inventory | INTENDED_BEHAVIOR | `query_snapshot_time_range` carries one exact `matrix|cell_evidence` discriminated request and result family. It preserves mode, row, value-state, scale, and immutable snapshot/revision semantics without a second evidence operation. | PC-01A Heatmap wire contract; `OperationBinding`; result correlation rules | DEFINED | Aggregation and formatting: CD-002; presentation: CD-005 | Exact-union, discriminant, field, scale, revision, and cross-language preservation tests |
+| FR-001 HM-F11 and HM-F13 | INTENDED_BEHAVIOR | Matrix records contain no evidence ledger or eager detail. Cell-evidence records contain at most 100 chronological sanitized items and an exact omitted count. | PC-01A Heatmap wire contract; PR-04 through PR-07; INV-19 | DEFINED | Evidence calculation and sanitation: CD-002 | Matrix-exclusion, evidence-cap, chronology, privacy, and streaming tests |
+| FR-001 HM-F14 | INTENDED_BEHAVIOR | Matrix results contain at most 2,000 cells. Every request and result also stays below the protocol's strict 1 MiB record limit. | Protocol Constants; PC-01A; INV-02 and INV-19 | DEFINED | Coarsening and row omission: CD-002 | 2,000-cell, 2,001-rejection, and worst-case encoded-record tests |
+| FR-001 retained MCP compatibility; PLAN-012 compatibility boundary | CURRENT_BEHAVIOR and INTENDED_BEHAVIOR | The Worker snapshot binding is named `query_snapshot_time_range`. Retained MCP `query_time_range` remains separate and never enters this Worker dispatch table. | `OperationName`; PC-01A; INV-20 | DEFINED | Retained MCP implementation and schema: MCP adapter | Exhaustive operation inventory and retained-schema isolation tests |
 | ARC-01, ARC-03, ARC-05, ARC-06 | INTENDED_BEHAVIOR | Processing stays local; each process owns a service instance; Tauri owns native authority; webview data stays bounded. | Parent Context, PC-09, Trust And Identity Boundaries | DEFINED | UI DTO fields: CD-005 | Boundary and path tests |
 | ARC-07, ARC-14, ARC-15, ARC-16 | INTENDED_BEHAVIOR | Sources stay read-only; failure cannot publish partial state; opaque and epistemic data remain safe; bundled versions validate at startup. | INV-09 through INV-12; startup handshake | DEFINED | Discovery engine implementation: CD-001 | Privacy, atomicity, startup, and no-source-write tests |
 | HLD-003 OQ-01 through OQ-04 | OPEN_QUESTION | Preserve the parent questions without choosing answers in CD-004. | Open Questions | OUT_OF_SCOPE | Product decisions affect other branches, as defined by HLD-003. | HLD requirements review |
@@ -166,6 +173,8 @@ tools/report/
 | --- | --- | --- |
 | `PROTOCOL_VERSION` | `Final[int] = 1` | Current protocol version |
 | `MAX_RECORD_BYTES` | `Final[int] = 1_048_576` | Maximum UTF-8 bytes in one input or output record, including the newline |
+| `MAX_HEATMAP_CELLS` | `Final[int] = 2_000` | Maximum total matrix cells in one result |
+| `MAX_HEATMAP_EVIDENCE_ITEMS` | `Final[int] = 100` | Protocol-fixed selected-cell evidence cap |
 | `MAX_MESSAGE_CHARS` | `Final[int] = 512` | Maximum safe progress or error message length |
 | `JsonValue` | `None | bool | int | float | str | list[JsonValue] | dict[str, JsonValue]` | JSON-compatible recursive value |
 | `WorkerConfig` | `@dataclass(frozen=True, slots=True)` with `protocol_version: int`, `package_version: str`, `max_in_flight: int`, and `max_record_bytes: int` | Validated Worker limits |
@@ -177,9 +186,9 @@ tools/report/
 | `parse_input_line` | `def parse_input_line(line: bytes, *, max_record_bytes: int = MAX_RECORD_BYTES) -> RequestEnvelope | CancelEnvelope` | Decode and validate exactly one JSONL input record |
 | `encode_output_record` | `def encode_output_record(record: ProgressEnvelope | ResultEnvelope | ErrorEnvelope | CancelledEnvelope, *, max_record_bytes: int = MAX_RECORD_BYTES) -> bytes` | Serialize exactly one compact UTF-8 JSON record plus `b"\n"` |
 | `decode_service_request` | `def decode_service_request(request: RequestEnvelope) -> ServiceRequestValue` | Reject unknown or mismatched fields and construct one accepted CD-002 request dataclass |
-| `ServiceRequestValue` | Union of the thirteen CD-002 request dataclasses named in PC-01A | Exact decoded request type |
+| `ServiceRequestValue` | Union of the CD-002 request dataclasses named in PC-01A; thirteen operations use fourteen classes because Heatmap has two discriminated variants | Exact decoded request type |
 | `ServiceResultValue` | Exact union below, including each concrete `PageResult` item specialization | Exhaustive accepted CD-002 success-value set |
-| `OperationBinding` | Frozen slotted dataclass with `request_type: type[ServiceRequestValue]`, `method_name: ServiceMethodName`, `result_type: type[ServiceResultValue]`, `page_item_type: type[PageRowValue] | None`, and `serialize_result: ResultSerializer` | Bind one operation to one request, service method, success type, optional page-row type, and wire schema |
+| `OperationBinding` | Frozen slotted dataclass with `request_types: tuple[type[ServiceRequestValue], ...]`, `method_name: ServiceMethodName`, `result_types: tuple[type[ServiceResultValue], ...]`, `page_item_type: type[PageRowValue] | None`, and `serialize_result: ResultSerializer` | Bind one operation to its exact request/result class set, named method, optional page-row type, and wire schema; only Heatmap has two classes in each tuple |
 | `OPERATION_BINDINGS` | `Final[dict[OperationName, OperationBinding]]` with exactly the thirteen PC-01A entries | Runtime authority for exhaustive dispatch and result validation; module initialization asserts key equality with `get_args(OperationName)` |
 | `dispatch_service_operation` | `def dispatch_service_operation(service: ApplicationService, request: RequestEnvelope, *, cancellation: ThreadCancellationToken, progress: ProgressSink) -> ServiceResult[ServiceResultValue]` | Call one named CD-002 method and preserve its returned failure model |
 | `serialize_service_value` | `def serialize_service_value(request: RequestEnvelope, value: ServiceResultValue) -> dict[str, JsonValue]` | Require the request operation's exact success type, nested row types, and correlation fields before deterministic serialization |
@@ -289,7 +298,7 @@ OperationName = Literal[
     "list_agents",
     "list_turns",
     "list_events",
-    "query_time_range",
+    "query_snapshot_time_range",
     "query_sequence",
     "query_coordination",
     "get_event_details",
@@ -305,7 +314,7 @@ ServiceResultValue = (
     | PageResult[AgentRow, AgentFilters, AgentSort]
     | PageResult[TurnRow, TurnFilters, TurnSort]
     | PageResult[EventRow, EventFilters, EventSort]
-    | HeatmapResult
+    | HeatmapSnapshotQueryResult
     | SequenceResult
     | PageResult[CoordinationRow, CoordinationFilters, CoordinationSort]
     | EventDetail
@@ -323,7 +332,7 @@ ServiceMethodName = Literal[
     "list_agents",
     "list_turns",
     "list_events",
-    "query_time_range",
+    "query_snapshot_time_range",
     "query_sequence",
     "query_coordination",
     "get_event_details",
@@ -335,7 +344,7 @@ ServiceMethodName = Literal[
 ResultSerializer = Callable[[ServiceResultValue], dict[str, JsonValue]]
 ```
 
-Python erases generic parameters at runtime. Therefore, a binding for a page operation validates both `type(value) is PageResult` and `type(item) is` the operation's exact row class for every item. Every non-page binding validates `type(value) is` its exact result class. Subclasses are not accepted. These checks occur before any dataclass traversal or output write.
+Python erases generic parameters at runtime. Therefore, a binding for a page operation validates both `type(value) is PageResult` and `type(item) is` the operation's exact row class for every item. Every non-page binding validates exact membership in its `result_types`. Only Heatmap has two permitted result classes, and its request discriminant selects one of them. Subclasses are not accepted. These checks occur before any dataclass traversal or output write.
 
 `main` accepts only `--max-in-flight INTEGER` and `--protocol-version INTEGER`. The package composition root supplies worker mode. Development invocation is `python -m agent_report.report_worker`. Packaged invocation is `agent-report worker`. The CLI adapter owns registration of the packaged subcommand.
 
@@ -345,6 +354,8 @@ Python erases generic parameters at runtime. Therefore, a binding for a page ope
 | --- | --- | --- |
 | `WORKER_PROTOCOL_VERSION` | `pub const WORKER_PROTOCOL_VERSION: u32 = 1;` | Current protocol version |
 | `MAX_WORKER_RECORD_BYTES` | `pub const MAX_WORKER_RECORD_BYTES: usize = 1_048_576;` | Maximum record size |
+| `MAX_HEATMAP_CELLS` | `pub const MAX_HEATMAP_CELLS: usize = 2_000;` | Maximum total matrix cells validated before projection |
+| `MAX_HEATMAP_EVIDENCE_ITEMS` | `pub const MAX_HEATMAP_EVIDENCE_ITEMS: usize = 100;` | Maximum cell-evidence items validated before projection |
 | `WorkerSupervisorConfig` | `pub struct WorkerSupervisorConfig { pub max_in_flight: usize, pub cancellation_grace: Duration, pub startup_timeout: Duration, pub max_record_bytes: usize, pub max_stderr_bytes: usize, pub expected_package_version: String, pub service_configuration: ServiceConfiguration, pub path_authority: PathAuthority }` | Validated native limits, CD-002 startup values, and authority |
 | `ServiceConfiguration` | `pub struct ServiceConfiguration { pub parser_version: String, pub pricing_digest: String, pub formatter_digest: String, pub default_page_size: u16, pub max_page_size: u16, pub max_heatmap_cells: u32 }` | Non-path fields inserted into the trusted startup handshake |
 | `WorkerLaunchSpec` | `pub struct WorkerLaunchSpec { pub executable: PathBuf, pub arguments: Vec<OsString>, pub environment: BTreeMap<OsString, OsString> }` | Host-selected executable and environment |
@@ -376,6 +387,9 @@ Python erases generic parameters at runtime. Therefore, a binding for a page ope
 | `WorkerSupervisor::restart` | `pub fn restart(&self, reason: RestartReason) -> Result<(), SupervisorError>` | Enqueue one serialized lifecycle command and await its coalesced outcome |
 | `WorkerSupervisor::shutdown` | `pub fn shutdown(&self) -> Result<(), SupervisorError>` | Enqueue shutdown and await process reaping |
 | `parse_worker_record` | `pub fn parse_worker_record(line: &[u8], max_record_bytes: usize) -> Result<WorkerWireRecord, SupervisorError>` | Validate framing, version, field types, bounds, and record-specific invariants |
+| `validate_snapshot_heatmap_request` | `fn validate_snapshot_heatmap_request(snapshot_id: &str, arguments: &serde_json::Map<String, serde_json::Value>) -> Result<HeatmapQueryKindWire, SupervisorError>` | Validate one exact snake-case matrix or cell-evidence request without accepting retained MCP fields |
+| `validate_snapshot_heatmap_result` | `fn validate_snapshot_heatmap_result(request: &RequestEnvelope, result: &serde_json::Map<String, serde_json::Value>) -> Result<(), SupervisorError>` | Validate the matching union variant, immutable identity correlation, true scale union, numeric bounds, 2,000/100 limits, and record size before projection |
+| `project_snapshot_heatmap_result` | `fn project_snapshot_heatmap_result(result: serde_json::Map<String, serde_json::Value>) -> Result<serde_json::Map<String, serde_json::Value>, SupervisorError>` | Rename exact snake-case keys to camel case recursively while preserving every value, null, discriminant, evidence method, and ordered array |
 | `force_terminate_process_tree` | `pub fn force_terminate_process_tree(tree: &ProcessTreeHandle) -> Result<(), SupervisorError>` | Terminate only the verified Supervisor-owned process group or Job Object |
 | `SupervisorError` | Error enum listed in Error Handling | Native startup, path, protocol, capacity, I/O, and lifecycle failures |
 
@@ -434,6 +448,13 @@ pub enum AutomationSurfaceWire {
 pub enum ExportModeWire {
     Summary,
     Directory,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HeatmapQueryKindWire {
+    Matrix,
+    CellEvidence,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -695,6 +716,8 @@ These operations expose transport and process state only. They do not define rep
 - Every record is one compact JSON object followed by one line feed byte.
 - Record encoding is UTF-8. A byte-order mark is invalid.
 - One record, including its line feed, is at most `1_048_576` bytes.
+- One matrix result contains at most `2_000` total cells.
+- One cell-evidence result contains at most `100` items. The caller cannot change this cap.
 - Unknown top-level fields are rejected. PC-01A defines and validates every `arguments` object. A `result` contains only the deterministic serialization of its named CD-002 result type.
 - Ordinary operation IDs contain 96 bits from an operating-system cryptographic random generator and encode as `op_` plus 24 lowercase hexadecimal digits. Counters, timestamps, process IDs, and non-cryptographic pseudo-random generators are invalid sources. The Worker and Supervisor validate but do not generate these IDs. The reserved all-zero handshake ID is the only exception.
 - Operation names match `^[a-z][a-z0-9_]{0,63}$`.
@@ -731,7 +754,7 @@ ServiceRequestValue = (
     | ListAgentsRequest
     | ListTurnsRequest
     | ListEventsRequest
-    | HeatmapQueryRequest
+    | HeatmapSnapshotQueryRequest
     | SequenceQueryRequest
     | CoordinationQueryRequest
     | EventDetailsRequest
@@ -751,13 +774,98 @@ The adapter dispatch and result ledger is exact:
 | `list_agents` | non-null; exact `AgentFilters {query,state}`; exact `AgentSort`; `cursor`; `page_size` | `ListAgentsRequest`; `service.list_agents(context, value, cancellation=token)` | `ServiceResult[PageResult[AgentRow, AgentFilters, AgentSort]]` | Canonical page with `revision`, exact applied filters and sort, and full agent rows | No |
 | `list_turns` | non-null; exact `TurnFilters {agent_id,state}`; exact `TurnSort`; `cursor`; `page_size` | `ListTurnsRequest`; `service.list_turns(context, value, cancellation=token)` | `ServiceResult[PageResult[TurnRow, TurnFilters, TurnSort]]` | Canonical page with `revision`, exact applied filters and sort, and full turn rows | No |
 | `list_events` | non-null; exact `EventFilters {agent_id,turn_id,kind,from_time,to_time}`; exact `EventSort`; `cursor`; `page_size` | `ListEventsRequest`; `service.list_events(context, value, cancellation=token)` | `ServiceResult[PageResult[EventRow, EventFilters, EventSort]]` | Canonical page with full event rows and nullable snapshot-scoped opaque `source_key` | No |
-| `query_time_range` | non-null; exact range, measure, requested resolution, `group_by`, and `maximum_rows` | `HeatmapQueryRequest`; `service.query_time_range(context, value, cancellation=token)` | `ServiceResult[HeatmapResult]` | Exact-revision grouped heatmap with applied limits, coarsened resolution, omitted rows, row scales, color semantics, labels, evidence, and provenance | No |
+| `query_snapshot_time_range` | non-null; exact discriminated `matrix` or `cell_evidence` arguments defined below | `HeatmapSnapshotQueryRequest`; `service.query_snapshot_time_range(context, value, cancellation=token)` | `ServiceResult[HeatmapSnapshotQueryResult]` | Exact matching `HeatmapMatrixResult | HeatmapCellEvidenceResult` variant with read-lease-owned `snapshot_id` and `revision_id`; no eager cross-variant fields | No |
 | `query_sequence` | non-null; exact `SequenceFilters`, exact `SequenceSort`, cursor, and page size | `SequenceQueryRequest`; `service.query_sequence(context, value, cancellation=token)` | `ServiceResult[SequenceResult]` | Canonical sequence page plus group hierarchy; rows include endpoints, labels, event identity, repetition, and reasoning availability | No |
 | `query_coordination` | non-null; exact `CoordinationFilters`, exact `CoordinationSort`, cursor, and page size | `CoordinationQueryRequest`; `service.query_coordination(context, value, cancellation=token)` | `ServiceResult[PageResult[CoordinationRow, CoordinationFilters, CoordinationSort]]` | Canonical page with work-item, delegated-root, agent, operation, label, evidence, and event fields | No |
 | `get_event_details` | non-null; `event_id: string` | `EventDetailsRequest`; `service.get_event_details(context, value, cancellation=token)` | `ServiceResult[EventDetail]` | Exact revision, title, optional summary, bounded structured disclosures, evidence, provenance, and nullable opaque `source_key` | No |
 | `refresh_snapshot` | non-null; empty object | `RefreshSnapshotRequest`; `service.refresh_snapshot(context, value, cancellation=token, progress=sink)` | `ServiceResult[RefreshSnapshotResult]` | `changed: boolean`; `snapshot: SnapshotMetadata` | Yes |
 | `export_snapshot` | non-null; exact `surface`; `target`; `replace`; nullable exact `mode`; `include_sqlite_archive` | `ExportSnapshotRequest`; `service.export_snapshot(context, value, cancellation=token, progress=sink)` | `ServiceResult[ExportResult]` | Operation, snapshot, revision, resolved mode, native `published_target`, manifest SHA-256, `file_count`, `total_byte_count`, structured warnings, and structured omissions | Yes |
 | `close_snapshot` | non-null; empty object | `CloseSnapshotRequest`; `service.close_snapshot(context, value)` | `ServiceResult[CloseSnapshotResult]` | `snapshot_id: string`; `closed: boolean` | No |
+
+#### `query_snapshot_time_range` JSONL union
+
+`query_snapshot_time_range` is one snapshot operation with two request variants. The outer request envelope supplies `snapshot_id`. The `arguments` object does not repeat it. No `query_snapshot_cell_evidence` operation exists.
+
+The matrix request arguments are exact:
+
+```json
+{
+  "query_kind": "matrix",
+  "from_time": "2026-08-13T12:00:00Z",
+  "to_time": "2026-08-13T13:00:00Z",
+  "mode": "tokens",
+  "requested_resolution_minutes": 5,
+  "maximum_rows": 100
+}
+```
+
+The cell-evidence request arguments are exact:
+
+```json
+{
+  "query_kind": "cell_evidence",
+  "mode": "tokens",
+  "row_id": "token:uncached_input",
+  "period_start_time": "2026-08-13T12:00:00Z",
+  "period_end_time": "2026-08-13T12:05:00Z"
+}
+```
+
+`mode` is exactly `wall_time|tokens|models`. `query_kind` is exactly `matrix|cell_evidence`. Matrix resolution is exactly `1|5|15|30|60`. Matrix `maximum_rows` is an integer from 1 through 200. Both time ranges are non-empty, half-open UTC ranges. A request decoder rejects fields from the other variant, including a row selector on `matrix` and a matrix range, resolution, or row limit on `cell_evidence`.
+
+The matrix result object has these exact fields in order:
+
+| Field | Exact wire type and rule |
+| --- | --- |
+| `snapshot_id` | Non-empty string derived by the Application Service from the acquired immutable read lease; must equal the request-envelope selector |
+| `revision_id` | Non-empty string derived from the same read lease; never read from mutable pending-handle state |
+| `query_kind` | Literal `matrix` |
+| `mode` | Literal `wall_time|tokens|models`; must equal the request |
+| `from_time`, `to_time` | RFC3339 UTC instants; must equal the requested half-open range |
+| `requested_resolution_minutes` | Literal `1|5|15|30|60`; must equal the request |
+| `actual_resolution_minutes` | Supported literal `1|5|15|30|60`; must equal or be coarser than the request |
+| `maximum_rows` | Integer from 1 through 200; must equal the request |
+| `omitted_row_count` | Non-negative integer |
+| `row_order` | Literal `runtime_state_contract|token_contract|model_first_occurrence_then_cost`; must match the mode |
+| `total_cell_count` | Non-negative integer no greater than 2,000; must equal the sum of all row cell counts |
+| `rows` | Ordered `HeatmapMatrixRow` array no longer than `maximum_rows` |
+| `provenance` | CD-002 bounded provenance array |
+
+`HeatmapMatrixRow` has `row_id`, `row_kind`, `label`, `scale`, and `cells` in that order. `row_kind` is exactly `runtime_state|token_measure|model|cost`. The label is the service-owned friendly label. The `scale` field is a true discriminated union:
+
+```text
+{availability:"available", minimum:number, maximum:number,
+ basis:"visible_row_maximum"|"context_window_capacity"}
+|
+{availability:"unavailable", reason:"context_capacity_unavailable"}
+```
+
+An available scale contains finite numeric bounds and one basis. An unavailable scale contains only `availability` and the exact N/A reason `context_capacity_unavailable`. The decoder and serializer reject nullable bounds, a basis on an unavailable variant, a reason on an available variant, an unknown reason, and every mixed cross-product.
+
+Each matrix cell has `start_time`, `end_time`, `value`, `formatted_value`, `value_state`, `applicable_zero`, `contributing_evidence_count`, `normalized_intensity`, and `supporting_text` in that order. `value` and `normalized_intensity` are finite numbers or null. `value_state` is exactly `measured|derived|partial|unavailable`. `applicable_zero` is boolean. The evidence count is a non-negative integer. `normalized_intensity` is null or a number from 0 through 1. An unavailable value has null `value`. Unknown context capacity uses the unavailable scale variant, null normalized intensity, no percentage, and no row-relative fallback. A separately evidenced observed token count can appear only in nullable `supporting_text`.
+
+The matrix variant contains no evidence-item array, preview, disclosure, or event detail. It streams aggregation into bounded row and cell accumulators. It does not materialize a full evidence ledger before serialization.
+
+The cell-evidence result object has these exact fields in order:
+
+| Field | Exact wire type and rule |
+| --- | --- |
+| `snapshot_id`, `revision_id` | Service-owned identifiers from the same immutable read lease; `snapshot_id` must equal the request-envelope selector |
+| `query_kind` | Literal `cell_evidence` |
+| `mode`, `row_id` | Must equal the request |
+| `row_label` | Bounded service-owned friendly label |
+| `period_start_time`, `period_end_time` | Must equal the requested half-open period |
+| `value` | Raw finite numeric value or null |
+| `formatted_value` | Bounded measure-specific string |
+| `value_state` | Literal `measured|derived|partial|unavailable` |
+| `applicable_zero` | Boolean with the FR-001 evidence-state meaning |
+| `evidence_items` | Chronological array of at most 100 `HeatmapEvidenceItem` values |
+| `omitted_evidence_count` | Exact count of matching evidence rows not returned |
+| `provenance` | CD-002 bounded provenance array |
+
+`HeatmapEvidenceItem` has `event_id`, `occurred_at`, `value`, `formatted_value`, `duration_ms`, `label`, `preview`, `evidence_method`, `value_state`, and `has_detail` in that order. `event_id`, raw numeric `value`, `duration_ms`, and sanitized `preview` are nullable. `evidence_method` is exactly `measured|derived|inferred|estimated|unavailable`. `value_state` uses its separate four-value literal. Items sort by `occurred_at` and then stable snapshot source order. `has_detail=true` requires a non-null deterministic event ID. The service streams matching evidence, retains only the first 100 ordered items, and increments `omitted_evidence_count` for the remainder. It never loads full event detail or creates previews for omitted items.
+
+The Worker checks cancellation while decoding, before service dispatch, during service-owned streamed aggregation through the supplied token, before result serialization, and before the terminal write. Cancellation emits one `cancelled` terminal record and no partial matrix or evidence result. The strict 1 MiB record limit applies after compact UTF-8 encoding, including the newline. A valid worst-case 2,000-cell matrix and a valid 100-item evidence result must each encode below that limit. Oversize is a bounded terminal protocol error, not a truncated success.
 
 `WarningRecord`, `ReportScope`, summary types, every filter and sort, every row type, heatmap types, sequence groups, detail disclosures, export omissions, and nested `SnapshotMetadata` use every CD-002 field in declaration order. No field is renamed, omitted, added, or flattened. Enum literals and nullable fields remain as CD-002 declares them.
 
@@ -771,7 +879,8 @@ The nested wire schemas are exact:
 | `AgentRow` | `agent_id`, nullable nickname and role, state, nullable start and last-activity times, turn count, event count |
 | `TurnRow` | `turn_id`, `agent_id`, start time, nullable end time, state, event count, nullable summary |
 | `EventRow` | `event_id`, occurrence time, nullable agent and turn IDs, kind, label, evidence, nullable opaque `source_key`, `has_detail` |
-| `HeatmapRow` | Row identity and label, independent scale minimum/maximum/color semantic/basis, and bounded cells with interval, value, count, evidence, and labels |
+| `HeatmapMatrixRow` | `row_id`, `row_kind`, friendly `label`, true available/unavailable `scale` union, and ordered bounded cells |
+| `HeatmapEvidenceItem` | Nullable deterministic event identity, time, raw nullable value, formatted value, nullable duration, friendly label, sanitized nullable preview, evidence method, value state, and detail availability |
 | `SequenceRow` | Sequence/group IDs, occurrence time, nullable endpoint IDs and labels, kind, label, evidence, nullable event ID, repeat count, reasoning availability |
 | `CoordinationRow` | Coordination identity and time, nullable work-item/delegated-root/agent IDs, operation, label, evidence, nullable event ID |
 | `EventDetail` | Snapshot/revision/event/time/kind/title/evidence/provenance, nullable summary, bounded disclosure objects, nullable opaque `source_key` |
@@ -780,13 +889,15 @@ The `SnapshotMetadata` nested schema is the exact schema in the `open_snapshot` 
 
 Each operation decoder rejects an absent field, an unknown field at any listed object level, a wrong JSON type, a non-RFC3339 time, and a snapshot nullability mismatch. Arrays contain strings only. CD-002 performs semantic limits and selector validation after typed construction.
 
-`dispatch_service_operation` obtains the binding before it decodes the request. It requires the decoded request's exact class to equal `binding.request_type` and calls only `binding.method_name`. When `ok` is true, `value` must be non-null and `error` null. Python validates the operation-specific result and every specialized page item before serialization. Thus, a valid `SummaryResult` returned by `list_events`, or a turn page returned by `list_agents`, is `REPORT_WORKER_SERVICE_CONTRACT`; it is never serialized as the requested operation. When `ok` is false, `error` must be non-null, `value` null, and `error.operation_id` equal to the envelope operation ID. `REPORT_CANCELLED` becomes a cancelled envelope. Every other `ReportError` becomes an error envelope with the same accepted fields. Expected service failures never raise.
+`dispatch_service_operation` obtains the binding before it decodes the request. It requires the decoded request's exact class to be one of `binding.request_types` and calls only `binding.method_name`. Every ordinary binding contains one request and one result class. The Heatmap binding contains the matrix and cell-evidence class pairs and also checks their discriminants. When `ok` is true, `value` must be non-null and `error` null. Python validates the operation-specific result and every specialized page item before serialization. Thus, a valid `SummaryResult` returned by `list_events`, or a turn page returned by `list_agents`, is `REPORT_WORKER_SERVICE_CONTRACT`; it is never serialized as the requested operation. When `ok` is false, `error` must be non-null, `value` null, and `error.operation_id` equal to the envelope operation ID. `REPORT_CANCELLED` becomes a cancelled envelope. Every other `ReportError` becomes an error envelope with the same accepted fields. Expected service failures never raise.
 
 `close_snapshot` has no CD-002 cancellation parameter. A cancel that wins while the slot is Pending prevents the method call. After the slot enters Running, `close_snapshot` and the cancel race for the terminal lock; the returned `ServiceResult` can win. The Worker does not invent a cancellation checkpoint inside the service method.
 
-`serialize_service_value` indexes `OPERATION_BINDINGS` by the request's already validated `OperationName`. It applies that binding's result validator and serializer. For every snapshot-bound result with a top-level `snapshot_id`, that value must equal `request.snapshot_id`. Every `PageResult.operation` must equal `request.operation`; `SequenceResult.page.operation` must equal `query_sequence`. A nested `RefreshSnapshotResult.snapshot.snapshot_id` must also equal the request snapshot. The serializer uses CD-002 dataclass field names unchanged. It encodes dataclasses as objects, sequences as arrays, aware datetimes as RFC3339 UTC with `Z`, `Path` values as strings, and literals unchanged. It rejects a wrong operation/result pairing, wrong nested page-row class, correlation mismatch, unsupported Python object, non-finite float, naive datetime, non-string map key, or integer outside the wire range before output.
+`serialize_service_value` indexes `OPERATION_BINDINGS` by the request's already validated `OperationName`. It applies that binding's result validator and serializer. For every snapshot-bound result with a top-level `snapshot_id`, that value must equal `request.snapshot_id`. Every `PageResult.operation` must equal `request.operation`; `SequenceResult.page.operation` must equal `query_sequence`. A nested `RefreshSnapshotResult.snapshot.snapshot_id` must also equal the request snapshot. For `query_snapshot_time_range`, the result `query_kind`, mode, selector fields, and exact variant must match the request. Its `snapshot_id` and `revision_id` must come from the one read lease used by the service call. The serializer never substitutes an identifier from a mutable Worker or pending-handle field. The Tauri adapter also compares `revision_id` with the current snapshot revision before webview publication. The serializer uses CD-002 dataclass field names unchanged. It encodes dataclasses as objects, sequences as arrays, aware datetimes as RFC3339 UTC with `Z`, `Path` values as strings, and literals unchanged. It rejects a wrong operation/result pairing, wrong nested page-row class, correlation mismatch, unsupported Python object, non-finite float, naive datetime, non-string map key, or integer outside the wire range before output.
 
-Rust deliberately does not declare operation-specific result DTOs. `ResultEnvelope.result` remains a generic bounded `serde_json::Map<String, serde_json::Value>`. The Supervisor validates framing, correlation, size, and terminal cardinality, then forwards the map to the Tauri command adapter. That adapter performs the only Tauri-specific business projections: it replaces nullable service `source_key` values with webview `sourceRef` values backed by its private authorized source registry, and it strips native `published_target` after recording an `exportId -> published path` capability. The webview receives neither native path.
+Rust preserves the full generic result map and also validates the exact `query_snapshot_time_range` discriminated structure before forwarding it. `ResultEnvelope.result` remains a bounded `serde_json::Map<String, serde_json::Value>`; Rust does not calculate Heatmap semantics or reserialize one variant as the other. The Supervisor validates framing, discriminants, correlation, numeric bounds, size, and terminal cardinality. It maps snake-case Python fields to the exact camel-case Tauri projection without dropping raw nullable evidence values, `evidence_method`, scale availability, N/A reason, or immutable revision identity. The Tauri command adapter performs the only native business projections: it replaces nullable service `source_key` values with webview `sourceRef` values backed by its private authorized source registry, and it strips native `published_target` after recording an `exportId -> published path` capability. The webview receives neither native path.
+
+Retained MCP `query_time_range` is outside this Worker operation union. The Worker does not accept, rename, route, or adapt that legacy thread-based operation. Its thread selector, optional range, `bucket_minutes`, six atomic measures, `include_events`, defaults, limits, results, errors, and cancellation remain owned by the retained MCP implementation. `query_snapshot_time_range` never calls retained `query_time_range`, and retained `query_time_range` never calls the snapshot operation.
 
 ### PC-02 Operation Acceptance
 
@@ -1067,11 +1178,11 @@ After `spawn` returns the Starting Supervisor, the coordinator writes the handsh
 
 ### PR-04 Request Dispatch
 
-`TrustedWorkerRequest` construction validates exact operation schema and path authority before `submit`. The coordinator validates Ready state, ID uniqueness, capacity, and record bounds. It registers the observer before writing the line. The Worker repeats framing and PC-01A validation, registers an `OperationSlot`, and submits `_execute` to its executor.
+`TrustedWorkerRequest` construction validates exact operation schema and path authority before `submit`. For `query_snapshot_time_range`, it validates exactly one matrix or cell-evidence argument variant and rejects legacy atomic-measure or grouping fields. The coordinator validates Ready state, ID uniqueness, capacity, and record bounds. It registers the observer before writing the line. The Worker repeats framing and PC-01A validation, registers an `OperationSlot`, and submits `_execute` to its executor.
 
 ### PR-05 Service Execution
 
-`_execute` changes Pending to Running. It resolves the exact PC-01A `OperationBinding`, constructs `OperationContext`, `ThreadCancellationToken`, and the binding's exact request type, and calls only the bound `ApplicationService` method. A successful `ServiceResult` becomes PC-04 only after its exact result class, page-row class where applicable, and nested wire schema pass. A failed `ServiceResult` becomes PC-05, except `REPORT_CANCELLED`, which becomes PC-06. An invalid success/error combination, wrong operation/result class, wrong page-row class, or invalid nested result field becomes `REPORT_WORKER_SERVICE_CONTRACT`. Expected service failures do not raise.
+`_execute` changes Pending to Running. It resolves the exact PC-01A `OperationBinding`, constructs `OperationContext`, `ThreadCancellationToken`, and the binding's exact request type, and calls only the bound `ApplicationService` method. The `query_snapshot_time_range` binding calls the same method for both variants and requires the result discriminant to match the request. A successful `ServiceResult` becomes PC-04 only after its exact result class, page-row class where applicable, and nested wire schema pass. A failed `ServiceResult` becomes PC-05, except `REPORT_CANCELLED`, which becomes PC-06. An invalid success/error combination, wrong operation/result class, wrong page-row class, mismatched Heatmap variant, or invalid nested result field becomes `REPORT_WORKER_SERVICE_CONTRACT`. Expected service failures do not raise.
 
 ### PR-06 Progress Publication
 
@@ -1079,7 +1190,7 @@ The Worker obtains `now = clock.now()` under the slot lock and applies PC-03. Al
 
 ### PR-07 Cooperative Cancellation
 
-The Supervisor writes PC-06 for one active operation. The Worker sets only its `threading.Event`. Pending work can transition directly to Cancelled. Running work stops at Application Service checkpoints. A result or error that wins the terminal lock remains the terminal outcome.
+The Supervisor writes PC-06 for one active operation. The Worker sets only its `threading.Event`. Pending work can transition directly to Cancelled. Running work stops at Application Service checkpoints, including streamed Heatmap aggregation and evidence collection. The Worker checks the token again before compact serialization and terminal write. A result or error that wins the terminal lock remains the terminal outcome.
 
 ### PR-08 Forced Cancellation
 
@@ -1175,6 +1286,26 @@ flowchart TD
   Terminal --> Cancelled[Cancelled]
 ```
 
+```mermaid
+flowchart TD
+  Request[query_snapshot_time_range JSONL request] --> Kind{query_kind}
+  Kind -- matrix --> MatrixFields{Exact matrix fields and limits?}
+  Kind -- cell_evidence --> EvidenceFields{Exact row-period fields?}
+  Kind -- other --> ContractError[Terminal protocol error]
+  MatrixFields -- No --> ContractError
+  EvidenceFields -- No --> ContractError
+  MatrixFields -- Yes --> MatrixCall[Call service matrix variant with cancellation token]
+  EvidenceFields -- Yes --> EvidenceCall[Call service evidence variant with cancellation token]
+  MatrixCall --> MatrixResult{Matching matrix, lease identity, at most 2,000 cells, no ledger, below 1 MiB?}
+  EvidenceCall --> EvidenceResult{Matching evidence, lease identity, at most 100 items, exact omission, below 1 MiB?}
+  MatrixResult -- No --> ServiceContract[Terminal service-contract error]
+  EvidenceResult -- No --> ServiceContract
+  MatrixResult -- Yes --> MatrixTerminal[One matrix result]
+  EvidenceResult -- Yes --> EvidenceTerminal[One cell-evidence result]
+  MatrixCall -. cancellation .-> CancelledTerminal[One cancelled result and no partial data]
+  EvidenceCall -. cancellation .-> CancelledTerminal
+```
+
 ## Invariants
 
 - **INV-01:** Standard output contains only valid PC-03 through PC-07 JSONL response records.
@@ -1195,6 +1326,8 @@ flowchart TD
 - **INV-16:** Only the Recovery Coordinator changes Supervisor lifecycle, replaces a generation, completes an observer, or reaps a process.
 - **INV-17:** Worker wire cancellation never contains the host-only `forced` field.
 - **INV-18:** Child stderr bytes never enter native diagnostics without allowlist mapping to fixed text.
+- **INV-19:** A `matrix` result has at most 2,000 cells and no evidence ledger. A `cell_evidence` result has at most 100 ordered items and no eager full detail. Each compact record remains below 1 MiB.
+- **INV-20:** The Worker accepts only snapshot `query_snapshot_time_range`. Retained MCP `query_time_range` never crosses this protocol boundary.
 
 ## Configuration
 
@@ -1206,6 +1339,7 @@ flowchart TD
 | `cancellation_grace` | duration; 5 seconds | Tauri composition root and Supervisor | Positive and at most 60 seconds; applies to new cancels without restart |
 | `startup_timeout` | duration; 10 seconds | Tauri composition root and Supervisor | Positive and at most 60 seconds; applies to each spawn |
 | `max_record_bytes` | integer; 1,048,576 | Worker and Supervisor | 4,096 through 1,048,576; both sides must use the same value; restart to change |
+| Heatmap result caps | 2,000 matrix cells; 100 cell-evidence items | Application Service, Worker, and Supervisor | Fixed by the protocol contract; changing either value requires coordinated schema review |
 | `max_stderr_bytes` | integer; 65,536 | Supervisor | 4,096 through 1,048,576 per generation; restart resets retained count |
 | `expected_package_version` | exact package version string | Tauri composition root | Fixed per packaged application; handshake validates exact equality |
 | `service_configuration` | exact CD-002 parser/pricing/formatter versions and page/bucket limits | Tauri composition root and Worker | Sent once in handshake; creates one service; change requires restart |
@@ -1346,7 +1480,17 @@ OQ-01 through OQ-04 do not add a CD-004 blocker. This BLOCKED decision concerns 
 - `test_successful_service_result_serializes_cd002_dataclass_fields_deterministically`
 - `test_each_operation_serializes_its_exact_cd002_result_wire_schema`
 - `test_pages_serialize_revision_and_exact_applied_filter_and_sort_objects`
-- `test_heatmap_sequence_coordination_detail_refresh_close_and_export_results_match_cd002`
+- `test_query_snapshot_time_range_accepts_only_exact_matrix_and_cell_evidence_requests`
+- `test_query_snapshot_time_range_serializes_the_matching_exact_result_variant`
+- `test_heatmap_scale_is_a_true_available_or_unavailable_union`
+- `test_heatmap_result_preserves_raw_nullable_values_evidence_method_and_revision_identity`
+- `test_heatmap_matrix_has_at_most_2000_cells_and_no_evidence_ledger`
+- `test_heatmap_cell_evidence_streams_at_most_100_chronological_items_and_exact_omission`
+- `test_heatmap_streaming_does_not_materialize_eager_previews_or_event_details`
+- `test_worst_case_valid_matrix_and_evidence_records_are_each_below_one_mibibyte`
+- `test_heatmap_cancellation_emits_no_partial_result_and_one_cancelled_terminal`
+- `test_retained_query_time_range_is_absent_from_worker_operation_bindings`
+- `test_sequence_coordination_detail_refresh_close_and_export_results_match_cd002`
 - `test_each_operation_rejects_every_other_valid_cd002_result_dataclass_before_serialization`
 - `test_each_page_operation_rejects_a_valid_page_result_with_the_wrong_row_class`
 - `test_result_serializer_rejects_snapshot_and_page_operation_correlation_mismatch`
@@ -1387,6 +1531,13 @@ Service doubles expose barriers before return, before simulated atomic commit, a
 - `times_out_and_reaps_a_worker_that_never_completes_handshake`
 - `round_trips_exact_wire_records_and_rejects_unknown_missing_nullable_and_wrong_literal_fields`
 - `result_transport_preserves_generic_json_maps_without_operation_specific_rust_dtos`
+- `query_snapshot_time_range_validates_exact_discriminants_bounds_and_correlation`
+- `query_snapshot_time_range_preserves_python_fields_in_exact_camel_case_projection`
+- `query_snapshot_time_range_rejects_mixed_scale_variants_nonfinite_values_and_wrong_revision`
+- `query_snapshot_time_range_accepts_2000_cells_rejects_2001_and_bounds_100_evidence_items`
+- `query_snapshot_time_range_worst_case_records_remain_below_one_mibibyte`
+- `query_snapshot_time_range_cancellation_preserves_one_terminal_outcome`
+- `worker_inventory_excludes_retained_mcp_query_time_range`
 - `tauri_command_adapter_projects_source_keys_and_published_targets_through_private_registries`
 - `operation_observer_satisfies_send_sync_static_bounds`
 - `writes_each_request_and_cancel_as_one_complete_json_line`

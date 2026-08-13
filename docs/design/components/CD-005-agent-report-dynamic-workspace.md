@@ -39,18 +39,19 @@ The accepted export decision gives Tauri only streamlined complete-directory and
 | Source category permitted by PLANNED_DEVELOPMENT | Durable source | Use |
 | --- | --- | --- |
 | Accepted functional specification | [FR-001](../../requirements/functional/FR-001-agent-report-dynamic-app-and-static-export.md) | Operator workflows, UI states, views, paging, time, accessibility, privacy, and error outcomes |
+| Accepted delivery plan | [PLAN-012](../../plans/PLAN-012-agent-report-dynamic-heatmap-parity.json) | Exact cross-language Heatmap union, modes, bounds, navigation, evidence loading, compatibility isolation, and verification facets |
 | Accepted architecture | [ARC-001](../../architecture/ARC-001-agent-report-dynamic-app-and-static-export.md) | Local processing, Tauri authority, bounded DTOs, explicit refresh, and independent MCP |
 | Owning high-level design | [HLD-003](../high-level/HLD-003-agent-report-dynamic-app-and-static-export.md) | Dynamic Workspace ownership, OP-01, OP-03, OP-18 through OP-26, CR-01, CR-13, paths, and stable surface IDs |
 | Accepted decisions | Dev Architect reconciliation packet accepted for `/root/report_app_architecture` | Full Workspace DTO semantics, generic Worker transport, cryptographic operation IDs, structured diagnostics, native registries, lifecycle results, and export counts |
 | Resolved product decisions | User decisions supplied to `/root/design_dynamic_workspace` on 2026-08-12 | Codex-only first dynamic release; Tauri-only dynamic runtime; complete-directory default; explicit bounded summary; no classic control required in Tauri; preserved classic CLI and MCP generation; shared streamlined exporter |
-| Backlog requirements | [Modularization backlog item](../../feature-backlog/modularize-report-tool-for-concurrent-maintenance.md) | Separation from the current catalog controller |
+| Backlog requirements | [Modularization backlog item](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) | Separation from the current catalog controller |
 | Project configuration | `tools/report/desktop/package.json`, `tools/report/desktop/tsconfig.json` | TypeScript, Vite, Vitest, DOM, and strict compiler constraints |
 | Current implementation evidence | `tools/report/desktop/src/contracts.ts`, `tools/report/desktop/src/main.ts`, `tools/report/desktop/index.html`, `tools/report/desktop/src/styles.css` | Existing catalog state, virtualization, local-time formatting, progress, diagnostics, and native invocation patterns |
 | Current test evidence | `tools/report/desktop/src/contracts.test.ts` | Existing unknown-value narrowing and local-time tests |
 | Dependency status | Application Service, Worker, and Static Exporter contracts are synchronized independently from the same accepted reconciliation | This design does not derive its presentation contract from a sibling module design |
 | Procedures and runtime evidence | [Agent Report README](../../../tools/report/README.md); retained runtime evidence is not required | Desktop build and test commands |
 
-The resolved product decisions win where FR-001, ARC-001, or HLD-003 still describe an open export branch. FR-001 otherwise wins for operator-visible behavior. ARC-001 wins for system-wide authority and privacy. HLD-003 wins for component ownership and cross-module operations. This design wins for Dynamic Workspace state, TypeScript symbols, rendering, and tests. Existing code wins only for implemented-baseline claims.
+The resolved product decisions win where FR-001, ARC-001, or HLD-003 still describe an open export branch. FR-001 otherwise wins for operator-visible behavior. PLAN-012 supplies the accepted Heatmap cross-language inventory and delivery constraints. ARC-001 wins for system-wide authority and privacy. HLD-003 wins for component ownership and cross-module operations. This design wins for Dynamic Workspace state, TypeScript symbols, rendering, and tests. Existing code wins only for implemented-baseline claims.
 
 An operation-specific parent contract governs a general rule for that operation. A module proposition cannot change an actor-visible or cross-module contract.
 
@@ -76,7 +77,7 @@ No browser end-to-end test file is accepted. The Verification section records th
 
 ## Related Backlog Items
 
-- [Modularize report tool for concurrent maintenance](../../feature-backlog/modularize-report-tool-for-concurrent-maintenance.md)
+- [Modularize report tool for concurrent maintenance](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md)
 - No separate accepted Dynamic Workspace backlog item is identified.
 
 ## Related Wiki Pages
@@ -85,24 +86,28 @@ No browser end-to-end test file is accepted. The Verification section records th
 - [ARC-001](../../architecture/ARC-001-agent-report-dynamic-app-and-static-export.md)
 - [HLD-003](../high-level/HLD-003-agent-report-dynamic-app-and-static-export.md)
 - [CD-001](./CD-001-codex-rollout-metrics.md)
+- [CD-002](./CD-002-agent-report-application-service.md)
+- [CD-004](./CD-004-agent-report-worker-protocol.md)
 
-No project wiki page is identified. CD-002 and CD-004 are planned but are not durable sources at the time of this design.
+No project wiki page is identified. CD-002 and CD-004 are durable planned-design dependencies. FR-001 and PLAN-012 remain the Heatmap functional and delivery authorities when those sibling designs are being reconciled in parallel.
 
 ## Open Questions
 
-No open question is recorded for this module. The first dynamic release is Codex-only and Tauri-only. It has no standalone-browser runtime. Tauri uses the shared streamlined exporter. Complete offline directory is the default, and bounded summary is explicit. Classic generation remains outside this module.
+No open question is recorded for this module. JFP-HM-01 requires a contextual UX review of actor-visible partial, unavailable, and N/A language for every row family. The review is a delivery gate with an accepted functional outcome. It is not unresolved product action and does not reopen the evidence-state decisions.
+
+The first dynamic release is Codex-only and Tauri-only. It has no standalone-browser runtime. Tauri uses the shared streamlined exporter. Complete offline directory is the default, and bounded summary is explicit. Classic generation remains outside this module.
 
 The event-cache quota and retention decision belongs to the Event Repository and Tauri maintenance configuration. It does not affect a Dynamic Workspace contract. Any later change to operation names, DTO meanings, native authority, or dynamic adapter scope must return to the owning HLD or architecture.
 
 ## Maintenance Notes
 
-Recheck this design when FR-001 view behavior, HLD-003 operation fields, worker protocol, command names, DTO limits, snapshot rules, privacy, navigation, accessibility, or desktop element IDs change.
+Recheck this design when FR-001 view behavior, HLD-003 operation fields, worker protocol, Heatmap modes or evidence states, command names, DTO limits, snapshot rules, privacy, navigation, accessibility, or desktop element IDs change.
 
 Keep the DTO parsers and their tests synchronized. Never add a response field directly to rendering code without boundary validation in `contracts.ts`.
 
 Keep each route's request, cache, cursor, and focus policy synchronized with `SURFACE_DEFINITIONS`. Recheck local-time rendering after browser or Tauri WebView changes.
 
-The latest source review is 2026-08-12.
+The latest source review is 2026-08-13. It includes FR-001 HM-F01 through HM-F15, JFP-HM-01 through JFP-HM-03, and PLAN-012.
 
 ## Requirements Coverage
 
@@ -113,7 +118,11 @@ The latest source review is 2026-08-12.
 | FR-001 FR-02; HLD OP-16 and OP-17 | INTENDED_BEHAVIOR | Preflight every selected or materially changed scope. Continue opens a coherent snapshot. Change scope or Cancel creates no snapshot. | `WorkspaceLifecycle`; `preflight`; `openSnapshot`; `cancelOperation`; preflight dialog focus policy | DEFINED | Application Service owns scope closure and snapshot creation | Four-scope, stale-preflight, cancel, and focus-return tests |
 | FR-001 FR-03; HLD OP-18 | INTENDED_BEHAVIOR | Load a bounded summary first. Show goal, state, scope, metrics, provenance, warnings, and recent significant activity. | `ReportSummaryDto`; `loadSurface("summary")`; `renderSummary` | DEFINED | Application Service owns summary calculation | Initial-load and no-eager-detail tests |
 | FR-001 FR-03; HLD OP-19 through OP-21 | INTENDED_BEHAVIOR | Page agents, turns, and events with operation-specific filters, requested sort, applied filter and sort metadata, opaque cursors, and current-page virtualization. | `CursorPageRequestDto<F, S>`; `CursorPageDto<T, F, S>`; exact sort contracts; `loadCursorPage`; `computeVirtualWindow`; page size 100 default and 500 maximum | DEFINED | Application Service validates filters, sort, cursor, and deterministic order | First, next, previous, filter/sort change, metadata mismatch, stale-cursor, chronology, and virtualization tests |
-| FR-001 FR-03; HLD OP-22 | INTENDED_BEHAVIOR | Query one exact visible UTC heatmap range and row grouping, return no more than 2,000 total cells, apply service-owned coarsening, preserve per-row scale and color semantics, and label the actual resolution. | `HeatmapRequestDto`; `HeatmapResultDto`; `HeatmapRowDto`; `HeatmapCellDto`; exact coarsening formula; `loadHeatmap`; `heatmapResolutionLabel` | DEFINED | Application Service owns grouping, aggregation, per-row domains, and coarsening | Range, grouping, row-scale, color-semantic, exact-limit, over-limit, coarsening, and stale-result tests |
+| FR-001 HM-F01 through HM-F08 | INTENDED_BEHAVIOR | Expose exactly Wall time, Tokens, and Models with their stable row families, local period labels, measure-specific values, and friendly row and evidence labels. | `HeatmapMode`; matrix DTO union; Heatmap Visible-Range Contract; View Behavior | DEFINED | Application Service owns row construction, aggregation, formatting, and source order | Mode inventory, row-order, label, local-time, and value-format tests |
+| FR-001 HM-F09 and HM-F10; JFP-HM-01 and JFP-HM-02 | INTENDED_BEHAVIOR | Keep complete zero distinct from partial and unavailable. Use a true per-row scale union. Unknown context capacity shows N/A scale semantics and intensity, no percentage, and no fallback. | Value-state and scale DTO unions; State Presentation; contextual UX review gate | DEFINED | Application Service owns evidence classification and known capacity | Zero/state, scale-union, N/A, supporting-text, non-fallback, and contextual UX review evidence |
+| FR-001 HM-F11 and HM-F13 | INTENDED_BEHAVIOR | Load matrix and selected-cell evidence through one discriminated operation family. Keep matrix results free of evidence ledgers. Show at most 100 synchronized chronological evidence items, exact omissions, and lazy event detail. | `HeatmapMatrixRequestDto`; `HeatmapCellEvidenceRequestDto`; `HeatmapInteractionState`; detail action | DEFINED | Application Service owns sanitized evidence selection; existing event-detail operation owns full detail | Initial-load, selection, 100-item, omission, chronology, and lazy-detail tests |
+| FR-001 HM-F12 and HM-F15; JFP-HM-03 | INTENDED_BEHAVIOR | Preserve single-click selection, double-click drilldown, right-click step-back, breadcrumbs, adjacent movement, horizontal scroll, five period controls, keyboard operation, non-color semantics, and visible controls labeled exactly `Drill down` and `Step back` with disabled boundaries. | Controller API; Heatmap Interaction; View Behavior; focus and accessible-name rules | DEFINED | None | Pointer, keyboard, focus, disabled-boundary, breadcrumb, period, scroll, and synchronized-ledger tests |
+| FR-001 HM-F14 | INTENDED_BEHAVIOR | Accept at most 2,000 matrix cells and show the service-owned actual supported resolution and omitted row count. | Matrix parser, visible-range contract, resolution label | DEFINED | Application Service owns nearest-supported coarsening and row omission | 2,000 acceptance, 2,001 rejection, coarsening, and omission tests |
 | FR-001 FR-03; HLD OP-23 | INTENDED_BEHAVIOR | Show bounded sequence groups and rows with zoom, fit, hierarchy collapse, agent focus, event filters, repeated-message grouping, reasoning disclosures, endpoint selection, and an accessible ledger. | `SequencePageDto`; `SequenceGroupDto`; `SequenceRowDto`; `SequenceFiltersDto`; `SequencePresentationState`; exact controller actions | DEFINED | Application Service owns evidence order and group hierarchy; Workspace owns zoom, fit, collapse, and selection state | Filter, zoom, fit, focus, collapse, endpoint, repeated-message, ledger, and reasoning tests |
 | FR-001 FR-03; HLD OP-24 | INTENDED_BEHAVIOR | Show deterministic chronological coordination pages with exact work-item, delegated-root, agent, operation, and evidence filters. Group evidence by canonical work item or delegated root and label prose-derived decisions as inferred. | `CoordinationFiltersDto`; `CoordinationSortDto`; `CoordinationPageDto`; `loadCoordination`; applied-metadata validation; evidence badge rule | DEFINED | Application Service owns evidence reconstruction, provenance, filter validation, and ordering | Cursor, filter, sort, metadata mismatch, canonical grouping, and inferred-label tests |
 | FR-001 FR-03; HLD OP-25 | INTENDED_BEHAVIOR | Load bounded redacted event details only after selection. Keep raw disclosures collapsed by default. | `EventDetailDto`; `openDetail`; `closeDetail`; `DisclosureDto`; detail dialog | DEFINED | Application Service and Tauri own sanitization and output validation | Lazy-load, redaction, collapse, not-found, Escape, and focus-return tests |
@@ -308,14 +317,15 @@ The parent sources delegate subordinate DTO representation and internal view com
 | DWP-02 | The Workspace stores only one current cursor page per paged view plus a bounded cursor history of 100 entries. | FR-001 requires cursor paging and virtualization. ARC performance rules require bounded presentation. | A current-page model keeps row DTO memory at 500 items or fewer. A capped history supports Previous without retaining old rows indefinitely. | Dev Documentation Writer within delegated module design authority |
 | DWP-03 | Each route has an independent `LoadState<T>` and monotonically increasing client request sequence. | HLD CR-13 requires pending/result/error state and rejection before replacement. | A sequence check discards late responses from superseded filters or routes. | Dev Documentation Writer within delegated module design authority |
 | DWP-04 | Metric-oriented HLD surfaces select bounded metric groups from `ReportSummaryDto`; timeline and tool surfaces select filtered event pages. | HLD delegates internal view composition and provides only OP-18 through OP-25. | This composition exposes every named surface without inventing another service operation. | Dev Documentation Writer within delegated module design authority |
-| DWP-05 | Heatmap requests use the visible UTC range and accept a positive requested resolution. The service returns the actual resolution. | FR-001 and HLD OP-22 require visible-range loading, a 2,000-bucket cap, and service coarsening. | The UI can label coarsening without duplicating service aggregation rules. | Dev Documentation Writer within delegated module design authority |
+| DWP-05 | Heatmap matrix requests use the visible UTC range and one supported requested resolution. The service returns the actual supported resolution. Cell evidence uses a separate variant of the same operation. | FR-001 HM-F11 and HM-F14 and PLAN-012 require one discriminated operation family, a 2,000-cell cap, and service coarsening. | The UI labels coarsening and loads selected evidence without duplicating service aggregation rules or adding another operation. | Accepted functional and delivery authorities |
 | DWP-06 | Source opening uses `sourceRef`, not a path. The service returns a nullable snapshot-scoped `source_key`; Tauri registers its authorized native path from the discovery closure and projects the key to `sourceRef`. | ARC-05, ARC-06, HLD TB-01, OP-36, and the accepted reconciliation keep filesystem authority in Tauri. | `open_source_location(snapshotId, sourceRef)` can resolve only through Tauri's private current-snapshot registry. The webview cannot construct a file target. | Dev Architect reconciliation |
 | DWP-07 | The navigation uses buttons in a named `nav` region with roving focus. It does not use ARIA tabs. | FR-001 requires stable navigation and keyboard control, not a tab-widget contract. | Button navigation avoids hidden-tab-panel focus rules while preserving arrow, Home, End, Enter, and Space operation. | Dev Documentation Writer within delegated module design authority |
-| DWP-08 | Heatmap and sequence visuals have synchronized text ledgers. | FR-001 FR-10 requires non-color evidence and accessible event labels. | A text ledger keeps equivalent evidence available when visual geometry is unavailable. | Dev Documentation Writer within delegated module design authority |
+| DWP-08 | Heatmap and sequence visuals have synchronized text ledgers. The Heatmap ledger is the bounded `cell_evidence` result for the selected row-period. | FR-001 HM-F11, HM-F13, HM-F15, and FR-10 require non-color evidence and accessible event labels. | A text ledger keeps equivalent evidence available when visual geometry is unavailable. | Accepted functional authority |
 | DWP-09 | Every webview boundary parser recursively rejects response objects that contain `sourcePath`, `outputPath`, `cachePath`, `filesystemPath`, `rawRecord`, or `rawRollout`. It also rejects every key ending in `Path`. | ARC-05, ARC-06, HLD CR-01, and HLD CR-13 keep native paths and raw records outside the webview. | Exact recursive rejection catches privacy and authority regressions before rendering or logging. | Dev Documentation Writer within delegated module design authority |
 | DWP-10 | Operator-visible strings are capped at 4,096 UTF-16 code units, warning lists at 100 items, and disclosure blocks at 16,384 code units after upstream redaction. | HLD requires bounded DTOs but delegates subordinate limits. | Explicit client caps prevent accidental unbounded DOM and diagnostic content. The disclosure cap remains large enough for bounded event inspection. | Dev Documentation Writer within delegated module design authority |
 | DWP-11 | Dynamic export uses opaque `exportId` and bounded `displayName`; it never returns a target path. The Tauri command opens the native target chooser, owns replacement confirmation, records the service's native `published_target` in a private `exportId -> published path` registry, and strips that target before returning. | The resolved export decision and accepted reconciliation make Tauri the dynamic surface while ARC-05 retains native path and publication authority. | The Workspace can show success and reopen an export without acquiring filesystem authority. CLI and MCP can receive authorized local publication paths under their own configured path authority. | Dev Architect reconciliation |
 | DWP-12 | Every webview boundary parser rejects path-shaped string values that start with `/`, `\\`, a drive-letter root, or `file:`. Opaque references and bounded labels remain distinct. | Key rejection alone cannot stop a native path embedded in a generic `message` or `label` field. | Recursive value checks enforce the no-unrestricted-path disclosure rule across diagnostics and future envelope fields. | Dev Documentation Writer within delegated module design authority |
+| DWP-13 | A contextual UX specialist reviews the actor-visible partial, unavailable, and N/A text for every Heatmap row family before implementation acceptance. | Accepted JFP-HM-01 requires contextual UX review but leaves no product decision open. | The review proves that exact evidence states are understandable without changing their semantics. | Product owner requirement; contextual UX reviewer supplies gate evidence |
 
 ### Exact TypeScript Module API
 
@@ -327,6 +337,7 @@ export const MAX_PAGE_SIZE = 500;
 export const MAX_CURSOR_HISTORY = 100;
 export const MAX_HEATMAP_CELLS = 2_000;
 export const MAX_HEATMAP_ROWS = 200;
+export const MAX_HEATMAP_EVIDENCE_ITEMS = 100;
 export const DEFAULT_ROW_HEIGHT_PX = 44;
 export const DEFAULT_OVERSCAN_ROWS = 8;
 
@@ -430,6 +441,11 @@ export interface ReportWorkspaceController {
   navigate(surface: WorkspaceSurfaceId, trigger?: HTMLElement): Promise<void>;
   nextPage(): Promise<void>;
   previousPage(): Promise<void>;
+  selectHeatmapCell(rowId: string, periodStartTime: string, periodEndTime: string): Promise<void>;
+  drillDownHeatmap(): Promise<void>;
+  stepBackHeatmap(): Promise<void>;
+  moveHeatmapPeriod(direction: "previous" | "next"): Promise<void>;
+  setHeatmapPeriod(minutes: HeatmapRequestedResolutionMinutes): Promise<void>;
   refreshSnapshot(): Promise<void>;
   exportSnapshot(mode?: ExportMode): Promise<void>;
   reopenExport(exportId: string): Promise<void>;
@@ -487,7 +503,8 @@ export interface WorkspaceState {
       CursorPagerState<unknown, unknown, unknown>
     >
   >;
-  readonly timeSeries: LoadState<HeatmapResultDto>;
+  readonly timeSeries: LoadState<HeatmapMatrixResultDto>;
+  readonly heatmapInteraction: HeatmapInteractionState;
   readonly detail: LoadState<EventDetailDto>;
   readonly exportState: LoadState<ExportSnapshotResultDto>;
   readonly sequencePresentation: SequencePresentationState;
@@ -511,7 +528,7 @@ export const WORKSPACE_COMMANDS = {
   listAgents: "list_agents",
   listTurns: "list_turns",
   listEvents: "list_events",
-  queryTimeRange: "query_time_range",
+  querySnapshotTimeRange: "query_snapshot_time_range",
   querySequence: "query_sequence",
   queryCoordination: "query_coordination",
   getEventDetails: "get_event_details",
@@ -536,6 +553,8 @@ export type WorkspaceOperationName = ReportOperationName;
 
 Every request that can run asynchronously contains a client-generated `operationId`. Cancellation sends only `{ operationId }`. Opening a source sends `{ snapshotId, sourceRef }`. No Workspace request contains a source path, cache path, output path, or raw record.
 
+For `query_snapshot_time_range`, Tauri maps the exact camel-case request union to the corresponding snake-case Worker fields. It maps the matching Worker result back to camel case without changing array order, numeric values, nulls, value state, scale availability, evidence method, or immutable identity. It rejects cross-variant fields. This command never invokes or projects retained MCP `query_time_range`.
+
 `newOperationId()` obtains 12 bytes from `globalThis.crypto.getRandomValues`, encodes them as lowercase hexadecimal, and prefixes `op_`. The resulting ID contains 96 cryptographically secure random bits and matches `^op_[0-9a-f]{24}$`. The Workspace never uses counters, timestamps, `Math.random`, or another predictable source. The all-zero ID is reserved for the native Worker handshake and is never returned by this function.
 
 ### Boundary DTO Types In `contracts.ts`
@@ -550,7 +569,7 @@ export type ReportOperationName =
   | "list_agents"
   | "list_turns"
   | "list_events"
-  | "query_time_range"
+  | "query_snapshot_time_range"
   | "query_sequence"
   | "query_coordination"
   | "get_event_details"
@@ -797,67 +816,147 @@ export interface EventRowDto {
   readonly hasDetail: boolean;
 }
 
-export type HeatmapGroupBy = "agent" | "event_kind" | "work_item";
-export type HeatmapColorSemantic = "sequential_nonnegative" | "diverging_signed";
 export type HeatmapRequestedResolutionMinutes = 1 | 5 | 15 | 30 | 60;
 export type HeatmapScaleBasis = "visible_row_maximum" | "context_window_capacity";
-export type TimeMeasure =
-  | "wall_time"
-  | "uncached_input_tokens"
-  | "cached_input_tokens"
-  | "output_tokens"
-  | "reasoning_tokens"
-  | "cost_usd";
+export type HeatmapMode = "wall_time" | "tokens" | "models";
+export type HeatmapValueState = "measured" | "derived" | "partial" | "unavailable";
+export type HeatmapRowKind = "runtime_state" | "token_measure" | "model" | "cost";
+export type HeatmapRowOrder =
+  | "runtime_state_contract"
+  | "token_contract"
+  | "model_first_occurrence_then_cost";
+export type HeatmapEvidenceMethod =
+  | "measured"
+  | "derived"
+  | "inferred"
+  | "estimated"
+  | "unavailable";
 
-export interface HeatmapRequestDto extends WorkspaceOperationRequestDto {
+export interface HeatmapMatrixRequestDto extends WorkspaceOperationRequestDto {
   readonly snapshotId: string;
+  readonly queryKind: "matrix";
   readonly fromTime: string;
   readonly toTime: string;
-  readonly measure: TimeMeasure;
-  readonly groupBy: HeatmapGroupBy;
+  readonly mode: HeatmapMode;
   readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
   readonly maximumRows: number;
 }
 
-export interface HeatmapCellDto {
+export interface HeatmapCellEvidenceRequestDto extends WorkspaceOperationRequestDto {
+  readonly snapshotId: string;
+  readonly queryKind: "cell_evidence";
+  readonly mode: HeatmapMode;
+  readonly rowId: string;
+  readonly periodStartTime: string;
+  readonly periodEndTime: string;
+}
+
+export type HeatmapRequestDto =
+  | HeatmapMatrixRequestDto
+  | HeatmapCellEvidenceRequestDto;
+
+export type HeatmapScaleDto =
+  | {
+      readonly availability: "available";
+      readonly minimum: number;
+      readonly maximum: number;
+      readonly basis: HeatmapScaleBasis;
+    }
+  | {
+      readonly availability: "unavailable";
+      readonly reason: "context_capacity_unavailable";
+    };
+
+export interface HeatmapMatrixCellDto {
   readonly startTime: string;
   readonly endTime: string;
   readonly value: number | null;
-  readonly count: number;
-  readonly evidence: EvidenceLabel;
-  readonly primaryLabel: string;
-  readonly secondaryLabel: string | null;
+  readonly formattedValue: string;
+  readonly valueState: HeatmapValueState;
+  readonly applicableZero: boolean;
+  readonly contributingEvidenceCount: number;
+  readonly normalizedIntensity: number | null;
+  readonly supportingText: string | null;
 }
 
-export interface HeatmapScaleDto {
-  readonly minimum: number;
-  readonly maximum: number;
-  readonly colorSemantic: HeatmapColorSemantic;
-  readonly basis: HeatmapScaleBasis;
-}
-
-export interface HeatmapRowDto {
+export interface HeatmapMatrixRowDto {
   readonly rowId: string;
+  readonly rowKind: HeatmapRowKind;
   readonly label: string;
   readonly scale: HeatmapScaleDto;
-  readonly cells: readonly HeatmapCellDto[];
+  readonly cells: readonly HeatmapMatrixCellDto[];
 }
 
-export interface HeatmapResultDto {
+export interface HeatmapMatrixResultDto {
   readonly snapshotId: string;
-  readonly revision: string;
-  readonly measure: TimeMeasure;
-  readonly groupBy: HeatmapGroupBy;
+  readonly revisionId: string;
+  readonly queryKind: "matrix";
+  readonly mode: HeatmapMode;
   readonly fromTime: string;
   readonly toTime: string;
   readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
-  readonly actualResolutionMinutes: number;
+  readonly actualResolutionMinutes: HeatmapRequestedResolutionMinutes;
   readonly maximumRows: number;
   readonly omittedRowCount: number;
-  readonly rowOrder: "activity_descending_id_ascending";
+  readonly rowOrder: HeatmapRowOrder;
   readonly totalCellCount: number;
-  readonly rows: readonly HeatmapRowDto[];
+  readonly rows: readonly HeatmapMatrixRowDto[];
   readonly provenance: readonly string[];
+}
+
+export interface HeatmapEvidenceItemDto {
+  readonly eventId: string | null;
+  readonly occurredAt: string;
+  readonly value: number | null;
+  readonly formattedValue: string;
+  readonly durationMs: number | null;
+  readonly label: string;
+  readonly preview: string | null;
+  readonly evidenceMethod: HeatmapEvidenceMethod;
+  readonly valueState: HeatmapValueState;
+  readonly hasDetail: boolean;
+}
+
+export interface HeatmapCellEvidenceResultDto {
+  readonly snapshotId: string;
+  readonly revisionId: string;
+  readonly queryKind: "cell_evidence";
+  readonly mode: HeatmapMode;
+  readonly rowId: string;
+  readonly rowLabel: string;
+  readonly periodStartTime: string;
+  readonly periodEndTime: string;
+  readonly value: number | null;
+  readonly formattedValue: string;
+  readonly valueState: HeatmapValueState;
+  readonly applicableZero: boolean;
+  readonly evidenceItems: readonly HeatmapEvidenceItemDto[];
+  readonly omittedEvidenceCount: number;
+  readonly provenance: readonly string[];
+}
+
+export type HeatmapResultDto =
+  | HeatmapMatrixResultDto
+  | HeatmapCellEvidenceResultDto;
+
+export interface HeatmapPeriodHistoryEntry {
+  readonly fromTime: string;
+  readonly toTime: string;
+  readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
+}
+
+export interface HeatmapInteractionState {
+  readonly mode: HeatmapMode;
+  readonly visibleFromTime: string;
+  readonly visibleToTime: string;
+  readonly requestedResolutionMinutes: HeatmapRequestedResolutionMinutes;
+  readonly selectedCell: {
+    readonly rowId: string;
+    readonly periodStartTime: string;
+    readonly periodEndTime: string;
+  } | null;
+  readonly history: readonly HeatmapPeriodHistoryEntry[];
+  readonly evidence: LoadState<HeatmapCellEvidenceResultDto>;
 }
 
 export interface SequenceFiltersDto {
@@ -1056,18 +1155,7 @@ export function parseCoordinationPageDto(
 
 export function parseHeatmapResultDto(
   value: unknown,
-  expected: Readonly<
-    Pick<
-      HeatmapRequestDto,
-      | "snapshotId"
-      | "fromTime"
-      | "toTime"
-      | "measure"
-      | "groupBy"
-      | "requestedResolutionMinutes"
-      | "maximumRows"
-    >
-  > & { readonly revision: string },
+  expected: HeatmapRequestDto & { readonly revisionId: string },
 ): HeatmapResultDto;
 
 export function parseExportSnapshotResultDto(
@@ -1094,7 +1182,11 @@ export function parseWorkspaceProgressDto(
 ): WorkspaceProgressDto;
 ```
 
-Each parser takes `unknown` and returns its named DTO. Each parser rejects missing fields, wrong primitive types, invalid ISO instants, negative counts, non-integer counts, empty opaque IDs, page sizes outside 1 through 500, item counts above the declared page size, sequence group arrays above 500, heatmap results above 2,000 total cells, unknown evidence, sort, heatmap, or export variants, forbidden keys, and strings above their client cap.
+Each parser takes `unknown` and returns its named DTO. Each parser rejects missing fields, wrong primitive types, invalid ISO instants, negative counts, non-integer counts, empty opaque IDs, page sizes outside 1 through 500, item counts above the declared page size, sequence group arrays above 500, matrix results above 2,000 total cells, cell-evidence arrays above 100 items, unknown evidence, sort, Heatmap, or export variants, forbidden keys, and strings above their client cap.
+
+`parseHeatmapResultDto` first matches `queryKind` to the exact request discriminant. It rejects fields from the other variant. For a matrix, it also checks mode, range, requested resolution, row limit, supported actual resolution, total, and immutable `snapshotId` and `revisionId`. `wall_time` requires `rowOrder="runtime_state_contract"`. `tokens` requires `rowOrder="token_contract"`. `models` requires `rowOrder="model_first_occurrence_then_cost"`. For cell evidence, the parser checks mode, row, period, immutable identities, nondecreasing `occurredAt`, and the exact omission count. It preserves service order for equal times because stable source order is not exposed as a field. `hasDetail=true` requires a non-null `eventId`.
+
+The scale parser accepts only `{availability:"available",minimum,maximum,basis}` or `{availability:"unavailable",reason:"context_capacity_unavailable"}`. It rejects nullable numeric members, unknown reasons, and every mixed cross-product. A cell parser rejects non-finite values and `normalizedIntensity` outside 0 through 1. An unavailable value has null `value`. An unavailable scale requires null `normalizedIntensity`. Context rows with unavailable capacity cannot contain a percentage or a `visible_row_maximum` fallback. Separately evidenced token support remains nullable text.
 
 Every page parser takes the expected request filters and sort as separate arguments. It requires deep equality with `appliedFilters` and `appliedSort` after the same normalization used before submission. It also requires the returned operation, snapshot ID, and revision to match the active request. A mismatch becomes `REPORT_PROTOCOL_ERROR` before page state changes.
 
@@ -1112,7 +1204,7 @@ Parsers allow extra non-forbidden keys only at the outer Tauri envelope. Nested 
 | --- | --- | --- |
 | `summary` | `get_summary`; render overview groups, warnings, and recent activity | Reload after snapshot open or a refresh that returns a new revision; retain after an unchanged refresh |
 | `coordination` | `query_coordination` with exact work-item, delegated-root, agent, operation, evidence, and chronological sort inputs | First cursor after filter, sort, or revision change; reuse requires matching applied metadata |
-| `heatmap` | `query_time_range` with exact visible UTC range, measure, grouping, and requested resolution | Reload after range, measure, grouping, requested resolution, or revision changes; reuse requires matching echoed fields |
+| `heatmap` | `query_snapshot_time_range`; `matrix` loads the visible range and `cell_evidence` loads one selected row-period ledger | Reload matrix after range, mode, requested resolution, or revision changes. Reload evidence after selection. Reuse requires matching exact discriminants, selectors, immutable snapshot ID, and revision ID. |
 | `timeline` | `list_events` with active time filters and chronological sort | First cursor after filter, sort, or revision change; parser verifies applied metadata and adjacent chronology |
 | `sequence` | `query_sequence` with agent focus, event kinds, grouping, reasoning, and chronological sort | First cursor after query filter, sort, or revision change; zoom, fit, collapse, and endpoint selection do not reload evidence |
 | `agents` | `list_agents` with query/state filters and explicit stable sort | First cursor after filter, sort, or revision change; reuse requires matching applied metadata |
@@ -1145,17 +1237,33 @@ Only the current page's row DTOs remain in the pager. Route changes preserve the
 
 ### Heatmap Visible-Range Contract
 
-The heatmap owns `visibleFromTime`, `visibleToTime`, `measure`, `groupBy`, `requestedResolutionMinutes`, and `maximumRows`. The start is inclusive. The end is exclusive. Both values are valid ISO UTC instants, and `fromTime < toTime`. Requested resolution is exactly 1, 5, 15, 30, or 60 minutes. `maximumRows` defaults to 100 and accepts 1 through 200.
+The Heatmap owns `visibleFromTime`, `visibleToTime`, `mode`, `requestedResolutionMinutes`, and `maximumRows`. The start is inclusive. The end is exclusive. Both values are valid ISO UTC instants, and `fromTime < toTime`. Requested resolution is exactly 1, 5, 15, 30, or 60 minutes. `maximumRows` defaults to 100 and accepts 1 through 200.
 
-The Workspace never asks for the complete snapshot solely because a heatmap route opened. The initial visible range equals `ReportSummaryDto.timeRange`. Panning moves the half-open range without changing its duration. Previous and Next arrows move it by exactly one returned actual-resolution bucket. Drill-in uses the selected cell's `[startTime,endTime)` range. Step-back restores the immediately preceding range from a 100-entry bounded history. Zoom changes only `requestedResolutionMinutes` to the next value in `1, 5, 15, 30, 60` and issues a superseding request.
+The mode selector exposes exactly **Wall time**, **Tokens**, and **Models**. It never exposes an atomic token measure as another top-level mode.
 
-The Application Service groups evidence by the requested `groupBy`. It orders groups by activity count descending and opaque row ID ascending, returns at most `maximumRows`, and reports `omittedRowCount`. It calculates `requestedColumnCount = ceil((toTime - fromTime) / requestedResolutionMinutes)`. After it knows the returned row count, it selects the smallest positive integer `actualResolutionMinutes >= requestedResolutionMinutes` for which `ceil((toTime - fromTime) / actualResolutionMinutes) * rowCount <= 2,000`. Every positive integer minute is a supported actual coarsened resolution. A zero-row result uses the requested resolution. The response preserves the exact requested range, grouping, row limit, and row order.
+Wall time rows include only runtime states present in the snapshot. Known states use this order and these labels: Model inference, Tool execution, Build / Test, Waiting for agent, User pause, Watchdog, Approval / infrastructure, and Unattributed. Other present states follow in ascending internal-state order and use a title-cased label.
 
-Each row supplies its own value domain, scale basis, and color semantic. Ordinary runtime, token, cost, tool, and model rows use `visible_row_maximum`; their minimum is zero and maximum equals the largest visible non-null value. Context rows use `context_window_capacity`; their minimum is zero and maximum equals the recorded full context window. Context cells put percentage in `primaryLabel` and compact tokens in `secondaryLabel`. For `sequential_nonnegative`, the view maps the row domain from low to high intensity. For `diverging_signed`, `minimum <= 0 <= maximum` and the view maps negative, zero, and positive values to text-labeled classes. When `minimum === maximum`, every non-null cell uses the midpoint class. Null values use the unavailable class. The Workspace never derives one row's scale from another row.
+Tokens rows are exactly Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), and Cost in that order. Models rows use the service-owned first-occurrence order for normalized model-and-effort labels and place Cost last. The Workspace does not sort, add, merge, or relabel rows.
 
-The parser verifies `rows.length <= maximumRows`, deterministic row order, and `totalCellCount === sum(row.cells.length)`. It rejects a total above 2,000. It verifies ordered, non-overlapping half-open cells within the returned range. It also verifies that `actualResolutionMinutes` satisfies the coarsening formula. `heatmapResolutionLabel` returns an empty string when actual equals requested. Otherwise, it returns `Showing <actual>-minute buckets; requested <requested>-minute buckets.` The view places this text beside the heading and in the status live region. A positive omission count produces `Showing <rows> rows; <omitted> lower-activity rows omitted.`
+The Workspace renders service-owned friendly labels without exposing internal identifiers. A model label is `model · effort value`, model only, or Unknown model. An agent label uses the recorded role, with main for an unlabeled root and default for an unlabeled child. It adds the recorded nickname or child assignment as `role (name)` only when that name adds information. Token-response evidence starts with the friendly agent label and then the friendly model label. Other evidence uses the applicable friendly runtime-state, tool, or model label.
 
-The Workspace does not reaggregate cells, recalculate row domains, or change color semantics. It uses the service response as authoritative after validation.
+The Workspace never asks for the complete snapshot solely because the Heatmap route opened. The initial matrix range equals `ReportSummaryDto.timeRange`. A matrix request contains `queryKind="matrix"` and no evidence selector. A cell selection sends a separate `queryKind="cell_evidence"` request through the same `query_snapshot_time_range` command. Initial matrix loading never contains the cell-evidence ledger, previews, or full event details.
+
+The service returns an actual resolution from 1, 5, 15, 30, or 60 minutes. It selects the nearest supported coarser resolution that keeps the matrix at or below 2,000 cells. The Workspace displays the returned actual resolution and exact omitted row count. It does not calculate or validate an unsupported intermediate resolution.
+
+Each non-context row has its own available scale with `basis="visible_row_maximum"`. Context rows have an available `context_window_capacity` scale only when capacity is known. An unavailable scale has no numeric domain. The Workspace never derives a scale or intensity from another row.
+
+When context capacity is unknown, the scale label and intensity semantics are N/A. Each affected cell has null `normalizedIntensity`. The Workspace shows no capacity percentage and does not substitute a visible-row maximum. It can show a separately evidenced observed token count only as supporting text. The accessible description states that context capacity is unavailable and that intensity is N/A.
+
+Every cell displays its service-owned `formattedValue`. A measured or derived complete zero displays as zero only when `applicableZero` is true. A partial cell displays the `Partial · ` prefix with its known formatted subtotal or value. An unavailable cell displays `Unavailable` and no numeric value. These text states appear in the grid and synchronized evidence region. Color is supplemental.
+
+The Workspace formats every period in browser-local time. The UTC `startTime` and `endTime` remain in `dateTime` attributes, request fields, and correlation state. Local labels cover the exact half-open period and include enough date context to distinguish day or daylight-saving transitions.
+
+The parser verifies `rows.length <= maximumRows`, exact mode-specific `rowOrder`, and `totalCellCount === sum(row.cells.length)`. It rejects totals above 2,000, unsupported resolution values, mixed scale variants, non-finite numeric values, unordered or overlapping periods, identity mismatches, and fields from the wrong query variant.
+
+`heatmapResolutionLabel` returns an empty string when actual equals requested. Otherwise, it returns `Showing <actual>-minute periods; requested <requested>-minute periods.` The view places this text beside the heading and in the status live region. A positive omission count produces `Showing <rows> rows; <omitted> rows omitted.`
+
+The Workspace does not reaggregate cells, calculate values, replace evidence states, normalize model identity, calculate percentages, or change scale semantics. It uses the validated service response as authoritative.
 
 ## External And Asynchronous Effect Phases
 
@@ -1202,7 +1310,8 @@ The local operating-system user running Tauri is the only actor identity. The Wo
 | `route` | Current catalog, preflight, or snapshot surface | Snapshot navigation changes only the surface. It never changes snapshot identity. |
 | `summary` | Parsed bounded summary for one snapshot revision | A refresh that returns a new revision invalidates it for immediate reload. An unchanged refresh retains it. Query failure retains it. Close clears it. |
 | `pagers` | One current page, normalized requested filters and sort, applied metadata, and bounded cursor history per paged view | Filter, sort, or revision change clears its page and cursors. Route change retains it only when all request and applied bindings match. |
-| `timeSeries` | One visible-range heatmap response with grouping, rows, per-row domains, color semantics, and range history | Range, measure, grouping, requested resolution, or revision change makes it stale until a parsed replacement arrives. |
+| `timeSeries` | One visible-range Heatmap matrix with mode-specific rows and exact immutable snapshot/revision binding | Range, mode, requested resolution, or revision change makes it stale until a parsed replacement arrives. |
+| `heatmapInteraction` | Current mode, visible range, five-value period setting, selected row-period, bounded range history, and selected-cell evidence state | Mode or revision change clears selection and evidence. Matrix replacement keeps selection only when the exact row and period remain valid. History holds at most 100 entries and never crosses a snapshot revision. |
 | `detail` | One selected event detail | Close, a refresh that returns a new revision, event-not-found, root change, or snapshot close clears it. An unchanged refresh retains it when its snapshot and revision binding remains valid. Query failure can retain a prior detail only when the event selector is unchanged. |
 | `sequencePresentation` | Zoom scale, fit mode, collapsed group IDs, focused agent, and selected endpoint for the current sequence revision | Evidence filter or revision change validates and removes missing group or endpoint identities. Zoom, fit, collapse, and endpoint selection do not request another page. |
 | `exportState` | Last bounded dynamic export result and current export loading/error state | A successful export replaces it. Failure or cancellation retains the prior result. Snapshot close clears it. No path is stored. |
@@ -1257,14 +1366,18 @@ The module has no persistent cache. Browser local storage retains only existing 
 ### Heatmap Interaction
 
 1. The route derives one visible UTC range from the current viewport and period controls.
-2. It sends that range, measure, grouping, requested resolution of 1, 5, 15, 30, or 60 minutes, and row limit from 1 through 200.
+2. It sends `query_kind=matrix`, the selected `wall_time|tokens|models` mode, that range, one supported period, and a row limit from 1 through 200.
 3. It accepts no more than 2,000 total parsed cells across all rows.
-4. It validates the exact range, grouping, row limit, deterministic row order, omitted count, coarsening formula, ordered half-open cells, per-row domain, and color semantic.
-5. It renders the service's actual resolution and does not reaggregate values or calculate cross-row scales.
-6. Pointer click or keyboard Enter selects a cell.
-7. Pointer double-click or the **Drill in** button requests the selected subrange.
-8. Pointer context-menu or the **Step back** button restores the previous range.
-9. Breadcrumb restores an earlier range. Previous and Next arrows move the range by exactly one returned `actualResolutionMinutes` bucket and issue one superseding request.
+4. It validates the exact variant, immutable identity, mode, range, row limit, row order, omission count, supported coarsening, ordered half-open cells, value states, and scale union.
+5. It renders service-owned values and actual resolution. It does not reaggregate values or calculate scales.
+6. Single click, Enter, or Space selects one cell and sends `query_kind=cell_evidence` for its exact mode, row, and period.
+7. The response replaces only the synchronized evidence list after exact selection and revision correlation.
+8. Double-click or the visible **Drill down** button pushes the current range to bounded history and loads the selected period as a finer matrix.
+9. Right-click or the visible **Step back** button restores the most recent parent range.
+10. A breadcrumb restores its named ancestor and discards later history.
+11. Previous and Next move the selected period to the adjacent period without leaving the snapshot range.
+12. Horizontal scroll controls move the visible grid without changing evidence. Period controls select exactly 1, 5, 15, 30, or 60 minutes and load a superseding matrix.
+13. **Drill down** is disabled at 1 minute. **Step back** is disabled without a parent. Previous and Next are disabled outside the snapshot range.
 
 ### Sequence And Coordination Interaction
 
@@ -1366,7 +1479,7 @@ sequenceDiagram
   end
 ```
 
-The paged and heatmap query flow exposes conflict and coarsening branches.
+The paged and Heatmap query flow exposes conflict, union, and coarsening branches.
 
 ```mermaid
 flowchart TD
@@ -1378,11 +1491,34 @@ flowchart TD
   Metadata -- No --> Reject
   Metadata -- Yes --> Conflict{Cursor conflict?}
   Conflict -- Yes --> Restart[Mark stale and offer First page]
-  Conflict -- No --> Kind{Heatmap result?}
-  Kind -- No --> Page[Render at most 500 virtualized rows]
-  Kind -- Yes --> Buckets{At most 2,000 cells and valid coarsening?}
-  Buckets -- No --> Reject
-  Buckets -- Yes --> Heatmap[Render actual resolution and coarsening label]
+  Conflict -- No --> Kind{Result kind?}
+  Kind -- Page --> Page[Render at most 500 virtualized rows]
+  Kind -- Matrix --> Cells{At most 2,000 cells, exact scale union, valid coarsening?}
+  Cells -- No --> Reject
+  Cells -- Yes --> Heatmap[Render actual resolution, rows, and non-color states]
+  Kind -- Cell evidence --> Evidence{At most 100 chronological items and exact selection?}
+  Evidence -- No --> Reject
+  Evidence -- Yes --> Ledger[Replace synchronized evidence list and show omitted count]
+```
+
+Heatmap navigation keeps pointer and keyboard actions equivalent.
+
+```mermaid
+flowchart TD
+  Select[Single click, Enter, or Space selects a cell] --> Evidence[Request bounded cell evidence]
+  Select --> Action{Navigation action}
+  Action -- Double-click or Drill down --> Finest{Current period is 1 minute?}
+  Finest -- Yes --> DisabledDrill[Drill down disabled]
+  Finest -- No --> Push[Push current range and request selected finer matrix]
+  Action -- Right-click or Step back --> Parent{Parent range exists?}
+  Parent -- No --> DisabledBack[Step back disabled]
+  Parent -- Yes --> Restore[Restore parent matrix]
+  Action -- Breadcrumb --> Ancestor[Restore named ancestor]
+  Action -- Previous or Next --> InRange{Adjacent period is inside snapshot?}
+  InRange -- No --> DisabledAdjacent[Adjacent control disabled]
+  InRange -- Yes --> Move[Request adjacent period and evidence]
+  Action -- Period control --> Period[Request 1, 5, 15, 30, or 60 minute matrix]
+  Action -- Horizontal scroll --> Scroll[Move grid viewport without requery]
 ```
 
 ## Invariants
@@ -1404,9 +1540,14 @@ flowchart TD
 - Timeline, tool, sequence, and coordination pages validate chronological order and their stable identity tie break.
 - A cursor page has 1 through 500 requested items and never renders more than 500 returned items.
 - Only the current cursor page retains row DTOs.
-- A heatmap result contains at most 2,000 total cells across all rows.
-- Heatmap rows retain independent scale domains and service-supplied color semantics.
-- The UI labels any difference between requested and actual heatmap resolution.
+- Heatmap exposes exactly Wall time, Tokens, and Models with the accepted stable row families.
+- A Heatmap matrix contains at most 2,000 total cells across all rows and no eager evidence ledger.
+- A selected-cell evidence result contains at most 100 chronological items and an exact omitted count.
+- Heatmap rows retain independent true scale variants. Unknown context capacity always has unavailable scale and N/A intensity, with no percentage or fallback.
+- Complete applicable zero, partial, and unavailable remain different visible and accessible states.
+- The UI labels any difference between requested and actual supported Heatmap resolution.
+- Full event detail remains a separate lazy request.
+- Visible controls labeled exactly **Drill down** and **Step back** remain keyboard operable and expose disabled boundaries.
 - Raw detail is lazy, bounded, redacted, and collapsed by default.
 - A late, invalid, failed, or cancelled result cannot replace coherent visible data.
 - Refresh is explicit. The module creates no watcher, polling timer, or background refresh.
@@ -1430,6 +1571,8 @@ The module reads no environment variable, file, or persisted application configu
 | Maximum page size | `MAX_PAGE_SIZE = 500` | Compile-time module constant. Parser and controller enforce it. HLD-003 owns the value. |
 | Maximum heatmap cells | `MAX_HEATMAP_CELLS = 2_000` | Compile-time module constant. Parser rejects overflow across all rows. FR-001 and HLD-003 own the value. |
 | Maximum heatmap rows | `MAX_HEATMAP_ROWS = 200`; default request 100 | Compile-time module proposition. Service echoes the applied limit and omission count. |
+| Maximum Heatmap evidence items | `MAX_HEATMAP_EVIDENCE_ITEMS = 100` | Protocol-fixed cap. The caller cannot request a larger value. Parser rejects overflow and requires the exact omitted count. |
+| Heatmap periods | `1 | 5 | 15 | 30 | 60` minutes | Accepted request and actual-resolution union. The parser rejects every other value. |
 | Cursor history cap | `MAX_CURSOR_HISTORY = 100` | Compile-time module proposition DWP-02. A rebuild is required to change it. |
 | Row estimate | `DEFAULT_ROW_HEIGHT_PX = 44` | Compile-time rendering default. `ResizeObserver` recalculates the viewport but does not mutate row data. |
 | Overscan | `DEFAULT_OVERSCAN_ROWS = 8` | Compile-time rendering default. It affects DOM count only. |
@@ -1456,7 +1599,7 @@ Native actions have these exact webview request shapes:
 | `list_agents` | `CursorPageRequestDto<AgentFiltersDto, AgentSortDto>` | `CursorPageDto<AgentRowDto, AgentFiltersDto, AgentSortDto>` |
 | `list_turns` | `CursorPageRequestDto<TurnFiltersDto, TurnSortDto>` | `CursorPageDto<TurnRowDto, TurnFiltersDto, TurnSortDto>` |
 | `list_events` | `CursorPageRequestDto<EventFiltersDto, EventSortDto>` | `CursorPageDto<EventRowDto, EventFiltersDto, EventSortDto>` |
-| `query_time_range` | `HeatmapRequestDto` | `HeatmapResultDto` |
+| `query_snapshot_time_range` | Exact `HeatmapMatrixRequestDto | HeatmapCellEvidenceRequestDto` discriminated request | Matching `HeatmapMatrixResultDto | HeatmapCellEvidenceResultDto` discriminated result |
 | `query_sequence` | `CursorPageRequestDto<SequenceFiltersDto, SequenceSortDto>` | `SequencePageDto` |
 | `query_coordination` | `CursorPageRequestDto<CoordinationFiltersDto, CoordinationSortDto>` | `CoordinationPageDto` |
 | `get_event_details` | `{ operationId, snapshotId, eventId }` | `EventDetailDto` |
@@ -1517,6 +1660,17 @@ Browser history and URL fragments are not authoritative. A route exists only in 
 
 Progress messages use `role=status` and a `progressbar` only when the total is known. A terminal result removes `aria-busy`. Status icons always have adjacent text.
 
+Heatmap evidence states use this actor-visible baseline:
+
+| State | Visible baseline |
+| --- | --- |
+| Complete applicable zero | The measure-specific zero, such as `0ms`, compact `0`, integer `0`, or `$0.00`; never `Unavailable` |
+| Partial | `Partial · <formatted known value>` plus a concise safe explanation in the synchronized evidence region |
+| Unavailable | `Unavailable` with no numeric value plus a concise safe explanation in the synchronized evidence region |
+| Unknown context capacity | `N/A` for capacity and intensity; optional separately evidenced token supporting text; no percentage or fallback scale |
+
+Before implementation acceptance, a contextual UX review evaluates this language in every runtime, token, context, model, and cost row family. The review covers compact grid text, accessible names, synchronized evidence text, and wide and narrow layouts. The reviewer can improve plain-language phrasing but cannot merge partial with unavailable, convert missing evidence to zero, add a capacity percentage, or add a fallback intensity. The completed contextual UX review is required verification evidence. It is not a user-action request.
+
 ### View Behavior
 
 - Summary displays title, goal, report state, scope, local observation time, metric groups, warnings, and recent activity.
@@ -1524,9 +1678,13 @@ Progress messages use `role=status` and a `progressbar` only when the total is k
 - Every paged view shows the active filters and sort in its controls. It keeps a visually-hidden applied-metadata summary. A response mismatch produces a protocol error instead of silently changing the controls.
 - Events and Timeline use the same cursor source. Timeline fixes chronological ascending presentation and does not offer a contradictory descending control. Event selection opens lazy detail.
 - Tools filters Events with the fixed tool kind and keeps agent, turn, and time filters available.
-- Heatmap uses a semantic grid. Arrow keys move cell focus. Enter or Space selects a cell. Explicit **Drill in**, **Step back**, **Previous bucket**, and **Next bucket** buttons provide keyboard equivalents for double-click, context-menu, and time movement.
-- Heatmap color never carries the only value. Each cell exposes time, row label, value, count, evidence label, and selection state in accessible text.
-- Heatmap uses each returned row's scale and `colorSemantic`. It labels the legend with row minimum, midpoint when applicable, maximum, unavailable, and the semantic name.
+- Heatmap exposes exactly **Wall time**, **Tokens**, and **Models**. The active mode has a visible and programmatic selected state.
+- Heatmap uses a semantic grid. Arrow keys move cell focus. Enter or Space selects a cell. The grid preserves single click, double-click, and right-click behavior.
+- After selection, visible keyboard-operable buttons are labeled exactly **Drill down** and **Step back**. Previous, Next, breadcrumbs, horizontal scroll controls, and 1, 5, 15, 30, and 60 minute period controls are also keyboard operable.
+- **Drill down** is disabled at 1 minute. **Step back** is disabled without a parent range. Previous and Next are disabled when the target period is outside the snapshot range.
+- Heatmap color never carries the only meaning. Each cell exposes mode, friendly row label, local half-open period, formatted value, value state, applicable-zero meaning, scale availability, supporting text, and selection state in accessible text.
+- Each row renders its own returned scale. An available scale labels its basis and numeric endpoints. An unavailable scale shows N/A and its bounded reason. Unknown context capacity produces N/A intensity, no percentage, and no fallback legend.
+- A synchronized selected-cell evidence list shows the friendly row label, local period, raw nullable value through its formatted projection, value state, evidence method, friendly evidence label, sanitized preview, and exact omitted count. It renders at most 100 chronological items. A detail button appears only when `hasDetail` is true and requests the existing lazy event detail.
 - Sequence renders its visual geometry as supplemental. Controls provide **Zoom in**, **Zoom out**, **Fit all**, **Fit width**, hierarchy collapse, agent focus, event-kind filters, repeated-message grouping, and reasoning disclosure. Pointer and keyboard users can select the source or destination endpoint separately.
 - A synchronized sequence ledger exposes hierarchy, order, both endpoint labels, selected endpoint, kind, evidence, repeat count, reasoning availability, and detail action. Collapsed visual descendants remain discoverable in the ledger.
 - Coordination applies returned chronological sort metadata. It renders canonical work-item, delegated-root, and explicit ungrouped sections and shows an `inferred` text badge for prose-derived decisions.
@@ -1571,7 +1729,7 @@ The Workspace fails closed at the DTO boundary. A parser error becomes `REPORT_P
 | Forbidden key or oversized DTO | Parser rejects the entire result before mutation. The payload is not logged. | Treat as protocol/privacy defect. No unsafe partial rendering occurs. |
 | Progress operation mismatch | Parser rejects the record before progress, active operation, or ARIA state changes. | Treat as protocol defect. Await the matching terminal result or cancel explicitly. |
 | Page applied-filter or applied-sort mismatch | Parser rejects the page before replacement. The prior page becomes stale with a protocol error. | Retry from the first page after correcting the service defect. |
-| Invalid heatmap range, grouping, row domain, cell order, total, or coarsening | Parser rejects the result before replacing the heatmap. | Preserve the prior heatmap and report a protocol error. |
+| Invalid Heatmap query variant, mode, range, row order, scale union, value state, cell order, total, evidence bound, revision, or supported coarsening | Parser rejects the result before replacing the matrix or evidence list. | Preserve the prior coherent Heatmap and report a protocol error. |
 | Export chooser cancelled | Occurs before exporter submission. Returns directly to ready. | No error alert and no state replacement. |
 | Export construction, publication, or cancellation failure | Occurs after submission but before successful result. Preserves snapshot, current route, and prior successful export result. | Retry explicitly. Tauri and Exporter own cleanup and atomicity. |
 | Unknown export identity on reopen | Occurs before native open. Report state is unchanged. | Export again or select another retained export. |
@@ -1583,11 +1741,11 @@ Errors are not swallowed. A disposed or superseded request is the only silently 
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This PLANNED_DEVELOPMENT design incorporates the accepted Dev Architect reconciliation. It defines exact placement, cryptographic operation-ID generation, structured diagnostics, canonical applied page metadata, full summary, grouped heatmap, sequence, coordination, detail, refresh, close, export-count, source-reference, and export-identity DTOs, plus Tauri commands, lifecycle, routes, state retention, accessibility, privacy, and tests. Each module-internal choice has a justified proposition.
+**ACCEPTED.** This PLANNED_DEVELOPMENT design incorporates the accepted Dev Architect reconciliation and the accepted Heatmap product decisions. It defines exact placement, cryptographic operation-ID generation, structured diagnostics, canonical applied page metadata, full summary, the discriminated Heatmap matrix and cell-evidence family, sequence, coordination, detail, refresh, close, export-count, source-reference, and export-identity DTOs. It also defines Tauri commands, lifecycle, routes, state retention, accessibility, privacy, and tests. Each module-internal choice has a justified proposition.
 
 ## Implementation Readiness
 
-**BLOCKED.** The documentation contract is accepted, but implementation readiness remains blocked until the assigned Workspace, DTO-parser, Tauri-adapter, HTML, style, and test sources implement the reconciled cryptographic ID, structured diagnostic, lifecycle-result, exact-page, source-registry, and export-registry contracts. The accepted Application Service, Worker, and Static Exporter boundaries are fixed dependencies, not circular sources of this design.
+**BLOCKED.** The documentation contract is accepted, but implementation readiness remains blocked until the assigned Workspace, DTO-parser, Tauri-adapter, HTML, style, and test sources implement the reconciled cryptographic ID, structured diagnostic, lifecycle-result, exact-page, Heatmap union, source-registry, and export-registry contracts. Contextual UX review must also validate actor-visible partial, unavailable, and N/A language. This review is required delivery evidence, not unresolved product action. The accepted Application Service, Worker, and Static Exporter boundaries are fixed dependencies, not circular sources of this design.
 
 Dynamic non-Codex support, a standalone-browser runtime, and classic generation controls are excluded from this Workspace. Classic CLI and MCP generation and current non-Codex static adapters remain available outside this component. Cache quota and retention defaults belong to another component and do not block this Workspace.
 
@@ -1608,7 +1766,12 @@ Dynamic non-Codex support, a standalone-browser runtime, and classic generation 
 | Cursor paging and metadata | Default 100 and accepted 1/500 boundaries; 0 and 501 fail before invoke; next pushes cursor; previous pops cursor; filter or sort change restarts; 100-entry history cap offers First page; stale cursor preserves page; applied-filter or sort mismatch rejects before replacement. |
 | Deterministic ordering | Agent, turn, event, timeline, tool, sequence, and coordination requests send exact default sorts; each parser validates applied sort and identity tie break; timeline, tool, sequence, and coordination pages reject adjacent chronological disorder. |
 | Virtualization | Empty input; first, middle, and final viewport; overscan clamp; negative and non-finite inputs; no returned index exceeds a 500-row page; scroll changes DOM rows but not DTO items. |
-| Heatmap | Exact half-open visible UTC range, grouping, requested resolution, and row limit enter the request; initial range comes from summary; one-bucket arrows, drill-in, step-back, and zoom ranges are exact; row order, omitted count, IDs, labels, scale bases, domains, semantics, cells, total, and coarsening validate; 200 rows and 2,000 cells pass at their limits; overflow fails; rows scale independently; late pan result is discarded. |
+| Heatmap modes and rows | Exactly Wall time, Tokens, and Models render. Wall time uses present runtime rows in accepted order. Tokens uses the exact eight rows. Models preserves normalized model-and-effort order and Cost last. Atomic token measures are not top-level modes. |
+| Heatmap matrix contract | `queryKind="matrix"`, exact half-open UTC range, mode, requested supported resolution, and row limit enter the request. Matching immutable snapshot and revision, row order, omitted count, IDs, friendly labels, true scale unions, cells, total, and supported coarsening validate. Exactly 2,000 cells pass; 2,001 fail. Matrix responses contain no evidence list or eager detail. |
+| Heatmap values and scales | Duration, compact-number, integer tool count, known-capacity token/percentage, and cost formats render. Complete applicable zero differs from partial and unavailable. Every row scales independently. Unknown context capacity produces unavailable scale, N/A intensity, null `normalizedIntensity`, no percentage, no fallback, and optional separately evidenced token support. |
+| Heatmap evidence | Selection sends only the exact `cell_evidence` variant. Raw nullable value, formatted value, nullable duration, friendly label, bounded sanitized preview, evidence method, value state, and detail availability render. At most 100 chronological rows and the exact omitted count pass. Full detail remains lazy. |
+| Heatmap navigation and access | Single click, double-click, right-click, exact **Drill down** and **Step back** buttons, breadcrumbs, Previous, Next, horizontal scrolling, five periods, arrow/Enter/Space keyboard operation, local period labels, focus, disabled boundaries, non-color accessible names, and synchronized evidence all pass. |
+| Contextual Heatmap UX review | A contextual UX reviewer evaluates partial, unavailable, and N/A language for every row family in grid, evidence, accessible, wide, and narrow contexts. Evidence states and accepted N/A rules remain unchanged. The recorded review is required before implementation acceptance and is not user action. |
 | Sequence | Focus, event kinds, grouping, reasoning, and chronological sort enter the request; group hierarchy validates; zoom clamps to 0.25/4.00; fit modes, collapse, focus, endpoint selection, repeated count, reasoning disclosure, and synchronized ledger behavior pass with keyboard and pointer. |
 | Coordination | Work-item, delegated-root, agent, operation, evidence, and chronological sort changes restart cursor; applied metadata validates; canonical work-item, delegated-root, and ungrouped sections render; inferred decisions have visible and accessible evidence labels. |
 | Event detail | No request before selection; loading dialog has heading focus; parser-bounded detail renders; disclosures start closed; redaction text is visible; event-not-found clears stale selector; close and Escape restore focus. |
@@ -1632,8 +1795,10 @@ Dynamic non-Codex support, a standalone-browser runtime, and classic generation 
 - Reject negative or non-integer counts.
 - Reject empty opaque IDs and invalid ISO instants.
 - Reject page sizes outside 1 through 500 and item arrays longer than `pageSize`.
-- Reject 2,001 total heatmap cells and accept exactly 2,000.
-- Reject mismatched applied filters, applied sort, operation identity, row scale, color semantic, hierarchy, chronology, and coarsening.
+- Accept only the exact `matrix|cell_evidence` Heatmap request and result pair. Reject mixed fields and wrong discriminants.
+- Reject 2,001 total matrix cells and accept exactly 2,000. Reject 101 evidence items and accept exactly 100.
+- Reject mixed or nullable scale cross-products, unknown unavailable-scale reasons, non-finite values, invalid `normalizedIntensity`, unsupported resolution, wrong immutable revision, chronology mismatch, and coarsening mismatch.
+- Preserve raw nullable evidence values and `evidenceMethod`; reject eager matrix evidence or detail fields.
 - Reject unknown evidence and error-code variants.
 - Reject `sourcePath`, `outputPath`, `cachePath`, `filesystemPath`, `rawRecord`, `rawRollout`, and every `*Path` key at every nested depth.
 - Reject Unix, UNC, drive-rooted, and `file:` path-shaped strings in every DTO field, including labels, warnings, and errors.
@@ -1660,6 +1825,8 @@ Then run these repository checks:
 5. Run the CD-004 Tauri worker and command tests when those commands exist.
 6. Run the FR-001 FR-03, FR-05, and FR-10 large-fixture acceptance scenarios when the Application Service and exporter fixtures exist.
 
-Manual verification uses one keyboard-only pass at wide and narrow window sizes. It covers root selection, preflight, every navigation item, pagination, heatmap gesture equivalents, sequence ledger, detail disclosures, refresh cancellation, error recovery, and focus return.
+Manual verification uses one keyboard-only pass at wide and narrow window sizes. It covers root selection, preflight, every navigation item, pagination, Heatmap modes, **Drill down**, **Step back**, adjacent movement, period and scroll controls, synchronized evidence, sequence ledger, detail disclosures, refresh cancellation, error recovery, and focus return.
+
+The contextual UX review records row-family evidence for complete zero, partial, unavailable, and unknown-capacity N/A language. It must confirm understandable text without changing the accepted evidence-state or no-fallback rules.
 
 The page-level source, structure, link, steady-state, and unresolved-placeholder checks must pass before implementation handoff. Native command runtime tests and full large-snapshot integration remain planned because the corresponding implementations do not yet exist.
