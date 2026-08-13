@@ -26,7 +26,7 @@ The module has one primary responsibility: publish and query coherent derived ev
 
 The version-1 Heatmap does not add cached Heatmap facets. The Application Service calculates matrix cells and selected-cell evidence from the parsed Codex run in `_ReadHandle.run`. One retained read handle binds that process-local run to one immutable `snapshot_id` and `revision_id` from snapshot open through replacement or close. Repeated queries use the same retained handle under separate Application Service reader guards. Existing schema-version-1 normalized rows remain the source for current list and event-detail operations.
 
-The parsed run is process-local derived evidence. It is not serialized into SQLite, restored after restart, or copied into a second cache. A restart reparses the authoritative JSONL before a new snapshot read handle is available.
+The parsed run and its immutable `HeatmapPricingAuthority` are process-local derived evidence. Normalization creates the authority by calling classic `_cost_for_response` exactly once per response. Neither value is serialized into SQLite, restored after restart, or copied into a second cache. A restart reparses the authoritative JSONL and recreates the authority before a new snapshot read handle is available.
 
 This design defines intended behavior in **PLANNED_DEVELOPMENT** mode. The planned implementation does not yet exist. The design therefore uses accepted parent contracts and justified module propositions for delegated internals.
 
@@ -112,11 +112,11 @@ The last meaningful source review is 2026-08-13. It covers FR-001, ARC-001, HLD-
 
 | Requirement source and ID | Claim mode | Required outcome | Satisfying contract, rule, state, or error path | Status | Out-of-scope authority, rationale, and owning artifact | Verification |
 | --- | --- | --- | --- | --- | --- | --- |
-| Target assignment | INTENDED_BEHAVIOR | Own `event_cache.py`, `test_event_cache.py`, and `~/.codex/agent-report/report-events-v1.sqlite3`; define schema, migration, source revisions, normalized records, snapshot bindings, retained parsed-run handles, concurrency, atomic replacement, stale detection, cursor/event locators, purge, quota, rebuild, recovery, and cancellation atomicity. | Runtime Path, Public Contracts, Internal Data And State, Processing Rules, and Verification | DEFINED | Not applicable | EC-01 through EC-52 |
+| Target assignment | INTENDED_BEHAVIOR | Own `event_cache.py`, `test_event_cache.py`, and `~/.codex/agent-report/report-events-v1.sqlite3`; define schema, migration, source revisions, normalized records, snapshot bindings, retained parsed-run handles, concurrency, atomic replacement, stale detection, cursor/event locators, purge, quota, rebuild, recovery, and cancellation atomicity. | Runtime Path, Public Contracts, Internal Data And State, Processing Rules, and Verification | DEFINED | Not applicable | EC-01 through EC-53 |
 | HLD-003 Event Repository constituent component and HLP-02 | INTENDED_BEHAVIOR | Own normalized cache, migrations, invalidation, snapshot persistence, and atomic revision publication in the fixed Python path. | `EventRepository`, schema version 1, `replace_source()`, `publish_snapshot()`, `open_or_rebuild()`, and the complete SQLite-family publication protocol | DEFINED | Application Service retains surface operation semantics. | EC-01 through EC-17, EC-34 through EC-44 |
 | FR-001 FR-02; HLD-003 OP-16 and OP-17 | INTENDED_BEHAVIOR | Report cache reuse and changed-file counts during preflight, then reuse or build one coherent snapshot. | `compare_sources()` and `publish_snapshot()` | DEFINED | Discovery owns relationship closure and accepted source revisions. Application Service owns preflight tokens. | EC-09, EC-10, EC-15 |
 | FR-001 FR-03; HLD-003 OP-18 through OP-25 | INTENDED_BEHAVIOR | Support bounded stable queries, lazy event lookup, and snapshot/filter/sort-bound continuation. | `query_events()`, `get_event()`, `save_cursor()`, and `load_cursor()` | DEFINED | Application Service owns actor-visible DTO construction and opaque cursor envelope. | EC-13 through EC-19 |
-| FR-001 HM-F01 through HM-F15; HLD-003 DEC-05; PLAN-012 no-cache-migration boundary | INTENDED_BEHAVIOR | Bind one process-local parsed run to the exact retained snapshot-revision handle. Keep schema version 1 and migrations unchanged. Retain normalized-cache ownership for existing lists and details. | `_ReadHandle.run`, immutable binding validation, schema ledger, privacy boundary, and stop condition | DEFINED | Application Service owns Heatmap aggregation, formatting, evidence states, and bounded DTOs. Source parsing remains Core-owned. | EC-48 through EC-52 plus existing EC-01, EC-02, EC-05, EC-13, and EC-17 regressions |
+| FR-001 HM-F01 through HM-F15; HLD-003 DEC-05; PLAN-012 no-cache-migration boundary | INTENDED_BEHAVIOR | Bind one process-local parsed run and its immutable normalization-time `HeatmapPricingAuthority` to the exact retained snapshot-revision handle. Keep schema version 1 and migrations unchanged. Retain normalized-cache ownership for existing lists and details. | `_ReadHandle.run`, `_ReadHandle.heatmap_pricing`, immutable binding validation, schema ledger, privacy boundary, and stop condition | DEFINED | Application Service owns Heatmap aggregation, formatting, evidence states, and bounded DTOs. Source parsing and one-time classic cost assessment remain Core-owned. | EC-48 through EC-53 plus existing EC-01, EC-02, EC-05, EC-13, and EC-17 regressions |
 | FR-001 FR-04; HLD-003 OP-26 | INTENDED_BEHAVIOR | Refresh changed sources without replacing the last coherent revision on failure or cancellation. | Immutable source versions, compare-and-swap `publish_snapshot()`, and cancellation checks | DEFINED | Worker and Tauri Supervisor own cooperative and forced process cancellation. | EC-10 through EC-12, EC-24 |
 | FR-001 FR-08; ARC-06, ARC-08, ARC-15; HLD-003 CR-09 | INTENDED_BEHAVIOR | Persist privacy-bounded normalized evidence only. Keep ciphertext opaque and raw bodies absent. Keep process-local parsed-run and Heatmap result content out of SQLite. | `NormalizedEventRecord`, canonical repository-derived `record_digest`, `PRIVACY_REGISTRY_V1`, exact bounds, `_ReadHandle` boundary, and schema without raw-body or Heatmap columns | DEFINED | Normalization Core owns semantic redaction. Event Repository owns the exact structural privacy validator. | EC-05 through EC-08, EC-28, EC-45 through EC-47, EC-50 |
 | FR-001 FR-09; ARC-08, ARC-09, ARC-14; HLD-003 CR-09 and CR-10 | INTENDED_BEHAVIOR | Keep caches separate; migrate, invalidate, purge, rebuild, and recover atomically; reject a newer schema before mutation. | Non-mutating schema inspection, platform-native family lock, complete WAL-family publication, source partition replacement, `purge()`, `apply_retention()`, `enforce_quota()`, `rebuild_empty()`, and `open_or_rebuild()` | DEFINED | Discovery owns `rollout-discovery-v2.sqlite3`. | EC-01 through EC-04, EC-09 through EC-17, EC-20 through EC-44 |
@@ -178,7 +178,7 @@ The tree lists transient alternatives; it does not imply that sidecars, a rebuil
 | `event_cache.py` | `_ReadHandle` | Process-local immutable `snapshot_id`, `revision_id`, `SnapshotBinding`, and parsed-run reference retained by Application Service snapshot state until replacement or close; never persisted or exposed as a DTO |
 | `event_cache.py` | Dataclasses and enums in Public Contracts | Typed input, result, binding, locator, diagnostic, and policy records |
 | `event_cache.py` | Errors in Error Handling | Typed failure contract |
-| `test_event_cache.py` | `test_<scenario>` functions EC-01 through EC-52 | Planned unit and integration verification |
+| `test_event_cache.py` | `test_<scenario>` functions EC-01 through EC-53 | Planned unit and integration verification |
 | `report-events-v1.sqlite3` | Schema version 1 | Disposable privacy-bounded cache |
 | `report-events-v1.sqlite3.lock` | `_CacheFileLock` | Cooperative cross-process shared/exclusive maintenance lock |
 | `.report-events-v1.sqlite3.rebuild-<hex>` | `EventRepository.rebuild_empty()` | Same-directory verified staging database |
@@ -435,12 +435,23 @@ class ParsedCodexRun(Protocol):
     def run_id(self) -> str:
         raise NotImplementedError
 
+class HeatmapPricingAssessment(Protocol):
+    value_usd: float | None
+    evidence_method: str
+    bounded_method: str
+
+class HeatmapPricingAuthority(Protocol):
+    pricing_version: str
+    pricing_digest: str
+    assessments: tuple[tuple[int, int, HeatmapPricingAssessment], ...]
+
 @dataclass(frozen=True, slots=True)
 class _ReadHandle:
     snapshot_id: SnapshotId
     revision_id: SnapshotRevisionId
     binding: SnapshotBinding
     run: ParsedCodexRun
+    heatmap_pricing: HeatmapPricingAuthority
 
 @dataclass(frozen=True, slots=True)
 class StaleSourceSet:
@@ -619,6 +630,7 @@ class EventRepository:
         snapshot_id: SnapshotId,
         revision_id: SnapshotRevisionId,
         run: ParsedCodexRun,
+        heatmap_pricing: HeatmapPricingAuthority,
     ) -> _ReadHandle:
         raise NotImplementedError
 
@@ -744,7 +756,7 @@ class EventRepository:
 - A cursor floating-point value must be finite. `NaN`, positive infinity, and negative infinity are invalid.
 - `observed_sources` and snapshot `sources` must contain unique source keys in ascending source-key order. This canonical order defines `source_order` and the source-set digest.
 - `open_read()` requires an active `snapshot_id` and exact `revision_id`. It rejects a stale, foreign, closed, or inactive binding before it constructs `_ReadHandle`.
-- `open_read().run` is the process-local parsed Codex run supplied for that exact published binding. Application Service snapshot state retains the handle across repeated queries. The repository does not serialize, copy, hash, backfill, or recover the run from SQLite.
+- `open_read().run` and `open_read().heatmap_pricing` are the process-local parsed Codex run and identical immutable normalization-time assessment snapshot supplied for that exact published binding. The Application Service validates pricing version and digest plus complete ordered `(thread_index, response_index)` coverage, then validates returned run and authority object identity with the exact published revision before state publication. Application Service snapshot state retains the handle across repeated queries. The repository does not serialize, copy, hash, backfill, or recover either value from SQLite.
 - `release_read()` accepts only a retained handle from the same repository instance and releases it once after replacement, snapshot close, or service shutdown. Per-query reader-guard cleanup never calls it. Release does not purge or mutate the persisted snapshot revision.
 - `PurgeRequest` must name at least one snapshot, closed-time boundary, or cursor-time boundary. It cannot mean “purge everything” by omission. Duplicate snapshot IDs and duplicate protected snapshot IDs are invalid. Protection applies only to snapshot deletion; it does not retain independent cursor locators.
 
@@ -802,7 +814,7 @@ The repository has no network or provider effect. Its external effects are local
 | Source replacement: transaction | Valid records | Last ready source version | Normalization Core | Not applicable | Event Repository | Inserts locators, events, and diagnostics in one `BEGIN IMMEDIATE` transaction. Cancel/error rolls back. | Repeat the full source version. | Committed source-version row and counts | FR-09, ARC-14, HLD CR-09; INTENDED_BEHAVIOR |
 | Snapshot publication | `publish_snapshot()` | Ready source versions and prior active revision | Application Service | Not applicable | Event Repository | Compare-and-swap inserts the revision and changes the active pointer in one transaction. Conflict/cancel leaves prior pointer. | Refresh source set and retry. | Active revision equals returned revision | ARC-09, ARC-14, HLD OP-17/OP-26; INTENDED_BEHAVIOR |
 | Query and cursor persistence | `query_events()`, `save_cursor()`, or `load_cursor()` | Published snapshot revision | Application Service | Not applicable | Event Repository | A read returns one revision. Cursor save is atomic. Mismatch returns typed conflict. | Restart from the first page. | Stable ordered rows or cursor row | FR-03, HLD CR-10; INTENDED_BEHAVIOR |
-| Retained parsed-run handle | `open_read(snapshot_id, revision_id, run)` | Published active snapshot revision; no persisted parsed run | Application Service | Not applicable | Event Repository validates the binding; Application Service snapshot state retains the handle; Query Core consumes it under per-operation guards | Success exposes one immutable `_ReadHandle`. Repeated queries reuse it. A mismatch fails before semantic calculation. No schema row changes. | Refresh swaps after active readers drain and releases the old handle once; close or shutdown releases the current handle once; reparse after process restart | Handle with exact snapshot, revision, binding, and process-local run; one lifetime release | FR-001 HM-F01 through HM-F15, HLD-003 DEC-05; INTENDED_BEHAVIOR |
+| Retained parsed-run handle | `open_read(snapshot_id, revision_id, run, heatmap_pricing)` | Published active snapshot revision; no persisted parsed run or pricing authority | Application Service | Not applicable | Event Repository preserves the binding and run-authority identity; Application Service validates and retains the handle; Query Core consumes it under per-operation guards | Success exposes one immutable `_ReadHandle`. Repeated queries reuse the run and authority. A mismatch fails before semantic calculation. No schema row changes. | Refresh swaps after active readers drain and releases the old handle once; close or shutdown releases the current handle once; reparse and recreate authority after process restart | Handle with exact snapshot, revision, binding, process-local run, and immutable authority; one lifetime release | FR-001 HM-F01 through HM-F15, HLD-003 DEC-05; INTENDED_BEHAVIOR |
 | Cursor retention | Startup or explicit maintenance calls `apply_retention()` or cursor-only `purge()` | Published snapshots and cursors | Application Service composition root or Tauri maintainer | Not applicable | Event Repository | One transaction removes cursors at or before the cutoff without removing snapshots or events. Cancel/error rolls back. | Retry with the same cutoff. | Cursor-only count and unchanged snapshot count | FR-09, HLD OP-41; INTENDED_BEHAVIOR |
 | Snapshot purge or quota eviction | Explicit maintenance, configured retention, or quota enforcement | Published and closed snapshot state | Application Service composition root or Tauri maintainer | Not applicable | Event Repository | One transaction removes selected closed unprotected bindings and unreachable partitions. Cancel/error rolls back. | Retry the same selector. | Distinct counts and live-byte result | FR-09, HLD OP-41; INTENDED_BEHAVIOR |
 | Compact | Explicit maintenance request | Logical purge or quota result | Tauri maintainer through Application Service | Not applicable | SQLite through Event Repository | Changes allocation only. Cancellation preserves logical rows and may defer reclaimed disk space. | Retry compaction. | `freelist_count` and file diagnostics | MP-03; PROPOSED_CHANGE |
@@ -826,7 +838,9 @@ There is no application account, remote tenancy, network listener, anonymous cal
 
 ### Heatmap Version-1 Cache Boundary
 
-`_ReadHandle` is a process-local retained snapshot-revision value. `open_read()` validates the requested snapshot and active revision in one repository read transaction. It then binds the caller-supplied parsed run to that immutable `SnapshotBinding`. The handle exposes the exact `snapshot_id`, `revision_id`, binding, and `run`. Application Service snapshot state retains it across sequential queries. `release_read()` ends the retained handle exactly once after replacement, snapshot close, or service shutdown. Neither operation inserts, updates, backfills, or deletes a schema row.
+`_ReadHandle` is a process-local retained snapshot-revision value. `open_read()` validates the requested snapshot and active revision in one repository read transaction. It then binds the caller-supplied parsed run and its identical `HeatmapPricingAuthority` to that immutable `SnapshotBinding`. The handle exposes the exact `snapshot_id`, `revision_id`, binding, `run`, and authority. Application Service snapshot state retains it across sequential queries. `release_read()` ends the retained handle exactly once after replacement, snapshot close, or service shutdown. Neither operation inserts, updates, backfills, or deletes a schema row.
+
+The repository preserves object identity but does not calculate or inspect pricing. The Application Service requires one ordered assessment for every run response coordinate, matching configured pricing metadata, and requires the returned handle to expose the identical run and authority objects with the published revision identifiers. A mismatch prevents snapshot-state publication. This check binds the normalization-time `_cost_for_response` results to the published revision without adding a table, column, migration, backfill, or recoverable cache representation.
 
 A later refresh or snapshot publication does not mutate an existing handle. The Application Service prevents refresh while `active_readers` is nonzero. After readers drain, it opens a replacement handle, atomically swaps the complete snapshot state, and releases the prior handle exactly once. Close removes snapshot state and releases the current handle exactly once after readers drain. A Heatmap result therefore cannot combine a new revision ID with an earlier parsed run.
 
@@ -847,11 +861,12 @@ The schema does not claim to be a complete Heatmap semantic projection. It inten
 - positive context observations with model context-window capacity;
 - complete versus incomplete tool-event coverage;
 - recorded-cost versus supported-estimate method and missing-price contributors;
+- normalization-time per-response `CostAssessment` snapshots and their pricing, run, response-order, and revision identity;
 - cell-specific chronological evidence selection before preview materialization.
 
 Some schema-version-1 fields overlap with Heatmap inputs. That overlap does not prove semantic completeness. A missing cache value cannot establish applicable zero, partial evidence, unavailable evidence, or N/A capacity. For this delivery, adding columns would create a new persistence and backfill contract without resolving parsed-run source-order and applicability semantics. Therefore `LATEST_SCHEMA_VERSION` remains 1, `MIGRATIONS` remains unchanged, and no schema version 2 exists.
 
-The read handle carries only the already privacy-bounded parsed run produced for the accepted source revision. It does not carry raw JSONL records, unrestricted paths, secrets, or ciphertext bodies into a public response. The Application Service still sanitizes previews and bounds evidence before disclosure. The repository never serializes `run`, previews, or Heatmap result DTOs.
+The read handle carries only the already privacy-bounded parsed run and immutable pricing-assessment authority produced for the accepted source revision. It does not carry raw JSONL records, unrestricted paths, secrets, or ciphertext bodies into a public response. The Application Service still sanitizes previews and bounds evidence before disclosure. The repository never serializes `run`, `HeatmapPricingAuthority`, assessments, previews, or Heatmap result DTOs.
 
 If the parsed run cannot preserve a required HM-F01 through HM-F15 distinction, Heatmap implementation stops and reports the concrete gap to Dev Architect. It must not infer the missing fact from schema-version-1 absence, convert absence to zero, backfill the cache, or invent a schema version 2.
 
@@ -1059,8 +1074,8 @@ The lock file is a zero-length coordination file. The implementation locks byte 
 - A `snapshot_revisions` row is immutable after publication.
 - `snapshot_bindings.active_revision_id` is the only mutable pointer that selects the current coherent revision for a snapshot handle.
 - A `cursor_locators` row is derived continuation state. It can be removed without removing events or snapshots.
-- An `_ReadHandle` is process-local and immutable. It holds one validated binding and one parsed-run object reference for the retained snapshot-state lifetime. It is not SQLite state.
-- Repository close invalidates all process-local handles. Reopen restores persisted bindings and normalized events only; it does not restore parsed runs.
+- An `_ReadHandle` is process-local and immutable. It holds one validated binding, one parsed-run object reference, and the identical immutable `HeatmapPricingAuthority` for the retained snapshot-state lifetime. None is SQLite state.
+- Repository close invalidates all process-local handles. Reopen restores persisted bindings and normalized events only; it does not restore parsed runs or pricing authorities.
 - `CacheDiagnostics.stale_rebuild_file_count` counts exact stage and old-family quarantine regular files in the cache parent. It does not count symlinks, directories, or near-match names.
 - Returned `StoredEvent` and `EventPage` values are transient copies. Returning them does not mutate persistent state except for bounded last-access timestamps.
 
@@ -1152,9 +1167,9 @@ The defensive scan is failure-closed. Its error names the field and registry rul
 ### Query And Locator Processing
 
 1. `open_read()` validates the snapshot and exact active revision in one read transaction.
-2. The repository creates `_ReadHandle` with those immutable identifiers, the validated binding, and the caller-supplied process-local parsed run.
+2. The repository creates `_ReadHandle` with the caller-supplied parsed run and `HeatmapPricingAuthority` object references; the Application Service validates their identity with the normalized candidate and published binding before snapshot-state publication.
 3. Application Service snapshot state retains the handle across sequential queries and uses separate per-operation `active_readers` guards.
-4. The repository does not persist, clone, or inspect Heatmap presentation facets from `run`.
+4. The repository does not persist, clone, or recalculate the run, authority assessments, or Heatmap presentation facets.
 5. A refresh opens one replacement handle only after active readers drain, swaps complete snapshot state, and releases the old handle once.
 6. Snapshot close or service shutdown releases the current handle once after active readers drain.
 7. `query_events()` validates the snapshot and exact active revision in one read transaction.
@@ -1259,12 +1274,13 @@ sequenceDiagram
   participant Repo as Event Repository
   participant SQLite
   participant Core as Query Core
-  Service->>Repo: open_read(snapshot_id, revision_id, parsed run)
+  Service->>Repo: open_read(snapshot_id, revision_id, parsed run, pricing authority)
   Repo->>SQLite: Validate exact active binding
   alt Binding is stale, foreign, or inactive
     Repo-->>Service: CacheRevisionConflictError
   else Binding is exact
-    Repo-->>Service: retained immutable _ReadHandle with run
+    Repo->>Repo: validate run, authority, response order, pricing, revision identity
+    Repo-->>Service: retained immutable _ReadHandle with run and authority
     Service->>Service: active_readers = 1
     Service->>Core: first Heatmap query over handle.run
     Core-->>Service: first bounded result
@@ -1273,7 +1289,7 @@ sequenceDiagram
     Service->>Core: second Heatmap query over same handle.run
     Core-->>Service: second bounded result
     Service->>Service: active_readers = 0; retain handle
-    Service->>Repo: open_read(new revision and parsed run)
+    Service->>Repo: open_read(new revision, parsed run, and new authority)
     Repo-->>Service: replacement retained handle
     Service->>Service: atomically swap snapshot state
     Service->>Repo: release_read(old handle) exactly once
@@ -1328,11 +1344,11 @@ flowchart TD
 - A failed or cancelled source replacement does not expose a partial file partition.
 - A failed, conflicted, or cancelled snapshot publication preserves the prior active revision.
 - A query observes exactly one snapshot revision.
-- `_ReadHandle` binds one process-local parsed run to the exact active `snapshot_id` and `revision_id`. The binding cannot change during its retained snapshot-state lifetime.
+- `_ReadHandle` binds one process-local parsed run and its identical immutable `HeatmapPricingAuthority` to the exact active `snapshot_id` and `revision_id`. The binding cannot change during its retained snapshot-state lifetime.
 - Sequential queries reuse the retained handle. Per-operation reader guards change `active_readers` but never call `release_read()`.
 - Refresh swaps the complete retained handle only after active readers drain and releases the old handle exactly once.
 - Snapshot close or service shutdown releases the current retained handle exactly once after active readers drain.
-- The parsed run, Heatmap matrix, and selected-cell evidence are never persisted, backfilled, or recovered from the event cache.
+- The parsed run, `HeatmapPricingAuthority`, per-response assessments, Heatmap matrix, and selected-cell evidence are never persisted, backfilled, or recovered from the event cache.
 - `LATEST_SCHEMA_VERSION` remains 1 for this Heatmap delivery. No schema version 2 or Heatmap migration exists.
 - Missing schema-version-1 fields never establish zero, partial, unavailable, capacity, price method, or evidence applicability.
 - Existing normalized rows remain available for list and event-detail operations without Heatmap-driven schema changes.
@@ -1415,11 +1431,11 @@ Expected errors are raised synchronously before a success result. No repository 
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This PLANNED_DEVELOPMENT design traces the Event Repository assignment, FR-001 cache rules, ARC-001 constraints, HLD-003 CR-09/CR-10 and DEC-05 boundaries, PLAN-012, the resolved production policy, exact placement, schema, migrations, types, signatures, state, atomicity, privacy, errors, portability, and planned verification. It keeps Heatmap semantic evidence in the immutable retained parsed-run handle and keeps schema version 1 unchanged. It corrects every RVW-013 finding: non-mutating newer-schema rejection, complete SQLite-family rebuild publication, native POSIX and Windows locking, complete canonical digest and privacy contracts, independent retention selectors, and the missing public-API and failure tests. Each delegated internal choice is a justified module proposition and does not replace an upstream actor-visible or cross-module decision.
+**ACCEPTED.** This PLANNED_DEVELOPMENT design traces the Event Repository assignment, FR-001 cache rules, ARC-001 constraints, HLD-003 CR-09/CR-10 and DEC-05 boundaries, PLAN-012, the resolved production policy, exact placement, schema, migrations, types, signatures, state, atomicity, privacy, errors, portability, and planned verification. It keeps Heatmap semantic evidence and the immutable normalization-time `HeatmapPricingAuthority` in the retained parsed-run handle and keeps schema version 1 unchanged. It corrects every RVW-013 finding: non-mutating newer-schema rejection, complete SQLite-family rebuild publication, native POSIX and Windows locking, complete canonical digest and privacy contracts, independent retention selectors, and the missing public-API and failure tests. Each delegated internal choice is a justified module proposition and does not replace an upstream actor-visible or cross-module decision.
 
 ## Implementation Readiness
 
-**READY.** The exact accepted production default, override boundary, schema inspection order, native lock behavior, WAL-family replacement protocol, digest inputs, structural privacy registry, retained parsed-run-handle boundary, unchanged schema-version-1 contract, retention semantics, failure states, and test obligations are defined. Implementation and test execution remain planned work. If parsed-run evidence is insufficient for a Heatmap facet, Heatmap implementation is blocked for Dev Architect reconciliation; that condition does not authorize a cache migration.
+**READY.** The exact accepted production default, override boundary, schema inspection order, native lock behavior, WAL-family replacement protocol, digest inputs, structural privacy registry, retained parsed-run-and-pricing-authority handle boundary, unchanged schema-version-1 contract, retention semantics, failure states, and test obligations are defined. Implementation and test execution remain planned work. If parsed-run or pricing-authority evidence is insufficient for a Heatmap facet, Heatmap implementation is blocked for Dev Architect reconciliation; that condition does not authorize a cache migration.
 
 ## Verification
 
@@ -1474,11 +1490,12 @@ All tests belong in `tools/report/tests/test_event_cache.py`. They use temporary
 | EC-45 | `test_every_identifier_digest_matches_canonical_reference_vectors()` | Use independent vectors for null, booleans, integers, decimals, UTC datetimes, binary64, sequences, one nested sequence, and NFC strings. Assert exact SourceKey, record, event, source-set, scope, filter, sort, revision, and cursor bytes and digests; reject deeper nesting, mappings, NaN, and infinity. |
 | EC-46 | `test_privacy_registry_enforces_marker_patterns_cipher_and_versions()` | For every scanned field, exact sensitive key, sensitive key component, assignment/mapping/authorization/flag form, quoting form, cipher threshold, control character, and version mismatch, assert the exact safe rule error. Assert `[redacted]` passes and rejected values never appear in error text or database pages. |
 | EC-47 | `test_stale_rebuild_cleanup_cancellation_never_reports_partial_success()` | Cancel before lock and before the first stage-or-quarantine deletion and assert zero deletion. Trigger cancellation after deletion begins and assert the bounded batch completes without `CacheCancelledError`; inject a later deletion failure and assert active database-family bytes remain unchanged and the public error omits candidate paths. |
-| EC-48 | `test_retained_read_handle_supports_two_queries_refresh_swap_and_close_release()` | Publish a snapshot and retain its handle. Run matrix and cell-evidence queries over the same handle without release. Publish a refresh, wait for `active_readers == 0`, install the replacement, and assert one old-handle release. Close and assert one replacement-handle release. Assert no handle is released twice. |
-| EC-49 | `test_retained_heatmap_handle_does_not_change_schema_v1_or_migrations()` | Snapshot every table, column, index, trigger, pragma authority, `LATEST_SCHEMA_VERSION`, and `MIGRATIONS`. Open, reuse, replace, and close parsed-run handles. Assert the before/after inventory is identical, both schema authorities remain 1, and no Heatmap table, column, migration, or backfill statement exists. |
-| EC-50 | `test_parsed_run_and_heatmap_facets_are_never_persisted()` | Use a parsed-run fixture with runtime intervals, model/effort fallbacks, context capacity, price method, and safe evidence previews. Inspect all SQLite rows and page-visible strings. Assert none of the run object, Heatmap-only facets, matrix cells, evidence ledger, paths, secrets, or ciphertext bodies is stored. |
+| EC-48 | `test_retained_read_handle_supports_two_queries_refresh_swap_and_close_release()` | Publish a snapshot with a parsed run and identical immutable `HeatmapPricingAuthority`, then retain its handle. Run matrix and cell-evidence queries over the same handle without release. Publish a refresh, wait for `active_readers == 0`, install the replacement run and authority, and assert one old-handle release. Close and assert one replacement-handle release. Assert no handle is released twice. |
+| EC-49 | `test_retained_heatmap_handle_does_not_change_schema_v1_or_migrations()` | Snapshot every table, column, index, trigger, pragma authority, `LATEST_SCHEMA_VERSION`, and `MIGRATIONS`. Open, reuse, replace, and close handles carrying runs and pricing authorities. Assert the before/after inventory is identical, both schema authorities remain 1, and no Heatmap or pricing-authority table, column, migration, or backfill statement exists. |
+| EC-50 | `test_parsed_run_pricing_authority_and_heatmap_facets_are_never_persisted()` | Use a parsed-run fixture with one normalization-time assessment per response, runtime intervals, model/effort fallbacks, context capacity, price method, and safe evidence previews. Inspect all SQLite rows and page-visible strings. Assert none of the run object, pricing authority, assessment data, Heatmap-only facets, matrix cells, evidence ledger, paths, secrets, or ciphertext bodies is stored. |
 | EC-51 | `test_existing_list_and_event_detail_cache_contracts_do_not_drift_for_heatmap()` | Run existing `query_events()` and `get_event()` fixtures before and after retained Heatmap-handle use. Assert byte-equivalent schema rows and equivalent ordered results, event IDs, locators, privacy fields, and errors. |
-| EC-52 | `test_repository_reopen_requires_a_new_parsed_run_without_backfill()` | Close and reopen a populated schema-version-1 repository. Assert snapshots and existing cached list/detail rows remain valid, no parsed-run object is restored, and a new read handle requires a caller-supplied reparsed run for the exact binding. |
+| EC-52 | `test_repository_reopen_requires_a_new_parsed_run_and_pricing_authority_without_backfill()` | Close and reopen a populated schema-version-1 repository. Assert snapshots and existing cached list/detail rows remain valid, no parsed-run object or pricing authority is restored, and a new read handle requires a caller-supplied reparsed run and newly created authority for the exact binding. |
+| EC-53 | `test_open_read_rejects_pricing_authority_identity_or_revision_mismatch()` | Vary pricing version, pricing digest, response-coordinate count and order, returned run identity, returned authority identity, and published revision identifiers. Assert each mismatch prevents snapshot-state publication and leaves schema version 1, migrations, and persisted rows byte-equivalent. |
 
 Integration verification also requires these gates:
 
@@ -1491,7 +1508,7 @@ Integration verification also requires these gates:
 7. Run the independent canonical-digest vector generator against every digest contract. Its implementation must not import `agent_report.event_cache`.
 8. Compare the schema-version-1 inventory and `MIGRATIONS` before and after retained parsed-run-handle tests. Confirm byte-equivalent schema authority and no version-2 artifact.
 9. Exercise existing list, cursor, and event-detail operations before and after retained-handle Heatmap queries. Confirm that their results and privacy boundaries do not change.
-10. Close and reopen the repository. Confirm that no parsed run or Heatmap result is recovered from SQLite and that authoritative JSONL must be reparsed before a new retained Heatmap handle opens.
+10. Close and reopen the repository. Confirm that no parsed run, pricing authority, assessment, or Heatmap result is recovered from SQLite and that authoritative JSONL must be reparsed and classic response costs reassessed once before a new retained Heatmap handle opens.
 
 ```mermaid
 flowchart LR
@@ -1501,7 +1518,7 @@ flowchart LR
   Query[Events cursors locators and access times] --> QueryTests[EC-13 through EC-19 and EC-38]
   Maintenance[Retention purge quota and compact] --> MaintenanceTests[EC-20 through EC-23 and EC-34 through EC-39]
   Portability[Family lock rebuild and crash recovery] --> PortabilityTests[EC-24 through EC-27 and EC-40 through EC-44 and EC-47]
-  Heatmap[Parsed-run lease and no schema drift] --> HeatmapTests[EC-48 through EC-52]
+  Heatmap[Parsed-run and pricing-authority handle; no schema drift] --> HeatmapTests[EC-48 through EC-53]
   CoreTests --> Full[Full Python regression suite]
   PrivacyTests --> Full
   RevisionTests --> Full

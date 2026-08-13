@@ -166,7 +166,7 @@ MAX_HEATMAP_EVIDENCE_ITEMS: Final[int] = 100
 MAX_WORKER_RESULT_BYTES: Final[int] = 1_048_576
 MAX_HEATMAP_FORMATTED_VALUE_BYTES: Final[int] = 64
 MAX_HEATMAP_LABEL_BYTES: Final[int] = 256
-MAX_HEATMAP_SUPPORTING_TEXT_BYTES: Final[int] = 96
+MAX_HEATMAP_SUPPORTING_TEXT_BYTES: Final[int] = 80
 MAX_HEATMAP_PREVIEW_BYTES: Final[int] = 4_096
 MAX_HEATMAP_PROVENANCE_ITEMS: Final[int] = 32
 MAX_HEATMAP_PROVENANCE_BYTES: Final[int] = 256
@@ -226,9 +226,25 @@ HeatmapEvidenceMethod = Literal[
 HeatmapResolutionMinutes = Literal[1, 5, 15, 30, 60]
 ```
 
+`HeatmapPricingAuthority` is the immutable per-response cost-assessment snapshot. Normalization calls the classic `_cost_for_response(thread, response)` exactly once for every response in stable run order and converts the result to one bounded assessment. The authority records the accepted pricing version and digest plus an ordered complete `(thread_index, response_index, assessment)` tuple. Query processing must use this snapshot and must not call `_cost_for_response`, reload pricing, or recalculate a response assessment.
+
 The production module declares these public common types. All dataclasses are frozen and use slots.
 
 ```python
+@dataclass(frozen=True, slots=True)
+class HeatmapCostAssessment:
+    value_usd: float | None
+    evidence_method: HeatmapEvidenceMethod
+    bounded_method: str
+
+@dataclass(frozen=True, slots=True)
+class HeatmapPricingAuthority:
+    pricing_version: str
+    pricing_digest: str
+    assessments: tuple[tuple[int, int, HeatmapCostAssessment], ...]
+
+    def lookup(self, thread_index: int, response_index: int) -> HeatmapCostAssessment | None: raise NotImplementedError
+
 @dataclass(frozen=True, slots=True)
 class WarningRecord:
     code: str
@@ -590,6 +606,8 @@ class HeatmapMatrixCell:
 @dataclass(frozen=True, slots=True)
 class HeatmapMatrixRow:
     row_id: str
+    row_key: str
+    row_order_index: int
     row_kind: HeatmapRowKind
     label: str
     scale: HeatmapScale
@@ -699,6 +717,8 @@ class HeatmapCellEvidenceResult:
     query_kind: Literal["cell_evidence"]
     mode: HeatmapMode
     row_id: str
+    row_key: str
+    row_order_index: int
     row_label: str
     period_start_time: datetime
     period_end_time: datetime
@@ -992,8 +1012,8 @@ class ApplicationServiceDependencies:
 | Port | Exact required operations | Purpose and ownership limit |
 | --- | --- | --- |
 | `DiscoveryPort` | `preflight(scope: ReportScope, roots: Sequence[Path], cancellation: CancellationToken, progress: ProgressSink | None) -> DiscoveredScope`; `recheck(scope: ReportScope, roots: Sequence[Path], cancellation: CancellationToken, progress: ProgressSink | None) -> DiscoveredScope` | Sole Rust discovery adapter; returns bounded identity, counts, and source revision without transcript bodies |
-| `NormalizationPort` | `normalize(discovered: DiscoveredScope, parser_version: str, pricing_digest: str, formatter_digest: str, cancellation: CancellationToken, progress: ProgressSink | None) -> NormalizedRevision` | Python Core; preserves privacy and evidence semantics before repository publication |
-| `EventRepositoryPort` | `known_event_count(source_revision: str) -> int | None`; `reuse_or_publish(revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision`; `open_read(snapshot_id: str, revision_id: str, run: CodexRunMetrics) -> SnapshotReadHandle`; `release_read(handle: SnapshotReadHandle) -> None` | CD-003 owns schema, migration, WAL, transactions, invalidation, physical paths, and binding validation. `open_read` creates one retained snapshot-revision handle. `release_read` ends that retained handle once after replacement or close, not after each query. |
+| `NormalizationPort` | `normalize(discovered: DiscoveredScope, parser_version: str, pricing_digest: str, formatter_digest: str, cancellation: CancellationToken, progress: ProgressSink | None) -> NormalizedRevision` | Python Core; preserves privacy and evidence semantics and creates one immutable `HeatmapPricingAuthority` by calling classic `_cost_for_response` once per response before repository publication |
+| `EventRepositoryPort` | `known_event_count(source_revision: str) -> int | None`; `reuse_or_publish(revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision`; `open_read(snapshot_id: str, revision_id: str, run: CodexRunMetrics, heatmap_pricing: HeatmapPricingAuthority) -> SnapshotReadHandle`; `release_read(handle: SnapshotReadHandle) -> None` | CD-003 owns schema, migration, WAL, transactions, invalidation, physical paths, and binding validation. `open_read` preserves run-and-authority identity and creates one retained snapshot-revision handle. `release_read` ends that retained handle once after replacement or close, not after each query. |
 | `QueryPort` | `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, and `get_event_details` with the corresponding request/result types and a `SnapshotReadHandle` first parameter | Existing Python report semantics plus one shared pure classic-Heatmap semantic helper. It returns privacy-bounded values only. |
 | `ExportRendererPort` | `stage(handle: SnapshotReadHandle, request: ResolvedExportRequest, cancellation: CancellationToken, progress: ProgressSink | None) -> StagedExport` | CD-006 receives a non-optional `summary|directory` mode and owns content, size caps, omissions, manifest layout, staging cleanup, and rendering |
 | `PublicationPort` | `publish(staged: StagedExport, target: Path, replace: bool, cancellation: CancellationToken) -> ExportResult`; `discard(staged: StagedExport) -> None` | Surface adapter validates output authority and owns atomic destination replacement |
@@ -1054,6 +1074,8 @@ class NormalizedRevision(Protocol):
     def privacy_validated(self) -> bool: raise NotImplementedError
     @property
     def run(self) -> CodexRunMetrics: raise NotImplementedError
+    @property
+    def heatmap_pricing(self) -> HeatmapPricingAuthority: raise NotImplementedError
 
 @dataclass(frozen=True, slots=True)
 class PublishedRevision:
@@ -1069,6 +1091,8 @@ class SnapshotReadHandle(Protocol):
     def source_revision(self) -> str: raise NotImplementedError
     @property
     def run(self) -> CodexRunMetrics: raise NotImplementedError
+    @property
+    def heatmap_pricing(self) -> HeatmapPricingAuthority: raise NotImplementedError
 
 @dataclass(frozen=True, slots=True)
 class QuerySlice(Generic[T]):
@@ -1091,7 +1115,7 @@ class NormalizationPort(Protocol):
 class EventRepositoryPort(Protocol):
     def known_event_count(self, source_revision: str) -> int | None: raise NotImplementedError
     def reuse_or_publish(self, revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision: raise NotImplementedError
-    def open_read(self, snapshot_id: str, revision_id: str, run: CodexRunMetrics) -> SnapshotReadHandle: raise NotImplementedError
+    def open_read(self, snapshot_id: str, revision_id: str, run: CodexRunMetrics, heatmap_pricing: HeatmapPricingAuthority) -> SnapshotReadHandle: raise NotImplementedError
     def release_read(self, handle: SnapshotReadHandle) -> None: raise NotImplementedError
 
 class QueryPort(Protocol):
@@ -1154,6 +1178,8 @@ Every summary, list, Heatmap, sequence, coordination, and event-detail operation
 
 `query_snapshot_time_range` uses one pure semantic implementation for both result variants. The implementation reads only `SnapshotReadHandle.run` while its per-operation reader guard is active. It does not reconstruct Heatmap meaning from normalized event-cache rows. Repeated queries can use the same retained handle. The helper traverses agents and responses in stable snapshot source order and performs bounded streaming aggregation. Matrix processing does not create previews or event details. Cell-evidence processing retains only the first 100 chronological safe items while it counts later matches.
 
+The retained handle also carries the identical `HeatmapPricingAuthority` object produced with its normalized run. Before publication, the service validates the configured pricing version and digest, requires assessment coordinates to equal every `(thread_index, response_index)` in run order exactly once, and validates each bounded assessment. After `open_read`, the service requires `handle.run is normalized.run` and `handle.heatmap_pricing is normalized.heatmap_pricing` together with the exact published revision identifiers. A mismatch fails snapshot open or refresh before state publication. Cost rows consume only the stored per-response assessments. This identity binding makes matrix and evidence queries independent of later pricing-file changes and prevents a second `_cost_for_response` call.
+
 The mode rows and order are exact:
 
 | Mode | Rows and order | Calculation | Formatting and scale |
@@ -1161,6 +1187,18 @@ The mode rows and order are exact:
 | `wall_time` | Present known runtime states in this order: Model inference, Tool execution, Build / Test, Waiting for agent, User pause, Watchdog, Approval / infrastructure, Unattributed. Present unknown states follow by ascending internal-state identifier with title-cased labels. | Clip matching intervals to each half-open period. Merge touching, nested, and overlapping intervals for the same state across agents. Sum the merged union once. | Duration format. Each row uses its visible maximum when available. |
 | `tokens` | Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), Cost. | Assign response-owned values to the response completion period. Sum token values. Count completed tool calls. Average positive context observations for `avg`; take their maximum for `max`. Sum recorded or supported API-equivalent costs. | Tokens use compact numbers. Tool calls use integers. Known-capacity context rows show tokens and percentage. Cost uses classic report precision. Non-context rows use their visible maximum. Context rows use known capacity. |
 | `models` | One row per normalized model-and-effort identity in first-response occurrence order, then Cost. | Use recorded model, then a single non-mixed thread model, then Unknown model. Use recorded effort, then a single non-mixed thread effort, then no suffix. Sum processed tokens for matching responses by completion period. Sum Cost as for `tokens`. | Model values use compact numbers. Cost uses classic report precision. Each row uses its visible maximum when available. |
+
+Every row carries one semantic `row_key` and one zero-based `row_order_index`. These fields are not labels. The exact catalog and construction rules are:
+
+| Mode and row | Exact `row_key` |
+| --- | --- |
+| Known `wall_time` rows | `model_inference`, `tool_execution`, `test_process`, `agent_wait`, `user_pause`, `watchdog`, `approval_infrastructure`, `unattributed` |
+| Unknown `wall_time` state | `runtime:<case-folded_internal_state_identifier>`; the suffix is non-empty, at most 128 UTF-8 bytes, contains no control or DEL character, and cannot equal a known key |
+| Fixed `tokens` rows | `uncached_input_tokens`, `cached_input_tokens`, `reasoning_tokens`, `output_tokens`, `tool_calls`, `context_average`, `context_maximum`, `cost` |
+| Dynamic `models` identity | `model:<first 24 lowercase hexadecimal characters of SHA-256 over the UTF-8 JSON array [normalized_model, normalized_effort_or_empty_string] with ensure_ascii=false and compact separators>` |
+| `models` Cost | `cost` |
+
+The service assigns `row_order_index` from zero after it constructs the complete ordered mode catalog and before it applies `maximum_rows` or the 2,000-cell omission rule. Known runtime rows keep contract order, unknown runtime states follow in case-folded ascending order, model identities keep first-response order, and Cost is last. `row_id` is `row_` plus the first 24 lowercase hexadecimal characters of SHA-256 over `revision_id + NUL + mode + NUL + internal_row_identity`; labels never participate. Keys must be unique within a mode. `HeatmapCellEvidenceResult` echoes the selected matrix row's exact `row_id`, `row_key`, and `row_order_index`. A mismatch in any of the three fields fails instead of returning evidence for another row.
 
 Friendly agent labels use the recorded role. A root without a role uses `main`; a child without a role uses `default`. The name uses the recorded nickname, then a child assignment. The label is `role (name)` only when the name differs from the role and the literal fallback `root`. Model labels use `model · effort value`, model alone, or `Unknown model` as applicable. Row headings, cell text, evidence headings, and evidence labels use these friendly forms.
 
@@ -1173,7 +1211,7 @@ Every cell and selected-cell result uses exactly one `value_state`:
 | Tool calls | A complete count is derived. | Coverage is explicitly incomplete and the known count is usable. | Tool-event coverage is unavailable. | Complete coverage contains no completed calls; format as integer `0`. |
 | Context average | A complete average of positive observations is derived. | Usable positive observations exist, and other applicable responses lack context evidence. | No positive usable observation exists. | Never applicable. A missing or nonpositive placeholder is unavailable. |
 | Context maximum | One positive observation is measured. A complete maximum of several observations is derived. | Usable positive observations exist, and other applicable responses lack context evidence. | No positive usable observation exists. | Never applicable. A missing or nonpositive placeholder is unavailable. |
-| Cost | One fully recorded direct cost is measured. A complete sum or supported API-equivalent estimate is derived and identifies its method. | Return the supported subtotal when another applicable response lacks usage or supported pricing. | No applicable response has defensible recorded or estimated cost. | Complete cost evidence establishes no cost; format as `$0.00`. |
+| Cost | One authority assessment is recorded. A complete sum of the normalization-time `HeatmapPricingAuthority` assessments is measured or derived and identifies each classic method. | Return the supported authority subtotal when another applicable response has an unavailable assessment. | No applicable response has a defensible authority assessment. | Complete authority evidence establishes no cost; format as `$0.00`. |
 | Model and effort | One direct processed-token value is measured. A complete sum or source-defined processed-token calculation is derived. | Return the usable subtotal when another matching response lacks usage. | The identity exists, but no matching response has usable processed-token evidence. | Complete matching usage establishes zero; format as compact `0`. |
 
 `applicable_zero=true` is valid only with `measured|derived`. Missing timing, usage, pricing, coverage, or capacity never becomes zero. A partial formatted value is `Partial · <formatted known value>`. An unavailable value is raw `None` and formats as `Unavailable`.
@@ -1207,9 +1245,9 @@ The service validates these constraints before the affected dependency call or s
 | Heatmap discriminator and mode | `query_kind` is exactly `matrix|cell_evidence`. `mode` is exactly `wall_time|tokens|models`. Fields from the other variant are forbidden. | The service rejects unknown, missing, or mixed variant fields before semantic aggregation. Dynamic queries reject the retained MCP atomic measures. |
 | Matrix selectors | Aware half-open `from_time|to_time`, `requested_resolution_minutes` in `1|5|15|30|60`, and `maximum_rows` from 1 through 200. | The result echoes the applied selectors, returns at most 2,000 cells, and uses only a supported actual resolution. |
 | Cell-evidence selectors | Opaque revision-bound `row_id` returned by the matrix; exact aware half-open `period_start_time|period_end_time` returned by the matrix; matching mode and snapshot. | Clients do not synthesize row IDs or periods. The evidence cap is fixed at 100 and is not a request field. A stale or mismatched selection fails instead of returning another cell's data. |
-| Heatmap result union | `query_kind` selects exactly one result shape. `snapshot_id` and `revision_id` equal the retained handle captured by the per-operation reader guard. Raw numeric fields and `normalized_intensity` are finite or null. Counts are nonnegative. Collections and provenance are bounded. | Matrix contains no evidence ledger or full detail. Cell evidence contains no matrix. Each serialized terminal result is less than 1,048,576 bytes and is never truncated. |
+| Heatmap result union | `query_kind` selects exactly one result shape. `snapshot_id` and `revision_id` equal the retained handle captured by the per-operation reader guard. Raw numeric fields and `normalized_intensity` are finite or null. Counts are nonnegative. Collections and provenance are bounded. | Matrix contains no evidence ledger or full detail. Cell evidence contains no matrix. The complete JSONL terminal record, including its LF delimiter, is at most 1,048,576 bytes and is never truncated. |
 | Heatmap scale | `available` requires finite numeric minimum and maximum plus `visible_row_maximum|context_window_capacity`. `unavailable` requires only `reason="context_capacity_unavailable"` and forbids basis or numeric scale fields. | Nullable or mixed cross-products are invalid. Unknown context capacity uses `unavailable`; `normalized_intensity` is null and no percentage or fallback scale is returned. |
-| Heatmap strings and provenance | `formatted_value` at most 64 UTF-8 bytes; row/evidence label at most 256; supporting text at most 96; nullable preview at most 4,096; at most 32 provenance items of 256 bytes each. | Overflow fails before a result is returned. The service does not truncate a semantic value, preview, or provenance item to satisfy the worker bound. |
+| Heatmap strings and provenance | JSON-escaped content is at most 256 UTF-8 bytes for each row or evidence label, 64 for each matrix `formatted_value`, 80 for each nullable `supporting_text`, 64 for each evidence `formatted_value`, 4,096 for each nullable evidence preview, and 256 for each provenance item; provenance contains at most 32 items. | Measure the bytes after JSON string escaping and before the surrounding quote characters. Overflow fails before a result is returned. The service does not truncate a semantic value, preview, or provenance item to satisfy the worker bound. |
 | `surface` | Required exact `tauri`, `cli`, or `mcp` | Unsupported values are invalid before rendering |
 | `mode`; MCP `export_snapshot.report_mode` | Optional exact `directory` or `summary` | The MCP snapshot adapter maps `report_mode` to `ExportSnapshotRequest.mode`. Omitted snapshot-export mode resolves to `directory`. FastMCP rejects any other value at the snapshot-tool schema; the service defensively returns `REPORT_INVALID_REQUEST` before rendering if an incompatible caller bypasses that schema. This field is absent from retained `generate_report`. |
 | `target` | Required absolute `Path` for service calls | The surface publisher performs root and permission authorization; a relative value is invalid before staging |
@@ -1284,7 +1322,7 @@ The MCP adapter registers these distinct snapshot tools: `preflight_report`, `op
 | MP-06 | Accept only the explicit operation-specific Workspace sort keys and directions, require stable identity tie breaks, and echo the normalized values in each page. | CD-005 defines visible sort controls and HLD-003 requires exact applied sort state. | Keeps cursors reproducible while preserving the accepted UI contract. | Dev Architect accepted UI/service reconciliation |
 | MP-07 | Treat unexpected exceptions as `REPORT_INTERNAL_ERROR` and log only operation metadata | ARC-06 and ARC-15 prohibit raw disclosure; HLD-003 requires safe errors | Prevents exception strings from leaking source or cache paths | Dev Documentation Writer within error-mapping authority |
 | MP-08 | Keep retained MCP tool names, exact schemas, defaults, and response semantics. Map only additive snapshot export to the shared service export sequence. | ARC-13 and the superseding user decision preserve `generate_report` compatibility while adding snapshot tools. | Preserves machine clients and keeps classic rendering separate from streamlined export. | User decision and CD-002 orchestration authority |
-| MP-09 | Use fixed version 1 byte and collection bounds for DTOs, filters, detail, warnings, provenance, redactions, recent activity, and Heatmap strings. Heatmap fields use 64-byte formatted values, 256-byte labels, 96-byte supporting text, 4,096-byte previews, and at most 32 provenance items of 256 bytes each. | ARC-06 requires bounded DTOs. HLD-003 fixes the 1,048,576-byte record ceiling and delegates field bounds to CD-002. | The exact bounds make worst-case matrix and evidence records testable without changing parent cell, row, evidence, page, or worker limits. | Dev Documentation Writer within CD-002 limit authority |
+| MP-09 | Use fixed version 1 byte and collection bounds for DTOs, filters, detail, warnings, provenance, redactions, recent activity, and Heatmap strings. Measure Heatmap limits on JSON-escaped content: 256 bytes for labels, 64 for matrix formatted values, 80 for supporting text, 64 for evidence formatted values, 4,096 for previews, and at most 32 provenance items of 256 bytes each. Include the full envelope and LF when enforcing at most 1,048,576 JSONL bytes. | ARC-06 requires bounded DTOs. HLD-003 fixes the 1,048,576-byte record ceiling and delegates field bounds to CD-002. | Exact escaped-content and complete-record bounds make adversarial serialization testable without changing parent cell, row, evidence, page, or worker limits. | Dev Documentation Writer within CD-002 limit authority |
 | MP-10 | Use the exact `REPORT_CURSOR_CONFLICT`, `REPORT_SNAPSHOT_NOT_FOUND`, `REPORT_SNAPSHOT_CONFLICT`, `REPORT_PRIVACY_FAILED`, `REPORT_EXPORT_FAILED`, `REPORT_CANCELLED`, and `REPORT_INTERNAL_ERROR` codes for error categories named but not spelled by HLD-003 | HLD-003 assigns structured errors to this component and requires cursor, snapshot, privacy, export, cancellation, and unexpected-failure distinctions | Gives every adapter one stable machine-readable mapping and avoids string inspection | Dev Documentation Writer within CD-002 structured-error authority |
 | MP-11 | Resolve omitted snapshot-export mode to `directory`; accept explicit `directory` or `summary`; reject every other value. An omitted CLI report mode stays outside CD-002 and selects classic generation. | Superseding user decision on 2026-08-12 | Makes streamlined snapshot export deterministic without changing classic defaults. | User decision; Application Service owns streamlined mode orchestration |
 | MP-12 | Make `close_snapshot` reject active readers and make service `close()` drain leases after rejecting new work | HLD-003 requires coherent handle lifetime and allows the module to select concurrency internals | Gives interactive close a recoverable non-blocking result and gives composition-root shutdown deterministic ownership | Dev Documentation Writer within module lifecycle authority |
@@ -1376,9 +1414,9 @@ On query failure, the reader guard still decrements `active_readers`, and the re
 4. The service creates an integrity-protected token over scope, source revision, counts, and service-version digests.
 5. `open_snapshot` decodes the token and rechecks discovery against its exact scope.
 6. A revision mismatch returns `REPORT_SCOPE_CONFLICT` before normalization.
-7. The Core normalizes the accepted sources and applies privacy rules.
+7. The Core normalizes the accepted sources, applies privacy rules, and calls classic `_cost_for_response` exactly once per response to create the immutable `HeatmapPricingAuthority`.
 8. The repository reuses or atomically publishes one coherent revision.
-9. The service opens the read handle with the exact published snapshot ID, revision ID, and privacy-valid `NormalizedRevision.run`.
+9. The service opens the read handle with the exact published snapshot ID, revision ID, privacy-valid `NormalizedRevision.run`, and its identical pricing-authority object. The repository rejects any source, pricing, run, response-order, or response-identity mismatch.
 10. The service publishes `_SnapshotState` only after the repository validates that immutable binding.
 
 ### Query And Cursor
@@ -1397,9 +1435,9 @@ On query failure, the reader guard still decrements `active_readers`, and the re
 1. The service validates the request discriminator and only the fields for that variant.
 2. The service acquires one per-operation reader guard and captures the retained handle's immutable `snapshot_id`, `revision_id`, and parsed run.
 3. For `matrix`, the service selects the nearest supported resolution and ordered rows that fit 2,000 cells.
-4. The pure semantic helper streams intervals, responses, tools, usage, price evidence, and identity fallbacks from the parsed run.
+4. The pure semantic helper streams intervals, responses, tools, usage, and identity fallbacks from the parsed run. It reads cost assessments only from the handle-bound `HeatmapPricingAuthority`.
 5. For `cell_evidence`, the same helper selects the returned row and period, retains 100 chronological safe items, and counts omissions.
-6. The service validates evidence states, raw nullable values, formatting, scale union, privacy, correlation, and the 1,048,576-byte encoded bound.
+6. The service validates evidence states, raw nullable values, formatting, scale union, row-key correlation, privacy, escaped-content byte bounds, and the complete JSONL-with-LF bound of at most 1,048,576 bytes.
 7. The service exits the reader guard in `finally`, retains the handle for later queries, and returns exactly one discriminated result.
 
 If parsed-run evidence cannot distinguish applicable zero from missing timing, usage, price, coverage, or capacity, the operation stops. The design gap returns to Dev Architect. The implementation must not coerce absence to zero, query mutable pending state, or add an event-cache migration.
@@ -1453,11 +1491,12 @@ sequenceDiagram
     Service-->>Caller: REPORT_SCOPE_CONFLICT
   else Source revision current
     Service->>Core: normalize(discovered, versions)
-    Core-->>Service: privacy-valid candidate and parsed run
+    Core->>Core: _cost_for_response once per response
+    Core-->>Service: privacy-valid candidate, parsed run, and immutable pricing authority
     Service->>Repo: reuse_or_publish(candidate)
     Repo-->>Service: published revision
-    Service->>Repo: open_read(snapshot, revision, parsed run)
-    Repo-->>Service: immutable handle binding
+    Service->>Repo: open_read(snapshot, revision, parsed run, pricing authority)
+    Repo-->>Service: immutable identity-validated handle binding
     Service-->>Caller: SnapshotMetadata
   end
   Caller->>Service: query_snapshot_time_range(matrix selectors)
@@ -1478,10 +1517,10 @@ sequenceDiagram
   alt Unchanged
     Service-->>Caller: existing coherent metadata
   else Changed and committed
-    Service->>Core: normalize changed sources
+    Service->>Core: normalize changed sources and create new pricing authority
     Service->>Repo: publish new revision
     Repo-->>Service: new published revision
-    Service->>Repo: open_read(new revision and parsed run)
+    Service->>Repo: open_read(new revision, parsed run, and pricing authority)
     Repo-->>Service: new retained handle
     Service->>Service: swap complete snapshot state
     Service->>Repo: release_read(old handle) exactly once
@@ -1560,7 +1599,7 @@ stateDiagram-v2
 - A cell-evidence result contains at most 100 chronological items and reports the exact omitted count. A matrix never contains that ledger or full event detail.
 - Heatmap scale availability is a discriminated union. Unknown context capacity has `reason="context_capacity_unavailable"`, null `normalized_intensity`, no percentage, and no row-relative fallback.
 - Both Heatmap variants derive `snapshot_id`, `revision_id`, and semantic evidence from one retained snapshot-revision handle protected by a per-operation reader guard. They never read mutable pending-handle or latest-run state.
-- Every Heatmap result is privacy-bounded, finite-or-null where numeric, and less than 1,048,576 encoded bytes. The service never truncates a terminal result to fit.
+- Every Heatmap result is privacy-bounded and finite-or-null where numeric. Its complete JSONL terminal record, including LF, is at most 1,048,576 bytes. The service never truncates a terminal result to fit.
 - Queries never replace a snapshot or repository revision.
 - Every query owns one `_ReadLease` reader guard from before handle capture through `finally`. Exiting the guard does not release the retained repository handle.
 - A retained handle is released exactly once only after `active_readers == 0` and refresh replacement, snapshot close, or service shutdown owns the snapshot.
@@ -1593,7 +1632,7 @@ CD-002 reads configuration only through `ApplicationServiceConfig`.
 | `max_page_size: int` | Optional; 500 | From 1 through 500 | Immutable per instance; HLD-003 and FR-001 own ceiling |
 | `max_heatmap_cells: int` | Optional; 2,000 | Exactly 2,000 in protocol version 1 | Immutable per instance; HLD-003 and FR-001 own limit |
 | Heatmap evidence limit | Fixed; 100 | Not caller-configurable in protocol version 1 | `MAX_HEATMAP_EVIDENCE_ITEMS`; HLD-003 and FR-001 own limit |
-| Worker result byte limit | Fixed; 1,048,576 exclusive | Every complete encoded Heatmap result is strictly smaller; no truncation | `MAX_WORKER_RESULT_BYTES`; CD-004 owns framing and enforces the same limit |
+| Worker result byte limit | Fixed; 1,048,576 inclusive | Every complete Heatmap JSONL terminal record, including LF, is at most this size; no truncation | `MAX_WORKER_RESULT_BYTES`; CD-004 owns framing and enforces the same limit |
 
 The module reads no environment variable and writes no configuration. Composition roots translate surface configuration into this dataclass before construction. A configuration change requires a new process-local service instance; no live reload occurs.
 
@@ -1691,12 +1730,15 @@ It declares these exact test functions:
 | `test_heatmap_hm_f13_returns_raw_nullable_safe_chronological_evidence()` | HM-F13 time, raw value, formatted value, duration, safe preview, evidence method/state, friendly prefixes, privacy, chronology, and optional event identity |
 | `test_heatmap_hm_f14_enforces_cells_coarsening_omission_and_extreme_ranges()` | HM-F14 2,000 acceptance, 2,001 coarsening, nearest supported resolution, deterministic row omission, and extreme-range rejection |
 | `test_heatmap_hm_f15_supplies_non_color_semantic_fields()` | HM-F15 service fields for row, UTC period, mode, formatted value, availability, scale basis, and synchronized selected evidence |
+| `test_heatmap_row_keys_and_order_indexes_follow_exact_catalog_and_echo_in_evidence()` | Exact fixed keys, unknown-state keys, model-identity digest keys, zero-based pre-omission indexes, unique row IDs, and selected-evidence echo |
 | `test_heatmap_request_and_result_unions_reject_cross_variant_fields()` | Exact `matrix|cell_evidence` discriminants and shape separation |
 | `test_heatmap_results_take_snapshot_and_revision_from_read_lease()` | Immutable lease correlation; mutable pending state cannot alter either identifier |
 | `test_heatmap_matrix_and_cell_evidence_use_one_pure_semantic_helper()` | Shared parsed-run algorithms and agreement between a selected cell and its evidence result |
+| `test_heatmap_pricing_authority_calls_classic_cost_once_per_response_and_binds_identity()` | Normalization-time `_cost_for_response` call count, immutable complete assessment copies, stable response order, pricing digest, run identity, revision binding, and no query-time repricing |
 | `test_two_heatmap_queries_reuse_handle_then_refresh_and_close_release_once()` | Matrix and cell-evidence queries reuse one retained handle; refresh swaps after readers drain and releases the old handle once; close releases the replacement once |
 | `test_heatmap_missing_semantic_distinction_fails_without_zero_or_cache_fallback()` | Parsed-run insufficiency stops the query with a concrete internal design gap; no zero coercion, normalized-cache inference, or migration path runs |
-| `test_heatmap_worst_case_union_results_remain_below_worker_line_limit()` | Sanitized worst-case matrix and 100-row evidence results are each strictly below 1,048,576 encoded bytes |
+| `test_heatmap_escaped_string_limits_cover_ascii_quotes_slashes_controls_and_multibyte_boundaries()` | Exact JSON-escaped-content acceptance and one-byte-over rejection for 256-byte labels, 64-byte matrix/evidence formatted values, 80-byte supporting text, 4,096-byte previews, and 32 provenance items of 256 bytes |
+| `test_heatmap_worst_case_union_jsonl_records_fit_inclusive_worker_limit()` | Sanitized worst-case matrix and 100-row evidence terminal envelopes, JSON encoding, and LF are each at most 1,048,576 bytes without truncation; one-byte-over adversarial fixtures fail |
 | `test_query_sequence_returns_canonical_page_and_exact_group_hierarchy` | OP-23 selector, sort, endpoint, repetition, and reasoning completeness |
 | `test_query_coordination_returns_exact_applied_values_and_labels_inference` | OP-24 filter, sort, row, and epistemic-label completeness |
 | `test_get_event_details_is_lazy_bounded_structured_and_returns_only_opaque_source_key` | OP-25 privacy, disclosures, provenance, and source-registry boundary |
@@ -1745,9 +1787,9 @@ The integration and regression gates are:
 6. Inject safe dependency failures and unexpected exceptions. Confirm exact structured codes and the absence of source, cache, staging, transcript, argument, result, secret, and ciphertext content.
 7. Hold every query family at its Query Port boundary. Confirm that `close_snapshot` returns `REPORT_SNAPSHOT_CONFLICT`, releases no handle, and succeeds exactly once after the query exits its reader guard.
 8. Omit CLI report mode and confirm classic interactive HTML. Exercise explicit CLI directory and summary. Omit MCP `export_snapshot.report_mode` and confirm directory; request summary explicitly. Confirm that invalid streamlined modes fail before renderer submission and that `generate_report` remains classic.
-9. Run one snapshot fixture through service matrix and cell-evidence requests. Confirm exact retained-handle `snapshot_id` and `revision_id`, mode and row agreement, raw nullable evidence values, `evidence_method`, and no cross-variant fields.
+9. Run one snapshot fixture through service matrix and cell-evidence requests. Confirm exact retained-handle `snapshot_id` and `revision_id`, `row_id`, `row_key`, `row_order_index`, mode and row agreement, raw nullable evidence values, `evidence_method`, and no cross-variant fields.
 10. Compare every HM-F01 through HM-F15 and JFP-HM-01 through JFP-HM-03 facet with its named test row above. A feature-name-only test does not establish semantic coverage.
-11. Encode the worst-case matrix and 100-row cell-evidence union fixtures. Confirm that each complete result is strictly smaller than 1,048,576 bytes and that no field or item is truncated to pass.
+11. Encode worst-case matrix and 100-row cell-evidence terminal envelopes as JSONL. Include the LF and confirm each complete record is at most 1,048,576 bytes without truncation. Exercise exact and one-byte-over escaped-content boundaries with ASCII, quotes, reverse solidus characters, controls, BMP characters, and supplementary Unicode characters.
 12. Compare the retained FastMCP `query_time_range` schema, defaults, six atomic measures, responses, 1,000-event cap, IDs, errors, and cancellation before and after this implementation. Confirm that it never calls `query_snapshot_time_range`.
 13. Run two sequential Heatmap variants over one retained handle. Refresh after both guards exit, assert one old-handle release, then close and assert one replacement-handle release. Confirm every per-operation cleanup changes only `active_readers`.
 
