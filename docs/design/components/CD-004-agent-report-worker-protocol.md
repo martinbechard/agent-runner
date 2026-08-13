@@ -1469,18 +1469,16 @@ The module never swallows a terminal service error. It never converts an error t
 
 ## Implementation Readiness
 
-**BLOCKED.** The corrected design resolves the material CD-004 contract choices, but production implementation and acceptance still require changes outside the four owned files and platform evidence that does not exist.
+**IMPLEMENTED; INTEGRATED VERIFICATION PENDING.** The owned Python Worker, Rust Supervisor, and their focused tests implement the accepted CD-004 contract. No Worker or Supervisor source implementation remains an unblock condition.
 
-The unblock conditions are:
+The remaining acceptance evidence is:
 
-- Register the packaged `agent-report worker` entry point and bind `ApplicationServiceFactory` to CD-002 `create_application_service` with accepted dependencies.
-- Register `agent_report_desktop::report_worker` in the Rust crate root.
-- Add the target-specific `libc` and `windows-sys` dependencies defined in Dependencies.
-- Implement the four owned files and pass their exact Python and Rust tests.
+- Verify the packaged `agent-report worker` entry point, `ApplicationServiceFactory` binding, Rust crate registration, and target-specific dependencies in the integrated desktop composition.
+- Run the complete Worker, native command, Application Service, and Workspace path through the packaged application.
 - Prove descendant termination and unrelated-process survival on Linux x64, Apple Silicon macOS, and native Windows x64.
-- Rerun Markdown link verification after the repository becomes an allowed verifier workspace.
+- Pass the repository link, packaging, and delivery gates.
 
-OQ-01 through OQ-04 do not add a CD-004 blocker. This BLOCKED decision concerns integration and required native evidence, not unresolved business semantics.
+OQ-01 through OQ-04 do not block CD-004. The pending status concerns integrated, packaged, native-platform, and delivery evidence. It does not indicate missing owned implementation or unresolved business semantics.
 
 ## Verification
 

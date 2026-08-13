@@ -1757,7 +1757,9 @@ Errors are not swallowed. A disposed or superseded request is the only silently 
 
 ## Implementation Readiness
 
-**BLOCKED.** The documentation contract is accepted, but implementation readiness remains blocked until the assigned Workspace, DTO-parser, Tauri-adapter, HTML, style, and test sources implement the reconciled cryptographic ID, structured diagnostic, lifecycle-result, exact-page, Heatmap union, source-registry, and export-registry contracts. Contextual UX review must also validate actor-visible partial, unavailable, and N/A language. This review is required delivery evidence, not unresolved product action. The accepted Application Service, Worker, and Static Exporter boundaries are fixed dependencies, not circular sources of this design.
+**IMPLEMENTED; PACKAGED UX AND INTEGRATED VERIFICATION PENDING.** The assigned Workspace, DTO parser, Tauri adapter, HTML, styles, and tests implement the accepted cryptographic ID, structured diagnostic, lifecycle-result, exact-page, Heatmap union, source-registry, and export-registry contracts. No owned Workspace source implementation remains an unblock condition.
+
+Delivery acceptance still requires integrated Application Service, Worker, native-command, and Static Exporter verification; packaged browser verification at wide and narrow sizes; the contextual UX review of actor-visible partial, unavailable, and N/A language; supported-platform packaging checks; and the remaining delivery gates. The contextual UX review is required evidence, not unresolved product action. The accepted Application Service, Worker, and Static Exporter boundaries remain fixed dependencies.
 
 Dynamic non-Codex support, a standalone-browser runtime, and classic generation controls are excluded from this Workspace. Classic CLI and MCP generation and current non-Codex static adapters remain available outside this component. Cache quota and retention defaults belong to another component and do not block this Workspace.
 
@@ -1835,11 +1837,11 @@ Then run these repository checks:
 2. Search `report-workspace.ts` for `fetch`, `XMLHttpRequest`, `WebSocket`, `mcp`, filesystem plugins, raw-rollout access, and direct `invoke` imports. The expected result is no prohibited dependency.
 3. Search all webview DTO definitions for `sourcePath`, `outputPath`, `cachePath`, `filesystemPath`, `rawRecord`, `rawRollout`, and every `*Path` field. The expected result is no match.
 4. Search intended Codex UI and command routing for `generate-report`, `generate_report`, `cancel_report_generation`, and `legacy`. The expected result is no Codex compatibility route. Allow only migration tests or non-Codex adapter evidence.
-5. Run the CD-004 Tauri worker and command tests when those commands exist.
-6. Run the FR-001 FR-03, FR-05, and FR-10 large-fixture acceptance scenarios when the Application Service and exporter fixtures exist.
+5. Run the CD-004 Tauri worker and command tests in the integrated desktop composition.
+6. Run the FR-001 FR-03, FR-05, and FR-10 large-fixture acceptance scenarios with the Application Service and exporter fixtures.
 
 Manual verification uses one keyboard-only pass at wide and narrow window sizes. It covers root selection, preflight, every navigation item, pagination, Heatmap modes, **Drill down**, **Step back**, adjacent movement, period and scroll controls, synchronized evidence, sequence ledger, detail disclosures, refresh cancellation, error recovery, and focus return.
 
 The contextual UX review records row-family evidence for complete zero, partial, unavailable, and unknown-capacity N/A language. It must confirm understandable text without changing the accepted evidence-state or no-fallback rules.
 
-The page-level source, structure, link, steady-state, and unresolved-placeholder checks must pass before implementation handoff. Native command runtime tests and full large-snapshot integration remain planned because the corresponding implementations do not yet exist.
+The page-level source, structure, link, steady-state, and unresolved-placeholder checks must pass before delivery acceptance. Native-command runtime tests and full large-snapshot integration remain pending integrated delivery evidence.
