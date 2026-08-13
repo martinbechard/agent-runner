@@ -26,7 +26,9 @@ The module has one primary responsibility: it validates and coordinates scope, s
 
 The module does not own normalized-cache schema or transactions, worker transport, native process control, UI rendering, or export rendering. It coordinates those owners through typed ports.
 
-The initial dynamic scope is Codex-only. The Tauri workspace, explicit CLI streamlined export, and MCP snapshot tools use the same service semantics. The service contract includes the complete Workspace filter, sort, summary, grouped heatmap, sequence, coordination, detail, refresh, close, and streamlined export semantics. The current classic CLI path and MCP `generate_report` remain adapter-and-renderer compatibility paths outside this service export operation. MCP forensic operations do not require export.
+The initial dynamic scope is Codex-only. The Tauri workspace, explicit CLI streamlined export, and MCP snapshot tools use the same service semantics. The service contract includes the complete Workspace filter, sort, summary, Heatmap matrix, selected-cell evidence, sequence, coordination, detail, refresh, close, and streamlined export semantics. The current classic CLI path and MCP `generate_report` remain adapter-and-renderer compatibility paths outside this service export operation. MCP forensic operations do not require export.
+
+The Heatmap uses one additive, discriminated `query_snapshot_time_range` operation family. A `matrix` request returns only matrix data. A `cell_evidence` request returns only the selected row-period evidence ledger. Both variants derive their `snapshot_id` and `revision_id` from the same immutable read lease and use one shared pure semantic calculation over the lease-bound parsed run.
 
 This design describes intended behavior. Its design mode is **PLANNED_DEVELOPMENT**.
 
@@ -41,11 +43,12 @@ The permitted source inventory is complete for this planned module.
 | Owning high-level design | [HLD-003](../high-level/HLD-003-agent-report-dynamic-app-and-static-export.md) | Application Service ownership, OP-16 through OP-30, CR-03 through CR-13, shared shapes, placement, and implementation order |
 | Accepted decisions | Dev Architect reconciliation packet accepted for `/root/report_app_architecture` | Full Workspace semantics, generic Worker transport, cryptographic operation IDs, structured diagnostics, native registries, lifecycle results, and retained-plus-snapshot MCP surfaces |
 | Resolved product decisions | Runtime-supplied user decisions on 2026-08-12 | Preserved classic CLI and MCP `generate_report`, separate shared streamlined directory/summary export, Codex-only initial dynamics, Tauri-only workspace, independent local MCP and CLI, and no standalone browser |
-| Backlog requirement | [Modularize report tool for concurrent maintenance](../../feature-backlog/modularize-report-tool-for-concurrent-maintenance.md) | Separation of shared report behavior from large compatibility code |
+| Backlog requirement | [Modularize report tool for concurrent maintenance](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) | Separation of shared report behavior from large compatibility code |
 | Project configuration | [`pyproject.toml`](../../../tools/report/pyproject.toml) | Python 3.11 or later, package boundary, test runner, and installed entry points |
 | Relevant technology guidance | Python standard library typing, dataclasses, threading, HMAC, JSON, and base64url facilities | Allowed implementation mechanisms within the accepted Python boundary |
 | Current compatibility evidence | [`mcp_server.py`](../../../tools/report/src/agent_report/mcp_server.py), [`mcp_report.py`](../../../tools/report/src/agent_report/mcp_report.py), [`cli.py`](../../../tools/report/src/agent_report/cli.py) | Current MCP and CLI contracts only; not authority for intended snapshot operations |
 | Current test evidence | [`test_mcp_server.py`](../../../tools/report/tests/test_mcp_server.py), [`test_mcp_report.py`](../../../tools/report/tests/test_mcp_report.py), [`test_cli.py`](../../../tools/report/tests/test_cli.py) | Retained surface behavior only |
+| Accepted Heatmap delivery plan | [`PLAN-012`](../../plans/PLAN-012-agent-report-dynamic-heatmap-parity.json), SHA-256 `b711b01c519585aa0c155e7c0025ff796387caab7f46d7b1ec80cbaab1fe8bc2` | Cross-language discriminated union, immutable correlation, semantic algorithms, bounds, no-cache-migration boundary, and verification facets |
 | Independent review | [RVW-012](../../reviews/RVW-012-cd-002-agent-report-application-service-checklist.md) | Earlier correction requirements; the superseding decision replaces its additive MCP `generate_report` schema finding with exact-schema preservation |
 | Planned dependency design | [CD-003](CD-003-agent-report-normalized-event-cache.md) | Cache internals remain dependency-owned; this document does not derive its service contract from sibling module designs |
 | Procedures and runtime evidence | [Agent Report README](../../../tools/report/README.md); runtime evidence is not required for planned contracts | Current commands and packaging context |
@@ -68,7 +71,7 @@ Current MCP and CLI tests remain compatibility evidence. The Verification sectio
 
 ## Related Backlog Items
 
-- [Modularize report tool for concurrent maintenance](../../feature-backlog/modularize-report-tool-for-concurrent-maintenance.md)
+- [Modularize report tool for concurrent maintenance](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md)
 - No separate accepted work item for CD-002 is identified.
 
 ## Related Wiki Pages
@@ -104,7 +107,7 @@ The retained MCP tools keep their current names, exact schemas, defaults, respon
 
 Recheck this design when FR-001 operations, ARC-001 constraints, HLD-003 CR boundaries, privacy rules, query limits, error codes, dependency ports, or retained MCP signatures change. Recheck every symbol ledger row when the owned implementation or test file changes.
 
-The latest meaningful source review is 2026-08-12. The configured terminology snapshot reported `terminology.md` as absent at revision `d801aa1fb7ddcc330a5e3173372ea6af4a3d08ec58074478e85aa5603e926658`.
+The latest meaningful source review is 2026-08-13. The configured terminology snapshot reported `terminology.md` as absent at revision `d801aa1fb7ddcc330a5e3173372ea6af4a3d08ec58074478e85aa5603e926658`.
 
 ## Requirements Coverage
 
@@ -115,7 +118,7 @@ The latest meaningful source review is 2026-08-12. The configured terminology sn
 | FR-001 FR-02; HLD OP-17 | INTENDED_BEHAVIOR | `open_snapshot` consumes an accepted preflight binding and returns one coherent opaque snapshot | `OpenSnapshotRequest`, `SnapshotMetadata`; `REPORT_SCOPE_CONFLICT` on changed source | DEFINED | Normalization and atomic revision publication belong to Core and Event Repository | Open, reuse, stale preflight, privacy, and cancellation tests |
 | FR-001 FR-03; HLD OP-18 | INTENDED_BEHAVIOR | `get_summary` returns bounded goal, state, scope, metrics, provenance, warnings, and recent activity | `SummaryResult`; query guard | DEFINED | Summary calculations come from the query dependency; UI rendering is CD-005 | Bounded summary and privacy tests |
 | FR-001 FR-03; HLD OP-19 through OP-21 | INTENDED_BEHAVIOR | Agent, turn, and event lists use stable operation-specific order, opaque bound cursors, default 100, and accepted page sizes 1 through 500 | Three list request types, three row types, `PageResult`, cursor codec | DEFINED | Virtualization and presentation sort state belong to CD-005 | Page boundaries, stable order, cursor mismatch, and reload tests |
-| FR-001 FR-03; HLD OP-22 | INTENDED_BEHAVIOR | Snapshot time queries return an exact-revision grouped heatmap with requested and actual resolution, at most 2,000 cells, and at most the applied row limit | `HeatmapQueryRequest`, `HeatmapResult`; deterministic grouping, row ordering, scaling, and coarsening rules | DEFINED | Retained MCP thread-based operation stays in `mcp_report.py` with its schema unchanged | Range, measure, grouping, row limit, scale, color, coarsening, and parity tests |
+| FR-001 HM-F01 through HM-F15; accepted JFP-HM-01 through JFP-HM-03; HLD-003 DEC-05 and DEC-06 | INTENDED_BEHAVIOR | `query_snapshot_time_range` is one discriminated `matrix|cell_evidence` family. It returns exact-revision classic Heatmap semantics, distinct evidence states, a true available/unavailable scale union, bounded lazy evidence, and supported-resolution coarsening. | `HeatmapSnapshotQueryRequest`, `HeatmapSnapshotQueryResult`, shared pure semantic helper, immutable read-lease identity, and Heatmap bounds | DEFINED | Retained MCP `query_time_range` remains unchanged. CD-003 stores existing normalized list/detail data but does not migrate Heatmap facets. CD-005 owns interaction and presentation. | HM-F01 through HM-F15 facet tests, JFP-HM-01 through JFP-HM-03 review, correlation, privacy, payload, and retained-schema tests |
 | FR-001 FR-03; HLD OP-23 | INTENDED_BEHAVIOR | Sequence queries return bounded delegation and communication rows for an exact snapshot, focus, filter, grouping, and cursor | `SequenceQueryRequest`, `SequenceRow`, `PageResult` | DEFINED | Sequence rendering belongs to CD-005 and CD-006 | Sequence filtering, grouping, cursor, and privacy tests |
 | FR-001 FR-03; HLD OP-24 | INTENDED_BEHAVIOR | Coordination queries return evidence-derived rows and label prose-derived decisions as inferred | `CoordinationQueryRequest`, `CoordinationRow`; evidence invariant | DEFINED | Visual grouping belongs to CD-005 | Work-item filter, agent filter, inference-label, and cursor tests |
 | FR-001 FR-03; HLD OP-25 | INTENDED_BEHAVIOR | Event detail is lazy, bounded, sanitized, and returns event-not-found without closing the snapshot | `EventDetailsRequest`, `EventDetail`; `REPORT_EVENT_NOT_FOUND` | DEFINED | Disclosure rendering belongs to CD-005; raw normalization belongs to Core | Malformed, stale, absent, bounded, ciphertext, and redaction tests |
@@ -149,7 +152,7 @@ No owned configuration, fixture, resource, migration, generated, or script file 
 
 | Leaf | Namespace | Declared symbols | Responsibility |
 | --- | --- | --- | --- |
-| `application_service.py` | `agent_report.application_service` | Constants, literal aliases, immutable request/result DTOs, typed dependency failures, port protocols, `ApplicationServiceConfig`, `ApplicationServiceDependencies`, `ApplicationService`, `create_application_service`, `resolve_automation_export_mode`, and private state/token/lease helpers listed below | Shared validation, orchestration, state, errors, cursors, export defaults, and parity semantics |
+| `application_service.py` | `agent_report.application_service` | Constants, literal aliases, immutable request/result DTOs, typed dependency failures, port protocols, `ApplicationServiceConfig`, `ApplicationServiceDependencies`, `ApplicationService`, `create_application_service`, `resolve_automation_export_mode`, `_query_heatmap_semantics`, and private state/token/lease helpers listed below | Shared validation, orchestration, state, errors, cursors, export defaults, parsed-run Heatmap semantics, and parity semantics |
 | `test_application_service.py` | `tests.test_application_service` | Boundary doubles and every exact `test_*` target in Verification | Unit and contract verification for CD-002 |
 
 The production module declares these constants and aliases:
@@ -159,6 +162,14 @@ PROTOCOL_VERSION: Final[int] = 1
 DEFAULT_PAGE_SIZE: Final[int] = 100
 MAX_PAGE_SIZE: Final[int] = 500
 MAX_HEATMAP_CELLS: Final[int] = 2_000
+MAX_HEATMAP_EVIDENCE_ITEMS: Final[int] = 100
+MAX_WORKER_RESULT_BYTES: Final[int] = 1_048_576
+MAX_HEATMAP_FORMATTED_VALUE_BYTES: Final[int] = 64
+MAX_HEATMAP_LABEL_BYTES: Final[int] = 256
+MAX_HEATMAP_SUPPORTING_TEXT_BYTES: Final[int] = 96
+MAX_HEATMAP_PREVIEW_BYTES: Final[int] = 4_096
+MAX_HEATMAP_PROVENANCE_ITEMS: Final[int] = 32
+MAX_HEATMAP_PROVENANCE_BYTES: Final[int] = 256
 MAX_ID_BYTES: Final[int] = 256
 MAX_FILTER_VALUES: Final[int] = 500
 MAX_TEXT_BYTES: Final[int] = 4_096
@@ -194,17 +205,25 @@ TurnSortKey = Literal["started_at", "ended_at", "turn_id"]
 EventSortKey = Literal["occurred_at", "event_id"]
 SequenceSortKey = Literal["occurred_at", "sequence_id"]
 CoordinationSortKey = Literal["occurred_at", "coordination_id"]
-HeatmapGroupBy = Literal["agent", "event_kind", "work_item"]
-HeatmapColorSemantic = Literal["sequential_nonnegative", "diverging_signed"]
+HeatmapMode = Literal["wall_time", "tokens", "models"]
+HeatmapQueryKind = Literal["matrix", "cell_evidence"]
+HeatmapValueState = Literal["measured", "derived", "partial", "unavailable"]
+HeatmapScaleAvailability = Literal["available", "unavailable"]
 HeatmapScaleBasis = Literal["visible_row_maximum", "context_window_capacity"]
-TimeMeasure = Literal[
-    "wall_time",
-    "uncached_input_tokens",
-    "cached_input_tokens",
-    "output_tokens",
-    "reasoning_tokens",
-    "cost_usd",
+HeatmapRowKind = Literal["runtime_state", "token_measure", "model", "cost"]
+HeatmapRowOrder = Literal[
+    "runtime_state_contract",
+    "token_contract",
+    "model_first_occurrence_then_cost",
 ]
+HeatmapEvidenceMethod = Literal[
+    "measured",
+    "derived",
+    "inferred",
+    "estimated",
+    "unavailable",
+]
+HeatmapResolutionMinutes = Literal[1, 5, 15, 30, 60]
 ```
 
 The production module declares these public common types. All dataclasses are frozen and use slots.
@@ -336,14 +355,25 @@ class ListEventsRequest:
     page_size: int = DEFAULT_PAGE_SIZE
 
 @dataclass(frozen=True, slots=True)
-class HeatmapQueryRequest:
+class HeatmapMatrixRequest:
     snapshot_id: str
+    query_kind: Literal["matrix"]
     from_time: datetime
     to_time: datetime
-    measure: TimeMeasure
-    requested_resolution_minutes: int
-    group_by: HeatmapGroupBy
-    maximum_rows: int = 100
+    mode: HeatmapMode
+    requested_resolution_minutes: HeatmapResolutionMinutes
+    maximum_rows: int
+
+@dataclass(frozen=True, slots=True)
+class HeatmapCellEvidenceRequest:
+    snapshot_id: str
+    query_kind: Literal["cell_evidence"]
+    mode: HeatmapMode
+    row_id: str
+    period_start_time: datetime
+    period_end_time: datetime
+
+HeatmapSnapshotQueryRequest = HeatmapMatrixRequest | HeatmapCellEvidenceRequest
 
 @dataclass(frozen=True, slots=True)
 class SequenceFilters:
@@ -532,28 +562,51 @@ class EventRow:
     has_detail: bool
 
 @dataclass(frozen=True, slots=True)
-class HeatmapCell:
-    start_time: datetime
-    end_time: datetime
-    value: int | float | None
-    count: int
-    evidence: EvidenceKind
-    primary_label: str
-    secondary_label: str | None
-
-@dataclass(frozen=True, slots=True)
-class HeatmapScale:
+class AvailableHeatmapScale:
+    availability: Literal["available"]
     minimum: int | float
     maximum: int | float
-    color_semantic: HeatmapColorSemantic
     basis: HeatmapScaleBasis
 
 @dataclass(frozen=True, slots=True)
-class HeatmapRow:
+class UnavailableHeatmapScale:
+    availability: Literal["unavailable"]
+    reason: Literal["context_capacity_unavailable"]
+
+HeatmapScale = AvailableHeatmapScale | UnavailableHeatmapScale
+
+@dataclass(frozen=True, slots=True)
+class HeatmapMatrixCell:
+    start_time: datetime
+    end_time: datetime
+    value: int | float | None
+    formatted_value: str
+    value_state: HeatmapValueState
+    applicable_zero: bool
+    contributing_evidence_count: int
+    normalized_intensity: float | None
+    supporting_text: str | None
+
+@dataclass(frozen=True, slots=True)
+class HeatmapMatrixRow:
     row_id: str
+    row_kind: HeatmapRowKind
     label: str
     scale: HeatmapScale
-    cells: Sequence[HeatmapCell]
+    cells: Sequence[HeatmapMatrixCell]
+
+@dataclass(frozen=True, slots=True)
+class HeatmapEvidenceItem:
+    event_id: str | None
+    occurred_at: datetime
+    value: int | float | None
+    formatted_value: str
+    duration_ms: int | None
+    label: str
+    preview: str | None
+    evidence_method: HeatmapEvidenceMethod
+    value_state: HeatmapValueState
+    has_detail: bool
 
 @dataclass(frozen=True, slots=True)
 class SequenceRow:
@@ -623,21 +676,41 @@ class PageResult(Generic[T, F, S]):
     next_cursor: str | None
 
 @dataclass(frozen=True, slots=True)
-class HeatmapResult:
+class HeatmapMatrixResult:
     snapshot_id: str
-    revision: str
-    measure: TimeMeasure
-    group_by: HeatmapGroupBy
+    revision_id: str
+    query_kind: Literal["matrix"]
+    mode: HeatmapMode
     from_time: datetime
     to_time: datetime
-    requested_resolution_minutes: int
-    actual_resolution_minutes: int
+    requested_resolution_minutes: HeatmapResolutionMinutes
+    actual_resolution_minutes: HeatmapResolutionMinutes
     maximum_rows: int
     omitted_row_count: int
-    row_order: Literal["activity_descending_id_ascending"]
+    row_order: HeatmapRowOrder
     total_cell_count: int
-    rows: Sequence[HeatmapRow]
+    rows: Sequence[HeatmapMatrixRow]
     provenance: Sequence[str]
+
+@dataclass(frozen=True, slots=True)
+class HeatmapCellEvidenceResult:
+    snapshot_id: str
+    revision_id: str
+    query_kind: Literal["cell_evidence"]
+    mode: HeatmapMode
+    row_id: str
+    row_label: str
+    period_start_time: datetime
+    period_end_time: datetime
+    value: int | float | None
+    formatted_value: str
+    value_state: HeatmapValueState
+    applicable_zero: bool
+    evidence_items: Sequence[HeatmapEvidenceItem]
+    omitted_evidence_count: int
+    provenance: Sequence[str]
+
+HeatmapSnapshotQueryResult = HeatmapMatrixResult | HeatmapCellEvidenceResult
 
 @dataclass(frozen=True, slots=True)
 class SequenceResult:
@@ -685,7 +758,7 @@ class ApplicationService:
     def list_agents(self, context: OperationContext, request: ListAgentsRequest, *, cancellation: CancellationToken) -> ServiceResult[PageResult[AgentRow, AgentFilters, AgentSort]]: raise NotImplementedError
     def list_turns(self, context: OperationContext, request: ListTurnsRequest, *, cancellation: CancellationToken) -> ServiceResult[PageResult[TurnRow, TurnFilters, TurnSort]]: raise NotImplementedError
     def list_events(self, context: OperationContext, request: ListEventsRequest, *, cancellation: CancellationToken) -> ServiceResult[PageResult[EventRow, EventFilters, EventSort]]: raise NotImplementedError
-    def query_time_range(self, context: OperationContext, request: HeatmapQueryRequest, *, cancellation: CancellationToken) -> ServiceResult[HeatmapResult]: raise NotImplementedError
+    def query_snapshot_time_range(self, context: OperationContext, request: HeatmapSnapshotQueryRequest, *, cancellation: CancellationToken) -> ServiceResult[HeatmapSnapshotQueryResult]: raise NotImplementedError
     def query_sequence(self, context: OperationContext, request: SequenceQueryRequest, *, cancellation: CancellationToken) -> ServiceResult[SequenceResult]: raise NotImplementedError
     def query_coordination(self, context: OperationContext, request: CoordinationQueryRequest, *, cancellation: CancellationToken) -> ServiceResult[PageResult[CoordinationRow, CoordinationFilters, CoordinationSort]]: raise NotImplementedError
     def get_event_details(self, context: OperationContext, request: EventDetailsRequest, *, cancellation: CancellationToken) -> ServiceResult[EventDetail]: raise NotImplementedError
@@ -746,7 +819,13 @@ class _ReadLease:
     def __init__(self, service: ApplicationService, snapshot_id: str, state: _SnapshotState) -> None: raise NotImplementedError
     @property
     def state(self) -> _SnapshotState: raise NotImplementedError
-    def __enter__(self) -> _SnapshotState: raise NotImplementedError
+    @property
+    def snapshot_id(self) -> str: raise NotImplementedError
+    @property
+    def revision_id(self) -> str: raise NotImplementedError
+    @property
+    def read_handle(self) -> SnapshotReadHandle: raise NotImplementedError
+    def __enter__(self) -> _ReadLease: raise NotImplementedError
     def __exit__(self, exc_type: type[BaseException] | None, exc: BaseException | None, traceback: TracebackType | None) -> Literal[False]: raise NotImplementedError
 
 class _MutationLease:
@@ -763,11 +842,12 @@ def _require_snapshot(self: ApplicationService, snapshot_id: str) -> ServiceResu
 def _acquire_read(self: ApplicationService, snapshot_id: str) -> ServiceResult[_ReadLease]: raise NotImplementedError
 def _acquire_mutation(self: ApplicationService, snapshot_id: str, status: Literal["refreshing", "exporting", "closing"], *, require_no_readers: bool) -> ServiceResult[_MutationLease]: raise NotImplementedError
 def _query_page(self: ApplicationService, request: ListAgentsRequest | ListTurnsRequest | ListEventsRequest | CoordinationQueryRequest, operation: str, filters: F, sort: S, query: Callable[[SnapshotReadHandle, str | None], QuerySlice[T]]) -> ServiceResult[PageResult[T, F, S]]: raise NotImplementedError
+def _query_heatmap_semantics(handle: SnapshotReadHandle, request: HeatmapSnapshotQueryRequest, cancellation: CancellationToken) -> HeatmapSnapshotQueryResult: raise NotImplementedError
 def _map_dependency_failure(operation_id: str, failure: DependencyFailure) -> ReportError: raise NotImplementedError
 def _safe_internal_error(operation_id: str) -> ReportError: raise NotImplementedError
 ```
 
-`_acquire_read` runs under the service condition lock. It requires status `ready` and no active mutation. It increments `active_readers` before returning the lease. `_ReadLease.__exit__` decrements the count in a `finally` path and notifies the condition.
+`_acquire_read` runs under the service condition lock. It requires status `ready` and no active mutation. It captures immutable `snapshot_id`, `revision_id`, and `read_handle` values and increments `active_readers` before returning the lease. A result uses only those captured values. It never reads correlation from a mutable pending handle. `_ReadLease.__exit__` decrements the count in a `finally` path and notifies the condition.
 
 `_acquire_mutation` runs under the same lock. Refresh, export, and close use `require_no_readers=True`. They return `REPORT_SNAPSHOT_CONFLICT` without side effects when a reader or mutation exists. `_MutationLease.__exit__` clears `mutation_active`, restores `ready` unless close committed, and notifies the condition.
 
@@ -911,8 +991,8 @@ class ApplicationServiceDependencies:
 | --- | --- | --- |
 | `DiscoveryPort` | `preflight(scope: ReportScope, roots: Sequence[Path], cancellation: CancellationToken, progress: ProgressSink | None) -> DiscoveredScope`; `recheck(scope: ReportScope, roots: Sequence[Path], cancellation: CancellationToken, progress: ProgressSink | None) -> DiscoveredScope` | Sole Rust discovery adapter; returns bounded identity, counts, and source revision without transcript bodies |
 | `NormalizationPort` | `normalize(discovered: DiscoveredScope, parser_version: str, pricing_digest: str, formatter_digest: str, cancellation: CancellationToken, progress: ProgressSink | None) -> NormalizedRevision` | Python Core; preserves privacy and evidence semantics before repository publication |
-| `EventRepositoryPort` | `known_event_count(source_revision: str) -> int | None`; `reuse_or_publish(revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision`; `open_read(revision_id: str) -> SnapshotReadHandle`; `release_read(handle: SnapshotReadHandle) -> None` | CD-003 owns schema, migration, WAL, transactions, invalidation, and physical paths |
-| `QueryPort` | `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_time_range`, `query_sequence`, `query_coordination`, and `get_event_details` with the corresponding request/result types and a `SnapshotReadHandle` first parameter | Existing Python report semantics; returns privacy-bounded values only |
+| `EventRepositoryPort` | `known_event_count(source_revision: str) -> int | None`; `reuse_or_publish(revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision`; `open_read(snapshot_id: str, revision_id: str, run: CodexRunMetrics) -> SnapshotReadHandle`; `release_read(handle: SnapshotReadHandle) -> None` | CD-003 owns schema, migration, WAL, transactions, invalidation, physical paths, and binding validation. The lease-bound parsed run is transient and does not add a schema field. |
+| `QueryPort` | `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, and `get_event_details` with the corresponding request/result types and a `SnapshotReadHandle` first parameter | Existing Python report semantics plus one shared pure classic-Heatmap semantic helper. It returns privacy-bounded values only. |
 | `ExportRendererPort` | `stage(handle: SnapshotReadHandle, request: ResolvedExportRequest, cancellation: CancellationToken, progress: ProgressSink | None) -> StagedExport` | CD-006 receives a non-optional `summary|directory` mode and owns content, size caps, omissions, manifest layout, staging cleanup, and rendering |
 | `PublicationPort` | `publish(staged: StagedExport, target: Path, replace: bool, cancellation: CancellationToken) -> ExportResult`; `discard(staged: StagedExport) -> None` | Surface adapter validates output authority and owns atomic destination replacement |
 | `ClockPort` | `now_utc() -> datetime` | Supplies observation time for deterministic tests |
@@ -937,7 +1017,7 @@ The port failure sets are exhaustive:
 
 Unexpected exceptions from any port bypass typed fields. `_safe_internal_error` returns `REPORT_INTERNAL_ERROR` with the fixed message `The report operation failed unexpectedly.` The logger receives only the operation ID, dependency name, and exception class name.
 
-`DiscoveredScope`, `NormalizedRevision`, `PublishedRevision`, `SnapshotReadHandle`, and `StagedExport` are application-facing protocols. They expose only the identifiers, counts, versions, and release methods required above. Concrete storage and rendering data remain dependency-owned.
+`DiscoveredScope`, `NormalizedRevision`, `PublishedRevision`, `SnapshotReadHandle`, and `StagedExport` are application-facing protocols. They expose only the identifiers, counts, versions, and release methods required above. `CodexRunMetrics` is the Core-owned parsed-run model whose classic semantic evidence is established by committed `a8eef62` `run-timeline.py`; CD-002 consumes the lease-bound value and does not redefine or persist it. Concrete storage and rendering data remain dependency-owned.
 
 Their complete application-facing contracts are:
 
@@ -970,6 +1050,8 @@ class NormalizedRevision(Protocol):
     def source_revision(self) -> str: raise NotImplementedError
     @property
     def privacy_validated(self) -> bool: raise NotImplementedError
+    @property
+    def run(self) -> CodexRunMetrics: raise NotImplementedError
 
 @dataclass(frozen=True, slots=True)
 class PublishedRevision:
@@ -978,9 +1060,13 @@ class PublishedRevision:
 
 class SnapshotReadHandle(Protocol):
     @property
+    def snapshot_id(self) -> str: raise NotImplementedError
+    @property
     def revision_id(self) -> str: raise NotImplementedError
     @property
     def source_revision(self) -> str: raise NotImplementedError
+    @property
+    def run(self) -> CodexRunMetrics: raise NotImplementedError
 
 @dataclass(frozen=True, slots=True)
 class QuerySlice(Generic[T]):
@@ -1003,7 +1089,7 @@ class NormalizationPort(Protocol):
 class EventRepositoryPort(Protocol):
     def known_event_count(self, source_revision: str) -> int | None: raise NotImplementedError
     def reuse_or_publish(self, revision: NormalizedRevision, cancellation: CancellationToken, progress: ProgressSink | None) -> PublishedRevision: raise NotImplementedError
-    def open_read(self, revision_id: str) -> SnapshotReadHandle: raise NotImplementedError
+    def open_read(self, snapshot_id: str, revision_id: str, run: CodexRunMetrics) -> SnapshotReadHandle: raise NotImplementedError
     def release_read(self, handle: SnapshotReadHandle) -> None: raise NotImplementedError
 
 class QueryPort(Protocol):
@@ -1011,7 +1097,7 @@ class QueryPort(Protocol):
     def list_agents(self, handle: SnapshotReadHandle, filters: AgentFilters, sort: AgentSort, after: str | None, limit: int, cancellation: CancellationToken) -> QuerySlice[AgentRow]: raise NotImplementedError
     def list_turns(self, handle: SnapshotReadHandle, filters: TurnFilters, sort: TurnSort, after: str | None, limit: int, cancellation: CancellationToken) -> QuerySlice[TurnRow]: raise NotImplementedError
     def list_events(self, handle: SnapshotReadHandle, filters: EventFilters, sort: EventSort, after: str | None, limit: int, cancellation: CancellationToken) -> QuerySlice[EventRow]: raise NotImplementedError
-    def query_time_range(self, handle: SnapshotReadHandle, request: HeatmapQueryRequest, actual_resolution_minutes: int, cancellation: CancellationToken) -> HeatmapResult: raise NotImplementedError
+    def query_snapshot_time_range(self, handle: SnapshotReadHandle, request: HeatmapSnapshotQueryRequest, cancellation: CancellationToken) -> HeatmapSnapshotQueryResult: raise NotImplementedError
     def query_sequence(self, handle: SnapshotReadHandle, request: SequenceQueryRequest, after: str | None, cancellation: CancellationToken) -> SequenceResult: raise NotImplementedError
     def query_coordination(self, handle: SnapshotReadHandle, request: CoordinationQueryRequest, after: str | None, cancellation: CancellationToken) -> QuerySlice[CoordinationRow]: raise NotImplementedError
     def get_event_details(self, handle: SnapshotReadHandle, event_id: str, cancellation: CancellationToken) -> EventDetail | None: raise NotImplementedError
@@ -1051,7 +1137,7 @@ All operations are synchronous in Python. A worker or asynchronous adapter runs 
 | `list_agents` | Snapshot holder; exact query/state filters, requested stable sort, opaque cursor, page size 1-500 | Service owns bounds, accepted sort keys, and cursor binding. Default sort is `last_activity_at descending, agent_id ascending`. | Canonical `PageResult[AgentRow, AgentFilters, AgentSort]`; exact revision, applied filter values, and applied sort values are explicit | Read-only. Malformed input is `REPORT_INVALID_REQUEST`; cross-operation, filter, sort, page-size, snapshot, or revision cursor mismatch is `REPORT_CURSOR_CONFLICT`. |
 | `list_turns` | Snapshot holder; exact agent/state filters, requested stable sort, cursor, page size 1-500 | Default sort is `started_at ascending, turn_id ascending`. Other rules match `list_agents`. | Canonical `PageResult[TurnRow, TurnFilters, TurnSort]` | Read-only; query error does not replace caller or service state. |
 | `list_events` | Snapshot holder; exact agent/turn/kind/time filters, requested stable sort, cursor, page size 1-500 | Default sort is `occurred_at ascending, event_id ascending`. Other rules match `list_agents`. | Canonical `PageResult[EventRow, EventFilters, EventSort]`; each row can carry a nullable snapshot-scoped opaque `source_key` | Read-only; cache path and raw record remain absent. Tauri alone projects `source_key` to `sourceRef`. |
-| `query_time_range` | Snapshot holder; aware half-open range, supported measure, `agent|event_kind|work_item` grouping, requested resolution, and 1-200 row maximum | Service requires start before end, orders rows by activity descending and opaque ID ascending, and calculates actual resolution so total cells stay at or below 2,000. | `HeatmapResult`; exact revision, request facets, per-row scale/color semantics, omission count, total cell count, rows, and provenance | Read-only. The actual resolution is the smallest positive whole-minute value at least the requested resolution that satisfies the total-cell cap. No retained MCP selector is changed. |
+| `query_snapshot_time_range` | Snapshot holder; exact `matrix|cell_evidence` discriminator. Matrix selects an aware half-open range, one `wall_time|tokens|models` mode, a supported resolution, and the row maximum. Cell evidence selects one returned row and period in the same mode. | Service validates the exact variant, acquires one immutable read lease, and derives `snapshot_id`, `revision_id`, and semantic data from that lease. Matrix chooses the nearest supported coarser resolution and deterministically omits trailing rows when 2,000 cells cannot otherwise fit. Cell evidence has a fixed 100-item cap. | Discriminated `HeatmapMatrixResult|HeatmapCellEvidenceResult`. Matrix has rows and cells but no evidence ledger. Cell evidence has one chronological ledger but no matrix. Both include bounded provenance and exact raw nullable values, formatting, applicability, and evidence state. | Read-only. Matrix streams no previews or full details. Cell evidence retains the first 100 chronological safe items and counts all omitted matches. Each encoded result must remain below 1,048,576 bytes. Retained MCP `query_time_range` remains separate and unchanged. |
 | `query_sequence` | Snapshot holder; exact focus, event kinds, `none|repeated_messages|delegation|agent` grouping, reasoning flag, requested chronological sort, cursor, and page size | Service binds cursor to every selector and supplies the group hierarchy. Default sort is `occurred_at ascending, sequence_id ascending`. | `SequenceResult`; canonical page metadata, groups, endpoints, repeat count, reasoning availability, evidence, and event selectors are explicit | Read-only. Invalid focus, grouping, hierarchy, cursor, or page uses structured request, contract, or cursor error. |
 | `query_coordination` | Snapshot holder; exact work-item, delegated-root, agent, operation, evidence filters, requested chronological sort, cursor, and page size | Service binds cursor to every selector. Default sort is `occurred_at ascending, coordination_id ascending`. | Canonical `PageResult[CoordinationRow, CoordinationFilters, CoordinationSort]`; grouping selectors, operation, event selector, and evidence are explicit | Read-only. A missing canonical work-item or delegated-root ID does not authorize invention; nullable IDs remain explicit. Prose-derived decisions have `evidence="inferred"`. |
 | `get_event_details` | Snapshot holder; exact deterministic opaque event ID | Service validates non-empty selectors. Query Port resolves only within the bound revision. | `EventDetail`; exact revision, title, optional summary, structured disclosures, evidence, provenance, and nullable opaque `source_key` | Read-only. Missing or stale event returns `REPORT_EVENT_NOT_FOUND`. The snapshot remains open. Tauri projects `source_key` to a webview `sourceRef`. |
@@ -1061,6 +1147,42 @@ All operations are synchronous in Python. A worker or asynchronous adapter runs 
 | `close` | Composition root during shutdown | Service atomically rejects new leases, waits until every active reader and mutation drains, then removes states and releases handles exactly once | No return value | Idempotent. The caller requests cancellation before `close()` when bounded shutdown is required. The service does not terminate a worker process or purge derived data. |
 
 Every summary, list, time-range, sequence, coordination, and event-detail operation follows the same read-lease rule. No Query Port receives a handle before the count increments, and no close releases a handle before the count returns to zero.
+
+### Heatmap Semantic Contract
+
+`query_snapshot_time_range` uses one pure semantic implementation for both result variants. The implementation reads only `SnapshotReadHandle.run` while the matching read lease is active. It does not reconstruct Heatmap meaning from normalized event-cache rows. It traverses agents and responses in stable snapshot source order and performs bounded streaming aggregation. Matrix processing does not create previews or event details. Cell-evidence processing retains only the first 100 chronological safe items while it counts later matches.
+
+The mode rows and order are exact:
+
+| Mode | Rows and order | Calculation | Formatting and scale |
+| --- | --- | --- | --- |
+| `wall_time` | Present known runtime states in this order: Model inference, Tool execution, Build / Test, Waiting for agent, User pause, Watchdog, Approval / infrastructure, Unattributed. Present unknown states follow by ascending internal-state identifier with title-cased labels. | Clip matching intervals to each half-open period. Merge touching, nested, and overlapping intervals for the same state across agents. Sum the merged union once. | Duration format. Each row uses its visible maximum when available. |
+| `tokens` | Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), Cost. | Assign response-owned values to the response completion period. Sum token values. Count completed tool calls. Average positive context observations for `avg`; take their maximum for `max`. Sum recorded or supported API-equivalent costs. | Tokens use compact numbers. Tool calls use integers. Known-capacity context rows show tokens and percentage. Cost uses classic report precision. Non-context rows use their visible maximum. Context rows use known capacity. |
+| `models` | One row per normalized model-and-effort identity in first-response occurrence order, then Cost. | Use recorded model, then a single non-mixed thread model, then Unknown model. Use recorded effort, then a single non-mixed thread effort, then no suffix. Sum processed tokens for matching responses by completion period. Sum Cost as for `tokens`. | Model values use compact numbers. Cost uses classic report precision. Each row uses its visible maximum when available. |
+
+Friendly agent labels use the recorded role. A root without a role uses `main`; a child without a role uses `default`. The name uses the recorded nickname, then a child assignment. The label is `role (name)` only when the name differs from the role and the literal fallback `root`. Model labels use `model · effort value`, model alone, or `Unknown model` as applicable. Row headings, cell text, evidence headings, and evidence labels use these friendly forms.
+
+Every cell and selected-cell result uses exactly one `value_state`:
+
+| Row family | `measured` or `derived` | `partial` | `unavailable` | Applicable zero |
+| --- | --- | --- | --- | --- |
+| Runtime state | Interval union is always derived when usable timing exists. | Some matching intervals have usable boundaries and others do not. | The state applies, but no matching interval has usable timing. | Complete interval evidence has no overlap; format as `0ms`. |
+| Input, cached input, reasoning, and output | One direct counter is measured. A complete sum or source-defined normalized calculation is derived. | At least one applicable response has no usable counter; return the subtotal. | Applicable responses exist, but none has a usable counter. | Complete applicable usage establishes zero; format as compact `0`. |
+| Tool calls | A complete count is derived. | Coverage is explicitly incomplete and the known count is usable. | Tool-event coverage is unavailable. | Complete coverage contains no completed calls; format as integer `0`. |
+| Context average | A complete average of positive observations is derived. | Usable positive observations exist, and other applicable responses lack context evidence. | No positive usable observation exists. | Never applicable. A missing or nonpositive placeholder is unavailable. |
+| Context maximum | One positive observation is measured. A complete maximum of several observations is derived. | Usable positive observations exist, and other applicable responses lack context evidence. | No positive usable observation exists. | Never applicable. A missing or nonpositive placeholder is unavailable. |
+| Cost | One fully recorded direct cost is measured. A complete sum or supported API-equivalent estimate is derived and identifies its method. | Return the supported subtotal when another applicable response lacks usage or supported pricing. | No applicable response has defensible recorded or estimated cost. | Complete cost evidence establishes no cost; format as `$0.00`. |
+| Model and effort | One direct processed-token value is measured. A complete sum or source-defined processed-token calculation is derived. | Return the usable subtotal when another matching response lacks usage. | The identity exists, but no matching response has usable processed-token evidence. | Complete matching usage establishes zero; format as compact `0`. |
+
+`applicable_zero=true` is valid only with `measured|derived`. Missing timing, usage, pricing, coverage, or capacity never becomes zero. A partial formatted value is `Partial · <formatted known value>`. An unavailable value is raw `None` and formats as `Unavailable`.
+
+Scale availability is a true union. `AvailableHeatmapScale` always has finite numeric `minimum` and `maximum` plus its basis. `UnavailableHeatmapScale` has only `reason="context_capacity_unavailable"`. Mixed nullable scale cross-products are invalid. Context rows use `context_window_capacity` only when capacity is known. Unknown capacity returns the unavailable variant, null `normalized_intensity`, and no percentage or visible-row fallback. A separately evidenced context-token observation may remain in `supporting_text`.
+
+`HeatmapEvidenceItem.value` preserves its raw nullable numeric value. `evidence_method` is exactly `measured|derived|inferred|estimated|unavailable`. Items are ordered by `occurred_at`, then stable source order. A nullable deterministic `event_id` is present only when full lazy detail is available. `has_detail=true` requires that event ID. Labels and nullable bounded previews contain no source path, unrestricted transcript, raw secret, or ciphertext.
+
+A token-response evidence label starts with the friendly agent label and then the friendly model-and-effort label. Other evidence labels use the applicable friendly model-and-effort, runtime-state, or tool label. `duration_ms` is present only when the selected evidence has a defensible duration.
+
+Coarsening considers only `1|5|15|30|60`. The service derives the complete mode-specific row order, retains at most the requested `maximum_rows`, and counts the remaining rows as omitted. It first chooses the requested resolution when those retained rows fit. Otherwise it chooses the nearest larger supported value that fits. If the 60-minute matrix still exceeds 2,000 cells, the service omits trailing retained rows and adds them to `omitted_row_count`. It never invents an unsupported interval. A request whose time span cannot fit one row at 60 minutes returns `REPORT_INVALID_REQUEST`. `row_order` is `runtime_state_contract`, `token_contract`, or `model_first_occurrence_then_cost` for the matching mode.
 
 ### Version 1 Field Constraints
 
@@ -1080,8 +1202,12 @@ The service validates these constraints before the affected dependency call or s
 | Event filters and sort | Nullable `agent_id`, `turn_id`, `kind`, `from_time`, and `to_time`. Sort key is `occurred_at|event_id`, direction is explicit, and the tie break is always `event_id ascending`. | Times are aware and half-open when both are present. Exact applied values are returned. |
 | Sequence filters and sort | Nullable focus, bounded event kinds, `none|repeated_messages|delegation|agent` grouping, explicit reasoning flag, and `occurred_at ascending, sequence_id ascending`. | Exact applied values and group hierarchy are returned. Unsupported ordering fails before execution. |
 | Coordination filters and sort | Nullable work-item, delegated-root, agent, operation, and evidence filters with `occurred_at ascending, coordination_id ascending`. | Exact applied values are returned. Unsupported ordering fails before execution. |
-| Heatmap fields | Required measure, `agent|event_kind|work_item` grouping, requested resolution in `1|5|15|30|60`, and `maximum_rows` from 1 through 200. | The result echoes every applied facet and contains at most 2,000 total cells. |
-| `requested_resolution_minutes` | Required positive integer | Actual resolution is an integer multiple of the request and produces at most 2,000 total cells across all returned rows |
+| Heatmap discriminator and mode | `query_kind` is exactly `matrix|cell_evidence`. `mode` is exactly `wall_time|tokens|models`. Fields from the other variant are forbidden. | The service rejects unknown, missing, or mixed variant fields before semantic aggregation. Dynamic queries reject the retained MCP atomic measures. |
+| Matrix selectors | Aware half-open `from_time|to_time`, `requested_resolution_minutes` in `1|5|15|30|60`, and `maximum_rows` from 1 through 200. | The result echoes the applied selectors, returns at most 2,000 cells, and uses only a supported actual resolution. |
+| Cell-evidence selectors | Opaque revision-bound `row_id` returned by the matrix; exact aware half-open `period_start_time|period_end_time` returned by the matrix; matching mode and snapshot. | Clients do not synthesize row IDs or periods. The evidence cap is fixed at 100 and is not a request field. A stale or mismatched selection fails instead of returning another cell's data. |
+| Heatmap result union | `query_kind` selects exactly one result shape. `snapshot_id` and `revision_id` equal the acquired read lease. Raw numeric fields and `normalized_intensity` are finite or null. Counts are nonnegative. Collections and provenance are bounded. | Matrix contains no evidence ledger or full detail. Cell evidence contains no matrix. Each serialized terminal result is less than 1,048,576 bytes and is never truncated. |
+| Heatmap scale | `available` requires finite numeric minimum and maximum plus `visible_row_maximum|context_window_capacity`. `unavailable` requires only `reason="context_capacity_unavailable"` and forbids basis or numeric scale fields. | Nullable or mixed cross-products are invalid. Unknown context capacity uses `unavailable`; `normalized_intensity` is null and no percentage or fallback scale is returned. |
+| Heatmap strings and provenance | `formatted_value` at most 64 UTF-8 bytes; row/evidence label at most 256; supporting text at most 96; nullable preview at most 4,096; at most 32 provenance items of 256 bytes each. | Overflow fails before a result is returned. The service does not truncate a semantic value, preview, or provenance item to satisfy the worker bound. |
 | `surface` | Required exact `tauri`, `cli`, or `mcp` | Unsupported values are invalid before rendering |
 | `mode`; MCP `export_snapshot.report_mode` | Optional exact `directory` or `summary` | The MCP snapshot adapter maps `report_mode` to `ExportSnapshotRequest.mode`. Omitted snapshot-export mode resolves to `directory`. FastMCP rejects any other value at the snapshot-tool schema; the service defensively returns `REPORT_INVALID_REQUEST` before rendering if an incompatible caller bypasses that schema. This field is absent from retained `generate_report`. |
 | `target` | Required absolute `Path` for service calls | The surface publisher performs root and permission authorization; a relative value is invalid before staging |
@@ -1092,7 +1218,7 @@ The service validates these constraints before the affected dependency call or s
 | Warnings | At most 100 ordered `WarningRecord { code, message }` values | Additional warnings become one terminal structured omission warning |
 | Provenance and redaction entries | At most 100 values in each sequence | Overflow is represented by one bounded omission entry |
 | Recent summary activity | At most 100 ordered items | The Query Port selects significant activity; the service rejects an oversized result |
-| Page and heatmap items | At most the requested page size or 2,000 total heatmap cells | An oversized dependency result is `REPORT_INTERNAL_ERROR`; it is not sliced after cursor calculation |
+| Page and Heatmap items | At most the requested page size, 2,000 total matrix cells, or 100 selected-cell evidence items | An oversized dependency result is `REPORT_INTERNAL_ERROR`; matrix rows use the defined coarsening and omission rule, while evidence reports exact omission without eager overflow materialization |
 
 Every public collection is returned as an immutable tuple even though the typing contract accepts `Sequence` at dependency boundaries. This copy prevents a dependency from mutating a returned DTO after validation.
 
@@ -1142,7 +1268,7 @@ get_event_details(ctx: Context, thread_id: str, event_id: str) -> dict[str, obje
 
 The current top-level `ok`, `code`, `message`, match, inline, byte-count, written-file, warning, range, task, event, and bucket shapes remain unchanged. The retained tools do not gain relationship-scope fields, `snapshot_id`, revision, Workspace filters, or Workspace result fields.
 
-The MCP adapter registers these distinct snapshot tools: `preflight_report`, `open_snapshot`, `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, `get_snapshot_event_details`, `refresh_snapshot`, `export_snapshot`, and `close_snapshot`. `query_snapshot_time_range` maps to `ApplicationService.query_time_range`. `get_snapshot_event_details` maps to `ApplicationService.get_event_details`. Each new tool maps to its exact request and `ServiceResult` independently. Forensic query, detail, and snapshot calls do not create a static export. No MCP operation requires Tauri.
+The MCP adapter registers these distinct snapshot tools: `preflight_report`, `open_snapshot`, `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, `get_snapshot_event_details`, `refresh_snapshot`, `export_snapshot`, and `close_snapshot`. `query_snapshot_time_range` maps to `ApplicationService.query_snapshot_time_range` and exposes only its discriminated `matrix|cell_evidence` schema. `get_snapshot_event_details` maps to `ApplicationService.get_event_details`. Each new tool maps to its exact request and `ServiceResult` independently. Forensic query, detail, and snapshot calls do not create a static export. No MCP operation requires Tauri.
 
 ### Justified Module Propositions
 
@@ -1152,16 +1278,17 @@ The MCP adapter registers these distinct snapshot tools: `preflight_report`, `op
 | MP-02 | Use a per-instance HMAC-SHA256 base64url codec for preflight tokens and cursors | Tokens and cursors must be opaque, scope-bound, filter-bound, sort-bound, snapshot-bound, and process-local | Detects caller modification without repository state or a global secret | Dev Documentation Writer within internal encoding authority |
 | MP-03 | Keep snapshot IDs opaque through `IdFactoryPort` and make no format promise | HLD-003 requires opaque IDs and delegates encoding | Supports deterministic tests without making a new public spelling contract | Dev Documentation Writer within internal ID-generation authority |
 | MP-04 | Use one condition-protected active-reader count plus one exclusive non-blocking mutation lease per snapshot | HLD-003 requires reads of one coherent revision and only one mutation at a time | Prevents handle release during a query and prevents query, refresh, export, or close races without serializing independent snapshots | Dev Documentation Writer within module concurrency authority |
-| MP-05 | Coarsen snapshot time queries to the smallest whole-minute multiple of the requested resolution that keeps all returned rows at or below 2,000 total cells | FR-001 requires a nearest coarser actual resolution while the accepted grouped heatmap caps the full response | Makes the grouped response limit deterministic while leaving the retained MCP bucket set unchanged | Dev Architect reconciliation |
+| MP-05 | Coarsen matrix queries to the nearest larger value in `1|5|15|30|60`. If 60 minutes is still too large, omit trailing rows in exact mode order. Reject an extreme range when even one retained row cannot fit 2,000 cells. | FR-001 HM-F14 and the accepted Heatmap plan require nearest supported coarsening, deterministic omission, and explicit extreme-range behavior. | Keeps matrix limits deterministic without inventing bucket sizes or changing retained MCP buckets. | Dev Architect reconciliation |
 | MP-06 | Accept only the explicit operation-specific Workspace sort keys and directions, require stable identity tie breaks, and echo the normalized values in each page. | CD-005 defines visible sort controls and HLD-003 requires exact applied sort state. | Keeps cursors reproducible while preserving the accepted UI contract. | Dev Architect accepted UI/service reconciliation |
 | MP-07 | Treat unexpected exceptions as `REPORT_INTERNAL_ERROR` and log only operation metadata | ARC-06 and ARC-15 prohibit raw disclosure; HLD-003 requires safe errors | Prevents exception strings from leaking source or cache paths | Dev Documentation Writer within error-mapping authority |
 | MP-08 | Keep retained MCP tool names, exact schemas, defaults, and response semantics. Map only additive snapshot export to the shared service export sequence. | ARC-13 and the superseding user decision preserve `generate_report` compatibility while adding snapshot tools. | Preserves machine clients and keeps classic rendering separate from streamlined export. | User decision and CD-002 orchestration authority |
-| MP-09 | Use fixed version 1 byte and collection bounds for DTOs, filters, detail, warnings, provenance, redactions, and recent activity | ARC-06 requires bounded DTOs, and HLD-003 assigns exact limits to the Application Service while fixing page and bucket ceilings | Converts the privacy and performance rule into executable validation without changing parent page or bucket limits | Dev Documentation Writer within CD-002 limit authority |
+| MP-09 | Use fixed version 1 byte and collection bounds for DTOs, filters, detail, warnings, provenance, redactions, recent activity, and Heatmap strings. Heatmap fields use 64-byte formatted values, 256-byte labels, 96-byte supporting text, 4,096-byte previews, and at most 32 provenance items of 256 bytes each. | ARC-06 requires bounded DTOs. HLD-003 fixes the 1,048,576-byte record ceiling and delegates field bounds to CD-002. | The exact bounds make worst-case matrix and evidence records testable without changing parent cell, row, evidence, page, or worker limits. | Dev Documentation Writer within CD-002 limit authority |
 | MP-10 | Use the exact `REPORT_CURSOR_CONFLICT`, `REPORT_SNAPSHOT_NOT_FOUND`, `REPORT_SNAPSHOT_CONFLICT`, `REPORT_PRIVACY_FAILED`, `REPORT_EXPORT_FAILED`, `REPORT_CANCELLED`, and `REPORT_INTERNAL_ERROR` codes for error categories named but not spelled by HLD-003 | HLD-003 assigns structured errors to this component and requires cursor, snapshot, privacy, export, cancellation, and unexpected-failure distinctions | Gives every adapter one stable machine-readable mapping and avoids string inspection | Dev Documentation Writer within CD-002 structured-error authority |
 | MP-11 | Resolve omitted snapshot-export mode to `directory`; accept explicit `directory` or `summary`; reject every other value. An omitted CLI report mode stays outside CD-002 and selects classic generation. | Superseding user decision on 2026-08-12 | Makes streamlined snapshot export deterministic without changing classic defaults. | User decision; Application Service owns streamlined mode orchestration |
 | MP-12 | Make `close_snapshot` reject active readers and make service `close()` drain leases after rejecting new work | HLD-003 requires coherent handle lifetime and allows the module to select concurrency internals | Gives interactive close a recoverable non-blocking result and gives composition-root shutdown deterministic ownership | Dev Documentation Writer within module lifecycle authority |
 | MP-13 | Require operation IDs to encode 96 cryptographically secure random bits as `op_` plus 24 lowercase hexadecimal characters. | Worker correlation, cancellation, and one-time output grants use the same identifier. | A predictable identifier cannot safely bind concurrent cancellation and publication authority. | Dev Architect accepted UI/service/worker reconciliation |
 | MP-14 | Return snapshot-scoped opaque `source_key` values from the service and native published targets from export; let Tauri project both through private registries. | Tauri owns native path authority, while the Worker must remain a generic service transport. | The split keeps paths out of the webview without teaching the generic Rust transport report semantics. | Dev Architect accepted UI/service/worker reconciliation |
+| MP-15 | Compute both Heatmap variants through one pure semantic helper over `SnapshotReadHandle.run`; do not add a second evidence operation or migrate the normalized event cache. | HLD-003 DEC-05 and DEC-06 plus PLAN-012 bind semantic evidence to one immutable parsed-run lease. | One calculation preserves matrix/evidence agreement, avoids semantic loss in schema-v1 rows, and keeps retained list/detail cache behavior stable. | Dev Architect accepted Heatmap reconciliation |
 
 ## External And Asynchronous Effect Phases
 
@@ -1248,7 +1375,8 @@ On query failure, the read lease still releases and the current snapshot survive
 6. A revision mismatch returns `REPORT_SCOPE_CONFLICT` before normalization.
 7. The Core normalizes the accepted sources and applies privacy rules.
 8. The repository reuses or atomically publishes one coherent revision.
-9. The service creates a read handle and publishes `_SnapshotState` only after repository success.
+9. The service opens the read handle with the exact published snapshot ID, revision ID, and privacy-valid `NormalizedRevision.run`.
+10. The service publishes `_SnapshotState` only after the repository validates that immutable binding.
 
 ### Query And Cursor
 
@@ -1261,15 +1389,28 @@ On query failure, the read lease still releases and the current snapshot survive
 7. The service releases the read lease in `finally`, including on cancellation or failure.
 8. The service returns the value without changing snapshot or repository state.
 
+### Heatmap Matrix And Cell Evidence
+
+1. The service validates the request discriminator and only the fields for that variant.
+2. The service acquires one read lease and captures its immutable `snapshot_id`, `revision_id`, and parsed run.
+3. For `matrix`, the service selects the nearest supported resolution and ordered rows that fit 2,000 cells.
+4. The pure semantic helper streams intervals, responses, tools, usage, price evidence, and identity fallbacks from the parsed run.
+5. For `cell_evidence`, the same helper selects the returned row and period, retains 100 chronological safe items, and counts omissions.
+6. The service validates evidence states, raw nullable values, formatting, scale union, privacy, correlation, and the 1,048,576-byte encoded bound.
+7. The service releases the read lease in `finally` and returns exactly one discriminated result.
+
+If parsed-run evidence cannot distinguish applicable zero from missing timing, usage, price, coverage, or capacity, the operation stops. The design gap returns to Dev Architect. The implementation must not coerce absence to zero, query mutable pending state, or add an event-cache migration.
+
 ### Refresh
 
 1. The service acquires the snapshot mutation lease without waiting and only when no reader exists.
 2. Discovery rechecks the exact stored scope.
 3. An unchanged source revision returns the existing metadata.
 4. A changed source revision runs normalization and repository publication.
-5. The service opens the new read handle and atomically swaps `_SnapshotState`.
-6. The service releases the old handle only after the swap.
-7. Every error or cancellation retains the old state and releases the lease.
+5. The service opens the new read handle with the new published revision and its privacy-valid parsed run.
+6. The service atomically swaps the complete `_SnapshotState` binding.
+7. The service releases the old handle only after the swap and after its active read leases drain.
+8. Every error or cancellation retains the old state and releases the lease.
 
 ### Export And Close
 
@@ -1309,17 +1450,25 @@ sequenceDiagram
     Service-->>Caller: REPORT_SCOPE_CONFLICT
   else Source revision current
     Service->>Core: normalize(discovered, versions)
-    Core-->>Service: privacy-valid candidate
+    Core-->>Service: privacy-valid candidate and parsed run
     Service->>Repo: reuse_or_publish(candidate)
     Repo-->>Service: published revision
+    Service->>Repo: open_read(snapshot, revision, parsed run)
+    Repo-->>Service: immutable handle binding
     Service-->>Caller: SnapshotMetadata
   end
-  Caller->>Service: bounded query(snapshot, selectors)
+  Caller->>Service: query_snapshot_time_range(matrix selectors)
   Service->>Service: acquire read lease and increment active_readers
-  Service->>Query: query(captured read handle)
-  Query-->>Service: bounded result
+  Service->>Query: stream matrix from captured handle.run
+  Query-->>Service: bounded matrix without evidence ledger
   Service->>Service: release read lease in finally
-  Service-->>Caller: sanitized DTO and cursor
+  Service-->>Caller: correlated matrix result
+  Caller->>Service: query_snapshot_time_range(cell_evidence selector)
+  Service->>Service: acquire matching read lease
+  Service->>Query: stream selected row-period evidence from handle.run
+  Query-->>Service: at most 100 items and exact omitted count
+  Service->>Service: release read lease in finally
+  Service-->>Caller: correlated cell-evidence result
   Caller->>Service: refresh_snapshot(snapshot)
   Service->>Discovery: recheck(stored scope)
   alt Unchanged
@@ -1371,7 +1520,11 @@ stateDiagram-v2
   Ready --> Opening: open_snapshot
   Opening --> SnapshotReady: coherent publication
   Opening --> Ready: error or cancellation
-  SnapshotReady --> Querying: bounded query
+  SnapshotReady --> QueryingMatrix: query_snapshot_time_range matrix
+  QueryingMatrix --> SnapshotReady: result, error, or cancellation
+  SnapshotReady --> QueryingCellEvidence: query_snapshot_time_range cell_evidence
+  QueryingCellEvidence --> SnapshotReady: result, error, or cancellation
+  SnapshotReady --> Querying: other bounded query
   Querying --> SnapshotReady: result, error, or cancellation
   SnapshotReady --> Refreshing: explicit refresh
   Refreshing --> SnapshotReady: unchanged, replaced, error, or cancellation
@@ -1395,7 +1548,11 @@ stateDiagram-v2
 - A cursor also binds one operation, normalized filters, the accepted requested sort, page size, and continuation position.
 - Every canonical `PageResult` carries the exact snapshot revision, exact normalized applied filter values, and exact normalized applied sort values. A digest or free-form sort string is not a substitute.
 - Pages contain 1 through 500 requested items, with 100 as the default.
-- Grouped heatmap results contain at most 2,000 total cells, enforce the applied row maximum, and disclose exact grouping, row order, scales, color semantics, and actual resolution.
+- A matrix result contains at most 2,000 total cells. It enforces the requested row maximum and discloses mode, exact row order, supported actual resolution, scales, evidence states, and omissions.
+- A cell-evidence result contains at most 100 chronological items and reports the exact omitted count. A matrix never contains that ledger or full event detail.
+- Heatmap scale availability is a discriminated union. Unknown context capacity has `reason="context_capacity_unavailable"`, null `normalized_intensity`, no percentage, and no row-relative fallback.
+- Both Heatmap variants derive `snapshot_id`, `revision_id`, and semantic evidence from one acquired read lease. They never read mutable pending-handle or latest-run state.
+- Every Heatmap result is privacy-bounded, finite-or-null where numeric, and less than 1,048,576 encoded bytes. The service never truncates a terminal result to fit.
 - Queries never replace a snapshot or repository revision.
 - Every query owns one read lease from before handle capture through its `finally` cleanup.
 - A handle is released only after `active_readers == 0` and no mutation owns the snapshot.
@@ -1427,6 +1584,8 @@ CD-002 reads configuration only through `ApplicationServiceConfig`.
 | `default_page_size: int` | Optional; 100 | From 1 through `max_page_size` | Immutable per instance; CD-002 default |
 | `max_page_size: int` | Optional; 500 | From 1 through 500 | Immutable per instance; HLD-003 and FR-001 own ceiling |
 | `max_heatmap_cells: int` | Optional; 2,000 | Exactly 2,000 in protocol version 1 | Immutable per instance; HLD-003 and FR-001 own limit |
+| Heatmap evidence limit | Fixed; 100 | Not caller-configurable in protocol version 1 | `MAX_HEATMAP_EVIDENCE_ITEMS`; HLD-003 and FR-001 own limit |
+| Worker result byte limit | Fixed; 1,048,576 exclusive | Every complete encoded Heatmap result is strictly smaller; no truncation | `MAX_WORKER_RESULT_BYTES`; CD-004 owns framing and enforces the same limit |
 
 The module reads no environment variable and writes no configuration. Composition roots translate surface configuration into this dataclass before construction. A configuration change requires a new process-local service instance; no live reload occurs.
 
@@ -1460,7 +1619,7 @@ Expected errors return a failed `ServiceResult` with one `ReportError`. Public m
 
 | Error code | Timing and recoverability | State and side effects | Adapter rule |
 | --- | --- | --- | --- |
-| `REPORT_INVALID_REQUEST` | Before dependency work; caller can correct input. This includes a defensively received MCP `export_snapshot.report_mode` other than `directory`, `summary`, or `None`. | No state change | FastMCP rejects an unsupported snapshot export mode at schema validation. If an internal caller bypasses the schema, MCP returns the service's machine-readable validation error. CLI maps an invalid explicit streamlined mode to its retained validation contract. |
+| `REPORT_INVALID_REQUEST` | Before dependency work; caller can correct input. This includes an invalid Heatmap discriminator, mixed variant fields, mode, range, resolution, row-period selector, extreme unbounded range, or defensively received MCP export mode. | No state change | Adapters reject invalid unions at their boundary. Service validation remains authoritative for callers that bypass an adapter. Retained MCP validation remains unchanged. |
 | `REPORT_SCOPE_CONFLICT` | During `open_snapshot` recheck or scope-sensitive work; recoverable after new preflight | No new snapshot or revision | Preserve current revision and `preflight_required=true` |
 | `REPORT_CURSOR_CONFLICT` | Before query execution when cursor binding differs; recoverable from first page | Snapshot remains open | Preserve `restart_from_first_page=true` |
 | `REPORT_NOT_FOUND` | Discovery cannot find the exact requested root task; recoverable after selector correction | No token, snapshot, or revision | Preserve the retained missing-task meaning without exposing searched paths |
@@ -1473,7 +1632,7 @@ Expected errors return a failed `ServiceResult` with one `ReportError`. Public m
 | `REPORT_EXPORT_FAILED` | Renderer or publisher fails before published success | Staging is discarded when possible; prior target remains | Keep renderer failure distinct from publisher/write failure in safe message context |
 | `REPORT_WRITE_FAILED` | Publication cannot write or replace the validated target | Prior complete target remains | Preserve the write-failure meaning for CLI and MCP mapping |
 | `REPORT_CANCELLED` | Cancellation check before a dependency, state publication, or response | Prior coherent revision and export remain; no retry occurs automatically | Adapter maps to one terminal cancelled outcome |
-| `REPORT_INTERNAL_ERROR` | Unexpected failure; recoverability is false for the current operation | Prior coherent state remains; partial staging is discarded when possible | Return generic safe message and log only operation metadata |
+| `REPORT_INTERNAL_ERROR` | Unexpected failure, invalid dependency union, correlation mismatch, non-finite numeric output, or result that violates the strict worker-record bound; recoverability is false for the current operation | Prior coherent state remains; no partial Heatmap result is returned; partial staging is discarded when possible | Return generic safe message and log only operation metadata |
 
 Dependency ports raise only their documented typed safe failures. The service maps them once at the boundary. It does not expose arbitrary `str(exception)` values. Unexpected failures are logged without request fields and return a generic message.
 
@@ -1481,11 +1640,11 @@ The module performs no automatic retry and no rollback of an already published c
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This PLANNED_DEVELOPMENT module design incorporates the accepted Dev Architect reconciliation and the applicable RVW-012 corrections. It defines the full Workspace operation semantics, canonical pages, grouped heatmap, sequence and coordination results, bounded detail, cryptographic operation-ID validation, structured diagnostics, opaque source keys, native export results, exact lifecycle results, and retained-plus-snapshot MCP contract. Cache internals, generic Rust transport, UI projection, and export rendering remain outside CD-002.
+**ACCEPTED.** This PLANNED_DEVELOPMENT module design incorporates the accepted Dev Architect reconciliation, PLAN-012 Heatmap contract, and applicable RVW-012 corrections. It defines the full Workspace operation semantics, canonical pages, discriminated Heatmap matrix and cell evidence, sequence and coordination results, bounded detail, cryptographic operation-ID validation, structured diagnostics, opaque source keys, native export results, exact lifecycle results, and retained-plus-snapshot MCP contract. Cache internals, generic Rust transport, UI projection, and export rendering remain outside CD-002.
 
 ## Implementation Readiness
 
-**BLOCKED.** The documentation contract is accepted, but implementation readiness remains blocked until the Application Service source and tests implement this reconciled operation, DTO, registry, diagnostic, and MCP-adapter contract. CD-003 repository integration, CD-004 worker integration, CD-005 adapter projection, and CD-006 export integration require their independently owned implementations and verification; none is an authority for this service contract.
+**BLOCKED.** The documentation contract is accepted, but implementation readiness remains blocked until the Application Service source and tests implement this reconciled operation, DTO, parsed-run semantic helper, registry, diagnostic, and MCP-adapter contract. If the parsed run cannot preserve an HM-F01 through HM-F15 distinction, implementation stops for Dev Architect reconciliation instead of migrating the cache or coercing missing evidence. CD-003 repository integration, CD-004 worker integration, CD-005 adapter projection, and CD-006 export integration require their independently owned implementations and verification; none is an authority for this service contract.
 
 Production cache-maintenance defaults are **BLOCKED** by OQ-02. Non-Codex dynamic behavior and a standalone-browser runtime are outside the accepted initial scope. Neither blocks the defined CD-002 source and unit-test scope.
 
@@ -1509,12 +1668,31 @@ It declares these exact test functions:
 | `test_list_agents_returns_revision_and_exact_applied_filters_and_sort` | OP-19 limits, requested sort, canonical page metadata, and full row fields |
 | `test_list_turns_cursor_binds_snapshot_revision_filters_sort_and_page_size` | OP-20 opaque cursor and exact applied-value contract |
 | `test_list_events_rejects_cross_operation_and_cross_snapshot_cursors` | OP-21 cursor conflict, full row fields, and nullable opaque source key |
-| `test_query_time_range_returns_grouped_heatmap_with_bounded_cells_rows_scales_and_coarsening` | OP-22 exact grouped heatmap and requested/actual resolution |
+| `test_heatmap_hm_f01_exposes_only_wall_time_tokens_and_models()` | HM-F01 exact dynamic modes and rejection of retained atomic measures |
+| `test_heatmap_hm_f02_orders_present_runtime_states_and_unknown_fallbacks()` | HM-F02 known order, absent-state omission, ascending unknown states, labels, complete zero, overlap, and unavailable timing |
+| `test_heatmap_hm_f03_returns_exact_tokens_rows_in_order()` | HM-F03 exact eight Tokens rows |
+| `test_heatmap_hm_f04_normalizes_models_efforts_fallbacks_and_order()` | HM-F04 recorded identity, uniform thread fallback, mixed non-fallback, Unknown model, distinct efforts, stable first occurrence, and Cost last |
+| `test_heatmap_hm_f05_unions_half_open_runtime_intervals_without_double_counting()` | HM-F05 clipping, touching, nested, multi-agent overlap, partial timing, unavailable timing, and zero |
+| `test_heatmap_hm_f06_aggregates_completion_usage_tools_context_cost_and_models()` | HM-F06 response completion buckets, token sums, completed tools, positive context average/maximum, supported cost, processed tokens, and missing contributors |
+| `test_heatmap_hm_f07_formats_each_row_family_exactly()` | HM-F07 duration, compact number, integer, known-capacity percentage, cost precision, partial prefix, zero, and unavailable formats |
+| `test_heatmap_hm_f08_uses_stable_friendly_agent_model_and_evidence_labels()` | HM-F08 agent roles/names, duplicate suppression, source order, model labels, headings, cells, and evidence labels |
+| `test_heatmap_hm_f09_distinguishes_applicable_zero_partial_and_unavailable()` | HM-F09 and JFP-HM-01 for every row family without coercing missing evidence to zero |
+| `test_heatmap_hm_f10_uses_true_scale_union_and_na_for_unknown_capacity()` | HM-F10 and JFP-HM-02 available variants, exact unavailable reason, nullable normalized intensity, no percentage or fallback, and optional token supporting text |
+| `test_heatmap_hm_f11_separates_matrix_from_bounded_lazy_cell_evidence()` | HM-F11 matrix without evidence/detail, 100 chronological evidence items, exact omission, and separate event detail |
+| `test_heatmap_hm_f12_returns_supported_resolution_and_navigation_bindings()` | HM-F12 and JFP-HM-03 service facets for five supported periods, finer/coarser selectors, snapshot boundaries, and stable row-period identities |
+| `test_heatmap_hm_f13_returns_raw_nullable_safe_chronological_evidence()` | HM-F13 time, raw value, formatted value, duration, safe preview, evidence method/state, friendly prefixes, privacy, chronology, and optional event identity |
+| `test_heatmap_hm_f14_enforces_cells_coarsening_omission_and_extreme_ranges()` | HM-F14 2,000 acceptance, 2,001 coarsening, nearest supported resolution, deterministic row omission, and extreme-range rejection |
+| `test_heatmap_hm_f15_supplies_non_color_semantic_fields()` | HM-F15 service fields for row, UTC period, mode, formatted value, availability, scale basis, and synchronized selected evidence |
+| `test_heatmap_request_and_result_unions_reject_cross_variant_fields()` | Exact `matrix|cell_evidence` discriminants and shape separation |
+| `test_heatmap_results_take_snapshot_and_revision_from_read_lease()` | Immutable lease correlation; mutable pending state cannot alter either identifier |
+| `test_heatmap_matrix_and_cell_evidence_use_one_pure_semantic_helper()` | Shared parsed-run algorithms and agreement between a selected cell and its evidence result |
+| `test_heatmap_missing_semantic_distinction_fails_without_zero_or_cache_fallback()` | Parsed-run insufficiency stops the query with a concrete internal design gap; no zero coercion, normalized-cache inference, or migration path runs |
+| `test_heatmap_worst_case_union_results_remain_below_worker_line_limit()` | Sanitized worst-case matrix and 100-row evidence results are each strictly below 1,048,576 encoded bytes |
 | `test_query_sequence_returns_canonical_page_and_exact_group_hierarchy` | OP-23 selector, sort, endpoint, repetition, and reasoning completeness |
 | `test_query_coordination_returns_exact_applied_values_and_labels_inference` | OP-24 filter, sort, row, and epistemic-label completeness |
 | `test_get_event_details_is_lazy_bounded_structured_and_returns_only_opaque_source_key` | OP-25 privacy, disclosures, provenance, and source-registry boundary |
 | `test_get_event_details_not_found_preserves_open_snapshot` | Exact not-found behavior |
-| `test_each_query_family_holds_read_lease_until_finally_cleanup` | Summary, list, time, sequence, coordination, and detail handle lifetime |
+| `test_each_query_family_holds_read_lease_until_finally_cleanup` | Summary, list, Heatmap matrix, Heatmap cell evidence, sequence, coordination, and detail handle lifetime |
 | `test_close_snapshot_rejects_each_active_query_family_without_releasing_handle` | Query-close race safety and recoverable conflict |
 | `test_close_snapshot_retry_releases_handle_once_after_reader_finishes` | Non-blocking close retry and exact release count |
 | `test_active_reader_rejects_refresh_and_export_without_side_effects` | Exclusive mutation lease across every handle-using operation |
@@ -1558,6 +1736,10 @@ The integration and regression gates are:
 6. Inject safe dependency failures and unexpected exceptions. Confirm exact structured codes and the absence of source, cache, staging, transcript, argument, result, secret, and ciphertext content.
 7. Hold every query family at its Query Port boundary. Confirm that `close_snapshot` returns `REPORT_SNAPSHOT_CONFLICT`, releases no handle, and succeeds exactly once after the query releases its lease.
 8. Omit CLI report mode and confirm classic interactive HTML. Exercise explicit CLI directory and summary. Omit MCP `export_snapshot.report_mode` and confirm directory; request summary explicitly. Confirm that invalid streamlined modes fail before renderer submission and that `generate_report` remains classic.
+9. Run one snapshot fixture through service matrix and cell-evidence requests. Confirm exact read-lease `snapshot_id` and `revision_id`, mode and row agreement, raw nullable evidence values, `evidence_method`, and no cross-variant fields.
+10. Compare every HM-F01 through HM-F15 and JFP-HM-01 through JFP-HM-03 facet with its named test row above. A feature-name-only test does not establish semantic coverage.
+11. Encode the worst-case matrix and 100-row cell-evidence union fixtures. Confirm that each complete result is strictly smaller than 1,048,576 bytes and that no field or item is truncated to pass.
+12. Compare the retained FastMCP `query_time_range` schema, defaults, six atomic measures, responses, 1,000-event cap, IDs, errors, and cancellation before and after this implementation. Confirm that it never calls `query_snapshot_time_range`.
 
 ```mermaid
 flowchart LR
