@@ -22,7 +22,7 @@ Task-ID-Evidence: runtime-supplied
 
 This high-level design defines the Agent Report dynamic-analysis and static-export subsystem. The subsystem lets a local operator select a bounded Codex run scope, open a coherent snapshot, inspect evidence on demand, and publish offline reports.
 
-The design describes intended behavior. Its mode is **PLANNED_DEVELOPMENT**. Current CLI, MCP, desktop catalog, discovery, normalization, and static rendering provide compatibility evidence. Planned modules reuse those semantics through one Python application-service boundary.
+The HLD remains in **PLANNED_DEVELOPMENT** until final delivery. CD-002 through CD-005 are adopted. The current Python, Rust/Tauri, and TypeScript source implements the synchronized Heatmap contract through one Python application-service boundary. Integrated independent verification, packaged and browser-based contextual UX evidence, platform evidence, and final delivery remain pending.
 
 The first dynamic release is Codex-only and Tauri-only. CLI primarily automates reports. MCP primarily provides bounded drill-down and forensic investigation by an LLM. MCP is first-class, independently runnable, and does not require Tauri or static report generation. The classic interactive renderer remains the CLI default and continues to serve MCP `generate_report`. A separate streamlined exporter serves Tauri, explicit CLI `directory|summary` choices, and MCP `export_snapshot`.
 
@@ -38,19 +38,19 @@ The first dynamic release is Codex-only and Tauri-only. CLI primarily automates 
 | Backlog requirements | [Modularization future idea](../../future-ideas/modularize-report-tool-for-concurrent-maintenance.md) | Existing Python decomposition pressure |
 | Project configuration | `tools/report/pyproject.toml`, `tools/report/Cargo.toml`, `tools/report/desktop/package.json`, `tools/report/desktop/src-tauri/Cargo.toml` | Runtime and build boundaries |
 | Current source evidence | Committed `a8eef62` version of `tools/report/scripts/run-timeline.py`; `tools/report/src/agent_report/`, `tools/report/rust/`, `tools/report/desktop/` | Classic Heatmap semantic authority plus compatibility and reuse evidence; uncommitted renderer changes are not design evidence |
-| Current test evidence | `tools/report/tests/`, `tools/report/rust/*/tests/`, `tools/report/desktop/src/contracts.test.ts`, `tools/report/desktop/src-tauri/tests/` | Implemented baseline only |
+| Current test evidence | `tools/report/tests/`, `tools/report/rust/*/tests/`, `tools/report/desktop/src/contracts.test.ts`, `tools/report/desktop/src-tauri/tests/` | Implemented baseline and focused Heatmap contract evidence; integrated independent verification remains pending |
 | Synchronized module-design set | CD-002 through CD-006 are maintained from this HLD and the same accepted reconciliation | Component designs elaborate owned internals; they are not authorities for each other or for this HLD |
-| Procedures and runtime evidence | [Agent Report README](../../../tools/report/README.md); retained runtime evidence is not required for the planned contracts | Current use and validation commands |
+| Procedures and runtime evidence | [Agent Report README](../../../tools/report/README.md) | Current use and validation commands; final integrated, packaged, browser, and platform evidence remains pending |
 
 FR-001 wins for actor-visible behavior. ARC-001 wins for system-wide constraints. This HLD wins for subsystem component ownership and interaction. Current code wins only for implemented-baseline claims. Component designs may elaborate internals but cannot change these boundaries.
 
 ## Related Code
 
-The planned and existing code roots are shown in Constituent Components and Artifact-Placement Ledger. Existing source is compatibility evidence. A planned path does not imply that a file is implemented.
+The implemented and retained code roots are shown in Constituent Components and Artifact-Placement Ledger. Source evidence supports the current implementation-status claims; final delivery still requires the gates in Verification.
 
 ## Related Tests
 
-Existing regression tests are listed in Verification. Planned test files are fixed in the artifact-placement ledger so component work can start without inventing test locations.
+Implemented focused and regression tests are listed in Verification. The artifact-placement ledger fixes their locations. Integrated independent, packaged, browser, contextual UX, and platform verification remains pending.
 
 ## Related Backlog Items
 
@@ -240,11 +240,11 @@ flowchart LR
 
 | Component | Responsibility | Module design |
 |---|---|---|
-| Application Service | Own exact operations, scope, snapshots, immutable read leases, limits, structured errors, Heatmap query/result unions, and semantic parity. | Planned: `docs/design/components/CD-002-agent-report-application-service.md` |
-| Event Repository | Own the schema-v1 normalized cache, invalidation, snapshot persistence, atomic revision publication, existing list/detail projections, and lifecycle binding. It does not aggregate Heatmap or require a Heatmap migration. | Planned: `docs/design/components/CD-003-agent-report-normalized-event-cache.md` |
-| Python Worker | Adapt versioned stdio operations to one Application Service instance, validate the exact Heatmap union, and keep every complete JSONL record below 1,048,576 bytes. | Planned: `docs/design/components/CD-004-agent-report-worker-protocol.md` |
-| Tauri Supervisor | Own worker process, native cancellation escalation, protocol validation, and recovery. | Planned: `docs/design/components/CD-004-agent-report-worker-protocol.md` |
-| Dynamic Workspace | Render bounded summary, coordination, three-mode Heatmap matrix and synchronized selected-cell evidence, timeline, sequence, agent, turn, tool, model, context, inference, runtime, wait, work-item, claim, detail, provenance, and diagnostic views. It owns Heatmap navigation and accessibility, not aggregation. | Planned: `docs/design/components/CD-005-agent-report-dynamic-workspace.md` |
+| Application Service | Own exact operations, scope, snapshots, immutable read leases, limits, structured errors, Heatmap query/result unions, and semantic parity. | Accepted: `docs/design/components/CD-002-agent-report-application-service.md` |
+| Event Repository | Own the schema-v1 normalized cache, invalidation, snapshot persistence, atomic revision publication, existing list/detail projections, and lifecycle binding. It does not aggregate Heatmap or require a Heatmap migration. | Accepted: `docs/design/components/CD-003-agent-report-normalized-event-cache.md` |
+| Python Worker | Adapt versioned stdio operations to one Application Service instance, validate the exact Heatmap union, and keep every complete JSONL record below 1,048,576 bytes. | Accepted: `docs/design/components/CD-004-agent-report-worker-protocol.md` |
+| Tauri Supervisor | Own worker process, native cancellation escalation, protocol validation, and recovery. | Accepted: `docs/design/components/CD-004-agent-report-worker-protocol.md` |
+| Dynamic Workspace | Render bounded summary, coordination, three-mode Heatmap matrix and synchronized selected-cell evidence, timeline, sequence, agent, turn, tool, model, context, inference, runtime, wait, work-item, claim, detail, provenance, and diagnostic views. It owns Heatmap navigation and accessibility, not aggregation. | Accepted: `docs/design/components/CD-005-agent-report-dynamic-workspace.md` |
 | Classic Interactive Renderer | Keep the current rich Codex HTML, separate sequence companion, current CLI default, and MCP `generate_report` bundle. | Existing `tools/report/scripts/run-timeline.py`; current renderer tests |
 | Static Exporter | Provide one streamlined Codex export function for Tauri, explicit CLI `directory|summary` choices, and MCP `export_snapshot`. | Planned: `docs/design/components/CD-006-agent-report-static-export.md` |
 | MCP Adapter | Retain existing MCP tools unchanged and expose the additive discriminated `query_snapshot_time_range` family without Tauri. | HLD-003 and existing MCP source are sufficient until scope changes. |
@@ -252,7 +252,7 @@ flowchart LR
 | Discovery Adapter | Use the existing bundled Rust engine as the sole Codex discovery implementation. | [CD-001](../components/CD-001-codex-rollout-metrics.md) and ARC-001 |
 | Normalization And Query Core | Reuse the committed classic Python Heatmap semantics through one pure parsed-run helper shared by matrix and selected-cell evidence. Stream rows and counters without eager preview generation or a second full-run payload. | [CD-001](../components/CD-001-codex-rollout-metrics.md) and CD-002 |
 
-### Exact Planned Placement
+### Exact Placement
 
 ```text
 docs/design/components/
@@ -298,7 +298,7 @@ Python modules use package names `agent_report.application_service`, `agent_repo
 
 The accepted Dev Architect packet supplies each placement family below. These records make the leaf choices inspectable without transferring internal component design into this HLD. Dev Architect owns and may revise each technical placement decision. Dev Documentation Writer owns its accurate recording.
 
-| Proposition | Planned placement family | Basis | Necessity | Decision owner |
+| Proposition | Placement family | Basis | Necessity | Decision owner |
 |---|---|---|---|---|
 | HLP-01 | Application Service source, test, namespace, and CD-002 paths | ARC-03 assigns shared Python semantics per process. The existing `agent_report` package already owns CLI and MCP report behavior. | One package-level service location prevents Tauri, CLI, and MCP from creating divergent semantic cores and gives its tests and design one owner. | Dev Architect; accepted packet for `/root/report_app_architecture` |
 | HLP-02 | Event Repository source, test, runtime cache, and CD-003 paths | ARC-08 requires a separate Python-owned privacy-bounded event cache and keeps the Rust discovery cache metadata-only. | A dedicated `agent_report.event_cache` module and test surface separate schema, invalidation, migration, purge, and atomic publication from discovery and presentation. | Dev Architect; accepted packet for `/root/report_app_architecture` |
@@ -326,16 +326,16 @@ flowchart LR
 
 | Short label | Exact path and namespace | Kind and owner | Verification |
 |---|---|---|---|
-| Service source | `tools/report/src/agent_report/application_service.py`; `agent_report.application_service` | Planned source; Application Service | `tools/report/tests/test_application_service.py` |
-| Service design | `docs/design/components/CD-002-agent-report-application-service.md` | Planned component design | Architecture and HLD review |
-| Repository source | `tools/report/src/agent_report/event_cache.py`; `agent_report.event_cache` | Planned source plus embedded migration resources; Event Repository | `tools/report/tests/test_event_cache.py` |
-| Repository design | `docs/design/components/CD-003-agent-report-normalized-event-cache.md` | Planned component design | Architecture and HLD review |
-| Worker source | `tools/report/src/agent_report/report_worker.py`; `agent_report.report_worker` | Planned source; Python Worker | `tools/report/tests/test_report_worker.py` |
-| Supervisor source | `tools/report/desktop/src-tauri/src/report_worker.rs`; `agent_report_desktop::report_worker` | Planned source; Tauri Supervisor | `tools/report/desktop/src-tauri/tests/report_worker.rs` |
-| Worker design | `docs/design/components/CD-004-agent-report-worker-protocol.md` | Planned shared design | Protocol and supervisor review |
-| Workspace source | `tools/report/desktop/src/report-workspace.ts` | Planned source; Dynamic Workspace | `tools/report/desktop/src/report-workspace.test.ts` |
+| Service source | `tools/report/src/agent_report/application_service.py`; `agent_report.application_service` | Implemented source; Application Service | `tools/report/tests/test_application_service.py` |
+| Service design | `docs/design/components/CD-002-agent-report-application-service.md` | Accepted component design | Architecture and HLD review |
+| Repository source | `tools/report/src/agent_report/event_cache.py`; `agent_report.event_cache` | Existing source plus embedded migration resources; Event Repository | `tools/report/tests/test_event_cache.py` |
+| Repository design | `docs/design/components/CD-003-agent-report-normalized-event-cache.md` | Accepted component design | Architecture and HLD review |
+| Worker source | `tools/report/src/agent_report/report_worker.py`; `agent_report.report_worker` | Implemented source; Python Worker | `tools/report/tests/test_report_worker.py` |
+| Supervisor source | `tools/report/desktop/src-tauri/src/report_worker.rs`; `agent_report_desktop::report_worker` | Implemented source; Tauri Supervisor | `tools/report/desktop/src-tauri/tests/report_worker.rs` |
+| Worker design | `docs/design/components/CD-004-agent-report-worker-protocol.md` | Accepted shared design | Protocol and supervisor review |
+| Workspace source | `tools/report/desktop/src/report-workspace.ts` | Implemented source; Dynamic Workspace | `tools/report/desktop/src/report-workspace.test.ts` |
 | Workspace integration | `tools/report/desktop/src/contracts.ts`, `tools/report/desktop/src/main.ts`, `tools/report/desktop/index.html`, `tools/report/desktop/src/styles.css` | Existing integration surfaces | Existing plus workspace tests |
-| Workspace design | `docs/design/components/CD-005-agent-report-dynamic-workspace.md` | Planned component design | UI and accessibility review |
+| Workspace design | `docs/design/components/CD-005-agent-report-dynamic-workspace.md` | Accepted component design | UI and accessibility review |
 | Export source | `tools/report/src/agent_report/static_export.py`; `agent_report.static_export` | Planned source; Static Exporter | `tools/report/tests/test_static_export.py` |
 | Export design | `docs/design/components/CD-006-agent-report-static-export.md` | Planned component design | Offline and publication review |
 | MCP source | `tools/report/src/agent_report/mcp_report.py`, `tools/report/src/agent_report/mcp_server.py` | Existing adapter | `tools/report/tests/test_mcp_report.py`, `tools/report/tests/test_mcp_server.py` |
@@ -665,19 +665,19 @@ Every Heatmap result comes from the parsed run bound to one immutable snapshot-a
 
 CLI retains its classic interactive Codex default and separate non-Codex backends. MCP retains the exact `generate_report` schema, classic bundle, tool identities, and independent runtime. Retained MCP `query_time_range` is unchanged. Additive `query_snapshot_time_range` exposes the same exact discriminated family as Tauri without requiring Tauri or static generation. Explicit streamlined operations use shared application semantics without requiring Tauri.
 
-The implementation is observable through bounded progress and diagnostics. It is maintainable through the accepted component split and literal paths. Automated tests prove privacy, read-lease coherence, every HM-F01 through HM-F15 facet, JFP-HM-01 through JFP-HM-03, exact cross-language unions, worst-case worker payload size, retained-tool isolation, pagination, accessibility, offline operation, atomic publication, platform packaging, and cross-entry-point parity.
+The implementation is observable through bounded progress and diagnostics. It is maintainable through the accepted component split and literal paths. Focused source tests cover the implemented Heatmap contract, including privacy, read-lease coherence, HM-F01 through HM-F15, JFP-HM-01 through JFP-HM-03, exact cross-language unions, worst-case worker payload size, retained-tool isolation, and accessibility logic. Integrated independent verification, packaged and browser-based contextual UX evidence, platform evidence, and final delivery must establish the complete cross-entry-point result.
 
 ## Documentation Acceptance
 
-**ACCEPTED.** This PLANNED_DEVELOPMENT HLD traces FR-01 through FR-10, HM-F01 through HM-F15, JFP-HM-01 through JFP-HM-03, and ARC-01 through ARC-16 to concrete interactions, CR boundaries, states, errors, and verification. It records DEC-01 through DEC-06; binds Heatmap semantics to the parsed run under one immutable read lease; defines one bounded `matrix|cell_evidence` operation family, truthful scale and evidence unions, separate full detail, streaming and payload limits, and no cache migration; and preserves classic CLI, retained MCP operations, and non-Codex static backends.
+**ACCEPTED.** This HLD traces FR-01 through FR-10, HM-F01 through HM-F15, JFP-HM-01 through JFP-HM-03, and ARC-01 through ARC-16 to concrete interactions, CR boundaries, states, errors, and verification. It records DEC-01 through DEC-06; binds Heatmap semantics to the parsed run under one immutable read lease; defines one bounded `matrix|cell_evidence` operation family, truthful scale and evidence unions, separate full detail, streaming and payload limits, and no cache migration; and preserves classic CLI, retained MCP operations, and non-Codex static backends. CD-002 through CD-005 and the Python, Rust/Tauri, and TypeScript Heatmap implementation use this synchronized contract.
 
 ## Implementation Readiness
 
-**BLOCKED.** This HLD is ready to govern the component-design reconciliation, but production mutation remains blocked until CD-002 through CD-005 independently adopt this exact Heatmap contract and pass design review. Production readiness then remains blocked until source and tests implement the synchronized contracts, additive MCP schema, worker and native projections, Workspace interaction and accessibility behavior, retained MCP isolation, worst-case payload bound, and required platform evidence. CD-006 remains governed by the existing export contract. No unresolved product or HLD-level architectural choice remains.
+**BLOCKED FOR FINAL DELIVERY ONLY.** CD-002 through CD-005 are adopted. The Python, Rust/Tauri, and TypeScript source and focused tests implement the synchronized Heatmap contract, additive MCP schema, worker and native projections, Workspace interaction and accessibility logic, retained MCP isolation, and worst-case payload bound. Final delivery remains blocked only until the integrated candidate passes independent verification, packaged and browser-based contextual UX verification, required platform evidence, and final delivery review. CD-006 remains governed by the existing export contract. No unresolved product or HLD-level architectural choice remains.
 
 ## Verification
 
-| Verification area | Exact evidence or planned path | Coverage |
+| Verification area | Exact evidence or verification path | Coverage |
 |---|---|---|
 | Application operations and errors | `tools/report/tests/test_application_service.py` | OP-16 through OP-28 and OP-30; canonical pages; exact Heatmap request/result unions, three-mode rows, aggregation, value and scale states, coarsening, 2,000-cell and 100-evidence bounds, immutable lease correlation, cancellation, full sequence/coordination/detail shapes, lifecycle results, native export fields, CR-03 through CR-13 |
 | Event cache, snapshot, migration, invalidation, quota, and recovery | `tools/report/tests/test_event_cache.py` | ARC-08, ARC-09, ARC-14, DEC-02, DEC-05, OP-41, CR-09, CR-10; schema-v1 remains unchanged and Heatmap adds no migration or backfill |
@@ -692,7 +692,7 @@ The implementation is observable through bounded progress and diagnostics. It is
 
 ### Heatmap Verification Traceability
 
-| Requirement | Required proof | Primary planned evidence |
+| Requirement | Required proof | Primary evidence |
 |---|---|---|
 | HM-F01 | Exactly three dynamic modes; atomic measures rejected by the additive family while retained MCP atomic measures still pass. | `test_application_service.py`, `contracts.test.ts`, `test_mcp_server.py` |
 | HM-F02 | Present known runtime-state order, absent-state omission, sorted unknown states, friendly labels, complete zero, partial/unavailable timing, and range overlap. | `test_application_service.py`, `report-workspace.test.ts` |
