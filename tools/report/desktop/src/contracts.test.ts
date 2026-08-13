@@ -343,6 +343,12 @@ describe("heatmap, detail, export, and progress contracts", () => {
     const wallRows = ["model_inference", "tool_execution", "runtime:alpha", "runtime:zeta"].map((rowKey, rowOrderIndex) => ({ ...tokenRows[0]!, rowId: `wall-${rowOrderIndex}`, rowKey, rowOrderIndex, rowKind: "runtime_state" as const }));
     const wallBase = { ...matrixResult, mode: "wall_time", rowOrder: "runtime_state_contract", rows: wallRows, omittedRowCount: 0, totalCellCount: 0 };
     expect(parseHeatmapResultDto(wallBase, { ...wallRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    const customStateRows = [{ ...wallRows[0]!, rowKey: "runtime:custom state", rowOrderIndex: 0 }];
+    const customStateBase = { ...wallBase, rows: customStateRows };
+    expect(parseHeatmapResultDto(customStateBase, { ...wallRequest, revisionId: "revision-1" }).queryKind).toBe("matrix");
+    for (const rowKey of ["runtime:custom\u0000state", "runtime:custom\u007fstate"]) {
+      expect(() => parseHeatmapResultDto({ ...customStateBase, rows: [{ ...customStateRows[0]!, rowKey }] }, { ...wallRequest, revisionId: "revision-1" })).toThrow("lowercase runtime identity");
+    }
     expect(() => parseHeatmapResultDto({ ...wallBase, rows: [wallRows[1], wallRows[0], wallRows[2], wallRows[3]].map((row, rowOrderIndex) => ({ ...row!, rowOrderIndex })) }, { ...wallRequest, revisionId: "revision-1" })).toThrow("runtime rows");
     expect(() => parseHeatmapResultDto({ ...wallBase, rows: [wallRows[0], wallRows[1], wallRows[3], wallRows[2]].map((row, rowOrderIndex) => ({ ...row!, rowOrderIndex })) }, { ...wallRequest, revisionId: "revision-1" })).toThrow("ascending");
 

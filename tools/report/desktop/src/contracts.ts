@@ -1090,7 +1090,7 @@ function validateHeatmapRowIdentity(mode: HeatmapMode, rowKind: HeatmapRowKind |
     if (rowKind !== null && rowKind !== "runtime_state") throw new Error(`${label}.rowKind does not match wall_time mode`);
     if (HEATMAP_RUNTIME_KNOWN_KEYS.some((key) => key === rowKey)) return;
     const suffix = rowKey.startsWith("runtime:") ? rowKey.slice(8) : "";
-    if (suffix === "" || new TextEncoder().encode(suffix).length > 128 || suffix !== suffix.toLowerCase() || HEATMAP_RUNTIME_KNOWN_KEYS.some((key) => key === suffix) || /[\s\p{Cc}]/u.test(suffix)) throw new Error(`${label}.rowKey is not a lowercase runtime identity`);
+    if (suffix === "" || new TextEncoder().encode(suffix).length > 128 || suffix !== suffix.toLowerCase() || HEATMAP_RUNTIME_KNOWN_KEYS.some((key) => key === suffix) || /\p{Cc}/u.test(suffix)) throw new Error(`${label}.rowKey is not a lowercase runtime identity`);
     return;
   }
   if (mode === "tokens") {
