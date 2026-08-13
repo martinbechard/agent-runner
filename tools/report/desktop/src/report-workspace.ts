@@ -111,6 +111,11 @@ export interface WorkspaceSelection {
   readonly includeCollaborators: boolean;
 }
 
+/** Preserve the current run and relationship choices when preflight returns to editing. */
+export function scopeSelectionForEditing(selection: WorkspaceSelection): WorkspaceSelection {
+  return Object.freeze({ ...selection });
+}
+
 export interface CursorPagerState<T, F, S> {
   readonly pageSize: number;
   readonly currentCursor: string | null;
@@ -173,7 +178,7 @@ export interface ReportWorkspaceController {
   updateScope(includeChildren: boolean, includeCollaborators: boolean): void;
   preflight(): Promise<void>;
   openSnapshot(): Promise<void>;
-  changeScope(): void;
+  changeScope(focusTarget?: HTMLElement): void;
   cancelActiveOperation(): Promise<void>;
   navigate(surface: WorkspaceSurfaceId, trigger?: HTMLElement): Promise<void>;
   nextPage(): Promise<void>;
@@ -352,6 +357,11 @@ export function formatLocalInstant(isoInstant: string): string {
   const instant = new Date(isoInstant);
   if (isoInstant === "" || Number.isNaN(instant.getTime())) throw new Error("Workspace instant is not a valid ISO instant.");
   return new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(instant);
+}
+
+/** Pair the report identity with the snapshot's browser-local observation time. */
+export function snapshotTitleAsOf(title: string, observationTime: string): string {
+  return `${title.trim() || "Untitled run"} as of ${formatLocalInstant(observationTime)}`;
 }
 
 /** Describe server-selected heatmap coarsening while preserving requested resolution. */
@@ -1618,10 +1628,10 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
         showModal(elements.preflightDialog);
       }
     },
-    changeScope() {
+    changeScope(focusTarget) {
       if (disposed || state.selection === null) return;
-      closeModal(elements.preflightDialog, selectionTrigger);
-      commit({ lifecycle: "selected", preflight: Object.freeze({ kind: "not-requested" }) });
+      closeModal(elements.preflightDialog, focusTarget ?? selectionTrigger);
+      commit({ lifecycle: "selected", selection: scopeSelectionForEditing(state.selection), preflight: Object.freeze({ kind: "not-requested" }) });
     },
     async cancelActiveOperation() {
       const operationId = state.activeOperationId;

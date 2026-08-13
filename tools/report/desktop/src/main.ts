@@ -31,6 +31,7 @@ import {
   type WorkspaceElements,
   type WorkspaceTransport,
   createReportWorkspace,
+  snapshotTitleAsOf,
 } from "./report-workspace";
 import "./styles.css";
 
@@ -240,8 +241,12 @@ function formatTimestamp(timestamp: string): string {
 }
 
 function renderWorkspaceObservation(): void {
-  const snapshot = workspace.getState().snapshot;
-  if (snapshot !== null) workspaceObservation.textContent = `${snapshot.mode === "live" ? "Live" : "Sealed"}; observed ${formatTimestamp(snapshot.observationTime)}.`;
+  const workspaceState = workspace.getState();
+  const snapshot = workspaceState.snapshot;
+  if (snapshot !== null) {
+    workspaceTitle.textContent = snapshotTitleAsOf(workspaceState.selection?.title ?? "Untitled run", snapshot.observationTime);
+    workspaceObservation.textContent = `${snapshot.mode === "live" ? "Live" : "Sealed"}; observed ${formatTimestamp(snapshot.observationTime)}.`;
+  }
 }
 
 function stat(value: string, label: string): HTMLElement {
@@ -544,7 +549,11 @@ reviewScopeButton.addEventListener("click", () => void reviewSelectedScope());
 element<HTMLButtonElement>("report-preflight-continue").addEventListener("click", () => void workspace.openSnapshot().then(() => {
   renderWorkspaceObservation();
 }));
-element<HTMLButtonElement>("report-preflight-change").addEventListener("click", () => workspace.changeScope());
+element<HTMLButtonElement>("report-preflight-change").addEventListener("click", () => {
+  workspace.changeScope(includeDescendantsInput);
+  statusDot.className = "ready";
+  status.textContent = "Update the report scope, then choose View report.";
+});
 element<HTMLButtonElement>("report-preflight-cancel").addEventListener("click", () => workspace.changeScope());
 workspaceElements.preflightDialog.addEventListener("cancel", (event) => {
   event.preventDefault();

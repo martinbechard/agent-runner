@@ -24,7 +24,9 @@ import {
   nextHeatmapResolution,
   newOperationId,
   reportErrorRecovery,
+  scopeSelectionForEditing,
   shiftHeatmapRange,
+  snapshotTitleAsOf,
 } from "./report-workspace";
 
 afterEach(() => {
@@ -125,6 +127,22 @@ describe("ReportWorkspaceController", () => {
     expect(SURFACE_DEFINITIONS.tools.operation).toBe("list_events");
     expect(SURFACE_DEFINITIONS.detail.operation).toBe("get_event_details");
     expect(SURFACE_DEFINITIONS.diagnostics.operation).toBeNull();
+  });
+
+  it("preserves the selected run and relationship choices when scope editing resumes", () => {
+    const selection = scopeSelectionForEditing({
+      rootThreadId: "thread-1",
+      title: "Investigate report",
+      includeChildren: true,
+      includeCollaborators: false,
+    });
+    expect(selection).toEqual({
+      rootThreadId: "thread-1",
+      title: "Investigate report",
+      includeChildren: true,
+      includeCollaborators: false,
+    });
+    expect(Object.isFrozen(selection)).toBe(true);
   });
 });
 
@@ -314,5 +332,16 @@ describe("workspace accessibility", () => {
       }).format(new Date(instant)),
     );
     expect(() => formatLocalInstant("not-an-instant")).toThrow("valid ISO instant");
+  });
+
+  it("adds the browser-local snapshot observation time to the visible report title", () => {
+    const observationTime = "2026-08-12T12:30:00Z";
+    expect(snapshotTitleAsOf("Investigate report", observationTime)).toBe(
+      `Investigate report as of ${new Intl.DateTimeFormat(undefined, {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(observationTime))}`,
+    );
+    expect(snapshotTitleAsOf("  ", observationTime)).toMatch(/^Untitled run as of /);
   });
 });
