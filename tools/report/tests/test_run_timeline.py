@@ -6827,7 +6827,9 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
         ".estimate,.credit-usage{align-self:stretch;"
         "border-left:1px solid var(--line);padding-left:28px}"
     ) in report
-    assert '<a href="#folder-table">View 2 Threads</a>' in report
+    assert (
+        '<a href="token-usage-threads/index.html">View 2 Threads</a>' in report
+    )
     assert "500 used · 0 remaining" in report
     assert "USD-equivalent usage per credit" in report
     assert "USD-equivalent usage divided by credits consumed" in report
@@ -6845,16 +6847,26 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     raw_pages = list(drilldown_directory.glob("*-raw.html"))
     steps_pages = list(drilldown_directory.glob("*-steps.html"))
     ledger_csv_pages = list(drilldown_directory.glob("*-token-detail.csv"))
-    assert not thread_index.exists()
+    assert thread_index.exists()
     assert len(folder_pages) == 1
     assert len(detail_pages) == 2
     assert len(raw_pages) == 2
     assert len(steps_pages) == 2
     assert len(ledger_csv_pages) == 2
-    assert "token-usage-threads/index.html" not in report
+    assert 'href="token-usage-threads/index.html">View 2 Threads</a>' in report
     assert detail_pages[0].name not in report
     assert f'href="token-usage-threads/{folder_pages[0].name}">View 2 Threads</a>' in report
     assert f'href="{rollout.as_uri()}"' not in report
+
+    all_threads_report = thread_index.read_text(encoding="utf-8")
+    assert "All Threads" in all_threads_report
+    assert "2 threads" in all_threads_report
+    assert all_threads_report.count(">View Events</a>") == 2
+    assert rollout.name not in all_threads_report
+    assert second_rollout.name not in all_threads_report
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in all_threads_report
+    for detail_page in detail_pages:
+        assert detail_page.name in all_threads_report
 
     folder_report = folder_pages[0].read_text(encoding="utf-8")
     assert "Threads in Folder" in folder_report
@@ -6902,13 +6914,15 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert f'href="{matching_steps.name}">View Steps</a>' in detail
     assert "#L" in detail
     assert "../token-usage.html" in detail
-    assert f'href="{folder_pages[0].name}">← Threads</a>' in detail
+    assert f'href="{folder_pages[0].name}">← Folder Threads</a>' in detail
+    assert 'href="index.html">All Threads</a>' in detail
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in detail
 
     steps = matching_steps.read_text(encoding="utf-8")
     assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
     assert "HTML report task" in steps
     assert f'href="{matching_raw.name}">Log file</a>' in steps
+    assert 'href="index.html">All Threads</a>' in steps
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in steps
 
     raw = matching_raw.read_text(encoding="utf-8")

@@ -11154,6 +11154,7 @@ def _render_token_summary_ledger_html(
     to_time: datetime,
     report_filename: str,
     threads_filename: str,
+    all_threads_filename: str,
     raw_path: Path,
     steps_filename: str,
     ledger_csv_path: Path,
@@ -11227,7 +11228,8 @@ def _render_token_summary_ledger_html(
         explanation_html="",
         explanation_name=None,
         nav_links=(
-            ("← Threads", threads_filename),
+            ("← Folder Threads", threads_filename),
+            ("All Threads", all_threads_filename),
             ("Token Usage Report", f"../{report_filename}"),
             ("View Steps", steps_filename),
             ("Log file", raw_path.name),
@@ -11243,6 +11245,7 @@ def _render_token_summary_html(
     to_time: datetime,
     directories: list[Path],
     group_links: dict[tuple[str, str], str] | None = None,
+    all_threads_link: str | None = None,
 ) -> str:
     """Render one self-contained verification-oriented token usage report."""
     rollup = _token_summary_rollup(rows)
@@ -11320,6 +11323,17 @@ def _render_token_summary_html(
 
     thread_count = len(rows)
     thread_word = "thread" if thread_count == 1 else "threads"
+    if all_threads_link is not None:
+        receipt_link = (
+            f'<a href="{_escape_html_attribute(quote(all_threads_link, safe="/:%"))}">'
+            f"View {thread_count:,} {thread_word.title()}</a>"
+        )
+    else:
+        folder_count = len(_token_summary_groups(rows))
+        folder_word = "Folder" if folder_count == 1 else "Folders"
+        receipt_link = (
+            f'<a href="#folder-table">View {folder_count:,} {folder_word}</a>'
+        )
     thread_section = f"""<section class="section">
 <div class="section-head"><div><div class="label">Folder summary</div><h2>Usage by folder</h2></div><label><span class="label">Filter rows</span><br><input id="folder-filter" class="search" type="search" placeholder="User or plan…"></label></div>
 <div class="table-wrap"><table id="folder-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Thread links"></th><th>Plan</th><th>Sub tokens</th><th>Sub estimate</th><th>Sub remaining</th><th>Credit tokens</th><th>Credit estimate</th><th>Credits used</th><th>Credits remaining</th><th>Total tokens</th><th>Total estimate</th></tr></thead><tbody>{''.join(group_rows_html)}</tbody></table></div>
@@ -11395,7 +11409,7 @@ footer{{margin-top:38px;padding-top:18px;border-top:1px solid var(--line);color:
 <p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
 </header>
 <section class="receipt" aria-label="Usage total">
-<div class="receipt-total"><div class="label">Processed tokens</div><strong>{total_tokens:,}</strong><span><a href="#folder-table">View {thread_count:,} {thread_word.title()}</a> · plan: {plan}</span></div>
+<div class="receipt-total"><div class="label">Processed tokens</div><strong>{total_tokens:,}</strong><span>{receipt_link} · plan: {plan}</span></div>
 <div class="estimate"><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(total_estimate)}</strong><span>Estimated from token counts - not an actual charged amount</span></div>
 <div class="credit-usage"><div class="label">Credit usage</div><strong>{_token_summary_html_credits(credits_used)}</strong><span>Observed credits consumed</span></div>
 </section>
@@ -11448,6 +11462,8 @@ def _render_token_summary_group_html(
     *,
     report_filename: str,
     detail_links: dict[Path, str],
+    page_title: str = "Threads in Folder",
+    eyebrow: str = "Agent Report · folder detail",
 ) -> str:
     """Render the thread list for one folder without exposing its path."""
     thread_rows: list[str] = []
@@ -11492,7 +11508,7 @@ def _render_token_summary_group_html(
     thread_word = "thread" if thread_count == 1 else "threads"
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Threads in Folder</title>
+<title>{_token_summary_html_cell(page_title)}</title>
 <style>
 :root{{--ink:#14202b;--muted:#63717d;--paper:#f3f6f6;--sheet:#fff;--line:#d9e1e3;--accent:#d97736;--focus:#1167a8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
@@ -11502,7 +11518,7 @@ h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.section-head{{display:block}}.search{{margin-top:12px}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.search{{display:none}}thead th{{position:static}}}}
 </style></head><body><main class="page">
 <nav class="nav"><a href="../{_escape_html_attribute(quote(report_filename))}">← Token Usage Report</a></nav>
-<div class="eyebrow">Agent Report · folder detail</div><h1>Threads in Folder</h1>
+<div class="eyebrow">{_token_summary_html_cell(eyebrow)}</div><h1>{_token_summary_html_cell(page_title)}</h1>
 <p class="summary">{thread_count:,} {thread_word} · {int(rollup['total_tokens']):,} processed tokens · {_token_summary_html_currency(rollup['total_est_usd'])} API-equivalent estimate</p>
 <section><div class="section-head"><div><div class="label">Thread summary</div><h2>Usage by thread</h2></div><label><span class="label">Filter rows</span><br><input id="thread-filter" class="search" type="search" placeholder="User, model, plan…"></label></div>
 <div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Thread links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
@@ -11625,7 +11641,7 @@ def _write_token_summary_html(
     if threads:
         thread_directory = destination.parent / f"{destination.stem}-threads"
         thread_directory.mkdir(parents=True, exist_ok=True)
-        (thread_directory / "index.html").unlink(missing_ok=True)
+        all_threads_page_name = "index.html"
         grouped_rows = _token_summary_groups(rows)
         group_page_names = {
             key: f"{_token_summary_group_stem(key)}-threads.html"
@@ -11656,7 +11672,8 @@ def _write_token_summary_html(
                 steps_path,
                 nav_links=[
                     ("Token events", detail_path.name),
-                    ("Threads", group_page_name),
+                    ("Folder Threads", group_page_name),
+                    ("All Threads", all_threads_page_name),
                     ("Log file", raw_path.name),
                     ("Token Usage Report", f"../{destination.name}"),
                 ],
@@ -11675,6 +11692,7 @@ def _write_token_summary_html(
                         to_time=to_time,
                         report_filename=destination.name,
                         threads_filename=group_page_name,
+                        all_threads_filename=all_threads_page_name,
                         raw_path=raw_path,
                         steps_filename=steps_path.name,
                         ledger_csv_path=ledger_csv_path,
@@ -11683,6 +11701,18 @@ def _write_token_summary_html(
                 encoding="utf-8",
             )
             detail_links[row.path] = detail_path.name
+        (thread_directory / all_threads_page_name).write_text(
+            _with_copyright_footer(
+                _render_token_summary_group_html(
+                    rows,
+                    report_filename=destination.name,
+                    detail_links=detail_links,
+                    page_title="All Threads",
+                    eyebrow="Agent Report · thread index",
+                )
+            ),
+            encoding="utf-8",
+        )
         for key, group_rows in grouped_rows:
             group_path = thread_directory / group_page_names[key]
             group_path.write_text(
@@ -11700,6 +11730,11 @@ def _write_token_summary_html(
             key: (relative_thread_directory / page_name).as_posix()
             for key, page_name in group_page_names.items()
         }
+        all_threads_link = (
+            relative_thread_directory / all_threads_page_name
+        ).as_posix()
+    else:
+        all_threads_link = None
     destination.write_text(
         _with_copyright_footer(
             _render_token_summary_html(
@@ -11708,6 +11743,7 @@ def _write_token_summary_html(
                 to_time=to_time,
                 directories=directories,
                 group_links=group_links,
+                all_threads_link=all_threads_link,
             )
         ),
         encoding="utf-8",
