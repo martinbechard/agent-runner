@@ -6813,7 +6813,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
         '<th aria-label="Thread links"></th><th>Plan</th>'
         '<th>Sub tokens</th><th>Sub estimate</th><th>Sub remaining</th>'
     ) in report
-    assert "2026-08-25 08:00" in report
+    expected_local_start = datetime.fromisoformat(
+        "2026-08-25T12:00:00+00:00"
+    ).astimezone().strftime("%Y-%m-%d %H:%M")
+    assert expected_local_start in report
     assert "<th>Total tokens</th><th>Total estimate</th>" in report
     assert report.count('data-search="martinbechard pro, credits"') == 1
     assert '<div class="label">Credit usage</div><strong>500</strong>' in report

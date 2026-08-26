@@ -159,7 +159,12 @@ def verify_release_wheel(
             raise ValueError(
                 "Wheel must contain exactly one MIT LICENSE file under dist-info/licenses"
             )
-        license_text = archive.read(license_paths[0]).decode("utf-8")
+        license_text = (
+            archive.read(license_paths[0])
+            .decode("utf-8")
+            .replace("\r\n", "\n")
+            .replace("\r", "\n")
+        )
         if not license_text.startswith("MIT License\n") or (
             "Copyright (c) 2026 Martin.Bechard@DevConsult.ca" not in license_text
         ):

@@ -31,6 +31,7 @@ def _write_wheel(
     include_desktop_extra: bool = False,
     include_app_runtime: bool = False,
     include_secondary_command: bool = False,
+    windows_license_line_endings: bool = False,
 ) -> None:
     """Write the smallest representative platform wheel fixture."""
 
@@ -69,9 +70,15 @@ def _write_wheel(
                 f"{prefix}/agent_report_cli/native/agent-report-engine", b"bin"
             )
         if include_license:
+            license_text = (
+                "MIT License\n\nCopyright (c) 2026 "
+                "Martin.Bechard@DevConsult.ca\n"
+            )
+            if windows_license_line_endings:
+                license_text = license_text.replace("\n", "\r\n")
             archive.writestr(
                 f"{dist_info}/licenses/LICENSE",
-                "MIT License\n\nCopyright (c) 2026 Martin.Bechard@DevConsult.ca\n",
+                license_text,
             )
         if include_desktop:
             archive.writestr(
@@ -88,6 +95,15 @@ def test_accepts_complete_platform_wheel(tmp_path: Path) -> None:
     _write_wheel(wheel)
 
     assert MODULE.verify_release_wheel(tmp_path, "1.0.0") == wheel.resolve()
+
+
+def test_accepts_windows_license_line_endings(tmp_path: Path) -> None:
+    """Treat CRLF as equivalent legal text in wheels built on Windows."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, windows_license_line_endings=True)
+
+    assert MODULE.verify_release_wheel(wheel, "1.0.0") == wheel.resolve()
 
 
 def test_rejects_wheel_without_platform_engine(tmp_path: Path) -> None:
