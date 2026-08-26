@@ -6818,7 +6818,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     ).astimezone().strftime("%Y-%m-%d %H:%M")
     assert expected_local_start in report
     assert "<th>Total tokens</th><th>Total estimate</th>" in report
-    assert report.count('data-search="martinbechard pro, credits"') == 1
+    expected_search = module._escape_html_attribute(
+        f"{module.getpass.getuser()} pro, credits"
+    )
+    assert report.count(f'data-search="{expected_search}"') == 1
     assert '<div class="label">Credit usage</div><strong>500</strong>' in report
     assert '<a href="#folder-table">View 2 Threads</a>' in report
     assert "500 used · 0 remaining" in report
