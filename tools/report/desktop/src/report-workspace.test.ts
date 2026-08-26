@@ -32,6 +32,7 @@ import {
   reportErrorRecovery,
   scopeSelectionForEditing,
   snapshotTitleAsOf,
+  visibleHeatmapPeriodWindow,
 } from "./report-workspace";
 
 afterEach(() => {
@@ -244,6 +245,19 @@ describe("heatmap bounds", () => {
     expect(nextHeatmapResolution(15, "out")).toBe(30);
     expect(nextHeatmapResolution(1, "in")).toBe(1);
     expect(nextHeatmapResolution(60, "out")).toBe(60);
+  });
+
+  it("reports the period columns intersecting the non-sticky viewport", () => {
+    const periods = [
+      { left: 190, width: 136 },
+      { left: 330, width: 136 },
+      { left: 470, width: 136 },
+      { left: 610, width: 136 },
+    ];
+    expect(visibleHeatmapPeriodWindow(periods, 190, 466)).toEqual({ firstIndex: 0, lastIndex: 1, total: 4 });
+    expect(visibleHeatmapPeriodWindow(periods, 470, 746)).toEqual({ firstIndex: 2, lastIndex: 3, total: 4 });
+    expect(visibleHeatmapPeriodWindow(periods, 750, 900)).toBeNull();
+    expect(visibleHeatmapPeriodWindow([], 0, 100)).toBeNull();
   });
 
   const completeCell = {

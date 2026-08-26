@@ -24,16 +24,23 @@ def _write_wheel(
     path: Path,
     *,
     include_engine: bool = True,
-    omitted_module: str | None = None,
+    include_launcher: bool = True,
+    include_token_ledger: bool = True,
+    include_license: bool = True,
+    include_desktop: bool = False,
+    include_desktop_extra: bool = False,
+    include_app_runtime: bool = False,
+    include_secondary_command: bool = False,
 ) -> None:
     """Write the smallest representative platform wheel fixture."""
 
-    prefix = "agent_report-0.10.1.data/purelib"
-    dist_info = "agent_report-0.10.1.dist-info"
+    prefix = "agent_report_cli-1.0.0.data/purelib"
+    dist_info = "agent_report_cli-1.0.0.dist-info"
     with zipfile.ZipFile(path, "w") as archive:
         archive.writestr(
             f"{dist_info}/METADATA",
-            "Metadata-Version: 2.4\nName: agent-report\nVersion: 0.10.1\n",
+            "Metadata-Version: 2.4\nName: agent-report-cli\nVersion: 1.0.0\n"
+            + ("Provides-Extra: desktop\n" if include_desktop_extra else ""),
         )
         archive.writestr(
             f"{dist_info}/WHEEL",
@@ -41,63 +48,133 @@ def _write_wheel(
         )
         archive.writestr(
             f"{dist_info}/entry_points.txt",
-            "[console_scripts]\n"
-            "agent-report = agent_report.cli:main\n"
-            "mcp-agent-report = agent_report.mcp_server:main\n",
+            "[console_scripts]\nagent-report = agent_report_cli.cli:main\n"
+            + (
+                "mcp-agent-report = agent_report.mcp_server:main\n"
+                if include_secondary_command
+                else ""
+            ),
         )
-        for module in (
-            "application_service.py",
-            "event_cache.py",
-            "mcp_report.py",
-            "mcp_server.py",
-            "report_worker.py",
-            "static_export.py",
-        ):
-            if module != omitted_module:
-                archive.writestr(f"{prefix}/agent_report/{module}", "")
+        if include_launcher:
+            archive.writestr(f"{prefix}/agent_report_cli/cli.py", "")
         archive.writestr(
-            "agent_report-0.10.1.data/data/share/agent-report/run-timeline.py", ""
+            "agent_report_cli-1.0.0.data/data/share/agent-report/run-timeline.py", ""
         )
+        if include_token_ledger:
+            archive.writestr(
+                "agent_report_cli-1.0.0.data/data/share/agent-report/token_ledger.py", ""
+            )
         if include_engine:
             archive.writestr(
-                f"{prefix}/agent_report/native/agent-report-engine", b"bin"
+                f"{prefix}/agent_report_cli/native/agent-report-engine", b"bin"
             )
+        if include_license:
+            archive.writestr(
+                f"{dist_info}/licenses/LICENSE",
+                "MIT License\n\nCopyright (c) 2026 Martin.Bechard@DevConsult.ca\n",
+            )
+        if include_desktop:
+            archive.writestr(
+                f"{prefix}/agent_report_desktop/app.js", "desktop application"
+            )
+        if include_app_runtime:
+            archive.writestr(f"{prefix}/agent_report/report_worker.py", "app worker")
 
 
 def test_accepts_complete_platform_wheel(tmp_path: Path) -> None:
-    """Accept a versioned wheel that contains both MCP and native runtimes."""
+    """Accept a versioned wheel that contains only the CLI runtime."""
 
-    wheel = tmp_path / "agent_report-0.10.1-py3-none-linux_x86_64.whl"
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
     _write_wheel(wheel)
 
-    assert MODULE.verify_release_wheel(tmp_path, "0.10.1") == wheel.resolve()
+    assert MODULE.verify_release_wheel(tmp_path, "1.0.0") == wheel.resolve()
 
 
 def test_rejects_wheel_without_platform_engine(tmp_path: Path) -> None:
     """Prevent publication of a Python-only wheel that cannot index rollouts."""
 
-    wheel = tmp_path / "agent_report-0.10.1-py3-none-linux_x86_64.whl"
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
     _write_wheel(wheel, include_engine=False)
 
     with pytest.raises(ValueError, match="bundled agent-report-engine"):
-        MODULE.verify_release_wheel(wheel, "0.10.1")
+        MODULE.verify_release_wheel(wheel, "1.0.0")
 
 
-def test_rejects_wheel_without_shared_report_runtime_module(tmp_path: Path) -> None:
-    """Require every production service and worker module in release wheels."""
+def test_rejects_wheel_without_standalone_launcher(tmp_path: Path) -> None:
+    """Require the minimal standalone command launcher."""
 
-    wheel = tmp_path / "agent_report-0.10.1-py3-none-linux_x86_64.whl"
-    _write_wheel(wheel, omitted_module="report_worker.py")
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_launcher=False)
 
-    with pytest.raises(ValueError, match="agent_report/report_worker.py"):
-        MODULE.verify_release_wheel(wheel, "0.10.1")
+    with pytest.raises(ValueError, match="agent_report_cli/cli.py"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
+
+
+def test_rejects_wheel_without_token_ledger_runtime(tmp_path: Path) -> None:
+    """Require the drilldown renderer used by token-summary HTML reports."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_token_ledger=False)
+
+    with pytest.raises(ValueError, match="token_ledger.py"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
+
+
+def test_rejects_wheel_without_mit_license(tmp_path: Path) -> None:
+    """Require the standalone distribution to carry its legal grant."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_license=False)
+
+    with pytest.raises(ValueError, match="MIT LICENSE"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
+
+
+def test_rejects_wheel_containing_desktop_application_files(tmp_path: Path) -> None:
+    """Keep the standalone CLI wheel independent from the unfinished app."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_desktop=True)
+
+    with pytest.raises(ValueError, match="desktop application files"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
+
+
+def test_rejects_wheel_advertising_desktop_install_extra(tmp_path: Path) -> None:
+    """Do not offer the Tauri app through the standalone CLI package."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_desktop_extra=True)
+
+    with pytest.raises(ValueError, match="desktop install extra"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
+
+
+def test_rejects_wheel_containing_app_runtime_code(tmp_path: Path) -> None:
+    """Exclude the Python worker used only by the Tauri application."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_app_runtime=True)
+
+    with pytest.raises(ValueError, match="app runtime files"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
+
+
+def test_rejects_wheel_containing_a_second_console_command(tmp_path: Path) -> None:
+    """Publish only the agent-report console entry point."""
+
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-linux_x86_64.whl"
+    _write_wheel(wheel, include_secondary_command=True)
+
+    with pytest.raises(ValueError, match="only the standalone CLI"):
+        MODULE.verify_release_wheel(wheel, "1.0.0")
 
 
 def test_rejects_universal_macos_wheel_for_arm64_release(tmp_path: Path) -> None:
     """Do not advertise Intel support when the bundled parser is ARM-only."""
 
-    wheel = tmp_path / "agent_report-0.10.1-py3-none-macosx_10_9_universal2.whl"
+    wheel = tmp_path / "agent_report_cli-1.0.0-py3-none-macosx_10_9_universal2.whl"
     _write_wheel(wheel)
 
     with pytest.raises(ValueError, match="does not match macos-arm64"):
-        MODULE.verify_release_wheel(wheel, "0.10.1", "macos-arm64")
+        MODULE.verify_release_wheel(wheel, "1.0.0", "macos-arm64")

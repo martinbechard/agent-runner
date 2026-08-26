@@ -4,7 +4,7 @@
   "version": "0.10.2",
   "identifier": "ca.devconsult.agent-report",
   "build": {
-    "beforeDevCommand": "pnpm build:sidecar && pnpm dev",
+    "beforeDevCommand": "pnpm build:sidecar && pnpm dev:vite",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "pnpm build:sidecar && pnpm build",
     "frontendDist": "../dist"

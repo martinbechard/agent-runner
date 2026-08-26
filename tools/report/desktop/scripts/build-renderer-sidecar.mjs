@@ -20,6 +20,7 @@ const pyinstallerRoot = join(reportRoot, "target", "pyinstaller");
 const pythonPackageRoot = join(reportRoot, "src");
 const pythonEntryPoint = join(pythonPackageRoot, "agent_report", "cli.py");
 const reportScript = join(reportRoot, "scripts", "run-timeline.py");
+const tokenLedgerScript = join(reportRoot, "scripts", "token_ledger.py");
 const formatterConfig = join(reportRoot, "tool-formatters.json");
 const pricingConfig = join(
   repositoryRoot,
@@ -123,6 +124,7 @@ const enginePath = join(reportRoot, "target", "release", engineName);
 await Promise.all([
   requireFile(pythonEntryPoint),
   requireFile(reportScript),
+  requireFile(tokenLedgerScript),
   requireFile(formatterConfig),
   requireFile(pricingConfig),
   mkdir(binariesRoot, { recursive: true }),
@@ -182,6 +184,8 @@ const pyinstallerArguments = [
   pythonPackageRoot,
   "--add-data",
   `${reportScript}${delimiter}share/agent-report`,
+  "--add-data",
+  `${tokenLedgerScript}${delimiter}share/agent-report`,
   "--add-data",
   `${formatterConfig}${delimiter}share/agent-report`,
   "--add-data",

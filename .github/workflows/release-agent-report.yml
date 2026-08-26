@@ -1,9 +1,10 @@
-name: Release Agent Report wheels
+name: Release Agent Report CLI wheels
 
 on:
+  workflow_dispatch:
   push:
     tags:
-      - "agent-report-v*"
+      - "agent-report-cli-v*"
 
 permissions:
   contents: read
@@ -28,7 +29,7 @@ jobs:
             runner: macos-15
 
     steps:
-      - name: Check out tagged source
+      - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: Set up Python 3.11
@@ -37,15 +38,19 @@ jobs:
           python-version: "3.11"
 
       - name: Validate release tag and package version
+        id: version
         env:
           RELEASE_TAG: ${{ github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
         run: >-
           python -c "import os, pathlib, tomllib;
-          version=tomllib.loads(pathlib.Path('tools/report/pyproject.toml').read_text(encoding='utf-8'))['project']['version'];
-          expected=f'agent-report-v{version}';
+          version=tomllib.loads(pathlib.Path('tools/report/cli/pyproject.toml').read_text(encoding='utf-8'))['project']['version'];
+          expected=f'agent-report-cli-v{version}';
           actual=os.environ['RELEASE_TAG'];
-          assert actual == expected, f'release tag {actual!r} does not match {expected!r}';
-          print(f'Validated {expected}')"
+          event=os.environ['EVENT_NAME'];
+          assert event != 'push' or actual == expected, f'release tag {actual!r} does not match {expected!r}';
+          pathlib.Path(os.environ['GITHUB_OUTPUT']).open('a', encoding='utf-8').write(f'version={version}\n');
+          print(f'Validated {expected}' if event == 'push' else f'Validated manual wheel build for {version}')"
 
       - name: Install build and test dependencies
         run: python -m pip install --upgrade build pytest
@@ -56,12 +61,12 @@ jobs:
           rustup default stable
 
       - name: Build platform wheel with bundled Rust engine
-        run: python -m build --wheel --outdir wheelhouse tools/report
+        run: python -m build --wheel --outdir wheelhouse tools/report/cli
 
       - name: Verify release wheel payload
         run: >-
           python tools/report/scripts/verify_release_wheel.py wheelhouse
-          --expected-version "${{ github.ref_name }}"
+          --expected-version "${{ steps.version.outputs.version }}"
           --expected-platform "${{ matrix.platform }}"
 
       - name: Install built wheel
@@ -70,13 +75,22 @@ jobs:
           wheel=next(Path('wheelhouse').glob('*.whl'));
           subprocess.check_call([sys.executable, '-m', 'pip', 'install', '--force-reinstall', str(wheel)])"
 
-      - name: Run report regression tests against installed package
-        run: python -m pytest tools/report/tests -q
+      - name: Exercise installed CLI and report regressions
+        run: >-
+          python -c "import subprocess;
+          subprocess.check_call(['agent-report', '--help'])"
+
+      - name: Run standalone CLI regression tests
+        run: >-
+          python -m pytest
+          tools/report/tests/test_run_timeline.py
+          tools/report/tests/test_token_ledger.py
+          tools/report/tests/test_verify_release_wheel.py -q
 
       - name: Upload verified wheel
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: agent-report-wheel-${{ matrix.platform }}
+          name: agent-report-cli-wheel-${{ matrix.platform }}
           path: wheelhouse/*.whl
           if-no-files-found: error
           compression-level: 0
@@ -84,6 +98,7 @@ jobs:
   publish-release:
     name: Publish GitHub Release
     needs: build-wheel
+    if: startsWith(github.ref, 'refs/tags/agent-report-cli-v')
     runs-on: ubuntu-24.04
     permissions:
       contents: write
@@ -92,7 +107,7 @@ jobs:
       - name: Download verified wheels
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          pattern: agent-report-wheel-*
+          pattern: agent-report-cli-wheel-*
           path: dist
           merge-multiple: true
 
@@ -112,9 +127,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          version="${GITHUB_REF_NAME#agent-report-v}"
+          version="${GITHUB_REF_NAME#agent-report-cli-v}"
           gh release create "$GITHUB_REF_NAME" dist/*.whl dist/SHA256SUMS \
             --verify-tag \
-            --title "Agent Report $version" \
+            --title "Agent Report CLI $version" \
             --generate-notes \
             --latest

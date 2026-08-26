@@ -161,7 +161,7 @@ No open product questions are recorded for this subsystem.
 The accepted product decision preserves current classic report behavior and adds streamlined export without replacing it.
 
 - CLI exists primarily for report automation. An omitted report mode keeps the current classic interactive HTML report and its sequence companion. Explicit `directory` or `summary` selection uses the streamlined exporter.
-- MCP exists primarily for bounded drill-down and forensic investigation by an LLM. MCP query, detail, preflight, snapshot, refresh, and close operations do not generate or require a static report.
+- MCP exists primarily for bounded drill-down and forensic investigation by an LLM. MCP query, detail, snapshot, refresh, and close operations do not generate or require a static report.
 - MCP retains the exact current `generate_report` tool signature, defaults, selection behavior, classic interactive HTML renderer, report bundle, inline representations, and errors.
 - MCP snapshot tools are additive. `export_snapshot` uses the streamlined exporter and accepts `directory` or `summary` without changing `generate_report`.
 - Tauri export uses only the streamlined `directory` and `summary` modes. Tauri does not need to expose the classic renderer.
@@ -185,6 +185,18 @@ The first dynamic release supports Codex only. Current Junie, prompt-runner, met
 
 The dynamic workspace runs in Tauri only. The product does not provide a standalone-browser dynamic runtime. Static directory and summary artifacts remain browser-readable from `file://`.
 
+### DEC-05: Persistent Desktop Configuration
+
+The desktop application provides one configuration menu for durable discovery, scope, export, and database settings.
+
+- **Folders to scan** is an ordered, editable list of authorized Codex session roots.
+- **Include children** and **Include collaborators** are independent saved defaults applied to searches and newly opened snapshots. They are not primary search-form controls.
+- **Worker threads** is a saved integer from 1 through 64 used by subsequent searches and report operations. It is not a primary search-form control.
+- **Report output folder** is the default destination for generated reports. A native chooser can override it for one export without changing the saved default unless the operator explicitly saves the new value.
+- **Database folder** and **Database name** together identify the derived normalized-event database. The name must be a filename, not a path, and must use the `.sqlite3` suffix.
+- Saving validates every value before replacing the active configuration. Invalid settings remain editable and do not partially apply.
+- Changing scan folders or relationship defaults affects the next search or snapshot open. Database folder and name controls are disabled while a snapshot or report operation is active; the operator must close the snapshot and wait for active work to finish before saving a new database identity. Existing source logs and the previous database are not deleted.
+
 ## Maintenance Notes
 
 Recheck this specification when the CLI parser, MCP tool schemas, desktop command contracts, report JSON schema, discovery protocol, privacy filter, pricing data, cache maintenance, cursor retention, or static exporter changes. Recheck DEC-01 through DEC-04 before changing their accepted behavior.
@@ -193,14 +205,14 @@ The most recent source review is 2026-08-12. It includes current dirty-worktree 
 
 ## Parent Workflow
 
-The parent workflow is local agent-run oversight. An operator finds a run, chooses its relationship scope, reviews execution and coordination evidence, and shares or archives a bounded report. Agent Report contributes discovery, normalization, interactive analysis, provenance, and export without changing the source run.
+The parent workflow is local agent-run oversight. An operator configures discovery and storage defaults, finds a run, reviews execution and coordination evidence, and shares or archives a bounded report. Agent Report contributes discovery, normalization, interactive analysis, provenance, and export without changing the source run.
 
 ## Actors
 
 | Actor | Goal and permitted actions | Prohibited actions |
 |---|---|---|
 | Local operator | Search authorized local stores, select scope, inspect evidence, refresh explicitly, cancel work, and export reports. | Cannot modify source rollout logs through Agent Report. |
-| MCP client | Select a task, preflight scope, open and query snapshots, retrieve details, refresh, export, and close snapshots through registered operations. | Cannot obtain host cache paths or bypass configured roots and output limits. |
+| MCP client | Select a task, open and query snapshots, retrieve details, refresh, export, and close snapshots through registered operations. | Cannot obtain host cache paths or bypass configured roots and output limits. |
 | CLI caller | Automate report generation through current backends and Codex catalog or snapshot operations with explicit paths and flags. Omitted report mode produces the classic interactive HTML report. | Cannot combine mutually exclusive modes or bypass sealing and path validation. |
 | Tauri host | Mediate local paths, settings, worker processes, cancellation, native windows, diagnostics, cache maintenance, and publication. | Must not send raw rollout content to the webview or expose unrestricted filesystem authority. |
 | Report worker | Normalize authorized source files, query snapshots, and render exports for the host application service. | Must not discover Codex files independently, publish partial output, or decrypt opaque content. |
@@ -217,7 +229,8 @@ The Tauri dynamic workspace is the intended primary entry point for Codex analys
 
 | Operation or surface | State | Actor and authority | Selector, request, paging, and sort | Result, errors, and side effects | Verification |
 |---|---|---|---|---|---|
-| Desktop catalog search | Implemented; independent child and collaborator settings are worktree behavior | Local operator through Tauri; local filesystem roots | Roots, text query, inclusive local date-hour range, children flag, workers 1 to 64; results sort by last activity, then start time and source path | Virtualized bounded metadata rows, scan/cache statistics, and progress; updates discovery metadata index | `contracts.test.ts`, `catalog.rs`, `discovery.rs` |
+| Desktop configuration | Intended | Local operator through Tauri; local OS user authority | Ordered scan folders, independent child and collaborator defaults, worker threads 1 through 64, report output folder, database folder, and database filename | Validates and atomically saves configuration; invalid values do not partially apply; database identity is immutable during active work and a later change never deletes the prior database | Planned configuration contract, persistence, validation, and migration tests |
+| Desktop catalog search | Implemented baseline with intended configuration integration | Local operator through Tauri; configured local filesystem roots | Text query and inclusive local date-hour range; configured roots and relationship defaults; results sort by last activity, then start time and source path | Virtualized bounded metadata rows, scan/cache statistics, and progress; updates discovery metadata index | `contracts.test.ts`, `catalog.rs`, `discovery.rs`, planned configuration tests |
 | Desktop catalog export | Implemented | Local operator through native save dialog | Current search contract and selected output file | Compact escaped offline catalog; stores last export folder and path | Tauri unit tests and manual desktop test |
 | Desktop dynamic workspace | Intended | Local operator through Tauri | Exact selected root and explicit relationship scope; cursor pages default 100 and maximum 500 | Opens one snapshot and lazy views; no report HTML is preloaded | Planned acceptance scenarios FR-01 through FR-10 |
 | Desktop Codex export | Intended streamlined exporter | Local operator through Tauri | Snapshot or exact selected root; directory or summary mode; output target | Publishes the selected complete offline directory or bounded summary. Progress and cancellation use the shared streamlined export operation. Tauri does not expose classic generation. | Planned exporter and Tauri tests |
@@ -228,8 +241,7 @@ The Tauri dynamic workspace is the intended primary entry point for Codex analys
 | MCP `generate_report` | Implemented and retained unchanged | MCP client through configured stdio server | Exact current parameters: optional exact thread ID, or half-open ISO time range plus case-insensitive name substrings; output directory; inline toggle and format | Keeps the current classic interactive HTML bundle and current default. Optional complete inline HTML, Markdown, or JSON and structured errors remain exact. | `test_mcp_report.py`, `test_mcp_server.py`, signature snapshot and classic-renderer regression tests |
 | MCP `query_time_range` | Implemented and retained | MCP client | Exact thread ID; optional time range; supported measure and 1, 5, 15, 30, or 60 minute buckets; optional events | Bucketed telemetry; at most 1,000 legacy events; deterministic opaque IDs; cancellation | `test_mcp_report.py`, `test_mcp_server.py` |
 | MCP `get_event_details` | Implemented and retained | MCP client | Exact thread ID and `evt_` plus 24 lowercase hexadecimal characters | Full privacy-safe current event or `REPORT_EVENT_NOT_FOUND`; cancellation | `test_mcp_report.py`, `test_mcp_server.py` |
-| `preflight_report` | Intended for Tauri, CLI service mode, and MCP | Authorized local caller | Root, children boolean, collaborators boolean | Counts relationship closure, logs, bytes, cached and changed files, and known indexed events; no snapshot mutation | Planned contract and integration tests |
-| `open_snapshot` | Intended | Authorized local caller | Accepted preflight scope and source revision set | Opaque snapshot ID and snapshot metadata; creates or reuses normalized cache | Planned worker protocol tests |
+| `open_snapshot` | Intended | Authorized local caller | Root and independent children and collaborators booleans; desktop callers use saved configuration defaults | Resolves the authorized relationship closure and atomically creates or reuses a coherent normalized snapshot; returns opaque snapshot metadata or a structured validation, discovery, cancellation, or source-conflict error | Planned worker protocol and scope tests |
 | `get_summary` | Intended | Snapshot holder | Snapshot ID | Exact revision, title, goal, state, scope label, observation and live state, half-open time range, grouped metrics, significant activity, and structured warnings | Planned application-service tests |
 | `list_agents` | Intended | Snapshot holder | Exact query and state filters; requested `last_activity_at|started_at|agent_id` sort; opaque cursor; page size 1 to 500 | Canonical page with exact revision, normalized applied filter and sort objects, and full agent rows; default 100 | Planned pagination tests |
 | `list_turns` | Intended | Snapshot holder | Exact agent and state filters; requested `started_at|ended_at|turn_id` sort; opaque cursor; page size 1 to 500 | Canonical page with exact revision, normalized applied filter and sort objects, and full turn rows | Planned pagination tests |
@@ -253,8 +265,8 @@ All dynamic operations use a versioned request and response envelope. A caller t
 This specification includes:
 
 - local run discovery, filtering, title fallback, selection, and source navigation;
-- explicit root, child, and collaborator scope;
-- preflight estimation and user confirmation;
+- persistent desktop configuration for scan folders, relationship defaults, report output, and database identity;
+- explicit root, child, and collaborator scope resolved when a snapshot opens;
 - dynamic Codex summary and analysis views;
 - cursor pagination, virtualization, time-range aggregation, and lazy event details;
 - explicit live refresh with no background watcher;
@@ -275,7 +287,7 @@ This specification excludes remote hosting, collaborative multi-user access, sou
 | Child | A descendant established by recorded native `thread_spawn` metadata. |
 | Collaborator | A non-child task connected by a recorded cross-root delegation link. |
 | Scope | The root plus independently selected child and collaborator relationship sets. |
-| Preflight | A read-only estimate of files, bytes, relationships, cache status, and known event count before snapshot creation. |
+| Desktop configuration | Persisted discovery, relationship-scope, export-destination, and database-location defaults managed from the application configuration menu. |
 | Snapshot | One coherent normalized view bound to source revisions, scope, parser version, pricing version, and observation time. |
 | Live snapshot | A snapshot of sources that can still change. Refresh occurs only on operator request. |
 | Sealed snapshot | A reproducible snapshot of stable terminal sources with source and pricing digests. |
@@ -351,26 +363,31 @@ Missing response effort does not make a model row partial or unavailable when th
 
 ### Workflow 1: Find And Select A Run
 
-1. The operator chooses one or more authorized Codex session roots.
+1. The application searches the folders saved in configuration and applies the saved relationship defaults.
 2. The operator can enter a text query and an inclusive local date-hour range.
 3. The application converts local date-hour values to UTC search boundaries.
 4. The application displays native scan and cache progress.
 5. The application shows virtualized root-run results ordered by last activity.
-6. The operator selects one result and sees its title, thread ID, times, workspace, store, source path, and diagnostics.
-7. An empty result shows a clear empty state. A validation or discovery failure leaves controls available for correction and retry.
+6. The operator selects one result and sees its title, thread ID, times, workspace, store, source location, and diagnostics.
+7. An empty result shows a clear empty state. A validation or discovery failure leaves search controls available for correction and provides an action to open configuration when a saved folder is invalid or unavailable.
 
-### Workflow 2: Choose Scope And Open A Dynamic Snapshot
+### Workflow 2: Configure Discovery And Storage
 
-1. The operator starts with root-only scope.
-2. The operator can select children and collaborators independently.
-3. The application runs `preflight_report` before opening the snapshot.
-4. The application shows log count, total bytes, relationship counts, cached and changed counts, and indexed events when known.
-5. The operator chooses Continue, Change scope, or Cancel.
-6. Continue opens a coherent snapshot and displays the bounded summary first.
-7. Change scope returns to the scope controls and runs a new preflight after the next request.
-8. Cancel leaves the selected run unchanged and creates no snapshot.
+1. The operator opens the configuration menu.
+2. The application displays the saved folders to scan, Include children default, Include collaborators default, worker threads, report output folder, database folder, and database name.
+3. The operator adds, removes, reorders, or chooses folders and edits either relationship default or the database filename.
+4. The application validates folder access, output and database destination suitability, and database filename syntax.
+5. Save atomically applies every valid setting. Cancel closes the menu without changing the active configuration.
+6. While a snapshot or report operation is active, database folder and name cannot be changed and the application explains that the operator must close the snapshot and wait for active work to finish. After that, Save switches to the configured database without deleting the old file.
 
-### Workflow 3: Inspect A Dynamic Snapshot
+### Workflow 3: Open A Dynamic Snapshot
+
+1. The operator selects a run and chooses Open report.
+2. The application uses the saved Include children and Include collaborators defaults to resolve the authorized relationship closure.
+3. The application opens or reuses one coherent normalized snapshot and shows operation progress with cancellation while work is active.
+4. Success displays the bounded summary first. Failure preserves the selected run and provides a corrective action or retry; cancellation creates no new snapshot.
+
+### Workflow 4: Inspect A Dynamic Snapshot
 
 1. The operator starts on Summary and sees scope, current goal or title, run state, high-level metrics, provenance, warnings, and recent significant activity.
 2. The operator chooses Coordination, Heatmap, Timeline, Sequence, Agents, Turns, Tools, Model usage, Context and compaction, Inference, Runtime and waits, Work items and claims, or Provenance and diagnostics.
@@ -384,7 +401,7 @@ Missing response effort does not make a model row partial or unavailable when th
 10. Raw argument or result disclosures remain absent until the operator opens them.
 11. The Coordination view groups evidence by canonical work item or delegated root when available. It marks reconstructed prose decisions as inferred.
 
-### Workflow 4: Refresh, Cancel, And Recover
+### Workflow 5: Refresh, Cancel, And Recover
 
 1. A live snapshot shows its observation time and an explicit Refresh action.
 2. Refresh compares current source revisions with the snapshot binding.
@@ -394,7 +411,7 @@ Missing response effort does not make a model row partial or unavailable when th
 6. The application returns to the last coherent snapshot and labels the refresh cancelled.
 7. A failed refresh never replaces the last coherent cache revision or visible snapshot.
 
-### Workflow 5: Export A Snapshot
+### Workflow 6: Export A Snapshot
 
 1. The operator selects Complete directory or Summary HTML in Tauri.
 2. The application shows the selected scope and expected content.
@@ -404,7 +421,7 @@ Missing response effort does not make a model row partial or unavailable when th
 6. The shared streamlined exporter writes to a staging location and atomically publishes the completed file or directory.
 7. The application records the successful export and can reopen it later.
 
-### Workflow 6: Use The CLI
+### Workflow 7: Use The CLI
 
 1. The caller selects a supported input backend or Codex catalog mode.
 2. The caller supplies compatible scope, state, title, formatter, worker, report-mode, and output flags. If report mode is omitted, the CLI generates the classic interactive HTML report. The caller selects `directory` or `summary` explicitly for streamlined output.
@@ -414,18 +431,18 @@ Missing response effort does not make a model row partial or unavailable when th
 6. A handled input, discovery, parse, render, write, or seal failure prints a diagnostic and returns exit status 1.
 7. An argument-contract violation prints `argparse` usage and exits with its standard nonzero status.
 
-### Workflow 7: Use MCP
+### Workflow 8: Use MCP
 
 1. The MCP server validates configured roots, output path, timezone, inline limit, and bundled discovery protocol at startup.
 2. The MCP client selects a task by exact thread ID or exact time-and-name selection.
-3. The client can preflight, open, query, retrieve detail, refresh, and close a snapshot without Tauri or static report generation.
+3. The client can open, query, retrieve detail, refresh, and close a snapshot without Tauri or static report generation.
 4. The client calls `generate_report` when it needs the current classic report bundle. It calls additive `export_snapshot` when it needs a streamlined directory or summary from an open snapshot.
 5. Retained `generate_report`, `query_time_range`, and `get_event_details` keep their current schemas and defaults unchanged. Snapshot tools remain separate additive operations.
 6. All operations return structured success or structured validation, ambiguity, discovery, generation, conflict, cancellation, and write errors.
 7. Inline HTML, Markdown, or JSON is complete or rejected with `REPORT_TOO_LARGE_FOR_MCP`; it is never truncated.
 8. MCP responses do not disclose the event-cache path.
 
-### Workflow 8: Read A Static Report
+### Workflow 9: Read A Static Report
 
 1. The reader opens a complete-directory `index.html` or a bounded summary file from disk.
 2. The reader navigates pre-rendered pages and the sequence companion through relative links.
@@ -435,65 +452,36 @@ Missing response effort does not make a model row partial or unavailable when th
 
 ## Interface Examples
 
-### UI Layout Contract
+### UI Information And Action Contract
 
-This wireframe defines grouping, relative prominence, and the preflight-to-workspace state transition.
+This specification does not prescribe a page layout, wireframe, navigation shape, or visual hierarchy. The implemented UI must make the following information available when it is relevant, may organize it into fewer or more views after UX validation, and must not require a separate preflight or scope-confirmation surface.
 
-```text
-┌────────────────────────────────────────────────────────────────────────────┐
-│ Agent Report        Run title                          Live · observed 08:05 │
-├───────────────────┬────────────────────────────────────────────────────────┤
-│ FIND A RUN        │ PREFLIGHT                                           × │
-│ Roots             │ Scope: Root ✓  Children □  Collaborators □            │
-│ Search            │ 1 log · 6.3 MB · 0 children · 0 collaborators          │
-│ From / To         │ 1 cached · 0 changed · 842 indexed events              │
-│                   │ [Change scope] [Cancel] [Continue]                      │
-│ SCOPE             ├────────────────────────────────────────────────────────┤
-│ Root ✓            │ SUMMARY                                                │
-│ Children □        │ Goal · state · duration · agents · turns · cost         │
-│ Collaborators □   │ Recent significant activity · warnings · provenance    │
-│                   │                                                        │
-│ VIEWS             │                                                        │
-│ Summary           │                                                        │
-│ Coordination      │                                                        │
-│ Heatmap           │                                                        │
-│ Timeline          │                                                        │
-│ Sequence          │                                                        │
-│ Agents / turns    │                                                        │
-│ Model / context   │                                                        │
-│ Runtime / waits   │                                                        │
-│ Work items        │                                                        │
-│ Provenance        │                                                        │
-├───────────────────┴────────────────────────────────────────────────────────┤
-│ Refresh  Export  Diagnostics         Loaded 100 rows · Next page available │
-└────────────────────────────────────────────────────────────────────────────┘
-```
+| Information family | Information that must be available |
+|---|---|
+| Selected run | Title, stable task identity, workspace, source store, start and last-activity times, current or terminal state, observation time, and whether the snapshot is live or sealed. |
+| Effective scope | Whether children and collaborators were included, the number of included roots and agents, and warnings for unavailable or excluded relationships. |
+| Outcome and progress | Current goal when available, significant activity, completion or failure evidence, active operation, bounded progress, cancellation state, warnings, and recoverable errors. |
+| Time and utilization | Wall-clock range, active and waiting time, runtime states, model inference, tool execution, build and test activity, concurrency, and time-bucket provenance. |
+| Tokens, context, models, and cost | Uncached and cached input, reasoning, output, tool calls, context average and maximum, model-and-effort identity, price evidence, cost, capacity, and explicit zero, partial, unavailable, or N/A states. |
+| Agents and turns | Agent identity and relationship, parent or delegator, status, start and end times, duration, current or final activity, turn identity, and bounded turn metrics. |
+| Tools and events | Event time, kind, actor, tool or operation, duration, status, bounded arguments or result disclosure, evidence quality, and an opaque source reference when opening the native source is authorized. |
+| Coordination | Dispatches, delegations, messages, follow-ups, waits, interrupts, work items, claims, handoffs, and whether a conclusion is recorded or inferred. |
+| Sequence | Chronological endpoints, event identity, repeated-message grouping, hierarchy, reasoning availability, and a text ledger equivalent to any graphical sequence. |
+| Provenance and diagnostics | Snapshot revision, parser and pricing versions, source and omission summaries, measured/derived/inferred/unavailable labels, cache or parse warnings, and bounded diagnostics without transcript bodies. |
+| Export | Selected export mode, effective scope, destination, expected omissions, progress, terminal artifact identity, manifest digest, file count, byte count, and warnings. |
 
-When preflight is closed, the workspace occupies the main region. On narrow windows, the navigation becomes a disclosure above the active view; the selected scope and Refresh action remain visible.
+The UI must support these actions wherever the corresponding information is available:
 
-### Heatmap Layout And Interaction Contract
+- search by bounded metadata and local date-hour range, clear filters, retry, select a run, and open its report;
+- open configuration, edit every setting in DEC-05, validate, save atomically, or cancel without applying changes;
+- choose an analysis information family, filter and sort applicable data, page or virtualize large collections, and return to the prior context;
+- select Heatmap mode and period, select a cell, drill down, step back, move to adjacent periods, follow breadcrumbs, and open one bounded event detail;
+- expand bounded arguments, results, reasoning status, provenance, warnings, and diagnostics without eagerly loading all underlying events;
+- refresh a live snapshot, cancel active work, retry a recoverable failure, and preserve the last coherent result during refresh or query failure;
+- export a complete directory or bounded summary, choose a one-time destination override, resolve an existing target, cancel safely, and reopen a successful export;
+- open an authorized source location through the native host and close the active snapshot.
 
-This wireframe defines the three mode choices, period controls, row-specific scale disclosure, bounded drilldown, and existing navigation controls. It is illustrative of layout, but its labels and interaction states are contractual.
-
-```text
-┌────────────────────────────────────────────────────────────────────────────┐
-│ HEATMAP                                                                    │
-│ Measure [Wall time ▾]   Period [1 min] [5 min•] [15] [30] [1 hour]  [←][→] │
-│ Scale: per row · Context uses known capacity, else N/A intensity           │
-├───────────────────────┬──────────┬──────────┬──────────┬──────────┤
-│ Periods               │ 08:00    │ 08:05    │ 08:10    │ 08:15    │
-│ Model inference       │ 2m 10s   │ 4m 02s   │ 0ms      │ Unavail. │
-│ Tool execution        │ 34s      │ 1m 11s   │ 12s      │ 0ms      │
-│ Build / Test          │ 0ms      │ 45s      │ 3m 08s   │ 10s      │
-└───────────────────────┴──────────┴──────────┴──────────┴──────────┘
-  Drilldown path: 15 min › 5 min · 08:05–08:10
-  [Drill down] [Step back]                            [Previous] [Next]
-  Tool execution · 08:05–08:10 · 1m 11s
-  08:06 · Shell · 44s · bounded sanitized preview
-  08:08 · MCP call · 27s · bounded sanitized preview
-```
-
-Tokens replaces the runtime-state rows with Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), and Cost. Models replaces them with one friendly model-and-effort row per recorded combination and a final Cost row. The label `Unavail.` represents unavailable evidence and is never used for a measured zero. Drill down is disabled at 1 minute. Step back is disabled at 60 minutes or whenever no coarser parent is in the selection trail. Previous and Next are disabled when the adjacent period does not overlap the snapshot range.
+Heatmap presents exactly Wall time, Tokens, and Models. Tokens contains Uncached input, Cached input, Reasoning, Output, Tool calls, Context size (avg), Context size (max), and Cost. Models contains one friendly model-and-effort row per recorded combination and a final Cost row. Unavailable evidence is never displayed as measured zero. Drill down is unavailable at 1 minute; step back is unavailable without a coarser parent; adjacent-period actions are unavailable beyond the snapshot range. Every pointer action has a visible keyboard-operable equivalent.
 
 ### CLI Success And Failure
 
@@ -636,8 +624,7 @@ MCP uses stdio tool calls, not HTTP. The following logical request and response 
     "scope": {
       "include_children": false,
       "include_collaborators": false
-    },
-    "preflight_token": "pf_6b8b4325602a4dc29d6d8ac4"
+    }
   }
 }
 ```
@@ -669,16 +656,15 @@ A validation failure returns no snapshot:
 }
 ```
 
-A stale preflight returns a conflict and current counts:
+A source change that prevents a coherent open returns a conflict and no snapshot:
 
 ```json
 {
   "ok": false,
   "error": {
-    "code": "REPORT_SCOPE_CONFLICT",
-    "message": "The selected source set changed after preflight."
+    "code": "REPORT_SOURCE_CONFLICT",
+    "message": "The selected source set changed while the snapshot was opening."
   },
-  "preflight_required": true,
   "current_source_revision": "src_3b4bb82207e14938a713cb77"
 }
 ```
@@ -770,17 +756,19 @@ agent-report-export/
 
 ```mermaid
 flowchart TD
-  Start[Operator opens Agent Report] --> Search[Search authorized local stores]
+  Start[Operator opens Agent Report] --> Configured{Configuration valid?}
+  Configured -- No --> Configure[Edit scan, scope, report, and database settings]
+  Configure --> Save{Settings valid?}
+  Save -- No --> Configure
+  Save -- Yes --> Search[Search configured local stores]
+  Configured -- Yes --> Search
   Search --> Found{Matching root runs?}
   Found -- No --> Empty[Show empty state and editable filters]
   Found -- Yes --> Select[Select one root run]
-  Select --> Scope[Choose children and collaborators independently]
-  Scope --> Preflight[Calculate bounded scope preflight]
-  Preflight --> Decision{Operator decision}
-  Decision -- Change scope --> Scope
-  Decision -- Cancel --> Selected[Keep selection without snapshot]
-  Decision -- Continue --> Open[Open coherent snapshot]
-  Open --> Summary[Show bounded summary]
+  Select --> Open[Open coherent snapshot using configured relationship defaults]
+  Open --> Result{Open result}
+  Result -- Cancel or fail --> Selected[Keep selection and show recovery]
+  Result -- Success --> Summary[Show bounded summary]
 ```
 
 ### Dynamic Inspection Workflow
@@ -869,13 +857,9 @@ sequenceDiagram
   participant MCP as MCP Server
   participant Service as Shared Application Service
   participant Worker as Report Worker
-  Client->>MCP: preflight_report(selection, scope)
+  Client->>MCP: open_snapshot(selection, scope)
   MCP->>Service: Validate roots, selection, and scope
-  Service->>Worker: Preflight request
-  Worker-->>Client: Counts and preflight token
-  Client->>MCP: open_snapshot(preflight token)
-  MCP->>Service: Open coherent snapshot
-  Service->>Worker: Normalize changed sources
+  Service->>Worker: Resolve closure and normalize changed sources
   Worker-->>Client: Snapshot ID
   loop Bounded queries
     Client->>MCP: Query with cursor or time range
@@ -935,10 +919,9 @@ flowchart TD
 
 | State | User-visible rule |
 |---|---|
-| No selection | Report and export actions are disabled. Search and root controls remain available. |
-| Selected | Scope controls and preflight are available. No snapshot query can run. |
-| Preflighting | Counts and progress are visible. Continue is disabled until a coherent result exists. |
-| Awaiting confirmation | Continue, Change scope, and Cancel are available. The counts correspond to one source revision. |
+| Configuration required | Search and report actions are unavailable until required scan, output, and database settings are valid; configuration remains editable. |
+| No selection | Report and export actions are disabled. Search controls and configuration remain available. |
+| Selected | Open report is available and uses the saved relationship defaults. No snapshot query can run. |
 | Opening | Snapshot progress and cancellation are available. Previous catalog state remains intact. |
 | Ready | Summary is visible. View, refresh, detail, and export operations are available. |
 | Querying | The current coherent view remains visible until the bounded result arrives. |
@@ -948,16 +931,19 @@ flowchart TD
 | Failed | A structured diagnostic and recovery action are visible. The last coherent snapshot remains usable. |
 | Closed | Worker snapshot resources are released. A later open requires a new snapshot operation. |
 
-### Scope And Preflight Rules
+### Configuration And Scope Rules
 
-- Root-only is the default for every new report selection.
+- Include children and Include collaborators are persistent configuration defaults, not primary search-form controls.
+- The initial defaults are both off, producing root-only scope until the operator saves another preference.
 - Children and collaborators are independent booleans.
 - Selecting collaborators does not imply native children. Selecting children does not imply collaborators.
 - A collaborator's spawned descendants are included only when children and collaborators are both selected.
 - Only recorded `thread_spawn` metadata establishes a child.
 - A delegation marker without spawn metadata establishes a collaborator.
-- Preflight runs before snapshot creation and before a materially changed scope is accepted.
-- A changed source revision invalidates the preflight token and requires user confirmation against current counts.
+- Snapshot open resolves scope and source revisions as one cancellable operation. It does not require a separate estimate, token, or confirmation step.
+- A source change during opening produces one coherent snapshot revision or a structured failure; it never publishes mixed revisions.
+- Folders to scan, report output folder, database folder, and database name are saved only through configuration and are validated before activation.
+- Database changes never move or delete the prior database implicitly.
 
 ### Paging, Filtering, And Time Rules
 
@@ -1003,7 +989,7 @@ flowchart TD
 
 ### Cache, Refresh, And Cancellation Rules
 
-- The default normalized cache location is `~/.codex/agent-report/report-events-v1.sqlite3`.
+- The initial normalized-cache default is folder `~/.codex/agent-report` and name `report-events-v1.sqlite3`; desktop configuration can replace both values.
 - The production quota defaults to 5 GiB, exactly 5,368,709,120 bytes, and is configurable.
 - Quota enforcement deterministically evicts the least-recently-used closed, unprotected snapshot first.
 - Open and protected snapshots are never evicted.
@@ -1033,8 +1019,8 @@ flowchart TD
 - The server retains `generate_report`, `query_time_range`, and `get_event_details`.
 - Retained `query_time_range` and `get_event_details` schemas remain unchanged.
 - `generate_report` preserves every prior parameter and default exactly. It does not add a report-mode or relationship-scope parameter.
-- The server also exposes exactly `preflight_report`, `open_snapshot`, `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, `get_snapshot_event_details`, `refresh_snapshot`, `export_snapshot`, and `close_snapshot`.
-- Query, detail, preflight, snapshot, refresh, and close operations do not require a static report.
+- The server also exposes exactly `open_snapshot`, `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, `get_snapshot_event_details`, `refresh_snapshot`, `export_snapshot`, and `close_snapshot`.
+- Query, detail, snapshot, refresh, and close operations do not require a static report.
 - CLI, Tauri, worker, and MCP clients share one application service and normalized semantics.
 - Configured session roots, output root precedence, workspace root, timezone, and maximum inline bytes remain server-owned.
 - The server validates the bundled discovery engine protocol at startup and never downloads or compiles an engine during a tool call.
@@ -1050,7 +1036,7 @@ flowchart TD
 | Search has no matches | Empty state preserves filters and root selection. | Operator can change filters. |
 | Time range is reversed | Validation identifies the invalid boundary. | Operator can correct the range. |
 | Name-and-time selection matches several tasks | `REPORT_SELECTION_AMBIGUOUS` returns bounded candidates. | Caller can use an exact thread ID. |
-| Selected root changes after preflight | Scope conflict shows current revision and requires a new preflight. | Operator can review current counts. |
+| A selected source changes while opening | Opening either binds one coherent revision or returns a structured source conflict without a new snapshot. | Operator can retry; the prior coherent snapshot remains usable. |
 | A live file changes during parse | The snapshot uses one coherent source revision or fails without publication. | Operator can refresh. |
 | A source is truncated or replaced | Discovery invalidates the stable fingerprint and reparses that file. | Snapshot can reopen or refresh. |
 | Cache is absent or corrupt | The application reports rebuild progress and recreates only derived state. | Operator can continue after rebuild. |
@@ -1095,7 +1081,7 @@ Type: Testable
 
 Test files: `tools/report/desktop/src/contracts.test.ts`, `tools/report/desktop/src-tauri/tests/catalog.rs`, `tools/report/rust/agent-report-core/tests/discovery.rs`
 
-Status: Pass for current behavior; Planned for preflight integration
+Status: Pass for current behavior; Planned for configuration integration
 
 Scenario: An operator finds root runs with local filters and selects one without loading transcript content into the run index.
 
@@ -1111,7 +1097,7 @@ Assertions:
 - Stable metadata is reused and changed files are reparsed.
 - Search does not expose transcript bodies.
 
-### Verification Block FR-02: Scope Preflight
+### Verification Block FR-02: Configuration And Snapshot Scope
 
 Type: Planned
 
@@ -1119,19 +1105,23 @@ Test files: Not yet identified
 
 Status: Planned
 
-Scenario: Root-only, child, and collaborator scopes produce explicit preflight counts before snapshot creation.
+Scenario: Saved discovery, relationship, export, and database settings are validated and applied to search and snapshot opening without a separate preflight.
 
 Steps:
 
-1. Select a fixture graph with native children and cross-root collaborators.
-2. Run all four child-and-collaborator boolean combinations.
-3. Change one source after a preflight and attempt to open its snapshot.
+1. Configure multiple scan folders, both relationship defaults, a report output folder, a database folder, and a valid database filename.
+2. Search and open a fixture graph under all four child-and-collaborator combinations by changing and saving the defaults.
+3. Attempt to save an inaccessible folder and an invalid database filename, then cancel a separate valid edit.
+4. Attempt to change the database identity while a snapshot or report operation is active, then close the snapshot and save the change.
+5. Change one source while a snapshot is opening.
 
 Assertions:
 
-- Root-only is the default.
-- Each scope reports logs, bytes, relationships, cache status, and known events.
-- A stale preflight cannot open a snapshot without renewed confirmation.
+- Both initial relationship defaults are off and remain independent when saved.
+- Search uses the configured folders and a snapshot uses the saved relationship defaults without a preflight token or confirmation surface.
+- Invalid settings do not partially apply, and Cancel preserves the prior configuration.
+- Database identity controls are disabled during active work. After the operator closes the snapshot, saving switches identity without deleting the old database.
+- A concurrent source change yields one coherent revision or a structured failure without publishing mixed data.
 
 ### Verification Block FR-03: Dynamic Summary And Views
 
@@ -1282,7 +1272,7 @@ Assertions:
 - Startup validates configuration and the bundled discovery protocol.
 - Retained `query_time_range` and `get_event_details` schemas and behavior remain unchanged.
 - `generate_report` remains available with its exact prior parameters and defaults and keeps the classic report bundle.
-- The exact snapshot-tool inventory is `preflight_report`, `open_snapshot`, `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, `get_snapshot_event_details`, `refresh_snapshot`, `export_snapshot`, and `close_snapshot`.
+- The exact snapshot-tool inventory is `open_snapshot`, `get_summary`, `list_agents`, `list_turns`, `list_events`, `query_snapshot_time_range`, `query_sequence`, `query_coordination`, `get_snapshot_event_details`, `refresh_snapshot`, `export_snapshot`, and `close_snapshot`.
 - `export_snapshot` uses the same streamlined directory and summary exporter as Tauri and explicit CLI streamlined modes.
 - Snapshot operations preserve scope, canonical page metadata, grouped heatmap, sequence, coordination, detail, lifecycle, export, and cancellation semantics.
 - Query, detail, and snapshot lifecycle complete without calling `generate_report` or `export_snapshot`.

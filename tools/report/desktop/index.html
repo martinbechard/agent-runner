@@ -41,8 +41,9 @@
             <label class="field-label" for="query">Search</label>
             <input id="query" type="search" autocomplete="off" placeholder="Title, thread, or workspace" />
             <div class="date-range" role="group" aria-label="Local date and time range with an exclusive To value">
-              <fieldset><legend>From</legend><div class="date-time-fields"><label for="from-date"><span>Date</span><input id="from-date" type="date" /></label><label for="from-time"><span>Time (24-hour)</span><input id="from-time" type="time" lang="en-GB" step="60" /></label></div></fieldset>
-              <fieldset><legend>To (exclusive)</legend><div class="date-time-fields"><label for="to-date"><span>Date</span><input id="to-date" type="date" /></label><label for="to-time"><span>Time (24-hour)</span><input id="to-time" type="time" lang="en-GB" step="60" /></label></div></fieldset>
+              <fieldset><legend>From</legend><div class="date-time-fields"><label for="from-date"><span>Date</span><input id="from-date" type="date" /></label><label for="from-time"><span>Time (24-hour)</span><input id="from-time" class="time-24-hour" type="text" inputmode="numeric" autocomplete="off" pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]" placeholder="00:00" aria-describedby="time-format-hint" /></label></div></fieldset>
+              <fieldset><legend>To (exclusive)</legend><div class="date-time-fields"><label for="to-date"><span>Date</span><input id="to-date" type="date" /></label><label for="to-time"><span>Time (24-hour)</span><input id="to-time" class="time-24-hour" type="text" inputmode="numeric" autocomplete="off" pattern="(?:[01][0-9]|2[0-3]):[0-5][0-9]" placeholder="00:00" aria-describedby="time-format-hint" /></label></div></fieldset>
+              <p id="time-format-hint" class="microcopy time-format-hint">Enter time as HH:mm, from 00:00 to 23:59.</p>
             </div>
             <button id="search" class="primary-action" type="button">Search logs</button>
           </section>

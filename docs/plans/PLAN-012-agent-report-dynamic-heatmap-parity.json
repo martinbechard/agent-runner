@@ -394,6 +394,77 @@
           "children": []
         }
       ]
+    },
+    {
+      "text": "Align realistic Heatmap examples, direct FR-to-HLD/CD traceability, and runtime presentation across all three modes",
+      "complete": false,
+      "children": [
+        {
+          "text": "HM-V01 Wall time normative test vector: service and Workspace preserve `2m 10s`, `Partial · 4m 2s`, `0ms`, and `Unavailable` exactly.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "HM-V02 compact-number normative rule: nonnegative token and model values below 1K use rounded locale integers. Values at or above 1K use the largest supported K, M, or B unit, round the scaled value decimal-half-up to one decimal, and omit a trailing `.0`. If rounding reaches `1000` and a larger supported unit exists, promote and reformat; B is the largest unit. Tool calls always use locale-grouped integer counts and never use K, M, or B. Canonical examples are `999 → 999`, `1,000 → 1K`, `1,200 → 1.2K`, `12,000 → 12K`, `12,400 → 12.4K`, `999,900 → 999.9K`, `999,950 → 1M`, `1,000,000 → 1M`, `1,200,000 → 1.2M`, and `1,200 Tool calls → 1,200`.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "HM-V03 known-context normative test vector: the service returns `75%\\n96K` with intensity `0.75`; the visual cell uses two lines and its accessible value is `75%; 96K`.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "HM-V04 cost normative test vectors: zero is `$0.00`; positive values below `$0.01` use four decimals; values at or above `$0.01` use two decimals; a partial value keeps the exact `Partial · ` prefix.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "HM-V05 unknown-capacity normative test vector: the service returns `N/A`, an unavailable `context_capacity_unavailable` scale, null intensity, no percentage, and optional `88K tokens observed`; Workspace presents `N/A — capacity unavailable` without a fallback scale.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "HM-V06 Models normative rows use `gpt-5.6-sol · effort high`, `gpt-5.6-terra · effort medium`, and `Unknown model` as applicable, preserve first-occurrence order, and place Cost last.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "HM-V07 assignment-fallback normative evidence label is `default (Trace Heatmap examples) · gpt-5.6-sol · effort high`; agent assignment supplies the name only when nickname is absent.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Own production changes only in application_service.py, report-workspace.ts, and styles.css unless a red preservation test proves loss elsewhere. CD-003 receives documentation traceability only: no source, schema, migration, or backfill change.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Document HM-V01 through HM-V07 as normative test vectors in FR-001; keep wireframe geometry illustrative. Add direct forward and backward traceability through HLD-003 and the relevant sections of CD-002 through CD-005.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Python red-green: add one routine deterministic fixture that asserts all normative service strings, raw values, evidence states, applicable zero, scales, intensity, supporting text, friendly labels, row order, and Cost last; preserve aggregation and retained MCP behavior.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Worker, Rust/Tauri, and TypeScript contract tests prove lossless snake-case/camel-case serialization and parsing of every normative vector. Keep their production code unchanged unless the focused red test proves that boundary loses a field or value.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Workspace red-green: assert service-owned values, visual line breaking, accessible semicolon wording, Partial, Unavailable, N/A, zero, friendly labels, and no percentage or intensity fallback; change styles only for the accepted two-line and accessible presentation.",
+          "complete": false,
+          "children": []
+        },
+        {
+          "text": "Integrated verification compares one fixture across service, worker, Rust/Tauri, contracts, and Workspace; runs focused/full Python, Rust, TypeScript, build, sidecar, macOS package, and wide/narrow keyboard/accessibility checks; preserves retained query_time_range, classic generation, payload/privacy bounds, and all dirty protected paths without edits, staging, reformatting, or commits.",
+          "complete": false,
+          "children": []
+        }
+      ]
     }
   ]
 }

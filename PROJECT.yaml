@@ -1,0 +1,281 @@
+schema: project
+schema_version: 1
+
+project_setup:
+  mode: advanced
+  concurrent_tasking: false
+  concurrent_capacity: null
+  persistence: file
+  commit: main-branch
+  documentation: specifications
+  core_skill_delivery:
+    mode: by-reference
+    source: mcp-agent-ops skill catalog revision 7b3d1c2d27ba5b58a88325ccc6c7e75a8a8c2b8ada1c223df8137fe4c8d49136
+  technology_skill_delivery: by-reference
+  technology_confirmation_required: true
+
+current_understanding:
+  summary: Agent Runner contains reusable development tooling and the Agent Report product, including a Python report service, a TypeScript desktop interface, and a Rust Tauri integration.
+  development_stage: Active development with existing functional, architecture, and component specifications.
+  setup_need: The project needs one durable routing and work-item configuration so agents use the selected file-backed backlog and main-branch completion process.
+
+resource_coordination:
+  selected: none
+
+authoritative_sources:
+  readme_files:
+    - path: README.md
+      evidence: Repository entry point.
+    - path: tools/report/README.md
+      evidence: Agent Report usage and implementation guide.
+  agents_files:
+    - path: AGENTS.md
+      evidence: Repository-wide file-placement requirements.
+  package_and_build_files:
+    - path: pyproject.toml
+      evidence: Root Python package and test configuration.
+    - path: tools/report/pyproject.toml
+      evidence: Agent Report Python package and command entry points.
+    - path: tools/report/desktop/package.json
+      evidence: Desktop TypeScript, React, Vite, Vitest, and Tauri commands.
+    - path: tools/report/desktop/src-tauri/Cargo.toml
+      evidence: Desktop Rust crate and Tauri dependencies.
+  source_roots:
+    - path: tools/report/src
+      evidence: Agent Report Python source.
+    - path: tools/report/desktop/src
+      evidence: Agent Report desktop TypeScript and React source.
+    - path: tools/report/desktop/src-tauri/src
+      evidence: Agent Report Tauri Rust source.
+  test_roots:
+    - path: tools/report/tests
+      evidence: Agent Report Python tests.
+    - path: tools/report/desktop/tests
+      evidence: Desktop browser and integration tests.
+  documentation:
+    - path: docs/project-taxonomy.md
+      evidence: Repository file-placement authority.
+    - path: docs/requirements/functional
+      evidence: Functional specification authority.
+    - path: docs/architecture
+      evidence: Architecture authority.
+    - path: docs/design/high-level
+      evidence: High-level design authority.
+    - path: docs/design/components
+      evidence: Component-design authority.
+
+project_scope_and_boundaries:
+  repository_boundary: This repository only. The .archive/ subtree is historical and excluded from setup evidence and technology detection.
+  product_or_service_boundary: Development tooling and the Agent Report command-line, MCP, static-report, and desktop-report surfaces.
+  private_data_boundary: Do not send private, proprietary, company-internal, personally identifying, customer, secret, or non-public data to an LLM unless the user explicitly authorizes it.
+  sibling_repositories:
+    - name: Not yet identified
+      relationship: No sibling repository is part of this configuration.
+
+project_taxonomy:
+  family: Multi-tool development repository with a report product.
+  primary_runtime: Python, TypeScript, and Rust.
+  application_tiers:
+    - name: Python tooling and Agent Report service
+      paths: ["tools/backlog-runner", "tools/methodology-runner", "tools/prompt-runner", "tools/report/src"]
+      stacks: [Python]
+      notes: Python package metadata and tests define these active scopes.
+    - name: Agent Report desktop interface
+      paths: ["tools/report/desktop/src"]
+      stacks: [TypeScript, React, Vite]
+      notes: The desktop package manifest defines this interface scope.
+    - name: Agent Report desktop native integration
+      paths: ["tools/report/desktop/src-tauri", "tools/report/rust"]
+      stacks: [Rust, Tauri]
+      notes: Cargo manifests define the native and shared-core scopes.
+  documentation_surfaces:
+    - path: docs/architecture
+      purpose: ARC-NNN-slug.md system architecture authority.
+    - path: docs/design/high-level
+      purpose: HLD-NNN-slug.md design authority derived from an architecture authority.
+    - path: docs/design/components
+      purpose: CD-NNN-slug.md component design authority derived from a high-level design.
+    - path: docs/requirements/functional
+      purpose: FR-NNN-slug.md functional specification authority.
+
+root_agents_reference:
+  file: AGENTS.md
+  purpose: Root instructions preserve taxonomy-based file placement and route agents to this configuration.
+  required_content:
+    - Preserve repository-wide file-placement requirements.
+    - Read PROJECT.yaml before creating a file or choosing a workflow.
+    - Load routed skills by reference. Do not copy skill definitions into guidance.
+    - Do not treat .archive/ as active project evidence.
+
+technology_skill_detection:
+  owner: Project Configurator
+  registry: mcp-agent-ops detect_technology_skills
+  runtime_catalog_source: mcp-agent-ops skill catalog revision 7b3d1c2d27ba5b58a88325ccc6c7e75a8a8c2b8ada1c223df8137fe4c8d49136
+  selection_policy: Detection uses only active repository scopes. It excludes .archive/ historical and recursive test material.
+  required_load_failure: BLOCKED
+  missing_variant_policy: Record an explicit no-variant skillset and use general model training for that scope.
+  required_but_unavailable_policy: BLOCKED
+  runtime_policy: Ordinary agents use the configured route and do not rerun technology detection.
+  status: BLOCKED
+  failure:
+    operation: mcp-agent-ops detect_technology_skills
+    active_scope_request: tools/backlog-runner, tools/methodology-runner, tools/prompt-runner, tools/report, tools/report/desktop, tools/report/desktop/src-tauri, tools/report/rust/agent-report-cli, tools/report/rust/agent-report-core, sample/hello-world
+    error: "Unknown activation predicate: compilerOption"
+    remediation: Repair the installed detector registry so compilerOption is a supported activation predicate, then run a fresh setup detection and replace the blocked loadout below with confirmed candidates.
+
+technology_confirmation:
+  candidates: []
+  accepted_skills: []
+  rejections: []
+  confirmation:
+    status: blocked
+    evidence: No technology confirmation is valid because the active-scope detector failed before it returned candidates.
+
+technology_skill_loadouts:
+  - scope: active technology scopes
+    pathPattern: "tools/{backlog-runner,methodology-runner,prompt-runner,report}/**"
+    skills: []
+    sourceEvidence:
+      - skill: detect-technology-skills
+        runtimeAvailability: AVAILABLE
+        evidence:
+          - The configured detector was callable but failed with Unknown activation predicate: compilerOption.
+    missingRequiredSkills: []
+    exclusiveConflicts: []
+    rejectedCandidates: []
+    status: BLOCKED
+    required_load_failure: BLOCKED
+    fallback: Not applicable until a successful detector result supplies candidates.
+    local_rules_source: AGENTS.md
+    notes: This is a setup-blocked outcome, not a confirmed technology selection.
+
+folder_route_precedence: Most-specific matching path pattern wins. Prefer non-overlapping routes.
+
+workflow_selection:
+  canonical_primary_branch: main
+  persistence:
+    default: file
+    folder_overrides: []
+  commit:
+    default: main-branch
+    folder_overrides: []
+  selection_policy: Persistence and Commit are independent user selections. Azure DevOps and Jira remain unsupported BLOCKED placeholders when selected.
+
+role_agent_set:
+  - role: dev_coder
+    purpose: Implements scoped source changes and focused tests.
+    owns: [Scoped implementation and verification changes.]
+    hands_off: [Architecture decisions, independent review, and work-item lifecycle decisions.]
+    skills: [careful-coding, test-strategy]
+    conditional_skills: []
+    completion_checks: [Run the applicable focused test and build checks.]
+  - role: dev_documentation_writer
+    purpose: Creates or revises project specifications and other technical documents.
+    owns: [Specification structure, source-backed prose, and documentation links.]
+    hands_off: [Material technical decisions to Dev Architect and independent review to Dev Artifact Reviewer.]
+    skills: [route-documentation-work, ste-technical-writing, terminology-standard]
+    conditional_skills: []
+    completion_checks: [Run the applicable documentation review and link validation.]
+  - role: dev_code_reviewer
+    purpose: Independently reviews scoped source changes and verification evidence.
+    owns: [Code-review findings and review evidence.]
+    hands_off: [Implementation changes to Dev Coder.]
+    skills: [review-code-with-evidence]
+    conditional_skills: []
+    completion_checks: [Return evidence-backed findings or an explicit pass.]
+
+shared_agent_skills:
+  - skill: organise-project-files
+    condition: when an agent creates a new project file or directory
+  - skill: effective-communication
+    condition: when an agent reports an outcome, blocker, decision, or handoff
+
+project_skill_extensions: []
+
+folder_routing:
+  - pattern: docs/**
+    tier_or_workflow: Project specifications
+    primary_role: dev_documentation_writer
+    required_skills: [route-documentation-work, ste-technical-writing, terminology-standard]
+    source_evidence:
+      - path: docs/project-taxonomy.md
+        fact: Documentation categories and authority paths are defined here.
+    verification_commands: [mcp-agent-ops verify_markdown_links]
+    nested_agents_file_needed: false
+    nested_agents_file_path: Not applicable
+  - pattern: tools/**
+    tier_or_workflow: Active technology scopes
+    primary_role: dev_coder
+    required_skills: []
+    source_evidence:
+      - path: PROJECT.yaml
+        fact: Technology-skill detection is blocked pending detector registry remediation.
+    verification_commands: [Use the relevant package test or build command after technology routing is repaired.]
+    nested_agents_file_needed: false
+    nested_agents_file_path: Not applicable
+
+nested_agents_files: []
+
+claude_bridge_files:
+  enabled: true
+  root_file: CLAUDE.md
+  import_target: AGENTS.md
+  nested_files: []
+  rule: Each CLAUDE.md is thin and imports the colocated AGENTS.md without duplicating project guidance.
+
+documentation_and_file_contracts:
+  - path: AGENTS.md
+    purpose: Repository-wide operational guidance and project-configuration routing.
+  - path: CLAUDE.md
+    purpose: Thin Claude bridge to AGENTS.md.
+  - path: PROJECT.yaml
+    purpose: Project setup, workflow selection, routing, and validation authority.
+  - path: docs/feature-backlog
+    purpose: File-backed active work-item location.
+
+validation_evidence:
+  core_skill_delivery:
+    status: AVAILABLE
+    operation: mcp-agent-ops skill_load
+    catalog_revision: 7b3d1c2d27ba5b58a88325ccc6c7e75a8a8c2b8ada1c223df8137fe4c8d49136
+    validated_skill_ids: [codex-harness-directives, effective-communication, ste-technical-writing, terminology-standard, detect-technology-skills, create-project-configuration, route-documentation-work, verify-documentation-page, careful-coding, test-strategy, review-code-with-evidence, organise-project-files]
+  runtime_capabilities:
+    yaml_validation: mcp-agent-ops verify_yaml
+    markdown_link_validation: mcp-agent-ops verify_markdown_links
+    technology_detection: BLOCKED; the runtime tool fails on compilerOption activation predicates.
+  bridges:
+    root_claude_bridge: CLAUDE.md imports AGENTS.md.
+
+validation_plan:
+  commands:
+    - command: mcp-agent-ops verify_yaml PROJECT.yaml
+      proves: PROJECT.yaml is syntactically valid YAML.
+    - command: mcp-agent-ops verify_markdown_links AGENTS.md CLAUDE.md
+      proves: Root guidance links resolve.
+  technology_detection_checks:
+    - Repair the detector registry and run a new Advanced setup detection for active scopes only.
+    - Compare each returned candidate, evidence, and conflict against runtime skill availability.
+    - Record every accepted, rejected, unavailable, and no-variant disposition with an explicit user confirmation reference.
+  privacy_checks:
+    - Do not send private, proprietary, company-internal, PII, customer, secret, or non-public content to an LLM without explicit user authorization.
+  customer_safe_example_checks:
+    - Use fictional names and synthetic data for material intended for external sharing.
+
+customer_safe_example_shape:
+  required: false
+  guidance: Use fictitious names, synthetic paths, and generic product behavior when externally shareable examples are needed.
+  forbidden_material: [Private project names, customer names, internal workflows, private architecture, secrets, non-public data]
+
+proprietary_validation_notes:
+  allowed_only_inside_private_project: true
+  notes:
+    - The active project configuration uses local repository evidence only.
+
+open_questions:
+  - question: When will the detector registry support compilerOption activation predicates?
+    owner: Installed detect-technology-skills registry maintainer
+    impact: Technology-specific routing and confirmation remain blocked.
+
+maintenance_notes:
+  - Keep PROJECT.yaml, AGENTS.md, and CLAUDE.md aligned when project routes or workflow selections change.
+  - Rerun technology detection only as part of a fresh setup after the detector registry is repaired.

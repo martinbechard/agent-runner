@@ -1,0 +1,44 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Martin.Bechard@DevConsult.ca -->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agent Report browser verification host</title>
+  </head>
+  <body>
+    <main id="catalog-workspace" hidden></main>
+    <main id="report-workspace" class="report-workspace">
+      <header class="workspace-header">
+        <div>
+          <p class="step">Browser verification host</p>
+          <h1>Canonical Heatmap report</h1>
+        </div>
+        <div class="workspace-actions">
+          <button id="fixture-refresh" type="button">Refresh report</button>
+        </div>
+      </header>
+      <details id="report-workspace-nav-disclosure" class="workspace-nav-disclosure">
+        <summary>Report views</summary>
+      </details>
+      <div class="workspace-body">
+        <nav id="report-workspace-nav" class="workspace-nav" aria-label="Report views"></nav>
+        <section class="workspace-view" aria-labelledby="report-view-heading">
+          <h2 id="report-view-heading" tabindex="-1">Summary</h2>
+          <div id="report-view-status" class="state-panel" role="status" aria-live="polite"></div>
+          <div id="report-progress" class="state-panel" role="status" aria-live="polite" hidden></div>
+          <div id="report-view" class="report-view"></div>
+        </section>
+      </div>
+    </main>
+    <dialog id="report-preflight-dialog" aria-labelledby="report-preflight-heading">
+      <h2 id="report-preflight-heading" data-dialog-heading tabindex="-1">Choose report contents</h2>
+      <div id="report-preflight-summary" aria-live="polite"></div>
+      <button id="report-preflight-continue" type="button">View report</button>
+    </dialog>
+    <dialog id="report-detail-dialog" aria-labelledby="report-detail-heading">
+      <h2 id="report-detail-heading" data-dialog-heading tabindex="-1">Event detail</h2>
+    </dialog>
+    <script type="module" src="./report-workspace-host.ts"></script>
+  </body>
+</html>

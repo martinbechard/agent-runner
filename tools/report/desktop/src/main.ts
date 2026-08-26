@@ -3,9 +3,6 @@
 // Responsibility: Integrate the bounded catalog and Dynamic Workspace with Tauri.
 // Design: docs/design/components/CD-005-agent-report-dynamic-workspace.md
 
-import { Channel, invoke } from "@tauri-apps/api/core";
-import { listen, type UnlistenFn } from "@tauri-apps/api/event";
-
 import {
   type CatalogEntry,
   type DiscoveryProgress,
@@ -25,11 +22,10 @@ import {
   parseRootReferences,
   parseSearchResponse,
 } from "./contracts";
+import { createTauriTransport, resolveRuntimeMode, type AppTransport } from "./app-transport";
 import {
   type ReportWorkspaceController,
-  type WorkspaceCommandName,
   type WorkspaceElements,
-  type WorkspaceTransport,
   createReportWorkspace,
   snapshotTitleAsOf,
 } from "./report-workspace";
@@ -130,33 +126,31 @@ const workspaceElements: WorkspaceElements = {
   detailDialog: dialog("report-detail-dialog"),
 };
 
-class TauriWorkspaceTransport implements WorkspaceTransport {
-  invoke(command: WorkspaceCommandName, request: unknown): Promise<unknown> {
-    return invoke<unknown>(command, { request });
-  }
-
-  subscribeProgress(listener: (value: unknown) => void): () => void {
-    let disposed = false;
-    let unlisten: UnlistenFn | null = null;
-    void listen<unknown>("report-operation-progress", (event) => {
-      if (!disposed) listener(event.payload);
-    }).then((registered) => {
-      if (disposed) registered();
-      else unlisten = registered;
-    }).catch((error: unknown) => {
-      if (!disposed) reportClientError("subscribe_report_progress", error);
-    });
-    return () => {
-      disposed = true;
-      unlisten?.();
-      unlisten = null;
-    };
-  }
+declare global {
+  interface Window { __AGENT_REPORT_TRANSPORT__?: AppTransport; }
 }
+
+async function createAppTransport(): Promise<AppTransport> {
+  if (window.__AGENT_REPORT_TRANSPORT__ !== undefined) return window.__AGENT_REPORT_TRANSPORT__;
+  const mode = resolveRuntimeMode(window.location.search, import.meta.env.DEV, "__TAURI_INTERNALS__" in window);
+  if (mode === "fixture") {
+    const { FullAppFixtureTransport } = await import("./browser/fixture-transport");
+    return new FullAppFixtureTransport();
+  }
+  if (mode === "live") {
+    const endpoint = new URLSearchParams(window.location.search).get("bridge") ?? "";
+    const token = new URLSearchParams(window.location.hash.slice(1)).get("token") ?? "";
+    const { LoopbackTransport } = await import("./browser/loopback-transport");
+    return new LoopbackTransport(endpoint, token);
+  }
+  return createTauriTransport();
+}
+
+const appTransport = await createAppTransport();
 
 const workspace: ReportWorkspaceController = createReportWorkspace(
   workspaceElements,
-  new TauriWorkspaceTransport(),
+  appTransport,
 );
 
 function selectedWorkerCount(): number {
@@ -347,10 +341,15 @@ async function runSearch(): Promise<void> {
     setCatalogState({ kind: "error", message: rangeError });
     return;
   }
+  const invalidRangeInput = [fromDateInput, fromTimeInput, toDateInput, toTimeInput].find((input) => !input.checkValidity());
+  if (invalidRangeInput !== undefined) {
+    invalidRangeInput.reportValidity();
+    setCatalogState({ kind: "error", message: "Enter the date range using valid dates and 24-hour times (HH:mm)." });
+    return;
+  }
   renderProgress({ label: "Preparing native index", value: "Starting", sourceLabel: "", completed: 0, total: 1 });
   setCatalogState({ kind: "searching", progress: null });
-  const onEvent = new Channel<unknown>();
-  onEvent.onmessage = (message: unknown) => {
+  const onProgress = (message: unknown) => {
     try {
       const progress = parseDiscoveryProgress(message);
       catalogState = { kind: "searching", progress };
@@ -360,7 +359,7 @@ async function runSearch(): Promise<void> {
     }
   };
   try {
-    const response = parseSearchResponse(await invoke<unknown>("search_rollouts", { request: currentRequest(), onEvent }));
+    const response = parseSearchResponse(await appTransport.invokeApp("search_rollouts", currentRequest(), onProgress));
     setCatalogState({ kind: "ready", response });
     renderResponse(response);
   } catch (error: unknown) {
@@ -374,7 +373,7 @@ function errorMessage(error: unknown): string {
 
 function reportClientError(context: string, error: unknown): string {
   const message = errorMessage(error).slice(0, 4_096);
-  void invoke<void>("record_client_error", { context, message }).catch(() => undefined);
+  void appTransport.invokeApp("record_client_error", { context, message }).catch(() => undefined);
   return message;
 }
 
@@ -408,7 +407,7 @@ function rememberExport(result: ExportResult): void {
 }
 
 async function openReportWindow(exportId: string): Promise<void> {
-  await invoke<void>("open_report_window", { exportId });
+  await appTransport.invokeApp("open_report_window", { exportId });
 }
 
 async function openLastExport(): Promise<void> {
@@ -428,7 +427,7 @@ async function openLastExport(): Promise<void> {
 
 async function addRoot(): Promise<void> {
   try {
-    const selected = parseRootReferences(await invoke<unknown>("add_root"));
+    const selected = parseRootReferences(await appTransport.invokeApp("add_root"));
     for (const root of selected) roots.set(root.rootRef, root);
     renderRoots();
   } catch (error: unknown) {
@@ -438,7 +437,7 @@ async function addRoot(): Promise<void> {
 
 async function exportCatalog(): Promise<void> {
   try {
-    const raw = await invoke<unknown>("export_catalog", { request: { search: currentRequest() } });
+    const raw = await appTransport.invokeApp("export_catalog", { search: currentRequest() });
     if (raw === null) return;
     const result = parseExportResult(raw);
     rememberExport(result);
@@ -453,7 +452,7 @@ async function exportCatalog(): Promise<void> {
 async function openDiagnosticLog(): Promise<void> {
   openDiagnosticLogButton.disabled = true;
   try {
-    await invoke<void>("open_diagnostic_log");
+    await appTransport.invokeApp("open_diagnostic_log");
     statusDot.className = "ready";
     status.textContent = "Opened the local diagnostic log.";
   } catch (error: unknown) {
@@ -523,12 +522,12 @@ async function initialize(): Promise<void> {
   includeDescendantsInput.checked = localStorage.getItem(INCLUDE_CHILDREN_STORAGE_KEY) === "true";
   includeCollaboratorsInput.checked = localStorage.getItem(INCLUDE_COLLABORATORS_STORAGE_KEY) === "true";
   try {
-    await listen<ParentReportRequest>("view-parent-report", (event) => void handleParentReport(event.payload));
+    await appTransport.subscribeParentReport((value) => void handleParentReport(value as ParentReportRequest));
   } catch (error: unknown) {
     reportClientError("listen_view_parent_report", error);
   }
   try {
-    const defaults = parseDesktopDefaults(await invoke<unknown>("desktop_defaults"));
+    const defaults = parseDesktopDefaults(await appTransport.invokeApp("desktop_defaults"));
     for (const root of defaults.roots) roots.set(root.rootRef, root);
     openDiagnosticLogButton.disabled = !defaults.diagnosticsAvailable;
     diagnosticLogLabel.textContent = defaults.diagnosticsAvailable ? "Diagnostic log available." : "Diagnostic log unavailable.";

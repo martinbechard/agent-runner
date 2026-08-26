@@ -28,8 +28,10 @@ import argparse
 from bisect import bisect_left, bisect_right
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import csv
+import getpass
 import hashlib
 import io
+import importlib.util
 import json
 import os
 import re
@@ -38,10 +40,11 @@ import sqlite3
 import subprocess
 import sys
 import threading
+import yaml
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from pathlib import Path
 from copy import deepcopy
 from functools import lru_cache
@@ -50,6 +53,7 @@ from urllib.parse import quote
 
 ProgressCallback = Callable[[int, str, str], None]
 WorkerProgressCallback = Callable[[int, str, str, str], None]
+ItemProgressCallback = Callable[[int, int, str, str, str | None], None]
 
 
 def _current_worker_id() -> str:
@@ -89,6 +93,7 @@ CODEX_ROLLOUT_FORMAT = "codex-rollout-metrics/v1"
 CODEX_ROLLOUT_PARSER_VERSION = "1.20.0"
 NATIVE_DISCOVERY_PROTOCOL_VERSION = 1
 AGENT_EXECUTION_METRICS_TITLE = "Agent Execution Metrics"
+COPYRIGHT_NOTICE = "© 2026 Martin.Bechard@DevConsult.ca · MIT License"
 CODEX_TOOL_ARGUMENT_SUMMARY_CHARS = 500
 CODEX_MESSAGE_PREVIEW_CHARS = 50
 TOOL_RESULT_PREVIEW_CHARS = 200
@@ -97,6 +102,23 @@ TOOL_ARGUMENT_RAW_CHARS = 20_000
 TOOL_RESULT_RAW_CHARS = 20_000
 JUNIE_SESSION_FORMAT = "junie-session-metrics/v1"
 JUNIE_SESSION_PARSER_VERSION = "1.7.0"
+
+
+def _with_copyright_footer(document: str) -> str:
+    """Add the visible standalone-report copyright footer once."""
+
+    if COPYRIGHT_NOTICE in document:
+        return document
+    footer = (
+        '<footer class="agent-report-copyright" '
+        'style="margin:2rem 1rem .75rem;padding-top:.75rem;border-top:1px solid '
+        'currentColor;opacity:.62;text-align:center;font:10px/1.4 '
+        'ui-monospace,SFMono-Regular,Menlo,monospace">'
+        f"{COPYRIGHT_NOTICE}</footer>"
+    )
+    if "</body>" not in document:
+        return document + footer
+    return document.replace("</body>", footer + "</body>", 1)
 CODEX_CONTENT_ARGUMENT_KEYS = frozenset(
     {
         "body",
@@ -384,6 +406,22 @@ class ResponseUsage:
     context_capacity: int = 0
     context_occupancy_percent: float | None = None
     reported_usage: UsageTotals = field(default_factory=UsageTotals)
+
+
+@dataclass(frozen=True)
+class _TokenFundingEvent:
+    """Token-summary funding telemetry attached to one source event."""
+
+    event_timestamp: str
+    source_path: str
+    source_ordinal: int
+    usage: UsageTotals = field(default_factory=UsageTotals)
+    model: str = ""
+    plan_type: str = ""
+    funding_source: str = "subscription"
+    subscription_used_percent: float | None = None
+    credit_balance: float | None = None
+    has_credits: bool | None = None
 
 
 @dataclass
@@ -2376,8 +2414,41 @@ def _terminal_turn_outcome(
     return "complete" if event_type == "task_complete" else "aborted"
 
 
+def _token_funding_telemetry(
+    rate_limits: object,
+) -> tuple[str, str, float | None, float | None, bool | None]:
+    """Normalize one token event's plan, funding source, and quota values."""
+    if not isinstance(rate_limits, dict):
+        return "", "unknown", None, None, None
+    raw_plan_type = rate_limits.get("plan_type")
+    plan_type = str(raw_plan_type).strip() if raw_plan_type else ""
+    primary = rate_limits.get("primary")
+    raw_used_percent = (
+        primary.get("used_percent") if isinstance(primary, dict) else None
+    )
+    try:
+        used_percent = (
+            float(raw_used_percent) if raw_used_percent is not None else None
+        )
+    except (TypeError, ValueError):
+        used_percent = None
+    credits = rate_limits.get("credits")
+    raw_has_credits = credits.get("has_credits") if isinstance(credits, dict) else None
+    has_credits = raw_has_credits if isinstance(raw_has_credits, bool) else None
+    raw_balance = credits.get("balance") if isinstance(credits, dict) else None
+    try:
+        credit_balance = float(raw_balance) if raw_balance is not None else None
+    except (TypeError, ValueError):
+        credit_balance = None
+    funding_source = "credits" if has_credits is True else "subscription"
+    return plan_type, funding_source, used_percent, credit_balance, has_credits
+
+
 def parse_codex_rollout(
-    path: Path, *, cancelled: Callable[[], bool] | None = None
+    path: Path,
+    *,
+    cancelled: Callable[[], bool] | None = None,
+    token_funding_events: list[_TokenFundingEvent] | None = None,
 ) -> CodexThreadMetrics:
     """Parse one native Codex Desktop rollout with bounded local disclosures.
 
@@ -2428,6 +2499,7 @@ def parse_codex_rollout(
     model_ready_at = ""
     pending_model_started_at = ""
     pending_model_output_timestamps: list[str] = []
+    funding_event_start = len(token_funding_events) if token_funding_events is not None else 0
 
     def note_model_output(raw_timestamp: str) -> None:
         """Track observable model fragments without retaining their content."""
@@ -2645,22 +2717,52 @@ def parse_codex_rollout(
                         )
                 current_usage = _usage_from_snapshot(total_snapshot)
                 rate_limits = payload.get("rate_limits")
-                if isinstance(rate_limits, dict) and rate_limits.get("plan_type"):
-                    plan_type = str(rate_limits["plan_type"])
+                (
+                    event_plan_type,
+                    funding_source,
+                    subscription_used_percent,
+                    credit_balance,
+                    has_credits,
+                ) = _token_funding_telemetry(rate_limits)
+                if event_plan_type:
+                    plan_type = event_plan_type
+
+                def record_token_funding(usage: UsageTotals | None = None) -> None:
+                    if token_funding_events is None:
+                        return
+                    token_funding_events.append(
+                        _TokenFundingEvent(
+                            event_timestamp=_normalize_timestamp(timestamp),
+                            source_path=str(path),
+                            source_ordinal=ordinal,
+                            usage=usage or UsageTotals(),
+                            model=model,
+                            plan_type=event_plan_type or plan_type,
+                            funding_source=funding_source,
+                            subscription_used_percent=subscription_used_percent,
+                            credit_balance=credit_balance,
+                            has_credits=has_credits,
+                        )
+                    )
+
                 if current_usage is None:
+                    record_token_funding()
                     diagnostics.append(f"invalid token_count at {path}:{ordinal}")
                     continue
                 if context is not None and context.is_compaction_marker:
+                    record_token_funding()
                     continue
                 direct_cost = info.get("total_cost_usd") if isinstance(info, dict) else None
                 if isinstance(direct_cost, (int, float)) and not isinstance(direct_cost, bool):
                     recorded_cost_usd = float(direct_cost)
                 if saw_usage and current_usage == previous_usage:
+                    record_token_funding()
                     continue
                 if saw_usage and not current_usage.is_monotonic_from(previous_usage):
                     diagnostics.append(f"cumulative token counter reset at {path}:{ordinal}")
                     previous_usage = UsageTotals()
                 delta = current_usage.subtract(previous_usage)
+                record_token_funding(delta)
                 if not _usage_is_zero(delta):
                     turn_id = next(iter(active_turns)) if len(active_turns) == 1 else None
                     confidence = "exact" if turn_id else "unattributed"
@@ -2917,6 +3019,8 @@ def parse_codex_rollout(
                         f"{previous_usage.processed_tokens} processed tokens"
                     )
                 responses.clear()
+                if token_funding_events is not None:
+                    del token_funding_events[funding_event_start:]
                 activities.clear()
                 final_outputs_by_turn.clear()
                 output_turn_ids.clear()
@@ -3411,6 +3515,7 @@ def _discover_rollout_paths(
     root_thread_id: str,
     candidate_paths: list[Path],
     *,
+    include_children: bool = True,
     include_delegations: bool = False,
     index_path: Path | None = None,
 ) -> tuple[list[Path], list[str], _RolloutParentContext | None]:
@@ -3469,8 +3574,9 @@ def _discover_rollout_paths(
         if thread_id in validated:
             return
         active.add(thread_id)
-        for child_thread_id in children.get(thread_id, []):
-            validate_hierarchy(child_thread_id, active)
+        if include_children:
+            for child_thread_id in children.get(thread_id, []):
+                validate_hierarchy(child_thread_id, active)
         active.remove(thread_id)
         validated.add(thread_id)
 
@@ -3484,7 +3590,8 @@ def _discover_rollout_paths(
         validate_hierarchy(thread_id, set())
         included.add(thread_id)
         ordered_ids.append(thread_id)
-        queue.extend(sorted(children.get(thread_id, [])))
+        if include_children:
+            queue.extend(sorted(children.get(thread_id, [])))
         if include_delegations:
             queue.extend(sorted(delegation_targets.get(thread_id, set())))
     for thread_id in ordered_ids:
@@ -4897,6 +5004,7 @@ def build_codex_rollout_run(
     *,
     seal: bool = False,
     allow_aborted: bool = False,
+    include_children: bool = True,
     include_delegations: bool = False,
     observed_at: datetime | None = None,
     candidate_paths: list[Path] | None = None,
@@ -4906,6 +5014,7 @@ def build_codex_rollout_run(
     cancelled: Callable[[], bool] | None = None,
     progress: ProgressCallback | None = None,
     worker_progress: WorkerProgressCallback | None = None,
+    item_progress: ItemProgressCallback | None = None,
     workers: int = 1,
 ) -> CodexRunMetrics:
     """Discover, parse, reconcile, and aggregate one native Codex subtree.
@@ -4944,6 +5053,7 @@ def build_codex_rollout_run(
     included_paths, diagnostics, discovered_parent = _discover_rollout_paths(
         root_thread_id,
         candidates,
+        include_children=include_children,
         include_delegations=include_delegations,
         index_path=discovery_index_path,
     )
@@ -4953,53 +5063,73 @@ def build_codex_rollout_run(
             "Resolving related threads",
             f"Selected {len(included_paths):,} thread logs for this report.",
         )
-    def parse_path(index: int, path: Path) -> tuple[int, CodexThreadMetrics]:
-        worker = _current_worker_id()
-        if worker_progress is not None:
-            worker_progress(
-                25,
-                "Parsing thread logs",
-                f"Thread {index + 1:,} of {len(included_paths):,}: {path.name}",
-                worker,
-            )
-        parsed = parse_codex_rollout(path, cancelled=cancelled)
-        return index, parsed
-
     thread_slots: list[CodexThreadMetrics | None] = [None] * len(included_paths)
     worker_count = min(max(1, workers), max(1, len(included_paths)))
-    if worker_count == 1:
-        for index, path in enumerate(included_paths):
-            _, thread_slots[index] = parse_path(index, path)
-            if progress is not None:
-                completed = 25 + round((index + 1) / max(1, len(included_paths)) * 40)
+    completed_count = 0
+    progress_lock = threading.Lock()
+
+    def record_parsed_item() -> None:
+        nonlocal completed_count
+        with progress_lock:
+            completed_count += 1
+            if item_progress is not None:
+                item_progress(
+                    completed_count,
+                    len(included_paths),
+                    "Parsing thread logs",
+                    f"Completed {completed_count:,} of {len(included_paths):,} thread logs.",
+                    None,
+                )
+            elif progress is not None:
+                completed = 25 + round(
+                    completed_count / max(1, len(included_paths)) * 40
+                )
                 progress(
                     completed,
                     "Parsing thread logs",
-                    f"Completed {index + 1:,} of {len(included_paths):,} thread logs.",
+                    f"Completed {completed_count:,} of {len(included_paths):,} thread logs.",
                 )
+
+    def parse_parcel(parcel: list[tuple[int, Path]]) -> list[tuple[int, CodexThreadMetrics]]:
+        worker = _current_worker_id()
+        parsed_items = []
+        for parcel_index, (index, path) in enumerate(parcel, start=1):
+            if item_progress is not None:
+                item_progress(
+                    parcel_index,
+                    len(parcel),
+                    "Parsing thread logs",
+                    path.name,
+                    worker,
+                )
+            elif worker_progress is not None:
+                worker_progress(25, "Parsing thread logs", path.name, worker)
+            parsed_items.append((index, parse_codex_rollout(path, cancelled=cancelled)))
+            record_parsed_item()
+        return parsed_items
+
+    if item_progress is not None:
+        item_progress(
+            0,
+            len(included_paths),
+            "Parsing thread logs",
+            f"Preparing {len(included_paths):,} thread logs.",
+            None,
+        )
+    if worker_count == 1:
+        for index, parsed in parse_parcel(list(enumerate(included_paths))):
+            thread_slots[index] = parsed
     else:
+        indexed_paths = list(enumerate(included_paths))
+        parcels = [indexed_paths[offset::worker_count] for offset in range(worker_count)]
         with ThreadPoolExecutor(
             max_workers=worker_count,
             thread_name_prefix="agent-report-worker",
         ) as executor:
-            futures = {
-                executor.submit(parse_path, index, path): index
-                for index, path in enumerate(included_paths)
-            }
-            completed_count = 0
+            futures = [executor.submit(parse_parcel, parcel) for parcel in parcels]
             for future in as_completed(futures):
-                index, parsed = future.result()
-                thread_slots[index] = parsed
-                completed_count += 1
-                if progress is not None:
-                    completed = 25 + round(
-                        completed_count / max(1, len(included_paths)) * 40
-                    )
-                    progress(
-                        completed,
-                        "Parsing thread logs",
-                        f"Completed {completed_count:,} of {len(included_paths):,} thread logs.",
-                    )
+                for index, parsed in future.result():
+                    thread_slots[index] = parsed
     threads = [thread for thread in thread_slots if thread is not None]
     if progress is not None:
         progress(65, "Resolving thread titles", "Matching parsed threads to Codex task titles.")
@@ -10458,6 +10588,1218 @@ if (executionHeatmap && !sequenceOnly) initializeExecutionHeatmap(executionHeatm
 </body></html>"""
 
 
+@dataclass(frozen=True)
+class _TokenSummaryRow:
+    path: Path
+    user_id: str
+    started_at: datetime
+    last_activity_at: datetime
+    usage: UsageTotals
+    cost: CostAssessment
+    plan_labels: tuple[str, ...] = ()
+    subscription_usage: UsageTotals = field(default_factory=UsageTotals)
+    subscription_cost: CostAssessment = field(
+        default_factory=lambda: CostAssessment(status="unavailable")
+    )
+    credit_usage: UsageTotals = field(default_factory=UsageTotals)
+    credit_cost: CostAssessment = field(
+        default_factory=lambda: CostAssessment(status="unavailable")
+    )
+    allocated_credits_used: float = 0.0
+    funding_events: tuple[_TokenFundingEvent, ...] = ()
+
+
+_TOKEN_SUMMARY_DETAIL_COLUMNS = (
+    "user_id", "folder", "filename", "started_at", "last_activity_at",
+    "plan", "sub_start", "sub_end", "sub_remaining", "credits_start",
+    "credits_end", "credits_used", "credits_remaining", "sub_tokens",
+    "sub_est_usd", "credit_tokens", "credit_est_usd", "input_tokens",
+    "input_est_usd", "cached_input_tokens", "cached_input_est_usd",
+    "uncached_input_tokens", "output_tokens", "output_est_usd",
+    "reasoning_tokens", "processed_tokens", "total_est_usd",
+)
+_TOKEN_SUMMARY_GROUP_COLUMNS = (
+    "user_id", "folder", "plan", "sub_tokens", "sub_est_usd",
+    "sub_remaining", "credit_tokens", "credit_est_usd", "credits_used",
+    "credits_remaining", "total_tokens", "total_est_usd",
+)
+
+
+def _load_token_summary_config(path: Path) -> dict[str, object]:
+    """Load one bounded token-summary YAML mapping."""
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as exc:
+        raise ValueError(f"Cannot read token summary config {path}: {exc}") from exc
+    if loaded is None:
+        return {}
+    if not isinstance(loaded, dict):
+        raise ValueError("Token summary config must contain a YAML mapping")
+    allowed = {
+        "mode", "directories", "from", "to", "csv", "html", "threads",
+    }
+    unknown = sorted(str(key) for key in loaded if key not in allowed)
+    if unknown:
+        raise ValueError(f"Unknown token summary config field(s): {', '.join(unknown)}")
+    return loaded
+
+
+def _token_summary_datetime(value: object, field_name: str) -> datetime | None:
+    if value in (None, ""):
+        return None
+    text = str(value).strip()
+    local_match = re.fullmatch(
+        r"\d{4}-\d{2}-\d{2}(?:[ T]\d{2}:\d{2})?",
+        text,
+    )
+    if local_match is not None:
+        try:
+            local_value = datetime.strptime(
+                text.replace("T", " "),
+                "%Y-%m-%d %H:%M" if " " in text.replace("T", " ") else "%Y-%m-%d",
+            )
+        except ValueError:
+            local_value = None
+        if local_value is not None:
+            return local_value.astimezone(timezone.utc)
+    parsed = _parse_iso_datetime(value)
+    if parsed is None:
+        raise ValueError(
+            f"{field_name} must be a local YYYY-MM-DD date with an optional "
+            "HH:mm time, or an ISO 8601 timestamp with an offset"
+        )
+    return parsed.astimezone(timezone.utc)
+
+
+def _token_summary_default_range(
+    now: datetime | None = None,
+) -> tuple[datetime, datetime]:
+    """Return the UI's default local-day From and To (exclusive) values."""
+    local_now = now or datetime.now().astimezone()
+    local_midnight = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    return local_midnight, local_midnight + timedelta(days=1)
+
+
+def _token_summary_rows(
+    directories: list[Path],
+    *,
+    from_time: datetime,
+    to_time: datetime,
+) -> list[_TokenSummaryRow]:
+    """Parse each unique Codex rollout overlapping the selected UI range."""
+    candidates: set[Path] = set()
+    for directory in directories:
+        if not directory.is_dir():
+            raise ValueError(f"Token summary directory not found: {directory}")
+        candidates.update(
+            path.resolve() for path in directory.rglob("*.jsonl") if path.is_file()
+        )
+    rows: list[_TokenSummaryRow] = []
+    for path in sorted(candidates):
+        last_activity_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+        if last_activity_at < from_time:
+            continue
+        if _rollout_identity(path) is None:
+            continue
+        funding_events: list[_TokenFundingEvent] = []
+        thread = parse_codex_rollout(path, token_funding_events=funding_events)
+        funding_events = [
+            event
+            for event in funding_events
+            if (
+                (event_time := _parse_iso_datetime(event.event_timestamp)) is not None
+                and from_time <= event_time.astimezone(timezone.utc) < to_time
+            )
+        ]
+        usage, cost = _token_summary_usage_cost(funding_events)
+        if usage.processed_tokens == 0:
+            continue
+        started_at = _parse_iso_datetime(thread.started_at) or last_activity_at
+        started_at = started_at.astimezone(timezone.utc)
+        if started_at >= to_time:
+            continue
+        try:
+            user_id = path.owner()
+        except (KeyError, NotImplementedError, OSError):
+            user_id = getpass.getuser()
+        rows.append(
+            _TokenSummaryRow(
+                path=path,
+                user_id=user_id,
+                started_at=started_at,
+                last_activity_at=last_activity_at,
+                usage=usage,
+                cost=cost,
+                funding_events=tuple(funding_events),
+            )
+        )
+    rows_by_user: dict[str, list[_TokenSummaryRow]] = {}
+    for row in rows:
+        rows_by_user.setdefault(row.user_id, []).append(row)
+    classified_events: list[_TokenFundingEvent] = []
+    for user_rows in rows_by_user.values():
+        classified_events.extend(
+            _token_summary_classify_events(
+                [event for row in user_rows for event in row.funding_events]
+            )
+        )
+    events_by_path: dict[str, list[_TokenFundingEvent]] = {}
+    for event in classified_events:
+        events_by_path.setdefault(event.source_path, []).append(event)
+    classified_rows: list[_TokenSummaryRow] = []
+    for row in rows:
+        row_events = events_by_path.get(str(row.path), [])
+        funding = _token_summary_funding(row_events)
+        classified_rows.append(
+            replace(
+                row,
+                plan_labels=funding["plan_labels"],
+                subscription_usage=funding["subscription_usage"],
+                subscription_cost=funding["subscription_cost"],
+                credit_usage=funding["credit_usage"],
+                credit_cost=funding["credit_cost"],
+                funding_events=tuple(row_events),
+            )
+        )
+    allocated_rows: list[_TokenSummaryRow] = []
+    for user_id in rows_by_user:
+        matching = [row for row in classified_rows if row.user_id == user_id]
+        allocated_rows.extend(_token_summary_allocate_credits(matching))
+    return sorted(allocated_rows, key=lambda row: str(row.path))
+
+
+def _cost_value(value: float | None) -> object:
+    return f"{0.0 if value is None else value:.8f}"
+
+
+def _token_summary_classify_events(
+    events: list[_TokenFundingEvent],
+) -> list[_TokenFundingEvent]:
+    """Classify usage inside the observed account credit interval."""
+    ordered = sorted(
+        events,
+        key=lambda item: (item.event_timestamp, item.source_path, item.source_ordinal),
+    )
+    positive_indices = [
+        index
+        for index, event in enumerate(ordered)
+        if event.has_credits is True
+        and event.credit_balance is not None
+        and event.credit_balance > 0
+    ]
+    if not positive_indices:
+        return [replace(event, funding_source="subscription") for event in ordered]
+    start_index = positive_indices[0]
+    last_positive_index = positive_indices[-1]
+    end_index = next(
+        (
+            index
+            for index in range(last_positive_index + 1, len(ordered))
+            if ordered[index].has_credits is False
+            and ordered[index].credit_balance is not None
+            and ordered[index].credit_balance <= 0
+        ),
+        len(ordered) - 1,
+    )
+    classified: list[_TokenFundingEvent] = []
+    for index, event in enumerate(ordered):
+        subscription_available = (
+            event.subscription_used_percent is not None
+            and event.subscription_used_percent < 100
+        )
+        source = (
+            "credits"
+            if start_index <= index <= end_index and not subscription_available
+            else "subscription"
+        )
+        classified.append(replace(event, funding_source=source))
+    return classified
+
+
+def _token_summary_usage_cost(
+    events: list[_TokenFundingEvent],
+) -> tuple[UsageTotals, CostAssessment]:
+    """Return one non-overlapping usage total and its model-aware estimate."""
+    usage = UsageTotals()
+    model_usage: dict[str, UsageTotals] = {}
+    plan_types: set[str] = set()
+    for event in events:
+        usage += event.usage
+        if event.model and not _usage_is_zero(event.usage):
+            model_usage[event.model] = (
+                model_usage.get(event.model, UsageTotals()) + event.usage
+            )
+        if event.plan_type:
+            plan_types.add(event.plan_type)
+    return usage, _cost_for_usage(usage, model_usage, plan_types=plan_types)
+
+
+def _token_summary_allocate_credits(
+    rows: list[_TokenSummaryRow],
+) -> list[_TokenSummaryRow]:
+    """Allocate observed account burn using model-aware token-cost weights."""
+    events = [event for row in rows for event in row.funding_events]
+    *_, observed_burn = _token_summary_limit_values(events)
+    burn = observed_burn or 0.0
+    eligible = [row for row in rows if row.credit_usage.processed_tokens > 0]
+    weights = [row.credit_cost.total_cost or 0.0 for row in eligible]
+    if eligible and sum(weights) <= 0:
+        weights = [float(row.credit_usage.processed_tokens) for row in eligible]
+    total_weight = sum(weights)
+    allocations: dict[Path, float] = {}
+    allocated = 0.0
+    for index, (row, weight) in enumerate(zip(eligible, weights, strict=True)):
+        share = (
+            round(burn - allocated, 8)
+            if index == len(eligible) - 1
+            else round(burn * weight / total_weight, 8)
+        )
+        allocations[row.path] = share
+        allocated += share
+    return [
+        replace(row, allocated_credits_used=allocations.get(row.path, 0.0))
+        for row in rows
+    ]
+
+
+def _token_summary_funding(
+    events: list[_TokenFundingEvent],
+) -> dict[str, object]:
+    usages = {source: UsageTotals() for source in ("subscription", "credits")}
+    model_usages: dict[str, dict[str, UsageTotals]] = {
+        "subscription": {},
+        "credits": {},
+    }
+    plan_types: set[str] = set()
+    for event in sorted(
+        events,
+        key=lambda item: (item.event_timestamp, item.source_path, item.source_ordinal),
+    ):
+        if event.plan_type:
+            plan_types.add(event.plan_type)
+        if _usage_is_zero(event.usage):
+            continue
+        source = event.funding_source
+        if source not in usages:
+            source = "subscription"
+        usages[source] = usages[source] + event.usage
+        if source in model_usages and event.model:
+            models = model_usages[source]
+            models[event.model] = models.get(event.model, UsageTotals()) + event.usage
+    labels = sorted(plan_types, key=str.casefold)
+    if not _usage_is_zero(usages["credits"]):
+        labels.append("credits")
+    return {
+        "plan_labels": tuple(labels),
+        "subscription_usage": usages["subscription"],
+        "subscription_cost": _cost_for_usage(
+            usages["subscription"],
+            model_usages["subscription"],
+            plan_types=plan_types,
+        ),
+        "credit_usage": usages["credits"],
+        "credit_cost": _cost_for_usage(
+            usages["credits"],
+            model_usages["credits"],
+            plan_types=plan_types,
+        ),
+    }
+
+
+def _token_summary_limit_values(
+    events: list[_TokenFundingEvent],
+) -> tuple[float | None, float | None, float | None, float | None, float | None]:
+    """Return observed subscription endpoints and a stale-safe credit burn-down."""
+    ordered = sorted(
+        events,
+        key=lambda item: (item.event_timestamp, item.source_path, item.source_ordinal),
+    )
+    subscription = [
+        event.subscription_used_percent
+        for event in ordered
+        if event.subscription_used_percent is not None
+    ]
+    balances = [
+        (index, event.credit_balance)
+        for index, event in enumerate(ordered)
+        if event.credit_balance is not None
+    ]
+    credits_start: float | None = None
+    credits_end: float | None = None
+    credits_used: float | None = None
+    if balances:
+        peak_index, credits_start = max(balances, key=lambda item: item[1])
+        credits_end = min(
+            balance for index, balance in balances if index >= peak_index
+        )
+        credits_used = max(0.0, credits_start - credits_end)
+    return (
+        subscription[0] if subscription else None,
+        max(subscription) if subscription else None,
+        credits_start,
+        credits_end,
+        credits_used,
+    )
+
+
+def _sum_cost(rows: list[_TokenSummaryRow], attribute: str) -> float | None:
+    values = [
+        getattr(getattr(row, attribute), "total_cost")
+        for row in rows
+        if getattr(getattr(row, attribute), "total_cost") is not None
+    ]
+    return sum(values) if values else None
+
+
+def _token_summary_rollup(rows: list[_TokenSummaryRow]) -> dict[str, object]:
+    usage = UsageTotals()
+    subscription_usage = UsageTotals()
+    credit_usage = UsageTotals()
+    label_set: set[str] = set()
+    events: list[_TokenFundingEvent] = []
+    for row in rows:
+        usage += row.usage
+        subscription_usage += row.subscription_usage
+        credit_usage += row.credit_usage
+        events.extend(row.funding_events)
+        label_set.update(row.plan_labels)
+    labels = sorted(label_set.difference({"credits"}), key=str.casefold)
+    if "credits" in label_set:
+        labels.append("credits")
+    subscription_start, subscription_end, credits_start, credits_end, _ = (
+        _token_summary_limit_values(events)
+    )
+    subscription_remaining = (
+        None if subscription_end is None else max(0.0, 100.0 - subscription_end)
+    )
+    allocated_credits_used = sum(row.allocated_credits_used for row in rows)
+    return {
+        "plan": ", ".join(labels),
+        "sub_start": _cost_value(subscription_start),
+        "sub_end": _cost_value(subscription_end),
+        "sub_remaining": _cost_value(subscription_remaining),
+        "credits_start": _cost_value(credits_start),
+        "credits_end": _cost_value(credits_end),
+        "credits_used": _cost_value(allocated_credits_used),
+        "credits_remaining": _cost_value(credits_end),
+        "sub_tokens": subscription_usage.processed_tokens,
+        "sub_est_usd": _cost_value(_sum_cost(rows, "subscription_cost")),
+        "credit_tokens": credit_usage.processed_tokens,
+        "credit_est_usd": _cost_value(_sum_cost(rows, "credit_cost")),
+        "total_tokens": usage.processed_tokens,
+        "total_est_usd": _cost_value(_sum_cost(rows, "cost")),
+    }
+
+
+def _token_summary_detail_values(row: _TokenSummaryRow) -> list[object]:
+    usage = row.usage
+    cost = row.cost
+    rollup = _token_summary_rollup([row])
+    return [
+        row.user_id, str(row.path.parent), row.path.name,
+        _token_summary_local_datetime(row.started_at),
+        _token_summary_local_datetime(row.last_activity_at),
+        rollup["plan"], rollup["sub_start"], rollup["sub_end"],
+        rollup["sub_remaining"], rollup["credits_start"],
+        rollup["credits_end"], rollup["credits_used"],
+        rollup["credits_remaining"], rollup["sub_tokens"],
+        rollup["sub_est_usd"], rollup["credit_tokens"],
+        rollup["credit_est_usd"], usage.input_tokens, _cost_value(cost.input_cost),
+        usage.cached_input_tokens, _cost_value(cost.cached_input_cost),
+        usage.uncached_input_tokens, usage.output_tokens,
+        _cost_value(cost.output_cost), usage.reasoning_tokens,
+        usage.processed_tokens, _cost_value(cost.total_cost),
+    ]
+
+
+def _token_summary_local_datetime(
+    value: datetime, local_timezone: tzinfo | None = None
+) -> str:
+    """Format a timestamp in local time using the desktop UI's date-time form."""
+    return value.astimezone(local_timezone).strftime("%Y-%m-%d %H:%M")
+
+
+def _token_summary_groups(
+    rows: list[_TokenSummaryRow],
+) -> list[tuple[tuple[str, str], list[_TokenSummaryRow]]]:
+    """Group token-summary rows exactly as the default terminal report does."""
+    groups: dict[tuple[str, str], list[_TokenSummaryRow]] = {}
+    for row in rows:
+        key = (row.user_id, str(row.path.parent))
+        groups.setdefault(key, []).append(row)
+    return sorted(groups.items())
+
+
+def _token_summary_group_values(rows: list[_TokenSummaryRow]) -> list[list[object]]:
+    values: list[list[object]] = []
+    for (user_id, folder), group_rows in _token_summary_groups(rows):
+        rollup = _token_summary_rollup(group_rows)
+        values.append(
+            [user_id, folder]
+            + [rollup[column] for column in _TOKEN_SUMMARY_GROUP_COLUMNS[2:]]
+        )
+    return values
+
+
+def _token_summary_output(
+    rows: list[_TokenSummaryRow], *, details: bool
+) -> tuple[tuple[str, ...], list[list[object]]]:
+    if details:
+        return (
+            _TOKEN_SUMMARY_DETAIL_COLUMNS,
+            [_token_summary_detail_values(row) for row in rows],
+        )
+    return _TOKEN_SUMMARY_GROUP_COLUMNS, _token_summary_group_values(rows)
+
+
+def _write_token_summary_csv(
+    rows: list[_TokenSummaryRow], destination: str, *, details: bool
+) -> None:
+    handle = (
+        sys.stdout
+        if destination == "-"
+        else Path(destination).open("w", encoding="utf-8", newline="")
+    )
+    try:
+        writer = csv.writer(handle, lineterminator="\n")
+        columns, values = _token_summary_output(rows, details=details)
+        writer.writerow(columns)
+        writer.writerows(values)
+    finally:
+        if handle is not sys.stdout:
+            handle.close()
+
+
+def _token_summary_model_rollup(
+    rows: list[_TokenSummaryRow],
+) -> list[tuple[str, UsageTotals, CostAssessment]]:
+    """Return model-aware usage and price totals for the selected events."""
+    usages: dict[str, UsageTotals] = {}
+    plan_types: dict[str, set[str]] = {}
+    for row in rows:
+        for event in row.funding_events:
+            if _usage_is_zero(event.usage):
+                continue
+            model = event.model or "unknown"
+            usages[model] = usages.get(model, UsageTotals()) + event.usage
+            if event.plan_type:
+                plan_types.setdefault(model, set()).add(event.plan_type)
+    result: list[tuple[str, UsageTotals, CostAssessment]] = []
+    for model in sorted(usages, key=str.casefold):
+        usage = usages[model]
+        model_usage = {} if model == "unknown" else {model: usage}
+        result.append(
+            (
+                model,
+                usage,
+                _cost_for_usage(
+                    usage,
+                    model_usage,
+                    plan_types=plan_types.get(model, set()),
+                ),
+            )
+        )
+    return result
+
+
+def _token_summary_html_currency(value: object) -> str:
+    return f"${float(value):,.2f}"
+
+
+def _token_summary_html_credits(value: object) -> str:
+    """Format credit units as whole numbers without implying currency cents."""
+    return f"{float(value):,.0f}"
+
+
+def _token_summary_html_cell(value: object) -> str:
+    return _escape_html(str(value))
+
+
+@lru_cache(maxsize=1)
+def _load_token_ledger_engine():
+    """Load the bundled audit-grade token ledger engine beside this script."""
+    module_path = Path(__file__).resolve().with_name("token_ledger.py")
+    spec = importlib.util.spec_from_file_location("_agent_report_token_ledger", module_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Cannot load bundled token ledger engine: {module_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _token_summary_source_range(row: dict[str, str]) -> tuple[int, int] | None:
+    source_range = row.get("_source_range", "")
+    match = re.search(r"raw lines (\d+)(?:[–-](\d+))?", source_range)
+    if match is not None:
+        return int(match.group(1)), int(match.group(2) or match.group(1))
+    source_line = row.get("_source_line", "")
+    if source_line.isdigit():
+        ordinal = int(source_line)
+        return ordinal, ordinal
+    return None
+
+
+def _token_summary_local_ledger_time(value: str) -> str:
+    prefix = "before " if value.startswith("before ") else ""
+    parsed = _parse_iso_datetime(value.removeprefix("before "))
+    if parsed is None:
+        return value
+    return prefix + parsed.astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _render_token_summary_ledger_html(
+    row: _TokenSummaryRow,
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    report_filename: str,
+    threads_filename: str,
+    raw_path: Path,
+    steps_filename: str,
+    ledger_csv_path: Path,
+) -> str:
+    """Render the audit-grade execution-cycle ledger for one thread."""
+    engine = _load_token_ledger_engine()
+    headers, ledger_rows = engine.build_ledger_from_rollout(
+        row.path,
+        ledger_csv_path,
+        pricing_path=PRICING_FILE,
+    )
+    funding_headers = list(engine.TOKEN_SUMMARY_FUNDING_HEADERS)
+    model_index = headers.index("model") + 1
+    headers = headers[:model_index] + funding_headers + headers[model_index:]
+    selected_events = sorted(
+        row.funding_events,
+        key=lambda event: (event.source_ordinal, event.event_timestamp),
+    )
+    enriched_rows: list[dict[str, str]] = []
+    for ledger_row in ledger_rows:
+        source_range = _token_summary_source_range(ledger_row)
+        matching_events = []
+        if source_range is not None:
+            matching_events = [
+                event
+                for event in selected_events
+                if source_range[0] <= event.source_ordinal <= source_range[1]
+            ]
+        funding_event = matching_events[-1] if matching_events else None
+        measured_row = ledger_row.get("total_tokens", "") != ""
+        timestamp = _parse_iso_datetime(ledger_row.get("time_utc", ""))
+        if measured_row and funding_event is None:
+            continue
+        if not measured_row and timestamp is not None:
+            if not (from_time <= timestamp < to_time):
+                continue
+        if funding_event is not None:
+            ledger_row["model"] = funding_event.model or ledger_row.get("model", "")
+            ledger_row["plan"] = funding_event.plan_type or "not observed"
+            ledger_row["funding"] = funding_event.funding_source
+            ledger_row["sub_remaining"] = (
+                "not observed"
+                if funding_event.subscription_used_percent is None
+                else f"{max(0.0, 100.0 - funding_event.subscription_used_percent):g}%"
+            )
+            ledger_row["credits_available"] = (
+                "not observed"
+                if funding_event.has_credits is None
+                else "yes" if funding_event.has_credits else "no"
+            )
+            ledger_row["credits_remaining"] = (
+                "not observed"
+                if funding_event.credit_balance is None
+                else f"{funding_event.credit_balance:g}"
+            )
+        ledger_row["time_utc"] = _token_summary_local_ledger_time(
+            ledger_row.get("time_utc", "")
+        )
+        source_line = ledger_row.get("_source_line", "")
+        if source_line:
+            ledger_row["_source_href"] = f"{raw_path.name}#L{source_line}"
+        enriched_rows.append(ledger_row)
+    for index, ledger_row in enumerate(enriched_rows):
+        ledger_row["row"] = str(index)
+    engine.write_csv_atomically(ledger_csv_path, headers, enriched_rows)
+    return engine.render_html(
+        headers,
+        enriched_rows,
+        title="Thread Token Ledger",
+        source_name=row.path.name,
+        explanation_html="",
+        explanation_name=None,
+        nav_links=(
+            ("← Threads", threads_filename),
+            ("Token Usage Report", f"../{report_filename}"),
+            ("View Steps", steps_filename),
+            ("Log file", raw_path.name),
+        ),
+        local_time=True,
+    )
+
+
+def _render_token_summary_html(
+    rows: list[_TokenSummaryRow],
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    directories: list[Path],
+    group_links: dict[tuple[str, str], str] | None = None,
+) -> str:
+    """Render one self-contained verification-oriented token usage report."""
+    rollup = _token_summary_rollup(rows)
+    total_tokens = int(rollup["total_tokens"])
+    sub_tokens = int(rollup["sub_tokens"])
+    credit_tokens = int(rollup["credit_tokens"])
+    credits_used = float(rollup["credits_used"])
+    credits_remaining = float(rollup["credits_remaining"])
+    total_estimate = float(rollup["total_est_usd"])
+    sub_estimate = float(rollup["sub_est_usd"])
+    credit_estimate = float(rollup["credit_est_usd"])
+    usage_per_credit = credit_estimate / credits_used if credits_used > 0 else 0.0
+    sub_share = 100.0 * sub_tokens / total_tokens if total_tokens else 0.0
+    credit_share = 100.0 * credit_tokens / total_tokens if total_tokens else 0.0
+    local_from = _token_summary_local_datetime(from_time)
+    local_to = _token_summary_local_datetime(to_time)
+
+    model_rows: list[str] = []
+    for model, usage, cost in _token_summary_model_rollup(rows):
+        model_rows.append(
+            "<tr>"
+            f"<th scope=\"row\">{_token_summary_html_cell(model)}</th>"
+            f"<td>{usage.input_tokens:,}</td>"
+            f"<td>{usage.cached_input_tokens:,}</td>"
+            f"<td>{usage.uncached_input_tokens:,}</td>"
+            f"<td>{usage.output_tokens:,}</td>"
+            f"<td>{usage.reasoning_tokens:,}</td>"
+            f"<td>{usage.processed_tokens:,}</td>"
+            f"<td>{_token_summary_html_currency(cost.total_cost or 0)}</td>"
+            "</tr>"
+        )
+    if not model_rows:
+        model_rows.append(
+            '<tr><td colspan="8" class="empty">No token usage was found in this range.</td></tr>'
+        )
+
+    group_rows_html: list[str] = []
+    for key, group_rows in _token_summary_groups(rows):
+        user_id, _folder = key
+        group_rollup = _token_summary_rollup(group_rows)
+        group_started_at = min(row.started_at for row in group_rows)
+        group_last_activity_at = max(row.last_activity_at for row in group_rows)
+        thread_count = len(group_rows)
+        thread_word = "Thread" if thread_count == 1 else "Threads"
+        group_href = group_links.get(key) if group_links is not None else None
+        thread_cell = (
+            f'<a href="{_escape_html_attribute(quote(group_href, safe="/:%"))}">'
+            f"View {thread_count:,} {thread_word}</a>"
+            if group_href is not None
+            else f"{thread_count:,} {thread_word}"
+        )
+        search_value = f"{user_id} {group_rollup['plan']}".casefold()
+        group_rows_html.append(
+            f'<tr data-search="{_escape_html_attribute(search_value)}">'
+            f'<td class="nowrap">{_token_summary_html_cell(_token_summary_local_datetime(group_started_at))}</td>'
+            f'<td class="nowrap">{_token_summary_html_cell(_token_summary_local_datetime(group_last_activity_at))}</td>'
+            f"<td>{_token_summary_html_cell(user_id)}</td>"
+            f"<td>{thread_cell}</td>"
+            f"<td>{_token_summary_html_cell(group_rollup['plan'])}</td>"
+            f"<td>{int(group_rollup['sub_tokens']):,}</td>"
+            f"<td>{_token_summary_html_currency(group_rollup['sub_est_usd'])}</td>"
+            f"<td>{float(group_rollup['sub_remaining']):,.2f}%</td>"
+            f"<td>{int(group_rollup['credit_tokens']):,}</td>"
+            f"<td>{_token_summary_html_currency(group_rollup['credit_est_usd'])}</td>"
+            f"<td>{_token_summary_html_credits(group_rollup['credits_used'])}</td>"
+            f"<td>{_token_summary_html_credits(group_rollup['credits_remaining'])}</td>"
+            f"<td>{int(group_rollup['total_tokens']):,}</td>"
+            f"<td>{_token_summary_html_currency(group_rollup['total_est_usd'])}</td>"
+            "</tr>"
+        )
+    if not group_rows_html:
+        group_rows_html.append(
+            '<tr><td colspan="14" class="empty">No usage-bearing folders matched this range.</td></tr>'
+        )
+
+    thread_count = len(rows)
+    thread_word = "thread" if thread_count == 1 else "threads"
+    thread_section = f"""<section class="section">
+<div class="section-head"><div><div class="label">Folder summary</div><h2>Usage by folder</h2></div><label><span class="label">Filter rows</span><br><input id="folder-filter" class="search" type="search" placeholder="User or plan…"></label></div>
+<div class="table-wrap"><table id="folder-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Thread links"></th><th>Plan</th><th>Sub tokens</th><th>Sub estimate</th><th>Sub remaining</th><th>Credit tokens</th><th>Credit estimate</th><th>Credits used</th><th>Credits remaining</th><th>Total tokens</th><th>Total estimate</th></tr></thead><tbody>{''.join(group_rows_html)}</tbody></table></div>
+</section>"""
+
+    source_items = "".join(
+        f"<li>{_token_summary_html_cell(directory)}</li>" for directory in directories
+    )
+    plan = _token_summary_html_cell(rollup["plan"] or "not observed")
+    generation_time = _token_summary_local_datetime(datetime.now(timezone.utc))
+    return f"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Token Usage Report</title>
+<style>
+:root{{--ink:#14202b;--muted:#63717d;--paper:#f3f6f6;--sheet:#fff;--line:#d9e1e3;--sub:#33658a;--credit:#d97736;--quiet:#e8eef0;--focus:#1167a8}}
+*{{box-sizing:border-box}}
+body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}
+a{{color:#155f8c;text-decoration-thickness:1px;text-underline-offset:3px}}
+a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
+.page{{max-width:1540px;margin:auto;padding:42px 32px 64px}}
+.eyebrow,.label,thead,.utility{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}
+.eyebrow{{color:var(--credit)}}
+h1{{max-width:900px;margin:8px 0 10px;font:600 clamp(38px,6vw,76px)/.98 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}
+.range{{margin:0;color:var(--muted);font-size:17px}}
+.receipt{{display:grid;grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(220px,.5fr));gap:28px;margin:34px 0;padding:26px;background:var(--sheet);border:1px solid var(--line);box-shadow:0 12px 40px rgba(20,32,43,.07)}}
+.receipt-total strong{{display:block;font:600 clamp(42px,7vw,82px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:-.07em}}
+.receipt-total span{{color:var(--muted)}}
+.estimate,.credit-usage{{align-self:end;border-left:1px solid var(--line);padding-left:28px}}
+.estimate strong,.credit-usage strong{{display:block;font:600 32px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace}}
+.estimate span,.credit-usage span{{color:var(--muted)}}
+.funding{{margin:28px 0 36px}}
+.funding-head{{display:flex;justify-content:space-between;gap:20px;align-items:end}}
+.funding-head h2,.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
+.rail{{display:flex;height:22px;margin:14px 0 12px;background:var(--quiet);border:1px solid var(--line);overflow:hidden}}
+.rail-sub{{width:{sub_share:.6f}%;background:var(--sub)}}
+.rail-credit{{width:{credit_share:.6f}%;background:var(--credit)}}
+.funding-values{{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}}
+.funding-values article{{padding:16px 18px;background:var(--sheet);border-top:4px solid var(--sub)}}
+.funding-values article:last-child{{border-color:var(--credit)}}
+.funding-values strong{{display:block;font:600 25px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}}
+.funding-values p{{margin:5px 0 0;color:var(--muted)}}
+.credit-equivalent{{margin-top:14px;padding:14px 18px;background:#fff6ee;border-left:4px solid var(--credit)}}
+.section{{margin-top:38px}}
+.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin-bottom:13px}}
+.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}
+table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}
+th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}
+thead th{{position:sticky;top:0;z-index:1;background:#e9eff1;color:#46545f}}
+tbody th,#folder-table td:nth-child(-n+5){{text-align:left}}
+tbody tr:hover{{background:#f7fafb}}
+.nowrap{{white-space:nowrap}}.empty{{padding:30px;text-align:center;color:var(--muted)}}
+.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}
+.notes{{display:grid;grid-template-columns:1fr 1fr;gap:20px}}
+.notes article{{padding:22px;background:var(--sheet);border:1px solid var(--line)}}
+.notes h3{{margin-top:0;font:600 20px/1.2 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
+.notes li{{margin:.55em 0}}
+.sources{{overflow-wrap:anywhere}}
+footer{{margin-top:38px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted)}}
+@media(max-width:960px){{.receipt{{grid-template-columns:1fr 1fr}}.receipt-total{{grid-column:1/-1}}}}
+@media(max-width:760px){{.page{{padding:28px 16px 48px}}.receipt,.notes{{grid-template-columns:1fr}}.receipt-total{{grid-column:auto}}.estimate,.credit-usage{{border-left:0;border-top:1px solid var(--line);padding:18px 0 0}}.funding-values{{grid-template-columns:1fr}}.section-head{{display:block}}.search{{margin-top:12px}}}}
+@media(prefers-reduced-motion:no-preference){{tbody tr{{transition:background-color .16s ease}}}}
+@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.receipt{{box-shadow:none}}.search{{display:none}}.table-wrap{{overflow:visible}}thead th{{position:static}}}}
+</style>
+</head>
+<body>
+<main class="page">
+<header>
+<div class="eyebrow">Agent Report · usage receipt</div>
+<h1>Token Usage Report</h1>
+<p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
+</header>
+<section class="receipt" aria-label="Usage total">
+<div class="receipt-total"><div class="label">Processed tokens</div><strong>{total_tokens:,}</strong><span><a href="#folder-table">View {thread_count:,} {thread_word.title()}</a> · plan: {plan}</span></div>
+<div class="estimate"><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(total_estimate)}</strong><span>Estimated from token counts - not an actual charged amount</span></div>
+<div class="credit-usage"><div class="label">Credit usage</div><strong>{_token_summary_html_credits(credits_used)}</strong><span>Observed credits consumed</span></div>
+</section>
+<section class="funding">
+<div class="funding-head"><div><div class="label">Funding split</div><h2>Where the usage came from</h2></div><div class="utility">{sub_share:.2f}% sub · {credit_share:.2f}% credits</div></div>
+<div class="rail" role="img" aria-label="Subscription {sub_share:.2f} percent; credits {credit_share:.2f} percent"><span class="rail-sub"></span><span class="rail-credit"></span></div>
+<div class="funding-values">
+<article><div class="label">Subscription</div><strong>{sub_tokens:,} tokens</strong><p>{_token_summary_html_currency(sub_estimate)} API-equivalent · {float(rollup['sub_remaining']):,.2f}% remaining</p></article>
+<article><div class="label">Purchased credits</div><strong>{credit_tokens:,} tokens</strong><p>{_token_summary_html_currency(credit_estimate)} API-equivalent · {_token_summary_html_credits(credits_used)} used · {_token_summary_html_credits(credits_remaining)} remaining</p></article>
+</div>
+<div class="credit-equivalent"><strong>USD-equivalent usage per credit: {_token_summary_html_currency(usage_per_credit)}</strong> USD-equivalent usage divided by credits consumed—not the purchase price or an actual charged amount.</div>
+</section>
+<section class="section">
+<div class="section-head"><div><div class="label">Model mix</div><h2>Cost by logged model</h2></div></div>
+<div class="table-wrap"><table><thead><tr><th>Model</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(model_rows)}</tbody></table></div>
+</section>
+{thread_section}
+<section class="section notes">
+<article><div class="label">Counting contract</div><h3>How totals are built</h3><ul><li>Only token events inside the selected local range count.</li><li>Processed tokens equal input plus output.</li><li>Cached input is already included in input tokens.</li><li>Reasoning tokens are already included in output tokens and are not added again.</li></ul></article>
+<article><div class="label">Cost contract</div><h3>What the dollar estimate means</h3><ul><li>Each event uses its logged model and the Agent Report pricing card.</li><li>Uncached input, cached input, and output use separate rates.</li><li>Subscription and credit usage keep the same API-equivalent estimate.</li><li>Observed credit burn is tracked separately and allocated to files by model-aware estimated cost weight.</li></ul></article>
+</section>
+<section class="section sources"><div class="label">Scanned directories</div><ul>{source_items}</ul></section>
+<footer>Generated {_token_summary_html_cell(generation_time)} local time · Agent Report · all amounts shown as USD are API-equivalent estimates.</footer>
+</main>
+<script>
+const filter=document.getElementById('folder-filter');
+filter?.addEventListener('input',()=>{{const query=filter.value.trim().toLocaleLowerCase();document.querySelectorAll('#folder-table tbody tr[data-search]').forEach(row=>{{row.hidden=!row.dataset.search.includes(query)}})}});
+</script>
+</body>
+</html>"""
+
+
+def _token_summary_thread_stem(row: _TokenSummaryRow) -> str:
+    """Return a filesystem-safe, collision-resistant name for one thread."""
+    basename = re.sub(r"[^A-Za-z0-9._-]+", "-", row.path.stem).strip("-.")
+    digest = hashlib.sha256(str(row.path).encode("utf-8")).hexdigest()[:10]
+    return f"{basename or 'thread'}-{digest}"
+
+
+def _token_summary_group_stem(key: tuple[str, str]) -> str:
+    """Return a stable page name for one user-and-folder summary group."""
+    user_id, folder = key
+    basename = re.sub(r"[^A-Za-z0-9._-]+", "-", Path(folder).name).strip("-.")
+    digest = hashlib.sha256(f"{user_id}\0{folder}".encode("utf-8")).hexdigest()[:10]
+    return f"{basename or 'folder'}-{digest}"
+
+
+def _render_token_summary_group_html(
+    rows: list[_TokenSummaryRow],
+    *,
+    report_filename: str,
+    detail_links: dict[Path, str],
+) -> str:
+    """Render the thread list for one folder without exposing its path."""
+    thread_rows: list[str] = []
+    for row in rows:
+        detail = dict(
+            zip(
+                _TOKEN_SUMMARY_DETAIL_COLUMNS,
+                _token_summary_detail_values(row),
+                strict=True,
+            )
+        )
+        models = ", ".join(
+            sorted(
+                {event.model for event in row.funding_events if event.model},
+                key=str.casefold,
+            )
+        ) or "unknown"
+        href = detail_links[row.path]
+        search_value = f"{row.user_id} {detail['plan']} {models}".casefold()
+        thread_rows.append(
+            f'<tr data-search="{_escape_html_attribute(search_value)}">'
+            f'<td class="nowrap">{_token_summary_html_cell(detail["started_at"])}</td>'
+            f'<td class="nowrap">{_token_summary_html_cell(detail["last_activity_at"])}</td>'
+            f"<td>{_token_summary_html_cell(row.user_id)}</td>"
+            f'<td><a href="{_escape_html_attribute(quote(href))}">View Events</a></td>'
+            f"<td>{_token_summary_html_cell(detail['plan'])}</td>"
+            f"<td>{_token_summary_html_cell(models)}</td>"
+            f"<td>{int(detail['sub_tokens']):,}</td>"
+            f"<td>{int(detail['credit_tokens']):,}</td>"
+            f"<td>{_token_summary_html_credits(detail['credits_used'])}</td>"
+            f"<td>{int(detail['input_tokens']):,}</td>"
+            f"<td>{int(detail['cached_input_tokens']):,}</td>"
+            f"<td>{int(detail['uncached_input_tokens']):,}</td>"
+            f"<td>{int(detail['output_tokens']):,}</td>"
+            f"<td>{int(detail['reasoning_tokens']):,}</td>"
+            f"<td>{int(detail['processed_tokens']):,}</td>"
+            f"<td>{_token_summary_html_currency(detail['total_est_usd'])}</td>"
+            "</tr>"
+        )
+    rollup = _token_summary_rollup(rows)
+    thread_count = len(rows)
+    thread_word = "thread" if thread_count == 1 else "threads"
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Threads in Folder</title>
+<style>
+:root{{--ink:#14202b;--muted:#63717d;--paper:#f3f6f6;--sheet:#fff;--line:#d9e1e3;--accent:#d97736;--focus:#1167a8}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
+.page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}.eyebrow{{margin-top:26px;color:var(--accent)}}
+h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}.summary{{color:var(--muted);font-size:17px}}.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin:30px 0 13px}}.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
+.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+6),th:nth-child(-n+6){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
+@media(max-width:720px){{.page{{padding:24px 14px 44px}}.section-head{{display:block}}.search{{margin-top:12px}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.search{{display:none}}thead th{{position:static}}}}
+</style></head><body><main class="page">
+<nav class="nav"><a href="../{_escape_html_attribute(quote(report_filename))}">← Token Usage Report</a></nav>
+<div class="eyebrow">Agent Report · folder detail</div><h1>Threads in Folder</h1>
+<p class="summary">{thread_count:,} {thread_word} · {int(rollup['total_tokens']):,} processed tokens · {_token_summary_html_currency(rollup['total_est_usd'])} API-equivalent estimate</p>
+<section><div class="section-head"><div><div class="label">Thread summary</div><h2>Usage by thread</h2></div><label><span class="label">Filter rows</span><br><input id="thread-filter" class="search" type="search" placeholder="User, model, plan…"></label></div>
+<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Thread links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
+</main><script>const filter=document.getElementById('thread-filter');filter?.addEventListener('input',()=>{{const query=filter.value.trim().toLocaleLowerCase();document.querySelectorAll('#thread-table tbody tr[data-search]').forEach(row=>{{row.hidden=!row.dataset.search.includes(query)}})}});</script></body></html>"""
+
+
+def _render_token_summary_thread_html(
+    row: _TokenSummaryRow,
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    report_filename: str,
+    threads_filename: str,
+    raw_filename: str,
+    steps_filename: str,
+) -> str:
+    """Render an event-level token ledger for one source thread."""
+    event_rows: list[str] = []
+    for event in sorted(
+        row.funding_events,
+        key=lambda item: (item.event_timestamp, item.source_ordinal),
+    ):
+        timestamp = _parse_iso_datetime(event.event_timestamp)
+        local_timestamp = (
+            _token_summary_local_datetime(timestamp)
+            if timestamp is not None
+            else event.event_timestamp
+        )
+        _, event_cost = _token_summary_usage_cost([event])
+        usage = event.usage
+        sub_used = (
+            "not observed"
+            if event.subscription_used_percent is None
+            else f"{event.subscription_used_percent:,.2f}%"
+        )
+        credit_balance = (
+            "not observed"
+            if event.credit_balance is None
+            else _token_summary_html_credits(event.credit_balance)
+        )
+        credit_available = (
+            "not observed"
+            if event.has_credits is None
+            else "yes" if event.has_credits else "no"
+        )
+        line_href = f"{quote(raw_filename)}#line-{event.source_ordinal}"
+        event_rows.append(
+            "<tr>"
+            f'<td class="nowrap">{_token_summary_html_cell(local_timestamp)}</td>'
+            f'<td><a href="{_escape_html_attribute(line_href)}">{event.source_ordinal:,}</a></td>'
+            f"<td>{_token_summary_html_cell(event.model or 'unknown')}</td>"
+            f"<td>{_token_summary_html_cell(event.plan_type or 'not observed')}</td>"
+            f"<td>{_token_summary_html_cell(event.funding_source)}</td>"
+            f"<td>{_token_summary_html_cell(sub_used)}</td>"
+            f"<td>{_token_summary_html_cell(credit_available)}</td>"
+            f"<td>{_token_summary_html_cell(credit_balance)}</td>"
+            f"<td>{usage.input_tokens:,}</td>"
+            f"<td>{usage.cached_input_tokens:,}</td>"
+            f"<td>{usage.uncached_input_tokens:,}</td>"
+            f"<td>{usage.output_tokens:,}</td>"
+            f"<td>{usage.reasoning_tokens:,}</td>"
+            f"<td>{usage.processed_tokens:,}</td>"
+            f"<td>{_token_summary_html_currency(event_cost.total_cost or 0)}</td>"
+            "</tr>"
+        )
+    if not event_rows:
+        event_rows.append(
+            '<tr><td colspan="15" class="empty">No token events matched this range.</td></tr>'
+        )
+    rollup = _token_summary_rollup([row])
+    local_from = _token_summary_local_datetime(from_time)
+    local_to = _token_summary_local_datetime(to_time)
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thread Token Detail</title>
+<style>
+:root{{--ink:#14202b;--muted:#63717d;--paper:#f3f6f6;--sheet:#fff;--line:#d9e1e3;--accent:#d97736;--focus:#1167a8}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}
+a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
+.page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav{{display:flex;gap:18px;align-items:center}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}
+.eyebrow{{margin-top:26px;color:var(--accent)}}h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}
+.source,.range,.note{{color:var(--muted);overflow-wrap:anywhere}}.summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:28px 0}}
+.summary article{{padding:18px;background:var(--sheet);border-top:4px solid var(--accent)}}.summary strong{{display:block;font:600 25px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}}
+h2{{margin:32px 0 12px;font:600 27px/1.2 "Iowan Old Style","Palatino Linotype",Georgia,serif}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}
+table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+5),th:nth-child(-n+5){{text-align:left}}tbody tr:hover{{background:#f7fafb}}.empty{{padding:30px;text-align:center;color:var(--muted)}}
+@media(max-width:720px){{.page{{padding:24px 14px 44px}}.summary{{grid-template-columns:1fr}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}thead th{{position:static}}}}
+</style></head><body><main class="page">
+<nav class="nav"><a href="{_escape_html_attribute(quote(threads_filename))}">← Threads</a><a href="../{_escape_html_attribute(quote(report_filename))}">Token Usage Report</a><a href="{_escape_html_attribute(quote(steps_filename))}">View Steps</a></nav>
+<div class="eyebrow">Agent Report · thread detail</div><h1>Thread Token Detail</h1>
+<p class="source">{_token_summary_html_cell(row.path)}</p><p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
+<section class="summary" aria-label="Thread totals"><article><div class="label">Processed tokens</div><strong>{row.usage.processed_tokens:,}</strong></article><article><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(row.cost.total_cost or 0)}</strong></article><article><div class="label">Allocated credit usage</div><strong>{_token_summary_html_credits(rollup['credits_used'])}</strong></article></section>
+<h2>Token event ledger</h2><p class="note">Each row is one recorded token event in the selected period. Zero-token rows preserve funding telemetry but do not add to the totals. Source-line links open an escaped local copy of the JSONL record.</p>
+<div class="table-wrap"><table><thead><tr><th>Local time</th><th>Source line</th><th>Model</th><th>Plan</th><th>Funding</th><th>Sub used</th><th>Credits available</th><th>Credits remaining</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(event_rows)}</tbody></table></div>
+</main></body></html>"""
+
+
+def _render_token_summary_raw_html(row: _TokenSummaryRow) -> str:
+    """Render an escaped, line-addressable copy of one local JSONL source."""
+    raw_lines = row.path.read_text(encoding="utf-8", errors="replace").splitlines()
+    lines = "".join(
+        f'<div class="line" id="line-{ordinal}"><a href="#line-{ordinal}">{ordinal:,}</a><code>{_escape_html_attribute(line)}</code></div>'
+        for ordinal, line in enumerate(raw_lines, start=1)
+    )
+    return f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Raw Source Log</title>
+<style>:root{{--ink:#dce7ec;--muted:#8295a1;--bg:#10181d;--line:#26363f;--link:#75c7f0}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}}header{{position:sticky;top:0;z-index:1;padding:14px 20px;background:#152229;border-bottom:1px solid var(--line)}}h1{{display:inline;margin:0 14px 0 0;font-size:15px}}header span{{color:var(--muted)}}.line{{display:grid;grid-template-columns:72px max-content;border-bottom:1px solid rgba(38,54,63,.45)}}.line:target{{background:#3b3220}}.line>a{{padding:3px 12px;color:var(--link);text-align:right;text-decoration:none;border-right:1px solid var(--line)}}code{{padding:3px 12px;white-space:pre}}@media print{{header{{position:static}}}}</style></head>
+<body><header><h1>Raw Source Log</h1><span>{_token_summary_html_cell(row.path)} · privacy-sensitive local copy</span></header><main>{lines}</main></body></html>"""
+
+
+def _write_token_summary_html(
+    rows: list[_TokenSummaryRow],
+    destination: Path,
+    *,
+    from_time: datetime,
+    to_time: datetime,
+    directories: list[Path],
+    threads: bool = False,
+) -> None:
+    group_links: dict[tuple[str, str], str] | None = None
+    if threads:
+        thread_directory = destination.parent / f"{destination.stem}-threads"
+        thread_directory.mkdir(parents=True, exist_ok=True)
+        (thread_directory / "index.html").unlink(missing_ok=True)
+        grouped_rows = _token_summary_groups(rows)
+        group_page_names = {
+            key: f"{_token_summary_group_stem(key)}-threads.html"
+            for key, _group_rows in grouped_rows
+        }
+        row_group_keys = {
+            row.path: key for key, group_rows in grouped_rows for row in group_rows
+        }
+        detail_links: dict[Path, str] = {}
+        for row in rows:
+            stem = _token_summary_thread_stem(row)
+            detail_path = thread_directory / f"{stem}-token-detail.html"
+            ledger_csv_path = thread_directory / f"{stem}-token-detail.csv"
+            raw_path = thread_directory / f"{stem}-raw.html"
+            steps_path = thread_directory / f"{stem}-steps.html"
+            group_page_name = group_page_names[row_group_keys[row.path]]
+            identity = _rollout_identity(row.path)
+            if identity is None:
+                raise ValueError(f"No Codex thread identity found in {row.path}")
+            steps_run = build_codex_rollout_run(
+                identity[0],
+                row.path.parent,
+                include_children=False,
+                candidate_paths=[row.path],
+            )
+            _write_codex_outputs(
+                steps_run,
+                steps_path,
+                nav_links=[
+                    ("Token events", detail_path.name),
+                    ("Threads", group_page_name),
+                    ("Log file", raw_path.name),
+                    ("Token Usage Report", f"../{destination.name}"),
+                ],
+            )
+            raw_path.write_text(
+                _with_copyright_footer(
+                    _load_token_ledger_engine().render_raw_rollout_html(row.path)
+                ),
+                encoding="utf-8",
+            )
+            detail_path.write_text(
+                _with_copyright_footer(
+                    _render_token_summary_ledger_html(
+                        row,
+                        from_time=from_time,
+                        to_time=to_time,
+                        report_filename=destination.name,
+                        threads_filename=group_page_name,
+                        raw_path=raw_path,
+                        steps_filename=steps_path.name,
+                        ledger_csv_path=ledger_csv_path,
+                    )
+                ),
+                encoding="utf-8",
+            )
+            detail_links[row.path] = detail_path.name
+        for key, group_rows in grouped_rows:
+            group_path = thread_directory / group_page_names[key]
+            group_path.write_text(
+                _with_copyright_footer(
+                    _render_token_summary_group_html(
+                        group_rows,
+                        report_filename=destination.name,
+                        detail_links=detail_links,
+                    )
+                ),
+                encoding="utf-8",
+            )
+        relative_thread_directory = thread_directory.relative_to(destination.parent)
+        group_links = {
+            key: (relative_thread_directory / page_name).as_posix()
+            for key, page_name in group_page_names.items()
+        }
+    destination.write_text(
+        _with_copyright_footer(
+            _render_token_summary_html(
+                rows,
+                from_time=from_time,
+                to_time=to_time,
+                directories=directories,
+                group_links=group_links,
+            )
+        ),
+        encoding="utf-8",
+    )
+
+
+def _token_summary_display_value(column: str, value: object) -> str:
+    """Format one terminal-table value without changing CSV serialization."""
+    if value == "":
+        return ""
+    if column.endswith("_usd"):
+        return f"${float(value):,.2f}"
+    if column in {"sub_start", "sub_end", "sub_remaining"}:
+        return f"{float(value):,.2f}%"
+    if column.endswith("_tokens") or column == "total_tokens":
+        return f"{int(value):,}"
+    if column in {
+        "credits_start", "credits_end", "credits_used", "credits_remaining"
+    }:
+        return f"{float(value):,.2f}"
+    return str(value)
+
+
+def _token_summary_total_values(
+    rows: list[_TokenSummaryRow], *, details: bool
+) -> list[object]:
+    columns = _TOKEN_SUMMARY_DETAIL_COLUMNS if details else _TOKEN_SUMMARY_GROUP_COLUMNS
+    rollup = _token_summary_rollup(rows)
+    values: dict[str, object] = {"user_id": "TOTAL", **rollup}
+    if details:
+        usage = UsageTotals()
+        for row in rows:
+            usage += row.usage
+        costs = [row.cost for row in rows]
+
+        def component(name: str) -> object:
+            known = [getattr(cost, name) for cost in costs if getattr(cost, name) is not None]
+            return _cost_value(sum(known) if known else None)
+
+        values.update(
+            {
+                "input_tokens": usage.input_tokens,
+                "input_est_usd": component("input_cost"),
+                "cached_input_tokens": usage.cached_input_tokens,
+                "cached_input_est_usd": component("cached_input_cost"),
+                "uncached_input_tokens": usage.uncached_input_tokens,
+                "output_tokens": usage.output_tokens,
+                "output_est_usd": component("output_cost"),
+                "reasoning_tokens": usage.reasoning_tokens,
+                "processed_tokens": usage.processed_tokens,
+            }
+        )
+    return [values.get(column, "") for column in columns]
+
+
+def _print_token_summary(rows: list[_TokenSummaryRow], *, details: bool) -> None:
+    columns, values = _token_summary_output(rows, details=details)
+    total_values = _token_summary_total_values(rows, details=details)
+    all_values = [
+        list(columns),
+        *[
+            [
+                _token_summary_display_value(columns[index], value)
+                for index, value in enumerate(row)
+            ]
+            for row in values
+        ],
+        [
+            _token_summary_display_value(columns[index], value)
+            for index, value in enumerate(total_values)
+        ],
+    ]
+    widths = [
+        max(len(str(row[index])) for row in all_values)
+        for index in range(len(columns))
+    ]
+    for row_index, row in enumerate(all_values):
+        rendered = []
+        for index, value in enumerate(row):
+            text = str(value)
+            left_aligned = columns[index] in {
+                "user_id", "folder", "filename", "started_at",
+                "last_activity_at", "plan",
+            }
+            rendered.append(
+                text.ljust(widths[index]) if left_aligned else text.rjust(widths[index])
+            )
+        print("  ".join(rendered).rstrip())
+        if row_index == 0:
+            print("  ".join("-" * width for width in widths))
+
+
 # ---------------------------------------------------------------------------
 # JSONL log parsers
 # ---------------------------------------------------------------------------
@@ -14815,6 +16157,29 @@ def _emit_report_progress(
     print(f"AGENT_REPORT_PROGRESS {payload}", file=sys.stderr, flush=True)
 
 
+def _emit_report_item_progress(
+    item_completed: int,
+    item_total: int,
+    label: str,
+    detail: str,
+    worker: str | None = None,
+) -> None:
+    """Emit report progress with an item counter scoped to the parent or worker."""
+
+    completed = 25 + round(item_completed / max(1, item_total) * 40)
+    event = {
+        "completed": completed,
+        "total": 100,
+        "itemCompleted": item_completed,
+        "itemTotal": item_total,
+        "label": label,
+        "detail": detail,
+        "worker": worker,
+    }
+    payload = json.dumps(event, separators=(",", ":"))
+    print(f"AGENT_REPORT_PROGRESS {payload}", file=sys.stderr, flush=True)
+
+
 def _child_output_path(parent_output: Path, slug: str) -> Path:
     suffix = parent_output.suffix or ".html"
     return parent_output.with_name(f"{parent_output.stem}-{slug}{suffix}")
@@ -14901,11 +16266,17 @@ def _write_codex_outputs(
             "Saving the main report and its companion files.",
         )
     if split_documents is None:
-        html_output.write_text(rendered_html, encoding="utf-8")
+        html_output.write_text(
+            _with_copyright_footer(rendered_html), encoding="utf-8"
+        )
     else:
         main_html, sequence_html = split_documents
-        html_output.write_text(main_html, encoding="utf-8")
-        sequence_output.write_text(sequence_html, encoding="utf-8")
+        html_output.write_text(
+            _with_copyright_footer(main_html), encoding="utf-8"
+        )
+        sequence_output.write_text(
+            _with_copyright_footer(sequence_html), encoding="utf-8"
+        )
     companions = (
         (json_output, codex_run_to_json(run)),
         (turn_csv_output, render_codex_rollout_turn_csv(run)),
@@ -15330,7 +16701,41 @@ def main(argv: list[str] | None = None) -> int:
         )
     )
     parser.add_argument("path", nargs="?", help="Path to analyze (workspace, run, rollout, or manifest).")
-    parser.add_argument("--output", "-o", default=None, help="Output HTML path.")
+    parser.add_argument("--config", help="YAML configuration file. CLI values override it.")
+    parser.add_argument(
+        "--token-summary", action="store_true",
+        help="Summarize Codex logs active in the range and print a rollup total.",
+    )
+    parser.add_argument(
+        "--scan-directory", action="append", default=[],
+        help=(
+            "Directory to scan recursively for token summary logs; repeat as needed. "
+            "Defaults to the active and archived Codex stores."
+        ),
+    )
+    parser.add_argument(
+        "--from", dest="from_time",
+        help="Inclusive local From value: YYYY-MM-DD with optional HH:mm.",
+    )
+    parser.add_argument(
+        "--to", dest="to_time",
+        help="Exclusive local To value: YYYY-MM-DD with optional HH:mm.",
+    )
+    parser.add_argument(
+        "--csv", nargs="?", const="-",
+        help="Write row-only token summary CSV to PATH, or stdout when PATH is omitted.",
+    )
+    parser.add_argument(
+        "--output", "-o", "--html", default=None,
+        help="Output HTML path; --html is an alias.",
+    )
+    parser.add_argument(
+        "--threads", action="store_true",
+        help=(
+            "Show one row per thread in text and CSV output; for HTML, add "
+            "per-thread token ledgers and escaped raw-source pages."
+        ),
+    )
     parser.add_argument("--codex-thread", help="Root Codex Desktop thread ID to report.")
     parser.add_argument(
         "--progress",
@@ -15411,11 +16816,16 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     parser.add_argument(
+        "--include-children",
+        action="store_true",
+        help="Include native spawned descendants of each selected task.",
+    )
+    parser.add_argument(
         "--include-delegations",
         action="store_true",
         help=(
-            "Follow outbound <codex_delegation> thread links and include each linked "
-            "thread's native subagent hierarchy."
+            "Follow outbound <codex_delegation> thread links and include linked "
+            "non-child tasks."
         ),
     )
     state_group = parser.add_mutually_exclusive_group()
@@ -15438,6 +16848,113 @@ def main(argv: list[str] | None = None) -> int:
         ),
     )
     args = parser.parse_args(argv)
+
+    token_config: dict[str, object] = {}
+    config_path: Path | None = None
+    if args.config:
+        config_path = Path(args.config).expanduser().resolve()
+        try:
+            token_config = _load_token_summary_config(config_path)
+        except ValueError as exc:
+            parser.error(str(exc))
+    config_mode = token_config.get("mode")
+    if config_mode not in (None, "token-summary"):
+        parser.error("config mode must be token-summary")
+    token_summary_mode = args.token_summary or config_mode == "token-summary"
+    if token_summary_mode:
+        if args.path or args.codex_thread or args.codex_catalog or args.junie_catalog:
+            parser.error("token summary cannot be combined with report or catalog selection")
+        configured_directories = token_config.get("directories", [])
+        if not isinstance(configured_directories, list) or not all(
+            isinstance(value, str) and value.strip() for value in configured_directories
+        ):
+            parser.error("config directories must be a list of non-empty paths")
+        configured_threads = token_config.get("threads", False)
+        if not isinstance(configured_threads, bool):
+            parser.error("config threads must be true or false")
+        include_threads = args.threads or configured_threads
+        base = config_path.parent if config_path is not None else Path.cwd()
+        using_default_directories = not args.scan_directory and not configured_directories
+        raw_directories = args.scan_directory or configured_directories or [
+            Path.home() / ".codex" / "sessions",
+            Path.home() / ".codex" / "archived_sessions",
+        ]
+        directories = [
+            (
+                Path(value).expanduser()
+                if Path(value).expanduser().is_absolute()
+                else base / value
+            ).resolve()
+            for value in raw_directories
+        ]
+        if using_default_directories:
+            directories = [directory for directory in directories if directory.is_dir()]
+        try:
+            default_from, default_to = _token_summary_default_range()
+            from_time = _token_summary_datetime(
+                args.from_time
+                if args.from_time is not None
+                else token_config.get("from"),
+                "From",
+            )
+            to_time = _token_summary_datetime(
+                args.to_time
+                if args.to_time is not None
+                else token_config.get("to"),
+                "To",
+            )
+            from_time = from_time or default_from
+            to_time = to_time or default_to
+            if from_time >= to_time:
+                raise ValueError("From date and time must be before To date and time")
+            rows = _token_summary_rows(
+                directories, from_time=from_time, to_time=to_time
+            )
+            csv_destination = (
+                args.csv if args.csv is not None else token_config.get("csv")
+            )
+            if csv_destination is not None and not isinstance(csv_destination, str):
+                raise ValueError("config csv must be a path string")
+            html_destination = (
+                args.output if args.output is not None else token_config.get("html")
+            )
+            if html_destination is not None and (
+                not isinstance(html_destination, str) or not html_destination.strip()
+            ):
+                raise ValueError("config html must be a non-empty path string")
+            if isinstance(csv_destination, str):
+                if csv_destination != "-":
+                    csv_path = Path(csv_destination).expanduser()
+                    csv_destination = str(
+                        (csv_path if csv_path.is_absolute() else base / csv_path).resolve()
+                    )
+                    Path(csv_destination).parent.mkdir(parents=True, exist_ok=True)
+                _write_token_summary_csv(
+                    rows, csv_destination, details=include_threads
+                )
+            if isinstance(html_destination, str):
+                html_path = Path(html_destination).expanduser()
+                html_path = (
+                    html_path if html_path.is_absolute() else base / html_path
+                ).resolve()
+                html_path.parent.mkdir(parents=True, exist_ok=True)
+                _write_token_summary_html(
+                    rows,
+                    html_path,
+                    from_time=from_time,
+                    to_time=to_time,
+                    directories=directories,
+                    threads=include_threads,
+                )
+            if csv_destination is None and html_destination is None:
+                _print_token_summary(rows, details=include_threads)
+        except (OSError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        return 0
+
+    if args.threads:
+        parser.error("--threads requires --token-summary")
 
     catalog_mode = args.codex_catalog or args.junie_catalog
     if not args.path and not args.codex_thread and not catalog_mode:
@@ -15552,6 +17069,7 @@ def main(argv: list[str] | None = None) -> int:
                         run = build_codex_rollout_run(
                             entry.run_id,
                             entry.source_path.parent,
+                            include_children=args.include_children,
                             candidate_paths=_codex_hierarchy_paths(
                                 entry.run_id, catalog_index
                             ),
@@ -15573,12 +17091,14 @@ def main(argv: list[str] | None = None) -> int:
                 ).as_posix()
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(
-            _render_agent_catalog_html(
-                runtime,
-                selected,
-                report_hrefs,
-                from_date=args.from_date or "",
-                to_date=args.to_date or "",
+            _with_copyright_footer(
+                _render_agent_catalog_html(
+                    runtime,
+                    selected,
+                    report_hrefs,
+                    from_date=args.from_date or "",
+                    to_date=args.to_date or "",
+                )
             ),
             encoding="utf-8",
         )
@@ -15604,6 +17124,14 @@ def main(argv: list[str] | None = None) -> int:
         thread_titles[thread_id.strip()] = display_title.strip()
     if args.include_delegations and not (args.codex_thread or native_rollout_path):
         parser.error("--include-delegations requires --codex-thread or a Codex rollout path")
+    if args.include_children and not (
+        args.codex_thread
+        or native_rollout_path
+        or (args.codex_catalog and args.generate_batch)
+    ):
+        parser.error(
+            "--include-children requires a Codex report or Codex batch generation"
+        )
     if thread_titles and not (args.codex_thread or native_rollout_path):
         parser.error("--thread-title requires --codex-thread or a Codex rollout path")
     if args.codex_thread or native_rollout_path is not None:
@@ -15649,19 +17177,21 @@ def main(argv: list[str] | None = None) -> int:
                     session_roots.append(primary_root.parent / sibling_name)
         output = Path(args.output).resolve() if args.output else (Path.cwd() / f"{root_thread_id}-timeline.html")
         if args.progress:
-            _emit_report_progress(10, "Discovering related threads", "Finding the selected thread and linked child logs.")
+            _emit_report_progress(10, "Discovering related threads", "Finding the selected thread and requested related logs.")
         try:
             run = build_codex_rollout_run(
                 root_thread_id,
                 session_roots,
                 seal=args.seal,
                 allow_aborted=args.seal_aborted,
+                include_children=args.include_children,
                 include_delegations=args.include_delegations,
                 title=args.title or "",
                 thread_titles=thread_titles,
                 discovery_index_path=_default_codex_discovery_index_path(),
                 progress=_emit_report_progress if args.progress else None,
                 worker_progress=_emit_report_progress if args.progress else None,
+                item_progress=_emit_report_item_progress if args.progress else None,
                 workers=args.workers,
             )
         except ValueError as exc:
@@ -15754,9 +17284,14 @@ def main(argv: list[str] | None = None) -> int:
             child_document.run_title = f"{child_slug.replace('-', ' ').title()} Timeline"
             child_document.nav_links.append(("bubble up", rel_parent))
 
-            output.write_text(render_html(document, formatter_config), encoding="utf-8")
+            output.write_text(
+                _with_copyright_footer(render_html(document, formatter_config)),
+                encoding="utf-8",
+            )
             child_output.write_text(
-                render_html(child_document, formatter_config),
+                _with_copyright_footer(
+                    render_html(child_document, formatter_config)
+                ),
                 encoding="utf-8",
             )
             print(f"Timeline written to {output}")
@@ -15764,7 +17299,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     html = render_html(document, formatter_config)
-    output.write_text(html, encoding="utf-8")
+    output.write_text(_with_copyright_footer(html), encoding="utf-8")
     print(f"Timeline written to {output}")
     return 0
 

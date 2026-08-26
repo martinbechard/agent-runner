@@ -7,12 +7,13 @@ name = "agent-report"
 version = "0.10.2"
 description = "Generate privacy-safe execution reports for agent runs."
 readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
 requires-python = ">=3.11"
-dependencies = ["fastmcp>=3.0,<4", "tzdata>=2025.2"]
+dependencies = ["fastmcp>=3.0,<4", "pyyaml>=6.0", "tzdata>=2025.2"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8.0"]
-desktop = ["pyinstaller==6.21.0"]
 
 [project.scripts]
 agent-report = "agent_report.cli:main"
@@ -28,6 +29,7 @@ include = ["agent_report*"]
 [tool.setuptools.data-files]
 "share/agent-report" = [
     "scripts/run-timeline.py",
+    "scripts/token_ledger.py",
     "tool-formatters.json",
     "../../docs/reference/openai-model-pricing.json",
 ]

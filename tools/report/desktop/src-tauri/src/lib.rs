@@ -6,6 +6,7 @@
 //! Native command boundary for the local agent report desktop application.
 
 pub mod report_worker;
+mod browser_bridge;
 
 use std::collections::{BTreeMap, HashMap};
 use std::env;
@@ -2851,6 +2852,7 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             initialize_diagnostics(app.handle()).map_err(std::io::Error::other)?;
+            browser_bridge::start_if_enabled(app.handle().clone())?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

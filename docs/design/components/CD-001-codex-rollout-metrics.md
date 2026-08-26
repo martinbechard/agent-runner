@@ -343,13 +343,13 @@ flowchart LR
   - **VALIDATES:** Protocol version, path ownership, cache schema, before/after fingerprint stability, malformed and partial JSONL, and UTF-8 replacement behavior.
 
 - **MODULE: MODULE-10** Desktop run browser
-  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC file-activity range and metadata with progress updates, overlays matching titles from Codex's read-only local task state, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root, opens only its matching local sequence companion in a child report window, and persists bounded local troubleshooting diagnostics.
+  - **SYNOPSIS:** Provide a Tauri application that selects bounded local stores, searches the native catalog by optional inclusive UTC file-activity range and metadata with progress updates, overlays matching titles from Codex's read-only local task state, exports catalog HTML with clickable source locations, invokes a bundled full-report sidecar for a selected root with independent persisted spawned-child and cross-root-collaborator scope settings, opens only its matching local sequence companion in a child report window, and persists bounded local troubleshooting diagnostics.
   - **USES:** `MODULE-9` as a direct Rust dependency; the webview receives normalized metadata and progress rather than raw transcript content.
   - **PRODUCES:** A responsive local run list, user-selected offline output artifacts, and current plus previous JSONL diagnostic logs without requiring a separately installed Python interpreter or report command at runtime.
 
 - **PROCESS: PROCESS-1** Discover and parse a run
-  - **SYNOPSIS:** Resolve the selected root, index candidate rollout files, traverse descendants, parse each file once, and record all parse gaps.
-  - **VALIDATES:** The root exists and every included thread is connected to it.
+  - **SYNOPSIS:** Resolve the selected root, index candidate rollout files, optionally traverse native spawned descendants and cross-root collaborators, parse each included file once, and record all parse gaps.
+  - **VALIDATES:** The root exists, only recorded `thread_spawn` metadata establishes a child, and every included thread is connected through the requested relationship classes.
   - **PRODUCES:** A normalized live run snapshot.
 
 - **PROCESS: PROCESS-2** Reconcile usage
@@ -657,7 +657,7 @@ These cases verify parsing, accounting, attribution, concurrency, privacy, and c
 
 - **TASK: TEST-27** Operate the desktop catalog and export boundary
   - **SYNOPSIS:** Typecheck and build the frontend, exercise native command request validation and inclusive UTC file-activity selection, verify Codex app title overlays and HTML export escaping, and validate remembered output folders, local report-window paths, sequence popups, and diagnostic-log persistence.
-  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed date-hour bounds are rejected, files created in the range, updated in the range, or spanning the range are selected, files wholly outside the range are excluded, complete selected-file metadata remains available, unchanged selected files reuse indexed metadata, saved task titles replace prompt fallbacks when available, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, only the matching local sequence companion can be opened from a report window, and structured diagnostics rotate at the configured size boundary.
+  - **VALIDATES:** Progress and result variants are exhaustive, unknown input is narrowed, invalid or reversed date-hour bounds are rejected, files created in the range, updated in the range, or spanning the range are selected, files wholly outside the range are excluded, complete selected-file metadata remains available, unchanged selected files reuse indexed metadata, saved task titles replace prompt fallbacks when available, spawned children and cross-root collaborators remain independently selectable and default off in the desktop, raw transcripts do not cross into the webview, exported catalog links identify the selected source files, only existing local HTML artifacts can be opened as report windows, only the matching local sequence companion can be opened from a report window, and structured diagnostics rotate at the configured size boundary.
 
 - **TASK: TEST-28** Run a self-contained desktop report export
   - **SYNOPSIS:** Build the target-specific renderer sidecar and Tauri application, then generate a report from a sanitized Codex fixture with no external report command configured.

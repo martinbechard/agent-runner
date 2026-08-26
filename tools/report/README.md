@@ -2,6 +2,144 @@
 
 `tools/report/` holds cross-tool reporting utilities for this repository.
 
+## Standalone Agent Report CLI
+
+The `agent-report-cli` wheel is a CLI-only distribution. It does not contain the
+Tauri application, desktop web assets, or a desktop install extra. Each wheel
+includes the Python report renderer, pricing data, and the native Rust
+discovery engine for one operating system. Python 3.11 or newer is required.
+
+Download the wheel for your computer from the matching GitHub release, then
+install it from the download directory.
+
+On Apple Silicon macOS:
+
+```bash
+python3 -m pip install \
+  ./agent_report_cli-1.0.0-py3-none-macosx_11_0_arm64.whl
+```
+
+On 64-bit Windows PowerShell:
+
+```powershell
+py -m pip install `
+  .\agent_report_cli-1.0.0-py3-none-win_amd64.whl
+```
+
+Confirm the command is available:
+
+```bash
+agent-report --help
+```
+
+### Text token summary
+
+The default token summary scans both `~/.codex/sessions` and
+`~/.codex/archived_sessions`. It reports one row per folder plus a total for
+local midnight today through local midnight tomorrow:
+
+```bash
+agent-report --token-summary
+```
+
+Select a local half-open date or date-time range with `--from` and `--to`.
+**From** is inclusive and **To** is exclusive:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-16 \
+  --to 2026-08-19
+```
+
+Date-times use local 24-hour time:
+
+```bash
+agent-report --token-summary \
+  --from "2026-08-18 09:15" \
+  --to "2026-08-18 22:04"
+```
+
+Scan one or more explicit folders by repeating `--scan-directory`:
+
+```bash
+agent-report --token-summary \
+  --scan-directory ~/.codex/sessions \
+  --scan-directory /Volumes/archive/codex-sessions
+```
+
+Add `--threads` to replace the folder rollup with one detailed row per thread:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-16 \
+  --to 2026-08-19 \
+  --threads
+```
+
+### CSV output
+
+Write machine-readable rows with `--csv`. CSV output intentionally omits the
+terminal rollup row:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-16 \
+  --to 2026-08-19 \
+  --csv token-usage.csv
+```
+
+Combine `--csv` with `--threads` for one CSV row per thread. Use `--csv`
+without a path to write CSV to standard output.
+
+### HTML output
+
+Write the folder-level Token Usage Report with `--html`:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-16 \
+  --to 2026-08-19 \
+  --html token-usage.html
+```
+
+Add `--threads` to generate folder, thread, event-ledger, step, raw-log, and
+ledger-CSV drill-down files beside the main report:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-16 \
+  --to 2026-08-19 \
+  --html token-usage.html \
+  --threads
+```
+
+### YAML configuration
+
+Store repeatable options in a YAML file:
+
+```yaml
+mode: token-summary
+directories:
+  - ~/.codex/sessions
+  - ~/.codex/archived_sessions
+from: 2026-08-16
+to: 2026-08-19
+csv: token-usage.csv
+html: token-usage.html
+threads: true
+```
+
+Run it with:
+
+```bash
+agent-report --config token-summary.yaml
+```
+
+Relative directory and output paths are resolved from the YAML file's
+directory. Explicit command-line options override their YAML equivalents.
+
+Agent Report is distributed under the [MIT License](LICENSE).
+
 Current contents:
 
 - `rust/agent-report-core/`
@@ -68,15 +206,14 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.10.2/agent_report-0.10.2-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-cli-v1.0.0/agent_report_cli-1.0.0-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 
 Build a platform wheel locally with:
 
 ```bash
-cd tools/report
-python -m build --wheel
+python -m build --wheel --outdir tools/report/dist tools/report/cli
 ```
 
 The wheel build fails if Rust cannot build `agent-report-engine`; it never
@@ -84,9 +221,9 @@ emits a Python-only package with different discovery behavior.
 
 ### GitHub Release publication
 
-Agent Report wheels are published only through GitHub Releases. Pushing an
-`agent-report-vVERSION` tag runs `.github/workflows/release-agent-report.yml`.
-The tag must exactly match the version in `tools/report/pyproject.toml`.
+Agent Report CLI wheels are published only through GitHub Releases. Pushing an
+`agent-report-cli-vVERSION` tag runs `.github/workflows/release-agent-report.yml`.
+The tag must exactly match the version in `tools/report/cli/pyproject.toml`.
 
 The workflow builds and tests one platform wheel on each supported target:
 
@@ -95,18 +232,18 @@ The workflow builds and tests one platform wheel on each supported target:
 - Apple Silicon macOS
 
 Every build compiles the Rust parser for its runner, verifies that the wheel is
-platform-specific, confirms that both report commands and all runtime resources
-are present, installs the completed wheel, and runs the report regression
-suite. The GitHub Release is created only after all three jobs pass. It contains
-the three wheels and a `SHA256SUMS` file. Intel macOS wheels and Python-only
-wheels are not published.
+platform-specific, confirms that the sole `agent-report` command and its CLI
+runtime resources are present, rejects desktop and Tauri payloads, installs the
+completed wheel, and runs the report regression suite. The GitHub Release is
+created only after all three jobs pass. It contains the three wheels and a
+`SHA256SUMS` file. Intel macOS wheels and Python-only wheels are not published.
 
 After synchronizing all Agent Report version files and committing the release
 candidate, publish it with:
 
 ```bash
-git tag agent-report-vVERSION
-git push origin agent-report-vVERSION
+git tag agent-report-cli-vVERSION
+git push origin agent-report-cli-vVERSION
 ```
 
 ## Execution heatmap
@@ -265,7 +402,10 @@ message text.
 
 Some coordinators dispatch work into separate root tasks with
 `<codex_delegation>` records. Add `--include-delegations` to follow those
-outbound links and include each linked task's native subagent hierarchy.
+outbound links. A single-task CLI report includes only the selected task by
+default. Add `--include-children` to include native spawned descendants; when
+combined with `--include-delegations`, linked collaborators and their spawned
+descendants are both in scope.
 Repeat `--sessions-root` when the connected graph spans the active and archived
 stores:
 
@@ -274,6 +414,7 @@ python tools/report/scripts/run-timeline.py \
   --codex-thread <coordinator-thread-id> \
   --sessions-root ~/.codex/sessions \
   --sessions-root ~/.codex/archived_sessions \
+  --include-children \
   --include-delegations \
   --live \
   --output codex-sequence.html
@@ -320,11 +461,18 @@ successful export opens in its own app window. The app
 remembers the last export folder across launches and offers **Open last
 export** without rescanning the logs. Selecting a root enables full report
 generation through the renderer bundled into the desktop application.
+Persistent **Include children** and **Include collaborators** settings control
+report scope independently and default off. Children are native spawned
+descendants; collaborators are non-child tasks connected by recorded cross-root
+delegation links. Only recorded `thread_spawn` metadata establishes a child;
+a delegation marker without spawn metadata remains a collaborator. **Include
+children** also controls whether child threads appear as separate run-index rows.
 The persistent **Worker threads** setting controls the bounded concurrency used
 by both native discovery and full-report generation. Independent rollout parsing
 and per-agent heatmap preview preparation use that worker pool; deterministic
 assembly and file writing remain serial. During report generation, the progress
-panel shows one current-operation line per active worker above **Cancel**.
+panel shows the overall parsed-log count before one current-operation line per
+active worker. Each worker line counts only the logs in that worker's parcel.
 Heatmap preview matching uses chronological overlap sweeps rather than rescanning
 an agent's complete event history for every period. Native command failures,
 renderer standard error, frontend exceptions, and panics are
@@ -338,7 +486,8 @@ bodies are not intentionally recorded.
 ```bash
 cd tools/report
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[desktop]'
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install pyinstaller==6.21.0
 cd desktop
 pnpm install
 pnpm tauri:dev
@@ -376,6 +525,7 @@ match the Codex sidebar exactly:
 ```bash
 agent-report \
   --codex-thread <coordinator-thread-id> \
+  --include-children \
   --include-delegations \
   --thread-title '<linked-thread-id>=Process Backlog Items' \
   --live \
@@ -531,3 +681,190 @@ Run its tests:
 ```bash
 pytest -q tools/report/tests/test_run_timeline.py
 ```
+
+## Token summary
+
+Print one row per folder containing Codex JSONL logs active in the selected
+range, followed by a rollup total. Each row contains the owning user ID, folder,
+funding plan, subscription usage, purchased-credit usage, total processed
+tokens, and API-equivalent cost estimate. The range uses the same overlap rule
+as the desktop run index: a log is included when it started before **To
+(exclusive)** and its last activity was at or after **From**. This includes logs
+created or updated in the range. Only token events whose timestamps fall inside
+the selected range contribute to the totals; a long-running file cannot leak
+later usage into an earlier period. Logs with no token usage inside the range
+are omitted instead of producing empty rows. Numeric fields with no measured
+value render as zero rather than alternating between blanks and zeroes.
+Without explicit directories, the command scans `~/.codex/sessions` and
+`~/.codex/archived_sessions`.
+
+```bash
+agent-report \
+  --token-summary \
+  --from 2026-08-01 \
+  --to 2026-09-01
+```
+
+**From** is inclusive and **To** is exclusive. Each value is a local
+`YYYY-MM-DD` date with an optional 24-hour `HH:mm` time. Quote a value that
+contains a time:
+
+```bash
+agent-report --token-summary \
+  --from "2026-08-18 09:15" \
+  --to "2026-08-18 22:04"
+```
+
+A date without a time means local `00:00`. When both values are omitted, they
+default to local midnight today and local midnight tomorrow. These defaults
+match the desktop UI. Offset-bearing ISO 8601 timestamps remain accepted for
+compatibility.
+Files reached through more than one scan directory are counted once. Add
+`--csv tokens.csv` to write a CSV containing only the data rows; CSV output
+intentionally has no rollup row. Use `--csv` without a path to write CSV to
+standard output.
+
+Add `--html token-usage-report.html` to create a self-contained **Token Usage
+Report** instead of printing the terminal table:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-18 \
+  --to 2026-08-19 \
+  --html token-usage-report.html
+```
+
+`--output` and `-o` are equivalent HTML-path options. The report uses local
+dates and times and includes the total estimate, a subscription-versus-credit
+funding rail, observed credit burn, USD-equivalent usage per credit, model
+totals, and the counting and cost contracts. Displayed credit-unit values are
+rounded to the nearest whole credit; they are not dollar amounts. It is
+printable and has no external assets. CSV and HTML may be generated in the
+same invocation by supplying both options.
+
+The main HTML table uses the same per-folder grouping and totals as the default
+terminal report. It omits the folder path and replaces it with an unnamed link
+column, while retaining the folder's earliest **Started** and latest **Last
+activity** timestamps in local time. The link above the table shows the
+report-wide thread count. Add
+`--threads` to make each folder row's **View N Threads** link open the threads
+for that folder:
+
+```bash
+agent-report --token-summary \
+  --from 2026-08-18 \
+  --to 2026-08-19 \
+  --html token-usage-report.html \
+  --threads
+```
+
+The extra pages are written beside the main report in
+`token-usage-report-threads/`. A folder page keeps the detailed per-thread
+metrics and uses **View Events** to open that thread's execution-cycle token
+ledger. The ledger preserves raw token snapshots while grouping reasoning,
+messages, tool calls, and tool results into the calls they belong to. It
+includes field definitions, token formulas, cache-history arithmetic, per-call
+and cumulative cost, local timestamps, and subscription/credit telemetry. Each
+ledger also has **View Steps** for the full Agent Report timeline and **Log
+file** for an escaped, line-addressable copy of the original JSONL. A structured
+ledger CSV is generated beside the HTML.
+
+The ledger renderer and pricing card are bundled in the `agent-report` wheel;
+the installed command does not depend on a source checkout or an audit-report
+directory.
+These generated reports can be large and contain privacy-sensitive log content,
+so the option is off by default. Without `--threads`, folder totals remain in
+the main HTML table but drilldown pages are not generated. Folder and filename
+columns are included in terminal and CSV output when `--threads` is used.
+
+The funding split follows the rate-limit timeline across all selected logs for
+one user. The observed credit interval begins with the first record that has a
+positive balance and `credits.has_credits: true`. It ends with the first zero
+balance after the last positive credit record. Events inside that interval are
+credit-funded only while subscription usage is at its limit; a record showing
+available subscription usage remains subscription-funded. Events outside the
+interval are subscription-funded. The report does not create separate
+`exhausted` or `unclassified` categories.
+
+- `plan` contains observed plan types, such as `pro`. It adds `credits` when
+  the row contains credit-funded tokens. A comma separates multiple values.
+- `sub_tokens` and `credit_tokens` contain the processed tokens for each
+  funding source.
+- `sub_remaining` contains 100 minus the highest observed
+  `primary.used_percent` value. This rule ignores stale lower values after the
+  subscription reaches its limit.
+- `credits_used` is an allocation of the observed account-wide credit balance
+  decrease. Each credit-funded file receives a proportional share based on its
+  model- and token-type-aware API-equivalent cost inside the observed credit
+  interval. Folder and total rows add those file allocations, so the total
+  equals the observed account burn. This is an allocation, not a transaction-
+  level charge recorded in the log.
+- `credits_remaining` contains the lowest balance observed after the highest
+  balance in the selected timeline. This rule ignores stale balance increases
+  from concurrent logs.
+- `sub_est_usd`, `credit_est_usd`, and `total_est_usd` are API-equivalent price
+  estimates. They are not purchased-credit charges or currency conversions.
+  The report keeps these estimates when credits fund the tokens.
+
+Credit balances are credit units, not dollar amounts. For example, a decrease
+from 500 credits to zero produces file allocations that total
+`credits_used = 500` and `credits_remaining = 0`. The logs do not contain the
+Canadian-dollar purchase price, so the report does not infer it.
+
+Add `--threads` for one row per thread in terminal or CSV output. Thread rows
+split `folder` and `filename`. `sub_start` is the first observed
+`primary.used_percent` value. `sub_end` is the highest observed value.
+`credits_start` and `credits_end` are the observed credit endpoints. Detailed
+row timestamps use local `YYYY-MM-DD HH:mm` values, matching the desktop UI;
+they are not emitted as UTC ISO timestamps. Detailed rows also retain the token
+categories and the precomputed `input_est_usd`, `cached_input_est_usd`,
+`output_est_usd`, and `total_est_usd` values:
+
+```bash
+agent-report --token-summary --threads
+```
+
+The same command can be defined in YAML and run with only the config option:
+
+```yaml
+mode: token-summary
+directories:
+  - ~/.codex/sessions
+  - ~/.codex/archived_sessions
+from: 2026-08-01
+to: 2026-09-01
+csv: tokens.csv
+html: token-usage-report.html
+threads: true
+```
+
+```bash
+agent-report --config token-summary.yaml
+```
+
+Relative directory, CSV, and HTML paths are resolved from the YAML file's directory.
+When supplied, `--scan-directory`, `--from`, `--to`, `--csv`, `--html` (or
+`--output`), and `--threads` override their corresponding YAML values.
+
+## Browser development harness
+
+Run the complete interface against real local Codex stores in the browser:
+
+```bash
+cd tools/report/desktop
+pnpm dev
+```
+
+Run it with deterministic browser fixtures instead:
+
+```bash
+cd tools/report/desktop
+pnpm dev:fixture
+```
+
+The default live launcher rebuilds the renderer sidecar, starts the native host
+and Vite, and opens an authenticated browser URL. The native window stays hidden
+while serving this development workflow. The bridge binds to `127.0.0.1`, accepts
+only the per-launch token and local Vite origin, and keeps filesystem paths behind
+opaque native references. Use `pnpm tauri:dev` when developing through the native
+window instead.

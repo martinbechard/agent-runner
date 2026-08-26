@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import importlib.util
+import csv
 import json
 import os
 import re
@@ -2060,6 +2061,11 @@ def test_native_codex_spawn_boundary_excludes_inherited_cumulative_usage(tmp_pat
         encoding="utf-8",
     )
 
+    funding_events = []
+    thread = module.parse_codex_rollout(
+        rollout,
+        token_funding_events=funding_events,
+    )
     run = module.build_codex_rollout_run("spawned-thread", tmp_path)
     thread = run.threads[0]
 
@@ -2072,6 +2078,7 @@ def test_native_codex_spawn_boundary_excludes_inherited_cumulative_usage(tmp_pat
     assert run.active_time_ms == 4_000
     assert {unit.work_unit_id for unit in run.work_units} == {"pass1_frontend_app"}
     assert sum(unit.usage.processed_tokens for unit in run.work_units) == 50
+    assert sum(event.usage.processed_tokens for event in funding_events) == 50
     assert any("excluded inherited cumulative token baseline" in item for item in thread.diagnostics)
 
 
@@ -2562,6 +2569,30 @@ def test_native_codex_heatmap_workers_preserve_output_and_report_distinct_phase(
         for _, label, _ in aggregate_events
     )
     assert any(label == "Heatmap drilldown previews" for _, label, _, _ in worker_events)
+
+
+def test_native_codex_parse_progress_scopes_parent_and_worker_item_totals():
+    module = _load_module()
+    item_events = []
+
+    run = module.build_codex_rollout_run(
+        "root-thread",
+        CODEX_ROLLOUT_FIXTURES,
+        workers=2,
+        item_progress=lambda completed, total, label, detail, worker: item_events.append(
+            (completed, total, label, detail, worker)
+        ),
+    )
+
+    parent_events = [event for event in item_events if event[4] is None]
+    assert parent_events[0][:2] == (0, len(run.threads))
+    assert parent_events[-1][:2] == (len(run.threads), len(run.threads))
+
+    worker_events = [event for event in item_events if event[4] is not None]
+    for worker in {event[4] for event in worker_events}:
+        parcel = [event for event in worker_events if event[4] == worker]
+        assert [event[0] for event in parcel] == list(range(1, parcel[0][1] + 1))
+        assert all(event[1] == parcel[0][1] for event in parcel)
 
 
 def test_heatmap_overlap_index_handles_many_long_lived_events_exactly():
@@ -4515,6 +4546,17 @@ def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):
         tmp_path,
         include_delegations=True,
     )
+    collaborator_only = module.build_codex_rollout_run(
+        "coordinator",
+        tmp_path,
+        include_children=False,
+        include_delegations=True,
+    )
+    selected_only = module.build_codex_rollout_run(
+        "orchestrator",
+        tmp_path,
+        include_children=False,
+    )
 
     assert [thread.thread_id for thread in hierarchy_only.threads] == ["coordinator"]
     assert [thread.thread_id for thread in linked.threads] == [
@@ -4522,6 +4564,11 @@ def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):
         "orchestrator",
         "worker",
     ]
+    assert [thread.thread_id for thread in collaborator_only.threads] == [
+        "coordinator",
+        "orchestrator",
+    ]
+    assert [thread.thread_id for thread in selected_only.threads] == ["orchestrator"]
 
     events = module._codex_sequence_events(linked)
     assert [event.kind for event in events] == [
@@ -4542,6 +4589,21 @@ def test_native_codex_linked_delegations_expand_sequence_scope(tmp_path):
         ("worker", "orchestrator"),
         ("orchestrator", "coordinator"),
     ]
+
+
+def test_native_codex_collaborators_exclude_spawned_children(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    _append_codex_delegation_record(tmp_path / "worker.jsonl", "orchestrator")
+
+    run = module.build_codex_rollout_run(
+        "orchestrator",
+        tmp_path,
+        include_children=False,
+        include_delegations=True,
+    )
+
+    assert [thread.thread_id for thread in run.threads] == ["orchestrator", "coordinator"]
 
 
 def test_delegated_subagent_report_keeps_one_parent_context_without_parent_tree(
@@ -5309,6 +5371,7 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path, monkeyp
             str(active),
             "--sessions-root",
             str(archived),
+            "--include-children",
             "--include-delegations",
             "--thread-title",
             "coordinator=List unmerged branches",
@@ -5331,6 +5394,35 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path, monkeyp
     assert "Process Backlog Items" in html
     assert "worker" in html
     assert discovery_index.is_file()
+
+
+def test_main_codex_report_defaults_to_selected_thread_only(tmp_path, monkeypatch):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    output = tmp_path / "orchestrator-report.html"
+    monkeypatch.setattr(
+        module,
+        "_default_codex_discovery_index_path",
+        lambda: tmp_path / "rollout-discovery.sqlite3",
+    )
+
+    rc = module.main(
+        [
+            "--codex-thread",
+            "orchestrator",
+            "--sessions-root",
+            str(tmp_path),
+            "--live",
+            "--output",
+            str(output),
+        ]
+    )
+
+    assert rc == 0
+    sequence = output.with_name("orchestrator-report-sequence.html").read_text(
+        encoding="utf-8"
+    )
+    assert "<title>worker</title>" not in sequence
 
 
 def test_native_codex_prefers_complete_direct_cost_telemetry(tmp_path):
@@ -6226,3 +6318,1275 @@ def test_main_writes_parent_and_child_reports_for_ph006_nested_run(tmp_path):
     assert 'timeline-implementation-workflow.html' in parent_html
     assert 'bubble up' in child_html
     assert 'timeline.html' in child_html
+
+
+def test_token_summary_scans_multiple_directories_and_prints_rollup(
+    tmp_path, capsys
+):
+    module = _load_module()
+    first_root = tmp_path / "active"
+    second_root = tmp_path / "archived"
+    first = _write_codex_catalog_rollout(
+        first_root,
+        thread_id="first",
+        timestamp="2026-08-24T12:00:00Z",
+        request="First task",
+        workspace="/workspace/first",
+    )
+    second = _write_codex_catalog_rollout(
+        second_root,
+        thread_id="second",
+        timestamp="2026-08-25T12:00:00Z",
+        request="Second task",
+        workspace="/workspace/second",
+    )
+    for path, input_tokens, cached_tokens, output_tokens in (
+        (first, 100, 40, 20),
+        (second, 50, 10, 5),
+    ):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-25T12:00:01Z",
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "total_token_usage": {
+                                    "input_tokens": input_tokens,
+                                    "cached_input_tokens": cached_tokens,
+                                    "output_tokens": output_tokens,
+                                    "reasoning_output_tokens": 2,
+                                    "total_tokens": input_tokens + output_tokens,
+                                }
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+    assert module.main(
+        [
+            "--token-summary",
+            "--threads",
+            "--scan-directory",
+            str(first_root),
+            "--scan-directory",
+            str(second_root),
+            "--from",
+            "2026-08-25T00:00:00Z",
+            "--to",
+            "2026-08-26T00:00:00Z",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "user_id" in output
+    assert "folder" in output
+    assert "filename" in output
+    assert "total_est_usd" in output
+    assert str(first.parent.resolve()) in output
+    assert first.name in output
+    assert str(second.parent.resolve()) in output
+    assert second.name in output
+    assert "TOTAL" in output
+    assert "150" in output
+    assert "25" in output
+    assert "175" in output
+
+
+def test_token_summary_yaml_config_uses_ui_range_overlap_and_csv_omits_rollup(
+    tmp_path, capsys
+):
+    module = _load_module()
+    included_root = tmp_path / "included"
+    excluded_root = tmp_path / "excluded"
+    included = _write_codex_catalog_rollout(
+        included_root,
+        thread_id="included",
+        timestamp="2026-04-30T12:00:00Z",
+        request="Included task",
+        workspace="/workspace/included",
+    )
+    excluded = _write_codex_catalog_rollout(
+        excluded_root,
+        thread_id="excluded",
+        timestamp="2026-06-01T00:00:00Z",
+        request="Excluded task",
+        workspace="/workspace/excluded",
+    )
+    for path, event_timestamp in (
+        (included, "2026-05-01T12:00:01Z"),
+        (excluded, "2026-06-01T12:00:01Z"),
+    ):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": event_timestamp,
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "total_token_usage": {
+                                    "input_tokens": 10,
+                                    "cached_input_tokens": 4,
+                                    "output_tokens": 3,
+                                    "total_tokens": 13,
+                                }
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+    included_mtime = datetime(2026, 5, 1, tzinfo=timezone.utc).timestamp()
+    excluded_mtime = datetime(2026, 5, 15, tzinfo=timezone.utc).timestamp()
+    os.utime(included, (included_mtime, included_mtime))
+    os.utime(excluded, (excluded_mtime, excluded_mtime))
+    csv_output = tmp_path / "tokens.csv"
+    config = tmp_path / "token-summary.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "mode: token-summary",
+                "directories:",
+                f"  - {included_root}",
+                f"  - {excluded_root}",
+                "from: 2026-05-01T00:00:00Z",
+                "to: 2026-06-01T00:00:00Z",
+                f"csv: {csv_output}",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert module.main(["--config", str(config)]) == 0
+
+    rows = list(csv.reader(csv_output.read_text(encoding="utf-8").splitlines()))
+    assert rows[0] == [
+        "user_id",
+        "folder",
+        "plan",
+        "sub_tokens",
+        "sub_est_usd",
+        "sub_remaining",
+        "credit_tokens",
+        "credit_est_usd",
+        "credits_used",
+        "credits_remaining",
+        "total_tokens",
+        "total_est_usd",
+    ]
+    assert [row[1] for row in rows[1:]] == [str(included.parent.resolve())]
+    assert rows[1][3] == "13"
+    assert rows[1][6] == "0"
+    assert rows[1][10] == "13"
+    assert all(row[0] != "TOTAL" for row in rows)
+    assert capsys.readouterr().out == ""
+
+
+def test_token_summary_defaults_to_the_ui_local_day_range():
+    module = _load_module()
+    local_now = datetime(
+        2026, 8, 25, 15, 42, tzinfo=timezone(timedelta(hours=-4))
+    )
+
+    from_time, to_time = module._token_summary_default_range(local_now)
+
+    assert from_time == datetime(
+        2026, 8, 25, 0, 0, tzinfo=timezone(timedelta(hours=-4))
+    )
+    assert to_time == datetime(
+        2026, 8, 26, 0, 0, tzinfo=timezone(timedelta(hours=-4))
+    )
+
+
+def test_token_summary_accepts_ui_style_local_dates_and_times():
+    module = _load_module()
+    local_midnight = datetime(2026, 8, 18).astimezone(timezone.utc)
+    local_time = datetime(2026, 8, 18, 9, 15).astimezone(timezone.utc)
+
+    assert module._token_summary_datetime("2026-08-18", "From") == local_midnight
+    assert module._token_summary_datetime(
+        datetime(2026, 8, 18).date(), "From"
+    ) == local_midnight
+    assert module._token_summary_datetime("2026-08-18 09:15", "From") == local_time
+    assert module._token_summary_datetime("2026-08-18T09:15", "From") == local_time
+    assert module._token_summary_datetime(
+        "2026-08-18T09:15:00-04:00", "From"
+    ) == datetime(2026, 8, 18, 13, 15, tzinfo=timezone.utc)
+
+
+def test_token_summary_rejects_invalid_local_time():
+    module = _load_module()
+
+    with pytest.raises(
+        ValueError,
+        match="From must be a local YYYY-MM-DD date with an optional HH:mm time",
+    ):
+        module._token_summary_datetime("2026-08-18 24:00", "From")
+
+
+def test_token_summary_defaults_to_active_and_archived_codex_stores(
+    tmp_path, monkeypatch, capsys
+):
+    module = _load_module()
+    monkeypatch.setattr(module.Path, "home", classmethod(lambda cls: tmp_path))
+    active = tmp_path / ".codex" / "sessions"
+    archived = tmp_path / ".codex" / "archived_sessions"
+    active_log = _write_codex_catalog_rollout(
+        active,
+        thread_id="active",
+        timestamp="2026-08-25T08:00:00Z",
+        request="Active task",
+        workspace="/workspace/active",
+    )
+    archived_log = _write_codex_catalog_rollout(
+        archived,
+        thread_id="archived",
+        timestamp="2026-08-25T09:00:00Z",
+        request="Archived task",
+        workspace="/workspace/archived",
+    )
+    for path, timestamp in (
+        (active_log, "2026-08-25T08:00:01Z"),
+        (archived_log, "2026-08-25T09:00:01Z"),
+    ):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": timestamp,
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "total_token_usage": {
+                                    "input_tokens": 10,
+                                    "cached_input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "total_tokens": 10,
+                                }
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+    assert module.main(
+        [
+            "--token-summary",
+            "--from",
+            "2026-08-25T00:00:00Z",
+            "--to",
+            "2026-08-26T00:00:00Z",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert str(active_log.parent.resolve()) in output
+    assert str(archived_log.parent.resolve()) in output
+    assert active_log.name not in output
+    assert archived_log.name not in output
+
+
+def test_token_summary_threads_can_be_enabled_from_yaml(tmp_path):
+    module = _load_module()
+    root = tmp_path / "logs"
+    rollout = _write_codex_catalog_rollout(
+        root,
+        thread_id="detail",
+        timestamp="2026-08-25T08:00:00Z",
+        request="Detail task",
+        workspace="/workspace/detail",
+    )
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-08-25T08:00:01Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 1_000_000,
+                                "cached_input_tokens": 800_000,
+                                "output_tokens": 200_000,
+                                "reasoning_output_tokens": 50_000,
+                                "total_tokens": 1_200_000,
+                            },
+                            "total_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 0,
+                                "total_tokens": 10,
+                            }
+                        },
+                    },
+                }
+            )
+            + "\n"
+        )
+    config = tmp_path / "token-summary.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "mode: token-summary",
+                f"directories: [{root}]",
+                "from: 2026-08-25T00:00:00Z",
+                "to: 2026-08-26T00:00:00Z",
+                "threads: true",
+                "csv: threads.csv",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert module.main(["--config", str(config)]) == 0
+
+    rows = list(csv.reader((tmp_path / "threads.csv").read_text(encoding="utf-8").splitlines()))
+    assert rows[0][:3] == ["user_id", "folder", "filename"]
+    assert rows[1][1:3] == [str(rollout.parent.resolve()), rollout.name]
+    assert rows[0][-1] == "total_est_usd"
+
+
+def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
+    module = _load_module()
+    root = tmp_path / "logs"
+    rollout = _write_codex_catalog_rollout(
+        root,
+        thread_id="html-report",
+        timestamp="2026-08-25T12:00:00Z",
+        request="HTML report task",
+        workspace="/workspace/html-report",
+    )
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.writelines(
+            json.dumps(record) + "\n"
+            for record in (
+                {
+                    "timestamp": "2026-08-25T12:00:00Z",
+                    "type": "turn_context",
+                    "payload": {"model": "gpt-5.5", "turn_id": "html-turn"},
+                },
+                {
+                    "timestamp": "2026-08-25T12:00:01Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 1_000_000,
+                                "cached_input_tokens": 800_000,
+                                "output_tokens": 200_000,
+                                "reasoning_output_tokens": 50_000,
+                                "total_tokens": 1_200_000,
+                            },
+                            "total_token_usage": {
+                                "input_tokens": 1_000_000,
+                                "cached_input_tokens": 800_000,
+                                "output_tokens": 200_000,
+                                "reasoning_output_tokens": 50_000,
+                                "total_tokens": 1_200_000,
+                            }
+                        },
+                        "rate_limits": {
+                            "primary": {"used_percent": 100},
+                            "credits": {"has_credits": True, "balance": "500"},
+                            "plan_type": "pro",
+                        },
+                    },
+                },
+                {
+                    "timestamp": "2026-08-25T12:00:02Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 1_000_000,
+                                "cached_input_tokens": 800_000,
+                                "output_tokens": 200_000,
+                                "reasoning_output_tokens": 50_000,
+                                "total_tokens": 1_200_000,
+                            },
+                            "total_token_usage": {
+                                "input_tokens": 1_000_000,
+                                "cached_input_tokens": 800_000,
+                                "output_tokens": 200_000,
+                                "reasoning_output_tokens": 50_000,
+                                "total_tokens": 1_200_000,
+                            }
+                        },
+                        "rate_limits": {
+                            "primary": {"used_percent": 100},
+                            "credits": {"has_credits": False, "balance": "0"},
+                            "plan_type": "pro",
+                        },
+                    },
+                },
+            )
+        )
+    second_rollout = _write_codex_catalog_rollout(
+        root,
+        thread_id="html-report-second",
+        timestamp="2026-08-25T12:00:00Z",
+        request="Second HTML report task",
+        workspace="/workspace/html-report-second",
+    )
+    with second_rollout.open("a", encoding="utf-8") as handle:
+        handle.writelines(
+            json.dumps(record) + "\n"
+            for record in (
+                {
+                    "timestamp": "2026-08-25T12:00:00Z",
+                    "type": "turn_context",
+                    "payload": {"model": "gpt-5.4", "turn_id": "second-turn"},
+                },
+                {
+                    "timestamp": "2026-08-25T12:00:01.500Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "last_token_usage": {
+                                "input_tokens": 100,
+                                "cached_input_tokens": 80,
+                                "output_tokens": 20,
+                                "reasoning_output_tokens": 5,
+                                "total_tokens": 120,
+                            },
+                            "total_token_usage": {
+                                "input_tokens": 100,
+                                "cached_input_tokens": 80,
+                                "output_tokens": 20,
+                                "reasoning_output_tokens": 5,
+                                "total_tokens": 120,
+                            }
+                        },
+                        "rate_limits": {
+                            "primary": {"used_percent": 100},
+                            "credits": {"has_credits": True, "balance": "250"},
+                            "plan_type": "pro",
+                        },
+                    },
+                },
+            )
+        )
+    html_output = tmp_path / "reports" / "token-usage.html"
+
+    assert module.main(
+        [
+            "--token-summary",
+            "--scan-directory",
+            str(root),
+            "--from",
+            "2026-08-25",
+            "--to",
+            "2026-08-26",
+            "--html",
+            str(html_output),
+            "--threads",
+        ]
+    ) == 0
+
+    report = html_output.read_text(encoding="utf-8")
+    assert "<title>Token Usage Report</title>" in report
+    assert "audit" not in report.casefold()
+    assert "1,200,120" in report
+    assert "gpt-5.5" in report
+    assert rollout.name not in report
+    assert "<th>Folder</th>" not in report
+    assert "<th>Filename</th>" not in report
+    assert "Folder summary" in report
+    assert "Usage by folder" in report
+    assert '<table id="folder-table">' in report
+    assert (
+        '<th>Started</th><th>Last activity</th><th>User</th>'
+        '<th aria-label="Thread links"></th><th>Plan</th>'
+        '<th>Sub tokens</th><th>Sub estimate</th><th>Sub remaining</th>'
+    ) in report
+    assert "2026-08-25 08:00" in report
+    assert "<th>Total tokens</th><th>Total estimate</th>" in report
+    assert report.count('data-search="martinbechard pro, credits"') == 1
+    assert '<div class="label">Credit usage</div><strong>500</strong>' in report
+    assert '<a href="#folder-table">View 2 Threads</a>' in report
+    assert "500 used · 0 remaining" in report
+    assert "USD-equivalent usage per credit" in report
+    assert "USD-equivalent usage divided by credits consumed" in report
+    assert "does not assign a cash currency to credits" not in report
+    assert "Estimated from token counts - not an actual charged amount" in report
+    assert "Not an actual subscription or credit charge" not in report
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in report
+    assert "Reasoning tokens are already included in output tokens" in report
+    assert "2026-08-25 00:00 inclusive" in report
+    assert "2026-08-26 00:00 exclusive" in report
+    drilldown_directory = html_output.parent / "token-usage-threads"
+    thread_index = drilldown_directory / "index.html"
+    folder_pages = list(drilldown_directory.glob("*-threads.html"))
+    detail_pages = list(drilldown_directory.glob("*-token-detail.html"))
+    raw_pages = list(drilldown_directory.glob("*-raw.html"))
+    steps_pages = list(drilldown_directory.glob("*-steps.html"))
+    ledger_csv_pages = list(drilldown_directory.glob("*-token-detail.csv"))
+    assert not thread_index.exists()
+    assert len(folder_pages) == 1
+    assert len(detail_pages) == 2
+    assert len(raw_pages) == 2
+    assert len(steps_pages) == 2
+    assert len(ledger_csv_pages) == 2
+    assert "token-usage-threads/index.html" not in report
+    assert detail_pages[0].name not in report
+    assert f'href="token-usage-threads/{folder_pages[0].name}">View 2 Threads</a>' in report
+    assert f'href="{rollout.as_uri()}"' not in report
+
+    folder_report = folder_pages[0].read_text(encoding="utf-8")
+    assert "Threads in Folder" in folder_report
+    assert "HTML report task" not in folder_report
+    assert "gpt-5.5" in folder_report
+    assert "gpt-5.4" in folder_report
+    assert '<th aria-label="Thread links"></th>' in folder_report
+    assert folder_report.count(">View Events</a>") == 2
+    assert rollout.name not in folder_report
+    assert second_rollout.name not in folder_report
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in folder_report
+    for detail_page in detail_pages:
+        assert detail_page.name in folder_report
+
+    detail_page = next(
+        page for page in detail_pages if rollout.name in page.read_text(encoding="utf-8")
+    )
+    detail = detail_page.read_text(encoding="utf-8")
+    assert "Thread Token Ledger" in detail
+    assert rollout.name in detail
+    assert "Column definitions and formulas" in detail
+    assert "Field relationships" in detail
+    assert "Event evidence" in detail
+    assert "cycle" in detail
+    assert "Cumulative total tokens" in detail
+    assert "Cumulative cost" in detail
+    assert "Local time" in detail
+    assert "UTC time" not in detail
+    assert "Funding" in detail
+    assert "Sub remaining" in detail
+    assert "gpt-5.5" in detail
+    assert "credits" in detail
+    assert "1200000" in detail
+    matching_steps = next(
+        page
+        for page in steps_pages
+        if page.name.startswith(detail_page.name.removesuffix("-token-detail.html"))
+    )
+    matching_raw = next(
+        page
+        for page in raw_pages
+        if page.name.startswith(detail_page.name.removesuffix("-token-detail.html"))
+    )
+    assert matching_raw.name in detail
+    assert f'href="{matching_steps.name}">View Steps</a>' in detail
+    assert "#L" in detail
+    assert "../token-usage.html" in detail
+    assert f'href="{folder_pages[0].name}">← Threads</a>' in detail
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in detail
+
+    steps = matching_steps.read_text(encoding="utf-8")
+    assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
+    assert "HTML report task" in steps
+    assert f'href="{matching_raw.name}">Log file</a>' in steps
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in steps
+
+    raw = matching_raw.read_text(encoding="utf-8")
+    assert "Raw rollout" in raw
+    assert 'id="L' in raw
+    assert "&quot;token_count&quot;" in raw
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in raw
+    assert capsys.readouterr().out == ""
+
+
+def test_token_summary_yaml_html_path_is_relative_to_config(tmp_path):
+    module = _load_module()
+    root = tmp_path / "logs"
+    rollout = _write_codex_catalog_rollout(
+        root,
+        thread_id="yaml-html-report",
+        timestamp="2026-08-25T12:00:00Z",
+        request="YAML HTML report task",
+        workspace="/workspace/yaml-html-report",
+    )
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-08-25T12:00:01Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "token_count",
+                        "info": {
+                            "total_token_usage": {
+                                "input_tokens": 10,
+                                "cached_input_tokens": 0,
+                                "output_tokens": 2,
+                                "total_tokens": 12,
+                            }
+                        },
+                    },
+                }
+            )
+            + "\n"
+        )
+    config = tmp_path / "token-summary.yaml"
+    config.write_text(
+        "\n".join(
+            [
+                "mode: token-summary",
+                f"directories: [{root}]",
+                "from: 2026-08-25",
+                "to: 2026-08-26",
+                "html: reports/token-usage.html",
+                "threads: true",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    assert module.main(["--config", str(config)]) == 0
+
+    report = tmp_path / "reports" / "token-usage.html"
+    assert report.is_file()
+    assert "Token Usage Report" in report.read_text(encoding="utf-8")
+    drilldown_directory = report.parent / "token-usage-threads"
+    assert len(list(drilldown_directory.glob("*-token-detail.html"))) == 1
+    assert len(list(drilldown_directory.glob("*-raw.html"))) == 1
+
+
+def test_token_summary_threads_selects_detailed_text_without_html(tmp_path, capsys):
+    module = _load_module()
+    root = tmp_path / "logs"
+    root.mkdir()
+
+    assert module.main(
+        [
+            "--token-summary",
+            "--scan-directory",
+            str(root),
+            "--from",
+            "2026-08-25",
+            "--to",
+            "2026-08-26",
+            "--threads",
+        ]
+    ) == 0
+
+    output = capsys.readouterr().out
+    assert "filename" in output
+    assert "started_at" in output
+
+
+def test_token_summary_html_rounds_credit_units_to_whole_numbers():
+    module = _load_module()
+
+    assert module._token_summary_html_credits(464.14) == "464"
+    assert module._token_summary_html_credits(499.7) == "500"
+    assert module._token_summary_html_credits(12_345) == "12,345"
+
+
+def test_token_summary_details_display_precomputed_cost_components(tmp_path):
+    module = _load_module()
+    path = tmp_path / "logs" / "rollout.jsonl"
+    row = module._TokenSummaryRow(
+        path=path,
+        user_id="martin",
+        started_at=datetime(2026, 8, 25, 8, tzinfo=timezone.utc),
+        last_activity_at=datetime(2026, 8, 25, 9, tzinfo=timezone.utc),
+        usage=module.UsageTotals(
+            input_tokens=100,
+            cached_input_tokens=40,
+            uncached_input_tokens=60,
+            output_tokens=20,
+            reasoning_tokens=5,
+            processed_tokens=120,
+        ),
+        cost=module.CostAssessment(
+            status="estimated",
+            input_cost=0.0012,
+            cached_input_cost=0.00008,
+            output_cost=0.0004,
+            total_cost=0.00168,
+        ),
+    )
+
+    columns, values = module._token_summary_output([row], details=True)
+    rendered = dict(zip(columns, values[0], strict=True))
+
+    assert rendered["input_est_usd"] == "0.00120000"
+    assert rendered["cached_input_est_usd"] == "0.00008000"
+    assert rendered["output_est_usd"] == "0.00040000"
+    assert rendered["total_est_usd"] == "0.00168000"
+
+
+def test_token_summary_details_format_timestamps_as_local_ui_values(tmp_path):
+    module = _load_module()
+    started_at = datetime(2026, 8, 25, 12, 7, tzinfo=timezone.utc)
+    last_activity_at = datetime(2026, 8, 25, 13, 42, tzinfo=timezone.utc)
+    row = module._TokenSummaryRow(
+        path=tmp_path / "logs" / "rollout.jsonl",
+        user_id="martin",
+        started_at=started_at,
+        last_activity_at=last_activity_at,
+        usage=module.UsageTotals(processed_tokens=1),
+        cost=module.CostAssessment(status="estimated", total_cost=0),
+    )
+
+    columns, values = module._token_summary_output([row], details=True)
+    rendered = dict(zip(columns, values[0], strict=True))
+
+    assert module._token_summary_local_datetime(
+        started_at, timezone(timedelta(hours=-4))
+    ) == "2026-08-25 08:07"
+    assert rendered["started_at"] == started_at.astimezone().strftime(
+        "%Y-%m-%d %H:%M"
+    )
+    assert rendered["last_activity_at"] == last_activity_at.astimezone().strftime(
+        "%Y-%m-%d %H:%M"
+    )
+
+
+def test_token_summary_terminal_formats_tokens_and_currency(tmp_path, capsys):
+    module = _load_module()
+    row = module._TokenSummaryRow(
+        path=tmp_path / "logs" / "rollout.jsonl",
+        user_id="martin",
+        started_at=datetime(2026, 8, 25, 8, tzinfo=timezone.utc),
+        last_activity_at=datetime(2026, 8, 25, 9, tzinfo=timezone.utc),
+        usage=module.UsageTotals(processed_tokens=1_234_567),
+        cost=module.CostAssessment(status="estimated", total_cost=1_234.567),
+    )
+
+    module._print_token_summary([row], details=False)
+
+    output = capsys.readouterr().out
+    assert "1,234,567" in output
+    assert "$1,234.57" in output
+    assert module._token_summary_display_value("credits_used", "1234.5") == "1,234.50"
+    assert module._token_summary_display_value(
+        "sub_end", "87.5"
+    ) == "87.50%"
+
+
+def test_token_summary_classifies_mixed_funding_and_observed_credit_consumption(
+    tmp_path,
+):
+    module = _load_module()
+    root = tmp_path / "logs"
+    rollout = _write_codex_catalog_rollout(
+        root,
+        thread_id="mixed-funding",
+        timestamp="2026-08-18T12:00:00Z",
+        request="Mixed funding task",
+        workspace="/workspace/mixed",
+    )
+    records = [
+        {
+            "timestamp": "2026-08-18T12:00:00Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.6-sol", "turn_id": "mixed-turn"},
+        },
+        {
+            "timestamp": "2026-08-18T12:00:01Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 1_000_000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 1_000_000,
+                    }
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": 50.0},
+                    "credits": {"has_credits": False, "balance": "0"},
+                    "plan_type": "pro",
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-18T12:00:02Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 2_000_000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 2_000_000,
+                    }
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": 100.0},
+                    "credits": {"has_credits": True, "balance": "500"},
+                    "plan_type": "pro",
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-18T12:00:03Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 3_000_000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 3_000_000,
+                    }
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": 100.0},
+                    "credits": {"has_credits": True, "balance": "475"},
+                    "plan_type": "pro",
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-18T12:00:04Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": None,
+                "rate_limits": {
+                    "primary": None,
+                    "credits": {"has_credits": False, "balance": "0"},
+                    "plan_type": None,
+                },
+            },
+        },
+        {
+            "timestamp": "2026-08-18T12:00:05Z",
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": 4_000_000,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": 4_000_000,
+                    }
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": 100.0},
+                    "credits": {"has_credits": False, "balance": "0"},
+                    "plan_type": "pro",
+                },
+            },
+        },
+    ]
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.writelines(json.dumps(record) + "\n" for record in records)
+
+    rows = module._token_summary_rows(
+        [root],
+        from_time=datetime(2026, 8, 18, tzinfo=timezone.utc),
+        to_time=datetime(2026, 8, 19, tzinfo=timezone.utc),
+    )
+    columns, values = module._token_summary_output(rows, details=True)
+    rendered = dict(zip(columns, values[0], strict=True))
+
+    assert rendered["plan"] == "pro, credits"
+    assert rendered["sub_tokens"] == 2_000_000
+    assert rendered["sub_est_usd"] == "10.00000000"
+    assert rendered["sub_start"] == "50.00000000"
+    assert rendered["sub_end"] == "100.00000000"
+    assert rendered["sub_remaining"] == "0.00000000"
+    assert rendered["credit_tokens"] == 2_000_000
+    assert rendered["credit_est_usd"] == "10.00000000"
+    assert rendered["credits_start"] == "500.00000000"
+    assert rendered["credits_end"] == "0.00000000"
+    assert rendered["credits_used"] == "500.00000000"
+    assert rendered["credits_remaining"] == "0.00000000"
+    assert rendered["processed_tokens"] == 4_000_000
+    assert rendered["total_est_usd"] == "20.00000000"
+
+
+def test_token_summary_requires_observed_credit_activation_for_credit_tokens():
+    module = _load_module()
+    events = [
+        module._TokenFundingEvent(
+            event_timestamp=f"2026-08-18T12:00:0{index}Z",
+            source_path="/logs/rollout.jsonl",
+            source_ordinal=index,
+            usage=module.UsageTotals(processed_tokens=100),
+            model="gpt-5.6-sol",
+            plan_type="pro",
+            subscription_used_percent=used_percent,
+            credit_balance=0.0,
+            has_credits=False,
+        )
+        for index, used_percent in enumerate((99.0, 100.0, 75.0), start=1)
+    ]
+
+    classified = module._token_summary_classify_events(events)
+
+    assert [event.funding_source for event in classified] == [
+        "subscription",
+        "subscription",
+        "subscription",
+    ]
+    funding = module._token_summary_funding(classified)
+    assert funding["plan_labels"] == ("pro",)
+    assert funding["subscription_usage"].processed_tokens == 300
+    assert funding["credit_usage"].processed_tokens == 0
+    sub_start, sub_end, *_ = module._token_summary_limit_values(classified)
+    assert sub_start == 99.0
+    assert sub_end == 100.0
+
+
+def test_token_summary_zero_credit_balance_has_consistent_zero_values(
+    tmp_path,
+):
+    module = _load_module()
+    subscription_usage = module.UsageTotals(processed_tokens=100)
+    row = module._TokenSummaryRow(
+        path=tmp_path / "logs" / "rollout.jsonl",
+        user_id="martin",
+        started_at=datetime(2026, 8, 16, tzinfo=timezone.utc),
+        last_activity_at=datetime(2026, 8, 16, 1, tzinfo=timezone.utc),
+        usage=subscription_usage,
+        cost=module.CostAssessment(status="unavailable"),
+        plan_labels=("pro",),
+        subscription_usage=subscription_usage,
+        funding_events=(
+            module._TokenFundingEvent(
+                event_timestamp="2026-08-16T00:30:00Z",
+                source_path=str(tmp_path / "logs" / "rollout.jsonl"),
+                source_ordinal=1,
+                usage=subscription_usage,
+                plan_type="pro",
+                funding_source="subscription",
+                subscription_used_percent=100.0,
+                credit_balance=0.0,
+                has_credits=False,
+            ),
+        ),
+    )
+
+    columns, values = module._token_summary_output([row], details=False)
+    rendered = dict(zip(columns, values[0], strict=True))
+
+    assert rendered["plan"] == "pro"
+    assert rendered["credit_tokens"] == 0
+    assert rendered["credit_est_usd"] == "0.00000000"
+    assert rendered["credits_used"] == "0.00000000"
+    assert rendered["credits_remaining"] == "0.00000000"
+    assert module._cost_value(None) == "0.00000000"
+
+
+def test_token_summary_deduplicates_concurrent_stale_credit_balances(tmp_path):
+    module = _load_module()
+    root = tmp_path / "logs"
+    first = _write_codex_catalog_rollout(
+        root,
+        thread_id="first-credit",
+        timestamp="2026-08-18T12:00:00Z",
+        request="First credit task",
+        workspace="/workspace/first",
+    )
+    second = _write_codex_catalog_rollout(
+        root,
+        thread_id="stale-credit",
+        timestamp="2026-08-18T12:00:00Z",
+        request="Stale credit task",
+        workspace="/workspace/second",
+    )
+
+    for path, turn_id in ((first, "first-turn"), (second, "second-turn")):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": "2026-08-18T12:00:00Z",
+                        "type": "turn_context",
+                        "payload": {"model": "gpt-5.5", "turn_id": turn_id},
+                    }
+                )
+                + "\n"
+            )
+
+    def append_credit_event(
+        path,
+        timestamp,
+        balance,
+        total_input,
+        *,
+        has_credits=True,
+    ):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.write(
+                json.dumps(
+                    {
+                        "timestamp": timestamp,
+                        "type": "event_msg",
+                        "payload": {
+                            "type": "token_count",
+                            "info": {
+                                "total_token_usage": {
+                                    "input_tokens": total_input,
+                                    "cached_input_tokens": 0,
+                                    "output_tokens": 0,
+                                    "total_tokens": total_input,
+                                }
+                            },
+                            "rate_limits": {
+                                "primary": None,
+                                "credits": {
+                                    "has_credits": has_credits,
+                                    "balance": str(balance),
+                                },
+                                "plan_type": "pro" if has_credits else None,
+                            },
+                        },
+                    }
+                )
+                + "\n"
+            )
+
+    append_credit_event(first, "2026-08-18T12:00:01Z", 500, 1_000_000)
+    append_credit_event(
+        first,
+        "2026-08-18T12:00:02Z",
+        0,
+        2_000_000,
+        has_credits=False,
+    )
+    append_credit_event(second, "2026-08-18T12:00:03Z", 40, 1_000_000)
+    append_credit_event(
+        second,
+        "2026-08-18T12:00:04Z",
+        0,
+        2_000_000,
+        has_credits=False,
+    )
+
+    rows = module._token_summary_rows(
+        [root],
+        from_time=datetime(2026, 8, 18, tzinfo=timezone.utc),
+        to_time=datetime(2026, 8, 19, tzinfo=timezone.utc),
+    )
+    columns, values = module._token_summary_output(rows, details=False)
+    rendered = dict(zip(columns, values[0], strict=True))
+
+    assert rendered["credits_used"] == "500.00000000"
+    assert rendered["credits_remaining"] == "0.00000000"
+
+
+def test_token_summary_allocates_observed_credit_burn_by_weighted_token_cost(
+    tmp_path,
+):
+    module = _load_module()
+    first_root = tmp_path / "first"
+    second_root = tmp_path / "second"
+    first = _write_codex_catalog_rollout(
+        first_root,
+        thread_id="first-weighted-credit",
+        timestamp="2026-08-18T12:00:00Z",
+        request="First weighted credit task",
+        workspace="/workspace/first",
+    )
+    second = _write_codex_catalog_rollout(
+        second_root,
+        thread_id="second-weighted-credit",
+        timestamp="2026-08-18T12:00:00Z",
+        request="Second weighted credit task",
+        workspace="/workspace/second",
+    )
+
+    def token_record(
+        timestamp,
+        total_input,
+        *,
+        used_percent,
+        balance,
+        has_credits,
+    ):
+        return {
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": {
+                    "total_token_usage": {
+                        "input_tokens": total_input,
+                        "cached_input_tokens": 0,
+                        "output_tokens": 0,
+                        "total_tokens": total_input,
+                    }
+                },
+                "rate_limits": {
+                    "primary": {"used_percent": used_percent},
+                    "credits": {
+                        "has_credits": has_credits,
+                        "balance": str(balance),
+                    },
+                    "plan_type": "pro",
+                },
+            },
+        }
+
+    first_records = [
+        {
+            "timestamp": "2026-08-18T12:00:00Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.4", "turn_id": "first-turn"},
+        },
+        token_record(
+            "2026-08-18T12:00:01Z",
+            1_000_000,
+            used_percent=50,
+            balance=0,
+            has_credits=False,
+        ),
+        token_record(
+            "2026-08-18T12:00:03Z",
+            2_000_000,
+            used_percent=100,
+            balance=100,
+            has_credits=True,
+        ),
+        token_record(
+            "2026-08-18T12:00:06Z",
+            3_000_000,
+            used_percent=100,
+            balance=0,
+            has_credits=False,
+        ),
+        token_record(
+            "2026-08-18T12:00:07Z",
+            4_000_000,
+            used_percent=1,
+            balance=0,
+            has_credits=False,
+        ),
+    ]
+    second_records = [
+        {
+            "timestamp": "2026-08-18T12:00:02Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.5", "turn_id": "second-turn"},
+        },
+        token_record(
+            "2026-08-18T12:00:04Z",
+            1_000_000,
+            used_percent=100,
+            balance=100,
+            has_credits=True,
+        ),
+        token_record(
+            "2026-08-18T12:00:05Z",
+            2_000_000,
+            used_percent=100,
+            balance=75,
+            has_credits=True,
+        ),
+    ]
+    for path, records in ((first, first_records), (second, second_records)):
+        with path.open("a", encoding="utf-8") as handle:
+            handle.writelines(json.dumps(record) + "\n" for record in records)
+
+    rows = module._token_summary_rows(
+        [first_root, second_root],
+        from_time=datetime(2026, 8, 18, tzinfo=timezone.utc),
+        to_time=datetime(2026, 8, 19, tzinfo=timezone.utc),
+    )
+    columns, values = module._token_summary_output(rows, details=True)
+    rendered = {
+        row[2]: dict(zip(columns, row, strict=True))
+        for row in values
+    }
+
+    assert rendered[first.name]["sub_tokens"] == 2_000_000
+    assert rendered[first.name]["credit_tokens"] == 2_000_000
+    assert rendered[first.name]["credits_used"] == "33.33333333"
+    assert rendered[second.name]["sub_tokens"] == 0
+    assert rendered[second.name]["credit_tokens"] == 2_000_000
+    assert rendered[second.name]["credits_used"] == "66.66666667"
+    assert sum(float(row["credits_used"]) for row in rendered.values()) == pytest.approx(100)
+
+
+def test_token_summary_counts_only_token_events_inside_selected_range(tmp_path):
+    module = _load_module()
+    root = tmp_path / "logs"
+    rollout = _write_codex_catalog_rollout(
+        root,
+        thread_id="bounded-token-summary",
+        timestamp="2026-08-17T23:59:00Z",
+        request="Bounded task",
+        workspace="/workspace/bounded",
+    )
+    records = [
+        {
+            "timestamp": "2026-08-17T23:59:30Z",
+            "type": "turn_context",
+            "payload": {"model": "gpt-5.5", "turn_id": "bounded-turn"},
+        },
+    ]
+    for timestamp, total_input in (
+        ("2026-08-17T23:59:59Z", 1_000_000),
+        ("2026-08-18T12:00:00Z", 2_000_000),
+        ("2026-08-19T00:00:00Z", 3_000_000),
+    ):
+        records.append(
+            {
+                "timestamp": timestamp,
+                "type": "event_msg",
+                "payload": {
+                    "type": "token_count",
+                    "info": {
+                        "total_token_usage": {
+                            "input_tokens": total_input,
+                            "cached_input_tokens": 0,
+                            "output_tokens": 0,
+                            "total_tokens": total_input,
+                        }
+                    },
+                    "rate_limits": {
+                        "primary": {"used_percent": 50},
+                        "credits": {"has_credits": False, "balance": "0"},
+                        "plan_type": "pro",
+                    },
+                },
+            }
+        )
+    with rollout.open("a", encoding="utf-8") as handle:
+        handle.writelines(json.dumps(record) + "\n" for record in records)
+
+    rows = module._token_summary_rows(
+        [root],
+        from_time=datetime(2026, 8, 18, tzinfo=timezone.utc),
+        to_time=datetime(2026, 8, 19, tzinfo=timezone.utc),
+    )
+    columns, values = module._token_summary_output(rows, details=True)
+    rendered = dict(zip(columns, values[0], strict=True))
+
+    assert rendered["sub_tokens"] == 1_000_000
+    assert rendered["credit_tokens"] == 0
+    assert rendered["processed_tokens"] == 1_000_000
+    assert rendered["total_est_usd"] == "5.00000000"
+
+    empty_rows = module._token_summary_rows(
+        [root],
+        from_time=datetime(2026, 8, 20, tzinfo=timezone.utc),
+        to_time=datetime(2026, 8, 21, tzinfo=timezone.utc),
+    )
+
+    assert empty_rows == []

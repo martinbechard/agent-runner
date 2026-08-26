@@ -22,7 +22,7 @@ Task-ID-Evidence: runtime-supplied
 
 Agent Report is a local reporting system for recorded agent execution. It discovers local runs, normalizes evidence, supports bounded queries, and publishes privacy-bounded static artifacts.
 
-This intended architecture defines the whole-system frame. The Tauri application is the primary dynamic Codex interface. CLI and MCP remain first-class, independently runnable interfaces. All three interfaces share Python application-service semantics without adding a local HTTP server.
+This intended architecture defines the whole-system frame. The Tauri application is the primary dynamic Codex interface. CLI and MCP remain first-class, independently runnable interfaces. All three interfaces share Python application-service semantics. A development-only authenticated loopback adapter may expose the existing Tauri host to the Vite-served application for UI troubleshooting; it is not a shipped product interface or remote report service.
 
 The [functional specification](../requirements/functional/FR-001-agent-report-dynamic-app-and-static-export.md) owns actor-visible behavior. The [subsystem high-level design](../design/high-level/HLD-003-agent-report-dynamic-app-and-static-export.md) owns exact constituent components, operations, contracts, and implementation order.
 
@@ -49,7 +49,7 @@ tools/report/
 
 The desktop roots own presentation and native authority. The Rust roots own Codex discovery. The Python roots own normalization, metrics, privacy, shared application semantics, queries, sealing, and export.
 
-Runtime data uses these stable roots:
+Runtime data uses these initial defaults. Desktop configuration may replace the normalized event database folder and filename:
 
 ```text
 ~/.codex/
@@ -91,7 +91,7 @@ No open product questions are recorded for this architecture.
 - CLI exists primarily for report automation. MCP exists primarily for bounded drill-down and forensic investigation by an LLM. MCP queries, detail, and snapshot lifecycle do not require static generation.
 - The normalized event cache has a configurable 5 GiB default quota, exactly 5,368,709,120 bytes. It deterministically evicts least-recently-used closed, unprotected snapshots. It never evicts open or protected snapshots, never deletes source logs or the discovery cache, and does not expire snapshots by age. Cursor retention is seven days.
 - The first dynamic release is Codex-only. Existing non-Codex static adapters remain separate supported backends.
-- The dynamic workspace is Tauri-only. There is no standalone-browser dynamic runtime. Published static artifacts remain browser-readable from `file://`.
+- The shipped dynamic workspace is Tauri-only. A development-only browser harness may use deterministic fixtures or an authenticated `127.0.0.1` adapter backed by the same native host. Published static artifacts remain browser-readable from `file://`.
 
 ## Maintenance Notes
 
@@ -103,7 +103,7 @@ This architecture governs the local Agent Report system, its runtime surfaces, t
 
 HLD-003 governs leaf modules, exact operations, detailed snapshot and worker contracts, cursor and view rules, exporter contracts, and implementation steps. Component designs govern classes, internal SQLite tables, migration SQL, cursor encoding bytes, and DTO field definitions.
 
-Remote hosting, multi-user tenancy, source-log mutation, automatic filesystem watching, a local HTTP server, a Rust normalization rewrite, first-release dynamic non-Codex adapters, and a standalone-browser dynamic runtime are outside this architecture.
+Remote hosting, multi-user tenancy, source-log mutation, automatic filesystem watching, a production local HTTP server, a Rust normalization rewrite, first-release dynamic non-Codex adapters, and a shipped standalone-browser dynamic runtime are outside this architecture. The bounded development harness is the sole loopback exception.
 
 ```mermaid
 flowchart LR
@@ -190,7 +190,7 @@ Dependencies point inward. The report core does not depend on Tauri, MCP, CLI fo
 | Classic interactive renderer | Current rich Codex HTML and sequence generation for CLI and MCP `generate_report` | `tools/report/scripts/run-timeline.py` |
 | Streamlined static exporter | Bounded summary and complete directory generation | `tools/report/src/agent_report/static_export.py` |
 | Codex discovery engine | Sole discovery implementation | `tools/report/rust/agent-report-core/`, `tools/report/rust/agent-report-cli/` |
-| Normalized event repository | Disposable privacy-bounded query cache | `~/.codex/agent-report/report-events-v1.sqlite3` |
+| Normalized event repository | Disposable privacy-bounded query cache | Tauri-validated configured folder and `.sqlite3` filename; initial default `~/.codex/agent-report/report-events-v1.sqlite3` |
 | Discovery repository | Metadata-only discovery cache | `~/.codex/agent-report/rollout-discovery-v2.sqlite3` |
 
 ## Architecture Constraints
@@ -203,10 +203,10 @@ These stable identifiers are the parent constraints for HLD-003 and later compon
 | ARC-02 | The Codex-only dynamic workspace runs in Tauri. MCP and CLI remain independently runnable; CLI primarily automates reports, and MCP primarily supports bounded LLM forensic investigation. |
 | ARC-03 | Every entry point uses the same Python application-service semantics through a per-process service instance. |
 | ARC-04 | Rust is the sole Codex discovery engine. Python owns normalization, metrics, privacy, queries, sealing, and export. |
-| ARC-05 | Tauri owns native paths, windows, worker processes, forced cancellation, cache maintenance, and desktop publication. |
+| ARC-05 | Tauri owns native paths, a versioned atomically replaced desktop configuration file, windows, worker processes, forced cancellation, cache maintenance, and desktop publication. The webview owns only an editable draft and bounded display values or opaque native references. |
 | ARC-06 | The webview receives only bounded sanitized DTOs. It receives no filesystem authority or raw rollout record. |
 | ARC-07 | JSONL and `state_5.sqlite` are read-only data authorities. |
-| ARC-08 | `rollout-discovery-v2.sqlite3` remains metadata-only. `report-events-v1.sqlite3` is a separate disposable privacy-bounded cache with a configurable 5,368,709,120-byte default quota, deterministic LRU eviction of closed unprotected snapshots, no eviction of open/protected snapshots, no age expiration, and seven-day cursor retention. Maintenance never deletes sources or the discovery cache. |
+| ARC-08 | `rollout-discovery-v2.sqlite3` remains metadata-only. The normalized event repository is a separate disposable privacy-bounded `.sqlite3` cache at the Tauri-validated configured database folder and filename, with initial default `~/.codex/agent-report/report-events-v1.sqlite3`, a configurable 5,368,709,120-byte default quota, deterministic LRU eviction of closed unprotected snapshots, no eviction of open/protected snapshots, no age expiration, and seven-day cursor retention. Tauri passes the assembled path at trusted worker startup, not in per-operation DTOs. Database identity cannot change during active snapshot/report work. Maintenance never deletes sources, the previous configured database, or the discovery cache. |
 | ARC-09 | Snapshot coherence binds source revisions, scope, parser, pricing, and formatter versions, observation time, and live or sealed state. |
 | ARC-10 | Refresh is explicit. The initial system has no watcher or background poller. |
 | ARC-11 | The classic interactive renderer remains separate and serves the existing CLI default plus MCP `generate_report`. One shared streamlined exporter serves Tauri, explicit CLI `directory|summary` choices, and MCP `export_snapshot`. |
@@ -235,6 +235,7 @@ JSONL and `state_5.sqlite` are authoritative. Both SQLite caches and every expor
 | Boundary | Authority rule | Disclosure rule |
 |---|---|---|
 | Webview to Tauri | Tauri validates every request and owns paths, processes, windows, and publication. | Only bounded sanitized DTOs cross into the webview. |
+| Desktop configuration | Tauri validates native folder selections, filename syntax, active-work guards, schema migration, and atomic persistence. Configuration is not stored in webview local storage or in the normalized database it locates. | The webview receives editable display values and opaque folder references where required, not ambient filesystem authority. |
 | Tauri to Python worker | Tauri owns process lifetime and forced cancellation. The protocol owns versioned operations and terminal outcomes. | Standard output carries protocol records; diagnostics use bounded standard error or native logs. |
 | Application service to Codex sources | Configured roots and operating-system permissions constrain reads. | Sources remain read-only and are not copied without privacy normalization. |
 | MCP client to MCP server | Server configuration constrains roots, outputs, and inline size. | Cache paths and unrestricted source content remain undisclosed. |
@@ -247,7 +248,7 @@ stateDiagram-v2
   [*] --> Starting
   Starting --> Ready: Validate configuration, bundled discovery, protocol, and cache schema
   Starting --> Failed: Validation fails
-  Ready --> Opening: Accepted preflight
+  Ready --> Opening: Open selected report with configured scope
   Opening --> SnapshotReady: Publish coherent snapshot
   Opening --> Ready: Cancel or fail
   SnapshotReady --> Querying: Bounded request

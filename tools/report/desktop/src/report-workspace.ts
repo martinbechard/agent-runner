@@ -47,6 +47,7 @@ import {
   parseTurnPageDto,
   parseWorkspaceProgressDto,
 } from "./contracts";
+import { createReactHeatmapHost } from "./heatmap/react-heatmap-host";
 
 export const DEFAULT_PAGE_SIZE = 100;
 export const MAX_PAGE_SIZE = 500;
@@ -526,6 +527,23 @@ export function heatmapCellAccessibleName(
 
 export interface HeatmapGridCoordinate { readonly rowIndex: number; readonly columnIndex: number }
 
+export interface HeatmapPeriodBounds { readonly left: number; readonly width: number }
+export interface HeatmapVisiblePeriodWindow { readonly firstIndex: number; readonly lastIndex: number; readonly total: number }
+
+/** Describe the period columns intersecting the non-sticky part of a scrolled grid viewport. */
+export function visibleHeatmapPeriodWindow(
+  periods: readonly HeatmapPeriodBounds[],
+  viewportStart: number,
+  viewportEnd: number,
+): HeatmapVisiblePeriodWindow | null {
+  if (periods.length === 0 || !Number.isFinite(viewportStart) || !Number.isFinite(viewportEnd) || viewportEnd <= viewportStart) return null;
+  const visible = periods
+    .map((period, index) => ({ ...period, index }))
+    .filter((period) => period.width > 0 && period.left < viewportEnd && period.left + period.width > viewportStart);
+  if (visible.length === 0) return null;
+  return Object.freeze({ firstIndex: visible[0]?.index ?? 0, lastIndex: visible.at(-1)?.index ?? 0, total: periods.length });
+}
+
 /** Resolve roving-grid intent without requiring a DOM test environment. */
 export function moveHeatmapGridFocus(
   rowLengths: readonly number[],
@@ -868,7 +886,7 @@ function renderPage(
   return fragment;
 }
 
-interface HeatmapRenderActions {
+export interface HeatmapRenderActions {
   select(selection: HeatmapSelectedCell): void;
   drillDown(): void;
   stepBack(): void;
@@ -882,6 +900,21 @@ interface HeatmapRenderActions {
 
 function heatmapRangeLabel(range: HeatmapRange): string {
   return `${formatLocalInstant(range.fromTime)} to ${formatLocalInstant(range.toTime)}`;
+}
+
+function heatmapColumnTime(isoInstant: string): string {
+  const instant = new Date(isoInstant);
+  if (isoInstant === "" || Number.isNaN(instant.getTime())) throw new Error("Workspace instant is not a valid ISO instant.");
+  return new Intl.DateTimeFormat(undefined, { hour: "2-digit", minute: "2-digit", hour12: false }).format(instant);
+}
+
+function heatmapSequentialColor(intensity: number): string {
+  const value = Math.max(0, Math.min(1, intensity));
+  const stops = value <= 0.5
+    ? { from: [255, 243, 208], to: [245, 154, 58], position: value * 2 }
+    : { from: [245, 154, 58], to: [180, 35, 47], position: (value - 0.5) * 2 };
+  const channel = (index: number) => Math.round((stops.from[index] ?? 0) + ((stops.to[index] ?? 0) - (stops.from[index] ?? 0)) * stops.position);
+  return `rgb(${channel(0)} ${channel(1)} ${channel(2)})`;
 }
 
 function heatmapSelectionFor(row: HeatmapMatrixResultDto["rows"][number], cell: HeatmapMatrixCellDto): HeatmapSelectedCell {
@@ -949,6 +982,10 @@ function renderHeatmapEvidence(
 }
 
 function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInteractionState, actions: HeatmapRenderActions): Node {
+  return createReactHeatmapHost({ result, presentation, actions });
+}
+
+function renderLegacyHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInteractionState, actions: HeatmapRenderActions): Node {
   const section = document.createElement("section");
   section.className = "heatmap-panel";
 
@@ -957,12 +994,16 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
   controls.setAttribute("aria-label", "Heatmap controls");
   const selectedRow = presentation.selectedCell === null ? undefined : result.rows.find((row) => row.rowId === presentation.selectedCell?.rowId);
   const selectedColumn = selectedRow?.cells.findIndex((cell) => cell.startTime === presentation.selectedCell?.periodStartTime && cell.endTime === presentation.selectedCell?.periodEndTime) ?? -1;
-  const previous = textElement("button", "Previous") as HTMLButtonElement;
+  const previous = textElement("button", "‹") as HTMLButtonElement;
   previous.type = "button";
+  previous.title = "Previous selected period";
+  previous.setAttribute("aria-label", "Previous selected period");
   previous.disabled = selectedColumn <= 0;
   previous.addEventListener("click", () => actions.movePeriod("previous"));
-  const next = textElement("button", "Next") as HTMLButtonElement;
+  const next = textElement("button", "›") as HTMLButtonElement;
   next.type = "button";
+  next.title = "Next selected period";
+  next.setAttribute("aria-label", "Next selected period");
   next.disabled = selectedColumn < 0 || selectedColumn >= (selectedRow?.cells.length ?? 0) - 1;
   next.addEventListener("click", () => actions.movePeriod("next"));
   const drillIn = textElement("button", "Drill down") as HTMLButtonElement;
@@ -973,19 +1014,48 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
   stepBack.type = "button";
   stepBack.disabled = presentation.history.length === 0;
   stepBack.addEventListener("click", actions.stepBack);
-  const scrollLeft = textElement("button", "Scroll left") as HTMLButtonElement;
+  const scrollLeft = textElement("button", "‹") as HTMLButtonElement;
   scrollLeft.type = "button";
-  scrollLeft.addEventListener("click", () => section.querySelector<HTMLElement>(".heatmap-grid")?.scrollBy({ left: -320 }));
-  const scrollRight = textElement("button", "Scroll right") as HTMLButtonElement;
+  scrollLeft.title = "Previous visible periods";
+  scrollLeft.setAttribute("aria-label", "Previous visible periods");
+  scrollLeft.disabled = true;
+  scrollLeft.addEventListener("click", () => {
+    const grid = section.querySelector<HTMLElement>(".heatmap-grid");
+    const stickyWidth = grid?.querySelector<HTMLElement>('.heatmap-time-row [role="columnheader"]:first-child')?.offsetWidth ?? 0;
+    grid?.scrollBy({ left: -Math.max(136, grid.clientWidth - stickyWidth) });
+  });
+  const scrollRight = textElement("button", "›") as HTMLButtonElement;
   scrollRight.type = "button";
-  scrollRight.addEventListener("click", () => section.querySelector<HTMLElement>(".heatmap-grid")?.scrollBy({ left: 320 }));
-  controls.append(previous, next, drillIn, stepBack, scrollLeft, scrollRight);
+  scrollRight.title = "Next visible periods";
+  scrollRight.setAttribute("aria-label", "Next visible periods");
+  scrollRight.disabled = true;
+  scrollRight.addEventListener("click", () => {
+    const grid = section.querySelector<HTMLElement>(".heatmap-grid");
+    const stickyWidth = grid?.querySelector<HTMLElement>('.heatmap-time-row [role="columnheader"]:first-child')?.offsetWidth ?? 0;
+    grid?.scrollBy({ left: Math.max(136, grid.clientWidth - stickyWidth) });
+  });
+  const visiblePeriods = textElement("span", "Periods —");
+  visiblePeriods.className = "heatmap-period-position";
+  visiblePeriods.setAttribute("aria-live", "polite");
+  const selectionControls = document.createElement("div");
+  selectionControls.className = "heatmap-control-group heatmap-selection-controls";
+  selectionControls.hidden = presentation.selectedCell === null;
+  selectionControls.append(previous, next, drillIn);
+  const detailControls = document.createElement("div");
+  detailControls.className = "heatmap-control-group heatmap-history-controls";
+  detailControls.hidden = presentation.history.length === 0;
+  detailControls.append(stepBack);
+  const viewportControls = document.createElement("div");
+  viewportControls.className = "heatmap-control-group heatmap-viewport-controls";
+  viewportControls.hidden = true;
+  viewportControls.append(scrollLeft, visiblePeriods, scrollRight);
+  controls.append(selectionControls, detailControls, viewportControls);
 
   const settings = document.createElement("div");
   settings.className = "heatmap-settings";
   const modes = document.createElement("fieldset");
   modes.className = "heatmap-modes";
-  modes.append(textElement("legend", "Mode"));
+  modes.append(textElement("legend", "Measure"));
   for (const item of HEATMAP_MODES) {
     const button = textElement("button", item.label) as HTMLButtonElement;
     button.type = "button";
@@ -996,7 +1066,7 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
   settings.append(modes);
   const period = document.createElement("fieldset");
   period.className = "heatmap-granularity";
-  period.append(textElement("legend", "Period"));
+  period.append(textElement("legend", "Resolution"));
   for (const value of HEATMAP_RESOLUTIONS) {
     const button = textElement("button", `${value} min`) as HTMLButtonElement;
     button.type = "button";
@@ -1006,23 +1076,7 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
     period.append(button);
   }
   settings.append(period);
-  const rowsLabel = document.createElement("label");
-  rowsLabel.htmlFor = "heatmap-maximum-rows";
-  rowsLabel.append(textElement("span", "Maximum rows"));
-  const rowsInput = document.createElement("input");
-  rowsInput.id = "heatmap-maximum-rows";
-  rowsInput.type = "number";
-  rowsInput.min = "1";
-  rowsInput.max = String(MAX_HEATMAP_ROWS);
-  rowsInput.step = "1";
-  rowsInput.value = String(presentation.maximumRows);
-  rowsInput.addEventListener("change", () => actions.setMaximumRows(Number(rowsInput.value)));
-  rowsLabel.append(rowsInput);
-  settings.append(rowsLabel);
-  section.append(controls, settings);
-  const instructions = textElement("p", "Select a cell to inspect its evidence. Double-click or use Drill down for a finer matrix; use Step back or the context menu to return.");
-  instructions.className = "heatmap-instructions";
-  section.append(instructions);
+  section.append(settings, controls);
 
   const breadcrumb = document.createElement("nav");
   breadcrumb.className = "heatmap-breadcrumbs";
@@ -1040,23 +1094,33 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
   section.append(breadcrumb);
 
   const resolution = heatmapResolutionLabel(result.requestedResolutionMinutes, result.actualResolutionMinutes);
-  const rangeSummary = textElement("p", `${result.actualResolutionMinutes}-minute periods · ${result.totalCellCount} cells · end time exclusive.`);
-  rangeSummary.className = "heatmap-range-summary";
-  section.append(rangeSummary);
+  const visualLegend = document.createElement("aside");
+  visualLegend.className = "heatmap-visual-legend";
+  visualLegend.setAttribute("aria-label", "Heatmap visual legend");
+  const scaleKey = document.createElement("div");
+  scaleKey.className = "heatmap-scale-key";
+  scaleKey.setAttribute("aria-label", "Low to high intensity within each row");
+  const scaleSwatch = document.createElement("i");
+  scaleSwatch.setAttribute("aria-hidden", "true");
+  scaleKey.append(textElement("span", "Low"), scaleSwatch, textElement("span", "High per row"));
+  const stateKey = document.createElement("div");
+  stateKey.className = "heatmap-state-key";
+  for (const [className, label] of [["is-partial", "Partial"], ["is-unavailable", "Unavailable"]] as const) {
+    const item = document.createElement("span");
+    const swatch = document.createElement("i");
+    swatch.className = className;
+    swatch.setAttribute("aria-hidden", "true");
+    item.append(swatch, document.createTextNode(label));
+    stateKey.append(item);
+  }
+  visualLegend.append(scaleKey, stateKey);
+  section.append(visualLegend);
   if (resolution !== "") {
     const resolutionNote = textElement("p", resolution);
     resolutionNote.className = "heatmap-resolution-note";
     section.append(resolutionNote);
   }
   if (result.omittedRowCount > 0) section.append(textElement("p", `Showing ${result.rows.length} rows; ${result.omittedRowCount} rows omitted.`));
-  if (presentation.selectedCell !== null) {
-    const stateText = heatmapStateText(presentation.selectedCell.scale, presentation.selectedCell.valueState, presentation.selectedCell.formattedValue);
-    const explanation = stateText.explanation === null ? "" : ` ${stateText.explanation}`;
-    const selected = textElement("p", `Selected ${presentation.selectedCell.rowLabel}, ${heatmapRangeLabel({ fromTime: presentation.selectedCell.periodStartTime, toTime: presentation.selectedCell.periodEndTime })}: ${stateText.visibleValue}.${explanation}`);
-    selected.className = "heatmap-selection";
-    selected.setAttribute("role", "status");
-    section.append(selected);
-  }
   const grid = document.createElement("div");
   grid.className = "heatmap-grid";
   grid.setAttribute("role", "grid");
@@ -1064,14 +1128,14 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
   const timeRow = document.createElement("div");
   timeRow.className = "heatmap-time-row";
   timeRow.setAttribute("role", "row");
-  const corner = textElement("span", "Row / time");
+  const corner = textElement("span", "Metric");
   corner.setAttribute("role", "columnheader");
   timeRow.append(corner);
   for (const cell of result.rows[0]?.cells ?? []) {
     const heading = document.createElement("time");
     heading.setAttribute("role", "columnheader");
     heading.dateTime = cell.startTime;
-    heading.textContent = formatLocalInstant(cell.startTime);
+    heading.textContent = heatmapColumnTime(cell.startTime);
     heading.title = `${formatLocalInstant(cell.startTime)} to ${formatLocalInstant(cell.endTime)}`;
     timeRow.append(heading);
   }
@@ -1098,13 +1162,14 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
       if (row.scale.availability === "available") button.dataset.scaleBasis = row.scale.basis;
       if (cellPresentation.intensity !== null) {
         button.dataset.intensity = cellPresentation.intensity.toFixed(3);
-        button.style.setProperty("--heatmap-lightness", `${94 - cellPresentation.intensity * 38}%`);
+        button.style.setProperty("--heatmap-color", heatmapSequentialColor(cellPresentation.intensity));
+        button.style.setProperty("--heatmap-cell-ink", cellPresentation.intensity >= 0.78 ? "#ffffff" : "var(--ink)");
       }
       button.tabIndex = isSelected || (presentation.selectedCell === null && rowIndex === 0 && columnIndex === 0) ? 0 : -1;
       button.setAttribute("aria-selected", String(isSelected));
       const value = textElement("strong", cellPresentation.visibleValue);
-      const metadata = textElement("span", `${cell.valueState} · ${cell.contributingEvidenceCount} evidence${cell.supportingText === null ? "" : ` · ${cell.supportingText}`}`);
-      button.append(value, metadata);
+      button.append(value);
+      if (cell.supportingText !== null) button.append(textElement("span", cell.supportingText));
       button.setAttribute("aria-label", heatmapCellAccessibleName(result.mode, row.label, cell, row.scale, isSelected));
       button.addEventListener("click", () => actions.select(selection));
       button.addEventListener("dblclick", actions.drillDown);
@@ -1128,15 +1193,30 @@ function renderHeatmap(result: HeatmapMatrixResultDto, presentation: HeatmapInte
       });
       rowElement.append(button);
     }
-    const legend = document.createElement("div");
-    legend.className = "heatmap-row-legend";
-    legend.textContent = row.scale.availability === "available"
-      ? `${row.scale.basis.replaceAll("_", " ")} · minimum ${row.scale.minimum} · maximum ${row.scale.maximum}`
-      : "N/A — capacity unavailable. Capacity is unavailable. No percentage or color comparison is available.";
-    rowElement.append(legend);
     grid.append(rowElement);
   }
+  const updateVisiblePeriods = () => {
+    const headings = [...grid.querySelectorAll<HTMLElement>(".heatmap-time-row time")];
+    const stickyWidth = grid.querySelector<HTMLElement>('.heatmap-time-row [role="columnheader"]:first-child')?.offsetWidth ?? 0;
+    const gridBounds = grid.getBoundingClientRect();
+    const periodWindow = visibleHeatmapPeriodWindow(
+      headings.map((heading) => {
+        const bounds = heading.getBoundingClientRect();
+        return { left: bounds.left, width: bounds.width };
+      }),
+      gridBounds.left + stickyWidth,
+      gridBounds.right,
+    );
+    visiblePeriods.textContent = periodWindow === null
+      ? `Periods 0 of ${headings.length}`
+      : `Periods ${periodWindow.firstIndex + 1}–${periodWindow.lastIndex + 1} of ${periodWindow.total}`;
+    scrollLeft.disabled = grid.scrollLeft <= 1;
+    scrollRight.disabled = grid.scrollLeft >= grid.scrollWidth - grid.clientWidth - 1;
+    viewportControls.hidden = grid.scrollWidth <= grid.clientWidth + 1;
+  };
+  grid.addEventListener("scroll", updateVisiblePeriods, { passive: true });
   section.append(grid, renderHeatmapEvidence(presentation.evidence, actions, presentation.selectedCell));
+  globalThis.requestAnimationFrame?.(updateVisiblePeriods);
   return section;
 }
 
@@ -1689,6 +1769,7 @@ export function createReportWorkspace(elements: WorkspaceElements, transport: Wo
     if (exportPresentation !== null) elements.viewRegion.append(exportPresentation);
     const heatmap = route.surface === "heatmap" ? valueFrom(state.timeSeries) : null;
     const resolutionStatus = heatmap === null ? "" : heatmapResolutionLabel(heatmap.requestedResolutionMinutes, heatmap.actualResolutionMinutes);
+    elements.statusRegion.hidden = route.surface === "heatmap" && !busy && resolutionStatus === "";
     elements.statusRegion.textContent = busy
       ? `Loading ${definition.label}.`
       : resolutionStatus === "" ? `${definition.label} ready.` : `${definition.label} ready. ${resolutionStatus}`;

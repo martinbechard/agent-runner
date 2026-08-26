@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=80", "wheel>=0.45"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agent-report-cli"
+version = "1.0.0"
+description = "Generate standalone token-usage reports from local Codex logs."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.11"
+dependencies = ["pyyaml>=6.0", "tzdata>=2025.2"]
+
+[project.scripts]
+agent-report = "agent_report_cli.cli:main"
+
+[tool.setuptools.package-dir]
+"" = "src"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["agent_report_cli*"]
+
+[tool.setuptools.data-files]
+"share/agent-report" = [
+    "../scripts/run-timeline.py",
+    "../scripts/token_ledger.py",
+    "../tool-formatters.json",
+    "../../../docs/reference/openai-model-pricing.json",
+]

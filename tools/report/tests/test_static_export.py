@@ -508,7 +508,9 @@ def test_export_warnings_and_errors_are_structured_records(tmp_path: Path) -> No
 
 def test_export_directory_opens_from_file_url_with_network_disabled(tmp_path: Path) -> None:
     target, _, _ = export_to(tmp_path)
-    assert "Privacy-safe task" in urlopen((target / "index.html").as_uri()).read().decode()  # noqa: S310 - file URI only
+    index = urlopen((target / "index.html").as_uri()).read().decode()  # noqa: S310 - file URI only
+    assert "Privacy-safe task" in index
+    assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in index
     for relative in ("pages/agents/page-0001.html", "pages/heatmap/overview.html", "sequence/index.html"):
         assert "<h1" in urlopen((target / relative).as_uri()).read().decode()  # noqa: S310 - file URI only
 

@@ -38,7 +38,7 @@ def verify_release_wheel(
     wheel = _single_wheel(path).resolve()
     if not re.fullmatch(r"\d+\.\d+\.\d+", expected_version):
         raise ValueError(f"Invalid expected version: {expected_version}")
-    if not wheel.name.startswith(f"agent_report-{expected_version}-"):
+    if not wheel.name.startswith(f"agent_report_cli-{expected_version}-"):
         raise ValueError(
             f"Wheel filename does not contain version {expected_version}: {wheel.name}"
         )
@@ -54,6 +54,29 @@ def verify_release_wheel(
 
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
+        desktop_resources = [
+            name
+            for name in names
+            if "/agent_report_desktop/" in name
+            or "/desktop/" in name
+            or name.endswith((".app", ".msi", ".dmg"))
+        ]
+        if desktop_resources:
+            raise ValueError(
+                "Standalone CLI wheel contains desktop application files: "
+                + ", ".join(desktop_resources)
+            )
+        app_runtime_resources = [
+            name
+            for name in names
+            if "/agent_report/" in name
+            or name.endswith(("/mcp_server.py", "/report_worker.py"))
+        ]
+        if app_runtime_resources:
+            raise ValueError(
+                "Standalone CLI wheel contains app runtime files: "
+                + ", ".join(app_runtime_resources)
+            )
         metadata_names = [
             name for name in names if name.endswith(".dist-info/METADATA")
         ]
@@ -70,29 +93,35 @@ def verify_release_wheel(
 
         metadata = BytesParser().parsebytes(archive.read(metadata_names[0]))
         if (
-            metadata["Name"] != "agent-report"
+            metadata["Name"] != "agent-report-cli"
             or metadata["Version"] != expected_version
         ):
             raise ValueError(
                 "Wheel metadata identity mismatch: "
                 f"{metadata['Name']} {metadata['Version']}"
             )
+        provided_extras = {
+            value.casefold() for value in (metadata.get_all("Provides-Extra") or [])
+        }
+        if "desktop" in provided_extras:
+            raise ValueError(
+                "Standalone CLI wheel must not advertise a desktop install extra"
+            )
         wheel_metadata = archive.read(wheel_metadata_names[0]).decode("utf-8")
         if "Root-Is-Purelib: false" not in wheel_metadata:
             raise ValueError("Release wheel is incorrectly marked as pure Python")
 
         entry_points = archive.read(entry_point_names[0]).decode("utf-8")
-        required_entry_points = {
-            "agent-report = agent_report.cli:main",
-            "mcp-agent-report = agent_report.mcp_server:main",
+        console_entries = {
+            line.strip()
+            for line in entry_points.splitlines()
+            if line.strip() and not line.startswith("[")
         }
-        missing_entry_points = sorted(
-            value for value in required_entry_points if value not in entry_points
-        )
-        if missing_entry_points:
+        required_entry_points = {"agent-report = agent_report_cli.cli:main"}
+        if console_entries != required_entry_points:
             raise ValueError(
-                "Wheel is missing console entry points: "
-                + ", ".join(missing_entry_points)
+                "Wheel console entry points must contain only the standalone CLI: "
+                + ", ".join(sorted(console_entries))
             )
 
         windows_wheel = "-win_" in wheel.name
@@ -102,7 +131,7 @@ def verify_release_wheel(
         engine_paths = [
             name
             for name in names
-            if name.endswith(f"/agent_report/native/{engine_name}")
+            if name.endswith(f"/agent_report_cli/native/{engine_name}")
         ]
         if len(engine_paths) != 1:
             raise ValueError(
@@ -110,13 +139,9 @@ def verify_release_wheel(
                 f"{len(engine_paths)}"
             )
         required_resources = (
-            "/agent_report/application_service.py",
-            "/agent_report/event_cache.py",
-            "/agent_report/mcp_report.py",
-            "/agent_report/mcp_server.py",
-            "/agent_report/report_worker.py",
-            "/agent_report/static_export.py",
+            "/agent_report_cli/cli.py",
             "/share/agent-report/run-timeline.py",
+            "/share/agent-report/token_ledger.py",
         )
         missing_resources = [
             resource
@@ -127,6 +152,18 @@ def verify_release_wheel(
             raise ValueError(
                 "Wheel is missing runtime resources: " + ", ".join(missing_resources)
             )
+        license_paths = [
+            name for name in names if name.endswith(".dist-info/licenses/LICENSE")
+        ]
+        if len(license_paths) != 1:
+            raise ValueError(
+                "Wheel must contain exactly one MIT LICENSE file under dist-info/licenses"
+            )
+        license_text = archive.read(license_paths[0]).decode("utf-8")
+        if not license_text.startswith("MIT License\n") or (
+            "Copyright (c) 2026 Martin.Bechard@DevConsult.ca" not in license_text
+        ):
+            raise ValueError("Wheel MIT LICENSE content is invalid")
     return wheel
 
 
@@ -142,7 +179,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--expected-version",
         required=True,
-        help="Package version or agent-report-vVERSION release tag",
+        help="Package version or agent-report-cli-vVERSION release tag",
     )
     parser.add_argument(
         "--expected-platform",
@@ -150,7 +187,7 @@ def main(argv: list[str] | None = None) -> int:
         help="Required release target and exact wheel platform tag",
     )
     args = parser.parse_args(argv)
-    expected_version = args.expected_version.removeprefix("agent-report-v")
+    expected_version = args.expected_version.removeprefix("agent-report-cli-v")
     try:
         wheel = verify_release_wheel(
             args.path, expected_version, args.expected_platform

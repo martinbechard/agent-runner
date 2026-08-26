@@ -5,7 +5,11 @@
   "type": "module",
   "scripts": {
     "build:sidecar": "node scripts/build-renderer-sidecar.mjs",
-    "dev": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "dev": "node scripts/run-web-live.mjs",
+    "dev:vite": "vite --host 127.0.0.1 --port 1420 --strictPort",
+    "dev:fixture": "vite --host 127.0.0.1 --port 1420 --strictPort --open '/?transport=fixture'",
+    "dev:web": "node scripts/run-web-live.mjs",
+    "dev:web:live": "node scripts/run-web-live.mjs",
     "build": "tsc --noEmit && vite build",
     "test": "vitest run",
     "tauri:dev": "tauri dev --config src-tauri/tauri.sidecar.conf.json",
@@ -14,10 +18,17 @@
   },
   "dependencies": {
     "@tauri-apps/api": "2.11.1",
-    "@tauri-apps/plugin-dialog": "2.7.2"
+    "@tauri-apps/plugin-dialog": "2.7.2",
+    "react": "19.1.1",
+    "react-dom": "19.1.1"
   },
   "devDependencies": {
+    "@tailwindcss/postcss": "4.3.3",
     "@tauri-apps/cli": "2.11.4",
+    "@types/react": "19.1.16",
+    "@types/react-dom": "19.1.9",
+    "postcss": "8.5.6",
+    "tailwindcss": "4.3.3",
     "typescript": "7.0.2",
     "vite": "8.1.5",
     "vitest": "4.1.10"

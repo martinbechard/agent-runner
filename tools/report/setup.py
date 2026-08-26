@@ -57,7 +57,9 @@ class PlatformWheel(bdist_wheel):
 
     def get_tag(self) -> tuple[str, str, str]:
         _, _, platform = super().get_tag()
-        if sys.platform == "darwin" and platform.endswith("_universal2"):
+        if sys.platform == "darwin" and platform.endswith(
+            ("_arm64", "_universal2")
+        ):
             platform = "macosx_11_0_arm64"
         return "py3", "none", platform
 

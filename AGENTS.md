@@ -19,3 +19,14 @@
 
 - **RULE:** Codex SHOULD NOT reclassify files that already exist unless the task is specifically about moving or renaming them.
   - **BECAUSE:** The placement mechanism is for new-file decisions; routine edits should not trigger unnecessary file churn.
+
+## 2. Project Configuration
+
+- **RULE:** Read [PROJECT.yaml](PROJECT.yaml) before creating a file, selecting a work-item workflow, or routing work to a project role.
+  - **BECAUSE:** It records the selected file-backed persistence and main-branch completion workflow.
+
+- **RULE:** Exclude `.archive/` from active project evidence and technology detection.
+  - **BECAUSE:** It contains historical and recursive test material, not active project scope.
+
+- **RULE:** Do not treat a technology-specific skill as configured until PROJECT.yaml records a successful detection and explicit confirmation.
+  - **BECAUSE:** The current detection result is blocked by a detector-registry error.

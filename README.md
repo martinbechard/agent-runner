@@ -155,7 +155,8 @@ Install the desktop dependencies and start Tauri development mode:
 ```bash
 cd tools/report
 python3 -m venv .venv
-.venv/bin/python -m pip install -e '.[desktop]'
+.venv/bin/python -m pip install -e .
+.venv/bin/python -m pip install pyinstaller==6.21.0
 cd desktop
 pnpm install
 pnpm tauri:dev

@@ -7,7 +7,7 @@
 
 ## Conventions
 
-- **ID prefixes:** FR (functional requirement), TR (technical requirement), HLD (high-level design), CD (component design), STR (strategy)
+- **ID prefixes:** FR (functional requirement), TR (technical requirement), ARC (architecture), HLD (high-level design), CD (component design), DS (design system), DSM (design-system conformance and migration), DSC (design-system component specification), DSV (design-system visualization specification), STR (strategy)
 - **ID format:** `<PREFIX>-<NNN>-<kebab-slug>.md` where NNN is 3-digit zero-padded (e.g. `FR-001-...`, `HLD-042-...`)
 - **Filename casing:**
   - Python modules: `snake_case.py`
@@ -105,6 +105,12 @@
 - **Filename pattern:** `TR-NNN-<slug>.md`
 - **Example:** `TR-001-python-version.md`
 
+### docs/architecture/
+- **Purpose:** Canonical Markdown architecture authorities for system-wide boundaries, technology choices, runtime roots, layers, dependency direction, data authority, trust boundaries, lifecycle policy, compatibility, cross-cutting concerns, risks, and invariants.
+- **Signals:** system context, project-wide constraint, technology stack, runtime-unit boundary, architectural layer, cross-cutting policy, system data authority, compatibility rule.
+- **Filename pattern:** `ARC-NNN-<slug>.md`
+- **Example:** `ARC-001-agent-report-dynamic-app-and-static-export.md`
+
 ### docs/feature-backlog/
 - **Purpose:** Active, dispatchable feature and enhancement work that has not
   yet been implemented or promoted into completed-backlog history.
@@ -136,8 +142,8 @@
 - **Example:** `claim-skill-enhancement-set.md`
 
 ### docs/design/high-level/
-- **Purpose:** System-wide decomposition — the components that make up the system and how they interact.
-- **Signals:** component diagram, sequence diagram, "the CLI talks to the server via", system overview, end-to-end data flow, three-tier description.
+- **Purpose:** Subsystem and feature-family designs that derive constituent components, interactions, contracts, and implementation order from functional requirements and a parent architecture.
+- **Signals:** subsystem boundary, constituent-component diagram, cross-module contract, subsystem lifecycle, implementation sequence, parent-constraint trace.
 - **Filename pattern:** `HLD-NNN-<slug>.md`
 - **Example:** `HLD-001-system-overview.md`
 
@@ -146,6 +152,40 @@
 - **Signals:** "this module exposes", single-component internals, "the X component", scoped data model, internal class/function decomposition.
 - **Filename pattern:** `CD-NNN-<slug>.md` for canonical markdown component designs; `CD-NNN-<slug>.yaml` for explicit YAML companions using the portable user-scope `structured-design` convention when the task specifically calls for the same component design in YAML form.
 - **Example:** `CD-001-cli-runner.md`
+
+### docs/design/system/
+- **Purpose:** Canonical, browsable product UI design-system suites. Each product or independently governed interface family has at most one active suite covering product character, foundations, shared tokens, layout, components, visualizations, accessibility, content, and governance through rendered examples.
+- **Signals:** linked HTML catalog, live specimens, primitive and semantic tokens, typography and spacing scales, responsive rules, component behavior, visualization semantics, and source inventory.
+- **Directory pattern:** `DS-NNN-<product-or-surface>/`; its `index.html` is the suite entry point and target-state authority.
+- **Example:** `DS-001-agent-report/index.html`
+- **Authority rule:** Search this directory before creating a design-system suite. Update the suitable active suite rather than creating a competing system. The suite describes the intended target state only; executable tokens remain in the owning frontend source tree and migration status belongs under `conformance/`.
+
+### docs/design/system/DS-NNN-<product-or-surface>/assets/
+- **Purpose:** Suite-local presentation assets shared by the rendered catalog pages.
+- **Signals:** design-system catalog CSS, lightweight specimen interactions, local illustrative assets.
+- **Filename pattern:** descriptive filenames such as `design-system.css` and `design-system.js`.
+- **Authority rule:** These assets demonstrate and document the design system. They must not silently become runtime application source.
+
+### docs/design/system/conformance/
+- **Purpose:** Current implementation-to-target mappings, prioritized UI updates, migration sequencing, and retained conformance evidence.
+- **Signals:** baseline observations, gap IDs, affected surfaces, target rules, priority, implementation status, and verification evidence.
+- **Filename pattern:** `DSM-NNN-<product-or-surface>-conformance-and-migration.md`.
+- **Example:** `DSM-001-agent-report-conformance-and-migration.md`
+- **Authority rule:** A `DSM-*` artifact links to the active `DS-*` suite and may not redefine the intended visual target.
+
+### docs/design/system/components/
+- **Purpose:** Child specifications for reusable or product-critical UI components whose anatomy, variants, states, content, responsive behavior, accessibility, and token consumption need durable detail beyond the canonical design-system document.
+- **Signals:** button or input family, application shell, navigation, dialog, data table, product-specific interactive component, component state matrix.
+- **Filename pattern:** `DSC-NNN-<component>.md`.
+- **Example:** `DSC-001-heatmap-controls.md`
+- **Authority rule:** A component specification elaborates one linked `DS-*` authority and cannot override it silently.
+
+### docs/design/system/visualizations/
+- **Purpose:** Child specifications for charts and data displays with non-trivial scale, legend, units, comparison, uncertainty, unavailable-data, selection, or evidence semantics.
+- **Signals:** heatmap, timeline visualization, chart scale, legend contract, non-color encoding, data comparison boundary.
+- **Filename pattern:** `DSV-NNN-<visualization>.md`.
+- **Example:** `DSV-001-heatmap.md`
+- **Authority rule:** A visualization specification links to its governing `DS-*` authority and the product/data contract it visualizes.
 
 ### tools/prompt-runner/
 - **Purpose:** Package root for the prompt-runner tool itself. Use this path for tool-level packaging files such as `pyproject.toml`, the tool README, and other root files that define how prompt-runner is installed and presented as a product.
@@ -290,6 +330,13 @@
 - **Tests location:** `tools/report/tests/` -- mirror path, `test_<module>.py`.
 - **Example:** `tools/report/src/agent_report/cli.py`
 
+### tools/report/cli/
+- **Purpose:** Independent CLI-only distribution package for Agent Report. Use this path for wheel metadata, the minimal standalone launcher, CLI installation documentation, and the package-local MIT license. This package must not contain or advertise the Tauri application.
+- **Signals:** `agent-report-cli` wheel, standalone `agent-report` console entry point, platform-native discovery engine, CLI-only package metadata, macOS and Windows wheel instructions.
+- **Filename pattern:** fixed package-root files such as `pyproject.toml`, `setup.py`, `README.md`, and `LICENSE`; Python package modules use `snake_case.py` under `src/agent_report_cli/`.
+- **Tests location:** `tools/report/tests/` -- release-wheel boundary and installed-command tests.
+- **Example:** `tools/report/cli/src/agent_report_cli/cli.py`
+
 ### tools/report/scripts/
 - **Purpose:** Reporting scripts and direct-entry utilities that analyze or render run data across tools. Use this path when a script belongs to the reporting tool rather than to prompt-runner, methodology-runner, or generic repo maintenance.
 - **Signals:** timeline report generator, HTML report builder, run-log analyzer, reporting-specific CLI invoked as `python tools/report/scripts/...`.
@@ -329,6 +376,18 @@
 - **Signals:** Codex custom agent, `name =`, `description =`, `developer_instructions =`, `.toml` agent definition, reusable repo-local agent role, file meant to be linked or copied into `~/.codex/agents/`.
 - **Filename pattern:** `kebab-case.toml`.
 - **Example:** `.codex/agents/prompt-runner-generator.toml`
+
+### .codex/skills/<skill-name>/
+- **Purpose:** Repository-local Codex skills used directly by custom agents and
+  interactive Codex work in this checkout. Use this path for versioned skill
+  experiments that apply to this repository but have not been incorporated
+  into the shared development methodology.
+- **Signals:** project-scoped `SKILL.md`, local custom-agent dependency,
+  experimental UI or engineering guidance, bundled skill references, scripts,
+  or data that Codex must resolve from this checkout.
+- **Filename pattern:** `SKILL.md` inside a lowercase kebab-case skill directory;
+  preserve upstream bundled resource names when installing an external skill.
+- **Example:** `.codex/skills/frontend-design/SKILL.md`
 
 ### src/cli/
 - **Purpose:** Python command-line process source code.
@@ -489,6 +548,9 @@
 ## Change log
 
 <!-- The agent appends one line per taxonomy extension here, newest at top. -->
+- 2026-08-26 — tools/report/cli/ added — the stable command-line wheel needs a package and version boundary independent from the unfinished Tauri application.
+- 2026-08-14 — docs/design/system/ added — product UI design systems and their optional component and visualization specifications need one discoverable authority distinct from architecture, HLDs, implementation, and review evidence.
+- 2026-08-14 — docs/design/system/ rendered-suite and conformance categories added — product design systems require browsable visual specimens, while current-state gaps and migration status remain a separate non-authoritative artifact.
 - 2026-08-12 — docs/future-ideas/ added — deferred possibilities need a non-dispatchable home outside the active backlog lifecycle.
 - 2026-08-10 — .github/workflows/ added — GitHub-hosted CI and release publication need a canonical automation path distinct from local scripts.
 - 2026-07-15 — docs/holding/ added — cross-repository proposals need a visible handoff location that the local backlog runner will not dispatch.

@@ -32,6 +32,7 @@ DEFAULT_DIRECTORY_PAGE_SIZE = 500
 MAX_DIRECTORY_PAGES_PER_COLLECTION = 9_999
 STAGING_PREFIX = ".agent-report-export-"
 STALE_STAGING_SECONDS = 86_400
+COPYRIGHT_NOTICE = "© 2026 Martin.Bechard@DevConsult.ca · MIT License"
 
 SUMMARY_OMISSION_PRIORITY: tuple[str, ...] = (
     "recent_activity",
@@ -52,6 +53,7 @@ table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #77
 .metric-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(12rem, 1fr)); gap: .75rem; }
 .metric { border: 1px solid #777; border-radius: .35rem; padding: .75rem; }
 .empty { font-style: italic; } [hidden] { display: none !important; }
+.agent-report-copyright { margin-top: 2rem; padding-top: .75rem; border-top: 1px solid currentColor; opacity: .62; text-align: center; font: 10px/1.4 ui-monospace, monospace; }
 """
 
 REPORT_JS = """\
@@ -747,7 +749,8 @@ def _summary_document(
 <dt>Pricing digest</dt><dd>{_escape(provenance.pricing_digest)}</dd><dt>Formatter digest</dt><dd>{_escape(provenance.formatter_digest)}</dd>
 </dl></section><section><h2>Headline metrics</h2><div class="metric-grid">{metrics}</div></section>
 <section><h2>Warnings</h2><ul>{warnings}</ul></section>{optional}
-<section><h2>Omissions</h2><ul>{omitted}</ul></section></main>
+<section><h2>Omissions</h2><ul>{omitted}</ul></section>
+<footer class="agent-report-copyright">{COPYRIGHT_NOTICE}</footer></main>
 <script>{REPORT_JS}</script></body></html>\n"""
     return document.encode("utf-8")
 
@@ -971,7 +974,7 @@ def _page_shell(title: str, body: str, *, asset_prefix: str, index_prefix: str, 
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <title>{_escape(title)}</title><link rel="stylesheet" href="{asset_prefix}assets/report.css">
 <script src="{asset_prefix}assets/report.js" defer></script></head>
-<body><nav><a href="{index_prefix}index.html">Report index</a>{navigation}</nav><main><h1>{_escape(title)}</h1>{body}</main></body></html>\n""".encode("utf-8")
+<body><nav><a href="{index_prefix}index.html">Report index</a>{navigation}</nav><main><h1>{_escape(title)}</h1>{body}<footer class="agent-report-copyright">{COPYRIGHT_NOTICE}</footer></main></body></html>\n""".encode("utf-8")
 
 
 def _collection_navigation(folder: str, page: int, pages: int) -> str:

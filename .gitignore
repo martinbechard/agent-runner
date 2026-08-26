@@ -25,7 +25,24 @@ runs/
 .prompt-runner/
 
 # Local tool and scratch state
-.codex/
+.codex/*
+!.codex/agents/
+.codex/agents/*
+!.codex/agents/dev-ui-designer.toml
+!.codex/skills/
+.codex/skills/*
+!.codex/skills/frontend-design/
+!.codex/skills/frontend-design/**
+!.codex/skills/frontend-production-shadcn/
+!.codex/skills/frontend-production-shadcn/**
+!.codex/skills/ui-ux-pro-max/
+!.codex/skills/ui-ux-pro-max/**
+!.codex/skills/extract-design-md/
+!.codex/skills/extract-design-md/**
+!.codex/skills/design-system/
+!.codex/skills/design-system/**
+!.codex/skills/web-design-guidelines/
+!.codex/skills/web-design-guidelines/**
 tmp/
 relative/
 .archive/
@@ -34,6 +51,11 @@ relative/
 work/
 work/**/.git
 work/pr-021-run/
+
+# Local Agent Report verification outputs (may embed raw task logs)
+htmltest.html
+htmltest-threads/
+test.csv
 
 # macOS
 .DS_Store

@@ -168,7 +168,7 @@ fn derives_root_title_from_delegation_input_instead_of_xml_tags() {
 }
 
 #[test]
-fn infers_parent_from_initial_delegation_without_spawn_metadata() {
+fn keeps_delegation_only_task_outside_the_spawn_hierarchy() {
     let directory = TempDir::new().expect("create temporary directory");
     let path = directory.path().join("delegated-subagent.jsonl");
     write_lines(
@@ -197,7 +197,7 @@ fn infers_parent_from_initial_delegation_without_spawn_metadata() {
 
     let entry = &response.entries[0];
     let identity = entry.identity.as_ref().expect("rollout identity");
-    assert_eq!(identity.parent_thread_id, "coordinator");
+    assert_eq!(identity.parent_thread_id, "");
     assert_eq!(entry.task_title, "Build the shared native report engine");
     assert_eq!(entry.delegation_source_ids, vec!["coordinator"]);
 }

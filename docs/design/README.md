@@ -29,6 +29,28 @@ one owns, and the dependency order between them.
 This section lists the active design documents in the order they should
 usually be read.
 
+For product UI work, first search `docs/design/system/`. A `DS-*` rendered HTML
+suite is the canonical visual and interaction authority for its named product
+or surface. `DSM-*` documents track implementation conformance and migration;
+`DSC-*` and `DSV-*` documents elaborate components and visualizations. None of
+them overrides the linked suite. Executable tokens remain in the owning
+frontend source tree, and completed reviews remain under `docs/reviews/` as
+evidence rather than authority.
+
+- **FILE: FILE-DS-1** `system/DS-001-agent-report/index.html`
+  - **SYNOPSIS:** Browsable whole-application Agent Report target system with
+    foundations, shell, content, controls, data, states, visualization,
+    accessibility, variants, and live specimens.
+  - **DEPENDS-ON:** `high-level/HLD-003-agent-report-dynamic-app-and-static-export.md`
+    - **BECAUSE:** Product and workflow constraints bound the design system.
+
+- **FILE: FILE-DSM-1** `system/conformance/DSM-001-agent-report-conformance-and-migration.md`
+  - **SYNOPSIS:** Current implementation gaps, prioritized UI updates,
+    migration sequence, and verification evidence for conformance with
+    `FILE-DS-1`; it is not visual authority.
+  - **DEPENDS-ON:** `FILE-DS-1`
+    - **BECAUSE:** Conformance is measured against the target suite.
+
 - **FILE: FILE-1** `.prompt-runner/docs/design/components/CD-006-prompt-runner-core.md`
   - **SYNOPSIS:** Generic `prompt_runner` design.
   - **BECAUSE:** Every methodology-specific design depends on the
