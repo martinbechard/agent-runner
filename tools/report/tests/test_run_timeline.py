@@ -6823,6 +6823,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     )
     assert report.count(f'data-search="{expected_search}"') == 1
     assert '<div class="label">Credit usage</div><strong>500</strong>' in report
+    assert (
+        ".estimate,.credit-usage{align-self:stretch;"
+        "border-left:1px solid var(--line);padding-left:28px}"
+    ) in report
     assert '<a href="#folder-table">View 2 Threads</a>' in report
     assert "500 used · 0 remaining" in report
     assert "USD-equivalent usage per credit" in report

@@ -11350,7 +11350,7 @@ h1{{max-width:900px;margin:8px 0 10px;font:600 clamp(38px,6vw,76px)/.98 "Iowan O
 .receipt{{display:grid;grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(220px,.5fr));gap:28px;margin:34px 0;padding:26px;background:var(--sheet);border:1px solid var(--line);box-shadow:0 12px 40px rgba(20,32,43,.07)}}
 .receipt-total strong{{display:block;font:600 clamp(42px,7vw,82px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:-.07em}}
 .receipt-total span{{color:var(--muted)}}
-.estimate,.credit-usage{{align-self:end;border-left:1px solid var(--line);padding-left:28px}}
+.estimate,.credit-usage{{align-self:stretch;border-left:1px solid var(--line);padding-left:28px}}
 .estimate strong,.credit-usage strong{{display:block;font:600 32px/1.1 ui-monospace,SFMono-Regular,Menlo,monospace}}
 .estimate span,.credit-usage span{{color:var(--muted)}}
 .funding{{margin:28px 0 36px}}
