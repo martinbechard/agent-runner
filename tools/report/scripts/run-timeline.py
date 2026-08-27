@@ -11102,6 +11102,19 @@ def render_codex_rollout_html(
             f'href="{_escape_html_attribute(parent_report_url)}">View parent report</a>'
             "</aside>"
         )
+    cost_metric_label = (
+        "Recorded cost" if run.cost.status == "recorded" else "API-equivalent estimate"
+    )
+    cost_metric_value = (
+        f"${run.cost.total_cost:.2f} USD"
+        if run.cost.total_cost is not None
+        else "Unavailable"
+    )
+    cost_metric_note = (
+        ""
+        if run.cost.status == "recorded"
+        else '<span class="metric-detail">Not an actual charge or invoice.</span>'
+    )
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>{_escape_html(report_title)}</title>
 <style>
@@ -11396,7 +11409,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="metric"><div class="label">State</div><div class="value">{_escape_html(run.state)}</div></div>
 <div class="metric"><div class="label">Started</div><div class="value">{_local_time_html(run.wall_started_at)}</div></div>
 <div class="metric"><div class="label">Last activity</div><div class="value">{_local_time_html(run.wall_ended_at)}</div></div>
-<div class="metric"><div class="label">Estimate</div><div class="value">{_escape_html(_cost_summary(run.cost))}</div></div>
+<div class="metric"><div class="label">{_escape_html(cost_metric_label)}</div><div class="value">{_escape_html(cost_metric_value)}</div>{cost_metric_note}</div>
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{_format_compact_count(run.usage_totals.processed_tokens)}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
 {activity_metric_cards}

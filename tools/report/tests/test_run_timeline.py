@@ -1083,7 +1083,7 @@ def test_native_junie_session_reports_agents_usage_tools_and_redacted_results(tm
     html = module.render_html(document)
     markdown = module.render_codex_rollout_markdown(run)
     assert "Junie run" in html
-    assert "Recorded cost: $0.03 USD" in html
+    assert '<div class="label">Recorded cost</div><div class="value">$0.03 USD</div>' in html
     assert '<div class="label">Summed agent time</div>' not in html
     assert '<div class="label">Active interval union</div>' not in html
     assert "<summary>raw result</summary>" in html
@@ -1297,7 +1297,7 @@ def test_native_junie_ide_chain_reports_finished_tasks_without_cumulative_double
 
     html = module.render_html(document)
     assert "Junie run" in html
-    assert "Recorded cost: $0.30 USD" in html
+    assert '<div class="label">Recorded cost</div><div class="value">$0.30 USD</div>' in html
     assert '<div class="label">User tasks</div><div class="value">2</div>' in html
     assert "gpt-5.6-terra" in html
     assert "typescript" in html
@@ -2259,7 +2259,7 @@ def test_native_codex_outputs_are_privacy_safe_and_label_estimated_cost():
         assert "PRIVATE-FINAL-CONTENT" not in output
     assert run.cost.status == "estimated"
     assert "API-equivalent estimate" in outputs[-1]
-    assert "not an actual charge" in outputs[-1]
+    assert "not an actual charge" in outputs[-1].casefold()
     assert "Critical path:" not in outputs[-1]
 
 
@@ -3587,11 +3587,11 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     run.observed_at = "2026-07-16T22:15:00+00:00"
     html = module.render_codex_rollout_html(run)
     assert (
-        '<div class="label">Estimate</div><div class="value">'
-        "API-equivalent estimate: $917.35 USD "
-        "(estimate, not an actual charge or invoice)</div>"
+        '<div class="label">API-equivalent estimate</div>'
+        '<div class="value">$917.35 USD</div>'
+        '<span class="metric-detail">Not an actual charge or invoice.</span>'
     ) in html
-    assert html.count("not an actual charge or invoice") == 1
+    assert html.casefold().count("not an actual charge or invoice") == 1
     assert '<p class="notice">' not in html
     assert "<h2>Diagnostics</h2>" not in html
     assert "not an actual Codex charge or invoice" not in html
