@@ -6803,7 +6803,7 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "1,200,120" in report
     assert "gpt-5.5" in report
     assert rollout.name not in report
-    assert "<th>Folder</th>" not in report
+    assert report.count("<th>Folder</th>") == 1
     assert "<th>Filename</th>" not in report
     assert "Folder summary" in report
     assert "Usage by folder" in report
@@ -6818,8 +6818,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     ).astimezone().strftime("%Y-%m-%d %H:%M")
     assert expected_local_start in report
     assert "<th>Total tokens</th><th>Total estimate</th>" in report
+    assert "<th>Total estimate</th><th>Folder</th>" in report
+    assert str(root) in report
     expected_search = module._escape_html_attribute(
-        f"{module.getpass.getuser()} pro, credits"
+        f"{module.getpass.getuser()} pro, credits {root}".casefold()
     )
     assert report.count(f'data-search="{expected_search}"') == 1
     assert '<div class="label">Credit usage</div><strong>500</strong>' in report
@@ -6870,6 +6872,8 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
 
     folder_report = folder_pages[0].read_text(encoding="utf-8")
     assert "Threads in Folder" in folder_report
+    assert '<p class="folder-context"><span class="label">Folder</span>' in folder_report
+    assert str(root) in folder_report
     assert "HTML report task" not in folder_report
     assert "gpt-5.5" in folder_report
     assert "gpt-5.4" in folder_report
