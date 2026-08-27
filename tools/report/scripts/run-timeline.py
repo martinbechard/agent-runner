@@ -7477,6 +7477,23 @@ def _format_tokens_per_second(value: float | None) -> str:
     return f"{value:.2f} tok/s" if value is not None else "—"
 
 
+def _compaction_chart_markers(run: CodexRunMetrics) -> list[dict[str, object]]:
+    """Return the root thread's compactions in the shared trend-chart form."""
+
+    root_thread = next(
+        thread for thread in run.threads if thread.thread_id == run.root_thread_id
+    )
+    return [
+        {
+            "timestamp": _normalize_timestamp(compaction.event_timestamp),
+            "label": "Compaction",
+            "before": compaction.before_total_tokens,
+            "after": compaction.after_total_tokens,
+        }
+        for compaction in root_thread.compactions
+    ]
+
+
 def _render_trend_table_chart(
     view_id: str,
     label: str,
@@ -7607,15 +7624,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
                     ],
                 },
             ],
-            "markers": [
-                {
-                    "timestamp": _normalize_timestamp(compaction.event_timestamp),
-                    "label": "Compaction",
-                    "before": compaction.before_total_tokens,
-                    "after": compaction.after_total_tokens,
-                }
-                for compaction in root_thread.compactions
-            ],
+            "markers": _compaction_chart_markers(run),
             "empty_message": "No context-growth measurements are available.",
         },
     )
@@ -7702,7 +7711,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
                     ],
                 }
             ],
-            "markers": [],
+            "markers": _compaction_chart_markers(run),
             "empty_message": "No measured inference-rate data are available.",
         },
     )

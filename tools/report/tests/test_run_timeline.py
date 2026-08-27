@@ -1803,7 +1803,7 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
     assert run.inference_size_bands[0].call_count == 2
     html = module.render_codex_rollout_html(run)
     assert 'data-view-id="context-growth-view"' in html
-    assert '"label":"Compaction","before":50,"after":30' in html
+    assert html.count('"label":"Compaction","before":50,"after":30') == 2
     assert '"label":"Context used","color":"#2563a6"' in html
 
 
