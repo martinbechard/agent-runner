@@ -793,6 +793,9 @@ class CodexThreadMetrics:
     bash_skills_loaded: list[str] = field(default_factory=list)
     terminal_state: str = "indeterminate"
     source_path: str = ""
+    source_started_at: str = ""
+    source_last_observed_at: str = ""
+    source_terminal_state: str = "indeterminate"
     diagnostics: list[str] = field(default_factory=list)
 
 
@@ -3311,11 +3314,16 @@ def parse_codex_rollout(
         terminal_state = turns[-1].outcome
     else:
         terminal_state = "indeterminate"
+    source_started_at = min(timestamps) if timestamps else ""
+    source_last_observed_at = max(timestamps) if timestamps else ""
     return CodexThreadMetrics(
         thread_id=thread_id,
         parent_thread_id=parent_thread_id,
         thread_name=thread_name,
-        task_title=task_title,
+        task_title=(
+            task_title
+            or (_derived_task_title(activities) if parent_thread_id else "")
+        ),
         agent_path=agent_path,
         agent_role=agent_role,
         agent_nickname=agent_nickname,
@@ -3327,8 +3335,8 @@ def parse_codex_rollout(
         ),
         plan_type=plan_type,
         recorded_cost_usd=recorded_cost_usd,
-        started_at=min(timestamps) if timestamps else "",
-        last_observed_at=max(timestamps) if timestamps else "",
+        started_at=source_started_at,
+        last_observed_at=source_last_observed_at,
         token_totals=owned_usage,
         unattributed_usage=unattributed,
         responses=responses,
@@ -3344,6 +3352,9 @@ def parse_codex_rollout(
         bash_skills_loaded=sorted(bash_skills_loaded, key=str.casefold),
         terminal_state=terminal_state,
         source_path=str(path),
+        source_started_at=source_started_at,
+        source_last_observed_at=source_last_observed_at,
+        source_terminal_state=terminal_state,
         diagnostics=diagnostics,
     )
 
@@ -5963,11 +5974,7 @@ def _agent_assignment(thread: CodexThreadMetrics) -> str:
 
 
 def _agent_assignment_label(thread: CodexThreadMetrics) -> str:
-    assignment = (
-        thread.task_title
-        if not thread.parent_thread_id and thread.task_title
-        else thread.thread_name
-    )
+    assignment = thread.task_title or thread.thread_name
     if not assignment and thread.agent_path:
         assignment = thread.agent_path.rstrip("/").rsplit("/", 1)[-1]
     if not assignment:
@@ -6902,7 +6909,10 @@ def _sequence_repeat_metadata(
     return metadata
 
 
-def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
+def _render_codex_sequence_section(
+    run: CodexRunMetrics,
+    report_range_html: str = "",
+) -> str:
     """Render one offline SVG sequence view with linked event details."""
 
     if run.runtime.casefold() != "codex":
@@ -6927,6 +6937,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         "explanatory reasoning summaries using the same bounded, secret-redacted text "
         "as the turn details; opaque reasoning appears only as a content-unavailable marker."
         "</div></details></div>"
+        f"{report_range_html}"
         '<p class="execution-note">Read downward to follow who dispatched, resumed, interrupted, '
         "or completed work. Select an agent to focus it; use the +/− control beside a parent "
         "to collapse its descendants.</p>"
@@ -10026,6 +10037,7 @@ def render_codex_rollout_html(
     page_subtitle: str = "",
     page_action_links: list[tuple[str, str]] | None = None,
     thread_events_filenames: dict[str, str] | None = None,
+    report_time_range: tuple[datetime, datetime] | None = None,
     progress: ProgressCallback | None = None,
     worker_progress: WorkerProgressCallback | None = None,
     workers: int = 1,
@@ -10038,6 +10050,11 @@ def render_codex_rollout_html(
     if progress is not None:
         progress(80, "Rendering report summary", "Preparing headline metrics and agent inventory.")
     formatter_config = formatter_config or _load_tool_formatter_config()
+    report_range_html = (
+        _token_summary_report_range_html(*report_time_range)
+        if report_time_range is not None
+        else ""
+    )
     nav_html = ""
     if nav_links:
         nav_html = '<nav class="report-nav" aria-label="Breadcrumb">' + " › ".join(
@@ -10649,6 +10666,39 @@ def render_codex_rollout_html(
         thread_tool_rows_html = "".join(thread_tool_rows) or (
             f'<tr><td colspan="7">No {turn_plural} recorded</td></tr>'
         )
+        has_selected_activity = bool(
+            thread.turns
+            or thread.responses
+            or thread.activities
+            or thread.tool_intervals
+            or thread.mcp_calls
+            or thread.token_totals.processed_tokens
+        )
+        selected_activity_note = (
+            ""
+            if has_selected_activity or thread.thread_id == run.root_thread_id
+            else '<p><strong>No activity in the selected range.</strong> '
+            "Identity and assignment metadata below come from the complete source JSONL.</p>"
+        )
+        source_span = " — ".join(
+            value
+            for value in (
+                thread.source_started_at,
+                thread.source_last_observed_at,
+            )
+            if value
+        ) or "not recorded"
+        agent_source_metadata = (
+            '<div class="agent-source-metadata">'
+            f"{selected_activity_note}"
+            f'<div><strong>Thread ID:</strong> <code>{_escape_html(thread.thread_id)}</code></div>'
+            f'<div><strong>Parent thread ID:</strong> <code>{_escape_html(thread.parent_thread_id or "—")}</code></div>'
+            f'<div><strong>Task path:</strong> <code>{_escape_html(thread.agent_path or thread.thread_name or "—")}</code></div>'
+            f'<div><strong>Source JSONL:</strong> <code>{_escape_html(thread.source_path or "—")}</code></div>'
+            f'<div><strong>Recorded source span:</strong> {_escape_html(source_span)}</div>'
+            f'<div><strong>Recorded source state:</strong> {_escape_html(thread.source_terminal_state)}</div>'
+            "</div>"
+        )
         tool_call_overlays.append(
             f'<section id="{tool_call_overlay_id}" class="tool-call-overlay agent-tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="{tool_call_overlay_id}-title">'
             '<div class="tool-call-panel">'
@@ -10666,6 +10716,7 @@ def render_codex_rollout_html(
         thread_details[thread.thread_id] = (
             f'<tr id="{agent_detail_id}" class="agent-expanded-row" hidden>'
             '<td colspan="6">'
+            f"{agent_source_metadata}"
             f"<h3>{turn_activity_label}</h3>"
             '<div class="table-scroll"><table class="turn-table"><thead><tr>'
             f"<th>{turn_id_label}</th><th>T+</th>{optional_headers}"
@@ -10799,7 +10850,7 @@ def render_codex_rollout_html(
     )
     if progress is not None:
         progress(96, "Rendering sequence diagram", "Building thread messages, delegations, and lifecycle events.")
-    sequence_html = _render_codex_sequence_section(run)
+    sequence_html = _render_codex_sequence_section(run, report_range_html)
     sequence_document_html = (
         f"<!-- agent-sequence:start -->{sequence_html}<!-- agent-sequence:end -->"
         if sequence_html
@@ -11073,6 +11124,9 @@ td {{ font-size:.85em; }}
 .state-complete, .state-sealed {{ background:#e6f4ea; color:#24733b; }}
 .state-aborted, .state-failed {{ background:#fdecea; color:#b3261e; }}
 .state-active, .state-live {{ background:#fff3cd; color:#7a5b00; }}
+.report-range {{ margin:8px 0 16px; color:var(--muted); }}
+.agent-source-metadata {{ margin:0 0 14px; padding:12px; background:#f6f8f9; border-left:3px solid var(--line); overflow-wrap:anywhere; }}
+.agent-source-metadata code {{ white-space:normal; }}
 .model-pricing-overlay {{ display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:#fafbfc; }}
 .model-pricing-overlay:target {{ display:flex; }}
 .model-pricing-panel {{ width:min(1200px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; }}
@@ -11112,6 +11166,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {nav_html}
 <h1{report_title_attribute}>{_escape_html(report_title)}</h1>
 {run_label_html}
+{report_range_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_local_time_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 {view_nav_html}
 {parent_context_html}
@@ -12097,6 +12152,21 @@ def _token_summary_local_datetime(
     return value.astimezone(local_timezone).strftime("%Y-%m-%d %H:%M")
 
 
+def _token_summary_report_range_html(
+    from_time: datetime,
+    to_time: datetime,
+) -> str:
+    """Render the shared local half-open range label for generated reports."""
+
+    local_from = _token_summary_local_datetime(from_time)
+    local_to = _token_summary_local_datetime(to_time)
+    return (
+        '<p class="report-range"><strong>Selected range:</strong> '
+        f"{_escape_html(local_from)} inclusive → {_escape_html(local_to)} exclusive · local time"
+        "</p>"
+    )
+
+
 def _token_summary_groups(
     rows: list[_TokenSummaryRow],
 ) -> list[tuple[tuple[str, str], list[_TokenSummaryRow]]]:
@@ -12318,7 +12388,7 @@ def _render_token_summary_ledger_html(
         source_href=raw_path.name,
         subtitle_label="Thread Title",
         subtitle_value=thread_title,
-        explanation_html="",
+        explanation_html=_token_summary_report_range_html(from_time, to_time),
         explanation_name=None,
         nav_links=(
             ("Overall Usage", f"../{report_filename}"),
@@ -12451,7 +12521,7 @@ a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offs
 .eyebrow,.label,thead,.utility{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}
 .eyebrow{{color:var(--credit)}}
 h1{{max-width:900px;margin:8px 0 10px;font:600 clamp(38px,6vw,76px)/.98 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}
-.range{{margin:0;color:var(--muted);font-size:17px}}
+.report-range{{margin:0;color:var(--muted);font-size:17px}}
 .receipt{{display:grid;grid-template-columns:minmax(0,1.4fr) repeat(2,minmax(220px,.5fr));gap:28px;margin:34px 0;padding:26px;background:var(--sheet);border:1px solid var(--line);box-shadow:0 12px 40px rgba(20,32,43,.07)}}
 .receipt-total strong{{display:block;font:600 clamp(42px,7vw,82px)/1 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:-.07em}}
 .receipt-total span{{color:var(--muted)}}
@@ -12498,7 +12568,7 @@ footer{{margin-top:38px;padding-top:18px;border-top:1px solid var(--line);color:
 <header>
 <div class="eyebrow">Agent Report · usage receipt</div>
 <h1>Token Usage Report</h1>
-<p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
+{_token_summary_report_range_html(from_time, to_time)}
 </header>
 <section class="receipt" aria-label="Usage total">
 <div class="receipt-total"><div class="label">Processed tokens</div><strong>{total_tokens:,}</strong><span>{receipt_link} · plan: {plan}</span></div>
@@ -12569,6 +12639,8 @@ def _render_token_summary_group_html(
     detail_links: dict[Path, str],
     event_links: dict[Path, str],
     thread_titles: dict[Path, str],
+    from_time: datetime,
+    to_time: datetime,
     page_title: str = "Threads in Folder",
     eyebrow: str = "Agent Report · folder detail",
     folder_label: str | None = None,
@@ -12643,12 +12715,13 @@ def _render_token_summary_group_html(
 :root{{--ink:#14202b;--muted:#63717d;--paper:#f3f6f6;--sheet:#fff;--line:#d9e1e3;--accent:#d97736;--focus:#1167a8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
 .page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}.eyebrow{{margin-top:26px;color:var(--accent)}}
-h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}.folder-context{{margin:10px 0 4px;color:var(--muted);overflow-wrap:anywhere}}.folder-context .label{{margin-right:7px;color:var(--ink)}}.summary{{color:var(--muted);font-size:17px}}.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin:30px 0 13px}}.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
+h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}.report-range,.folder-context{{margin:10px 0 4px;color:var(--muted);overflow-wrap:anywhere}}.folder-context .label{{margin-right:7px;color:var(--ink)}}.summary{{color:var(--muted);font-size:17px}}.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin:30px 0 13px}}.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
 .search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+4),th:nth-child(-n+4),td:nth-child(n+6):nth-child(-n+9),th:nth-child(n+6):nth-child(-n+9){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.section-head{{display:block}}.search{{margin-top:12px}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.search{{display:none}}thead th{{position:static}}}}
 </style></head><body><main class="page">
 <nav class="nav" aria-label="Breadcrumb"><a href="../{_escape_html_attribute(quote(report_filename))}">Overall Usage</a></nav>
 <div class="eyebrow">{_token_summary_html_cell(eyebrow)}</div><h1>{_token_summary_html_cell(page_title)}</h1>
+{_token_summary_report_range_html(from_time, to_time)}
 {folder_context}
 <p class="summary">{thread_count:,} {thread_word} · {int(rollup['total_tokens']):,} processed tokens · {_token_summary_html_currency(rollup['total_est_usd'])} API-equivalent estimate</p>
 <section><div class="section-head"><div><div class="label">Thread summary</div><h2>Usage by thread</h2></div><label><span class="label">Filter rows</span><br><input id="thread-filter" class="search" type="search" placeholder="User, model, plan…"></label></div>
@@ -12731,7 +12804,7 @@ def _render_token_summary_thread_html(
 a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
 .page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav{{display:flex;gap:18px;align-items:center}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}
 .eyebrow{{margin-top:26px;color:var(--accent)}}h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}
-.source,.range,.note{{color:var(--muted);overflow-wrap:anywhere}}.summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:28px 0}}
+.source,.report-range,.note{{color:var(--muted);overflow-wrap:anywhere}}.summary{{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px;margin:28px 0}}
 .summary article{{padding:18px;background:var(--sheet);border-top:4px solid var(--accent)}}.summary strong{{display:block;font:600 25px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}}
 h2{{margin:32px 0 12px;font:600 27px/1.2 "Iowan Old Style","Palatino Linotype",Georgia,serif}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}
 table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+5),th:nth-child(-n+5){{text-align:left}}tbody tr:hover{{background:#f7fafb}}.empty{{padding:30px;text-align:center;color:var(--muted)}}
@@ -12739,7 +12812,7 @@ table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numer
 </style></head><body><main class="page">
 <nav class="nav" aria-label="Breadcrumb"><a href="../{_escape_html_attribute(quote(report_filename))}">Overall Usage</a> › <a href="{_escape_html_attribute(quote(threads_filename))}">Threads in Folder</a></nav>
 <div class="eyebrow">Agent Report · thread detail</div><h1>Thread Token Usage</h1>
-<p class="source">{_token_summary_html_cell(row.path)}</p><p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
+<p class="source">{_token_summary_html_cell(row.path)}</p>{_token_summary_report_range_html(from_time, to_time)}
 <section class="summary" aria-label="Thread totals"><article><div class="label">Processed tokens</div><strong>{row.usage.processed_tokens:,}</strong></article><article><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(row.cost.total_cost or 0)}</strong></article><article><div class="label">Allocated credit usage</div><strong>{_token_summary_html_credits(rollup['credits_used'])}</strong></article></section>
 <h2>Token event ledger</h2><p class="note">Each row is one recorded token event in the selected period. Zero-token rows preserve funding telemetry but do not add to the totals. Source-line links open an escaped local copy of the JSONL record.</p>
 <div class="table-wrap"><table><thead><tr><th>Local time</th><th>Source line</th><th>Model</th><th>Plan</th><th>Funding</th><th>Sub used</th><th>Credits available</th><th>Credits remaining</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(event_rows)}</tbody></table></div>
@@ -12856,6 +12929,7 @@ def _write_token_summary_html(
                 page_subtitle=raw_thread_title,
                 page_action_links=[("Log file", raw_path.name)],
                 thread_events_filenames=thread_events_filenames,
+                report_time_range=(from_time, to_time),
             )
             raw_path.write_text(
                 _with_copyright_footer(
@@ -12888,6 +12962,8 @@ def _write_token_summary_html(
                     detail_links=detail_links,
                     event_links=event_links,
                     thread_titles=thread_titles,
+                    from_time=from_time,
+                    to_time=to_time,
                     page_title="All Threads",
                     eyebrow="Agent Report · thread index",
                 )
@@ -12904,6 +12980,8 @@ def _write_token_summary_html(
                         detail_links=detail_links,
                         event_links=event_links,
                         thread_titles=thread_titles,
+                        from_time=from_time,
+                        to_time=to_time,
                         folder_label=key[1],
                     )
                 ),
@@ -17450,6 +17528,7 @@ def _write_codex_outputs(
     page_subtitle: str = "",
     page_action_links: list[tuple[str, str]] | None = None,
     thread_events_filenames: dict[str, str] | None = None,
+    report_time_range: tuple[datetime, datetime] | None = None,
     json_output: Path | None = None,
     turn_csv_output: Path | None = None,
     work_unit_csv_output: Path | None = None,
@@ -17472,6 +17551,7 @@ def _write_codex_outputs(
         page_subtitle=page_subtitle,
         page_action_links=page_action_links,
         thread_events_filenames=thread_events_filenames,
+        report_time_range=report_time_range,
         progress=_emit_report_progress if emit_progress else None,
         worker_progress=_emit_report_progress if emit_progress else None,
         workers=workers,

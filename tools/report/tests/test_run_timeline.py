@@ -7056,6 +7056,9 @@ def test_token_summary_html_writes_local_verification_report(
     compact_list_title = module._compact_display_text(raw_thread_title, 52)
     escaped_raw_title = module._escape_html_attribute(raw_thread_title)
     assert "All Threads" in all_threads_report
+    assert 'class="report-range"' in all_threads_report
+    assert "2026-08-25 00:00 inclusive" in all_threads_report
+    assert "2026-08-26 00:00 exclusive" in all_threads_report
     assert '>Overall Usage</a>' in all_threads_report
     assert "Token Usage Report</a>" not in all_threads_report
     assert "2 threads" in all_threads_report
@@ -7083,6 +7086,9 @@ def test_token_summary_html_writes_local_verification_report(
 
     folder_report = folder_pages[0].read_text(encoding="utf-8")
     assert "Threads in Folder" in folder_report
+    assert 'class="report-range"' in folder_report
+    assert "2026-08-25 00:00 inclusive" in folder_report
+    assert "2026-08-26 00:00 exclusive" in folder_report
     assert '>Overall Usage</a>' in folder_report
     assert "All Threads</a>" not in folder_report
     assert '<p class="folder-context"><span class="label">Folder</span>' in folder_report
@@ -7130,6 +7136,9 @@ def test_token_summary_html_writes_local_verification_report(
     assert "Cumulative total tokens" in detail
     assert "Cumulative cost" in detail
     assert "Local time" in detail
+    assert 'class="report-range"' in detail
+    assert "2026-08-25 00:00 inclusive" in detail
+    assert "2026-08-26 00:00 exclusive" in detail
     assert "UTC time" not in detail
     assert "Funding" in detail
     assert "Sub remaining" in detail
@@ -7175,6 +7184,9 @@ def test_token_summary_html_writes_local_verification_report(
     steps = matching_steps.read_text(encoding="utf-8")
     assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
     assert "<h1>Thread Events</h1>" in steps
+    assert 'class="report-range"' in steps
+    assert "2026-08-25 00:00 inclusive" in steps
+    assert "2026-08-26 00:00 exclusive" in steps
     assert (
         f'<p class="run-label" title="{escaped_raw_title}"><strong>Thread Title:</strong> '
         f'&quot;{module._escape_html(compact_thread_title)}&quot;'
@@ -7199,6 +7211,9 @@ def test_token_summary_html_writes_local_verification_report(
     )
     assert sequence_page.exists()
     sequence = sequence_page.read_text(encoding="utf-8")
+    assert 'class="report-range"' in sequence
+    assert "2026-08-25 00:00 inclusive" in sequence
+    assert "2026-08-26 00:00 exclusive" in sequence
     assert (
         f'data-participant-name="{module._escape_html_attribute(compact_thread_title)}"'
         in sequence
@@ -7407,7 +7422,23 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
         thread_id="grandchild-ungenerated",
         parent_thread_id="child-generated",
         timestamp="2026-08-23T22:00:00Z",
-        records=(token_record("2026-08-25T12:30:00Z", 7),),
+        records=(
+            {
+                "timestamp": "2026-08-25T11:25:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": "Audit the generated report links and summarize any broken targets.",
+                        }
+                    ],
+                },
+            },
+            token_record("2026-08-25T11:30:00Z", 7),
+        ),
     )
     write_rollout(
         "2026/08/25/rollout-one-sided.jsonl",
@@ -7484,6 +7515,14 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
     assert "one-sided" not in root_html
     assert "evidence-only" not in root_html
     assert "grandchild-ungenerated" in root_html
+    assert "Audit the generated report links and summarize any broken targets" in root_html
+    assert "grandchild-ungenerated" in root_html
+    assert "child-generated" in root_html
+    assert str(grandchild_path.resolve()) in root_html
+    assert "No activity in the selected range" in root_html
+    assert 'class="report-range"' in root_html
+    assert "2026-08-25 08:00 inclusive" in root_html
+    assert "2026-08-25 09:00 exclusive" in root_html
     assert f'href="{module.quote(child_page.name, safe="")}"' in root_html
     assert f'href="{module.quote(root_page.name, safe="")}"' not in root_html
     assert "grandchild-ungenerated-steps.html" not in root_html
