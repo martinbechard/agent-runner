@@ -10075,10 +10075,11 @@ def render_codex_rollout_html(
         else ""
     )
     nav_html = ""
-    if nav_links:
+    combined_nav_links = [*(nav_links or []), *(page_action_links or [])]
+    if combined_nav_links:
         nav_html = '<nav class="report-nav" aria-label="Breadcrumb">' + " › ".join(
             f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
-            for label, href in nav_links
+            for label, href in combined_nav_links
         ) + "</nav>"
     turn_count = sum(len(thread.turns) for thread in run.threads)
     unique_turn_count = len(
@@ -10823,12 +10824,6 @@ def render_codex_rollout_html(
         if report_title != full_report_title
         else ""
     )
-    page_actions_html = ""
-    if page_action_links:
-        page_actions_html = " · " + " · ".join(
-            f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
-            for label, href in page_action_links
-        )
     compact_page_subtitle = _compact_display_text(page_subtitle, 96)
     page_subtitle_attribute = (
         f' title="{_escape_html_attribute(page_subtitle)}"'
@@ -10838,7 +10833,7 @@ def render_codex_rollout_html(
     run_label_html = (
         f'<p class="run-label"{page_subtitle_attribute}>'
         '<strong>Thread Title:</strong> '
-        f'&quot;{_escape_html(compact_page_subtitle)}&quot;{page_actions_html}</p>'
+        f'&quot;{_escape_html(compact_page_subtitle)}&quot;</p>'
         if page_subtitle
         else (
             f'<p class="run-label">{_escape_html(run.run_label)}</p>'
@@ -10984,9 +10979,7 @@ td {{ font-size:.85em; }}
 .model-usage-table th:first-child, .model-usage-table td:first-child {{ white-space:normal; }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
 .generated-on {{ margin:4px 0 14px; color:#607d8b; font-size:.86em; }}
-.run-metadata {{ margin:12px 0 16px; }}
-.run-metadata .value {{ font-size:.92em; line-height:1.35; overflow-wrap:anywhere; }}
-.run-metadata code {{ font-size:.82em; }}
+.thread-id {{ margin:3px 0 0; color:#455a64; overflow-wrap:anywhere; }}
 .agent-table .agent-assignment-column {{ width:30%; }}
 .agent-table .agent-skills-column {{ width:15%; }}
 .agent-table .agent-count-column {{ width:10%; }}
@@ -11188,20 +11181,16 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </style></head><body>
 {nav_html}
 <h1{report_title_attribute}>{_escape_html(report_title)}</h1>
+<p class="thread-id"><strong>Thread ID:</strong> <code>{_escape_html(run.root_thread_id)}</code></p>
 <p class="generated-on"><strong>Generated On:</strong> {_local_time_html(report_generated_at)}</p>
 {run_label_html}
 {report_range_html}
-<div class="metrics run-metadata" aria-label="Run metadata">
+<div class="metrics" aria-label="Run metrics">
 <div class="metric"><div class="label">Runtime</div><div class="value">{_escape_html(run.runtime)} run</div></div>
-<div class="metric"><div class="label">Thread ID</div><div class="value"><code>{_escape_html(run.root_thread_id)}</code></div></div>
 <div class="metric"><div class="label">State</div><div class="value">{_escape_html(run.state)}</div></div>
 <div class="metric"><div class="label">Started</div><div class="value">{_local_time_html(run.wall_started_at)}</div></div>
 <div class="metric"><div class="label">Last activity</div><div class="value">{_local_time_html(run.wall_ended_at)}</div></div>
 <div class="metric"><div class="label">Estimate</div><div class="value">{_escape_html(_cost_summary(run.cost))}</div></div>
-</div>
-{view_nav_html}
-{parent_context_html}
-<div class="metrics">
 <div class="metric"><div class="label">Processed tokens</div><div class="value">{_format_compact_count(run.usage_totals.processed_tokens)}</div></div>
 <div class="metric"><div class="label">Agents used</div><div class="value">{len(run.threads):,}</div></div>
 {activity_metric_cards}
@@ -11211,6 +11200,8 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
 </div>
+{view_nav_html}
+{parent_context_html}
 <h2>Token composition</h2>
 <div class="token-composition" title="Processed token composition">
 <span class="token-segment fresh" style="width:{fresh_width:.3f}%"></span>
@@ -12964,8 +12955,7 @@ def _write_token_summary_html(
                     ("Overall Usage", f"../{destination.name}"),
                     ("Threads in Folder", group_page_name),
                 ],
-                page_title="Thread Events",
-                page_subtitle=raw_thread_title,
+                page_title=f'Thread Events: "{raw_thread_title}"',
                 page_action_links=[("Log file", raw_path.name)],
                 thread_events_filenames=thread_events_filenames,
                 report_time_range=(from_time, to_time),

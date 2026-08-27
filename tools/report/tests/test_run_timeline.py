@@ -1969,11 +1969,11 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Inference rate" in html
     assert "Runtime activity" in html
     assert "60.0%" in html
-    assert '<div class="metrics run-metadata" aria-label="Run metadata">' in html
+    assert '<div class="metrics" aria-label="Run metrics">' in html
     assert "<strong>Generated On:</strong>" in html
-    assert html.index('<div class="metrics run-metadata"') < html.index(
+    assert html.index('<div class="metrics" aria-label="Run metrics">') < html.index(
         '<nav class="view-nav"'
-    ) < html.index('<div class="metrics">')
+    )
     assert 'class="local-timestamp"' not in html
     assert "Intl.DateTimeFormat" in html
     assert "Direct telemetry" not in html
@@ -7244,7 +7244,13 @@ def test_token_summary_html_writes_local_verification_report(
 
     steps = matching_steps.read_text(encoding="utf-8")
     assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
-    assert "<h1>Thread Events</h1>" in steps
+    full_steps_title = f'Thread Events: "{raw_thread_title}"'
+    compact_steps_title = module._compact_report_title(full_steps_title)
+    assert f">{module._escape_html(compact_steps_title)}</h1>" in steps
+    assert (
+        f'<p class="thread-id"><strong>Thread ID:</strong> '
+        f'<code>html-report</code></p>' in steps
+    )
     assert 'class="report-range"' in steps
     assert 'aria-label="Filter range"' in steps
     assert "<strong>Filter range:</strong>" in steps
@@ -7259,23 +7265,17 @@ def test_token_summary_html_writes_local_verification_report(
     assert generated_match.group(2) == expected_generated_at.strftime(
         "%Y-%m-%d %H:%M local"
     )
-    assert (
-        f'<p class="run-label" title="{escaped_raw_title}"><strong>Thread Title:</strong> '
-        f'&quot;{module._escape_html(compact_thread_title)}&quot;'
-        in steps
-    )
-    steps_without_hover = steps.replace(
-        f'title="{escaped_raw_title}"',
-        "",
-    )
-    assert module._escape_html(raw_thread_title) not in steps_without_hover
-    assert module._escape_html(compact_thread_title) in steps
+    assert "<strong>Thread Title:</strong>" not in steps
     assert f'href="{matching_raw.name}">Log file</a>' in steps
     assert 'href="../token-usage.html">Overall Usage</a>' in steps
     assert f'href="{folder_pages[0].name}">Threads in Folder</a>' in steps
     assert "All Threads</a>" not in steps
-    assert steps.index(">Overall Usage</a>") < steps.index(">Threads in Folder</a>")
-    assert steps.index('aria-label="Breadcrumb"') < steps.index("<h1>Thread Events</h1>")
+    assert (
+        steps.index(">Overall Usage</a>")
+        < steps.index(">Threads in Folder</a>")
+        < steps.index(">Log file</a>")
+    )
+    assert steps.index('aria-label="Breadcrumb"') < steps.index("<h1")
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in steps
 
     sequence_page = matching_steps.with_name(
