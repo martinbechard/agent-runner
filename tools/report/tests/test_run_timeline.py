@@ -6863,6 +6863,7 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     all_threads_report = thread_index.read_text(encoding="utf-8")
     assert "All Threads" in all_threads_report
     assert "2 threads" in all_threads_report
+    assert all_threads_report.count(">View Usage</a>") == 2
     assert all_threads_report.count(">View Events</a>") == 2
     assert rollout.name not in all_threads_report
     assert second_rollout.name not in all_threads_report
@@ -6877,7 +6878,9 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "HTML report task" not in folder_report
     assert "gpt-5.5" in folder_report
     assert "gpt-5.4" in folder_report
-    assert '<th aria-label="Thread links"></th>' in folder_report
+    assert '<th aria-label="Usage links"></th>' in folder_report
+    assert '<th aria-label="Event links"></th>' in folder_report
+    assert folder_report.count(">View Usage</a>") == 2
     assert folder_report.count(">View Events</a>") == 2
     assert rollout.name not in folder_report
     assert second_rollout.name not in folder_report
@@ -6889,7 +6892,8 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
         page for page in detail_pages if rollout.name in page.read_text(encoding="utf-8")
     )
     detail = detail_page.read_text(encoding="utf-8")
-    assert "Thread Token Ledger" in detail
+    assert "Thread Token Usage" in detail
+    assert "Thread Token Ledger" not in detail
     assert rollout.name in detail
     assert "Column definitions and formulas" in detail
     assert "Field relationships" in detail
@@ -6915,7 +6919,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
         if page.name.startswith(detail_page.name.removesuffix("-token-detail.html"))
     )
     assert matching_raw.name in detail
-    assert f'href="{matching_steps.name}">View Steps</a>' in detail
+    assert matching_steps.name not in detail
+    assert "View Steps" not in detail
+    assert f'href="{detail_page.name}">View Usage</a>' in folder_report
+    assert f'href="{matching_steps.name}">View Events</a>' in folder_report
     assert "#L" in detail
     assert "../token-usage.html" in detail
     assert f'href="{folder_pages[0].name}">← Folder Threads</a>' in detail

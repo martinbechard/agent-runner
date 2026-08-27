@@ -11156,7 +11156,6 @@ def _render_token_summary_ledger_html(
     threads_filename: str,
     all_threads_filename: str,
     raw_path: Path,
-    steps_filename: str,
     ledger_csv_path: Path,
 ) -> str:
     """Render the audit-grade execution-cycle ledger for one thread."""
@@ -11223,7 +11222,7 @@ def _render_token_summary_ledger_html(
     return engine.render_html(
         headers,
         enriched_rows,
-        title="Thread Token Ledger",
+        title="Thread Token Usage",
         source_name=row.path.name,
         explanation_html="",
         explanation_name=None,
@@ -11231,7 +11230,6 @@ def _render_token_summary_ledger_html(
             ("← Folder Threads", threads_filename),
             ("All Threads", all_threads_filename),
             ("Token Usage Report", f"../{report_filename}"),
-            ("View Steps", steps_filename),
             ("Log file", raw_path.name),
         ),
         local_time=True,
@@ -11464,6 +11462,7 @@ def _render_token_summary_group_html(
     *,
     report_filename: str,
     detail_links: dict[Path, str],
+    event_links: dict[Path, str],
     page_title: str = "Threads in Folder",
     eyebrow: str = "Agent Report · folder detail",
     folder_label: str | None = None,
@@ -11484,14 +11483,16 @@ def _render_token_summary_group_html(
                 key=str.casefold,
             )
         ) or "unknown"
-        href = detail_links[row.path]
+        usage_href = detail_links[row.path]
+        events_href = event_links[row.path]
         search_value = f"{row.user_id} {detail['plan']} {models}".casefold()
         thread_rows.append(
             f'<tr data-search="{_escape_html_attribute(search_value)}">'
             f'<td class="nowrap">{_token_summary_html_cell(detail["started_at"])}</td>'
             f'<td class="nowrap">{_token_summary_html_cell(detail["last_activity_at"])}</td>'
             f"<td>{_token_summary_html_cell(row.user_id)}</td>"
-            f'<td><a href="{_escape_html_attribute(quote(href))}">View Events</a></td>'
+            f'<td><a href="{_escape_html_attribute(quote(usage_href))}">View Usage</a></td>'
+            f'<td><a href="{_escape_html_attribute(quote(events_href))}">View Events</a></td>'
             f"<td>{_token_summary_html_cell(detail['plan'])}</td>"
             f"<td>{_token_summary_html_cell(models)}</td>"
             f"<td>{int(detail['sub_tokens']):,}</td>"
@@ -11523,7 +11524,7 @@ def _render_token_summary_group_html(
 *{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
 .page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}.eyebrow{{margin-top:26px;color:var(--accent)}}
 h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}.folder-context{{margin:10px 0 4px;color:var(--muted);overflow-wrap:anywhere}}.folder-context .label{{margin-right:7px;color:var(--ink)}}.summary{{color:var(--muted);font-size:17px}}.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin:30px 0 13px}}.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
-.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+6),th:nth-child(-n+6){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
+.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+7),th:nth-child(-n+7){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.section-head{{display:block}}.search{{margin-top:12px}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.search{{display:none}}thead th{{position:static}}}}
 </style></head><body><main class="page">
 <nav class="nav"><a href="../{_escape_html_attribute(quote(report_filename))}">← Token Usage Report</a></nav>
@@ -11531,7 +11532,7 @@ h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino
 {folder_context}
 <p class="summary">{thread_count:,} {thread_word} · {int(rollup['total_tokens']):,} processed tokens · {_token_summary_html_currency(rollup['total_est_usd'])} API-equivalent estimate</p>
 <section><div class="section-head"><div><div class="label">Thread summary</div><h2>Usage by thread</h2></div><label><span class="label">Filter rows</span><br><input id="thread-filter" class="search" type="search" placeholder="User, model, plan…"></label></div>
-<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Thread links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
+<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Usage links"></th><th aria-label="Event links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
 </main><script>const filter=document.getElementById('thread-filter');filter?.addEventListener('input',()=>{{const query=filter.value.trim().toLocaleLowerCase();document.querySelectorAll('#thread-table tbody tr[data-search]').forEach(row=>{{row.hidden=!row.dataset.search.includes(query)}})}});</script></body></html>"""
 
 
@@ -11603,7 +11604,7 @@ def _render_token_summary_thread_html(
     local_to = _token_summary_local_datetime(to_time)
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Thread Token Detail</title>
+<title>Thread Token Usage</title>
 <style>
 :root{{--ink:#14202b;--muted:#63717d;--paper:#f3f6f6;--sheet:#fff;--line:#d9e1e3;--accent:#d97736;--focus:#1167a8}}
 *{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}
@@ -11616,8 +11617,8 @@ h2{{margin:32px 0 12px;font:600 27px/1.2 "Iowan Old Style","Palatino Linotype",G
 table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+5),th:nth-child(-n+5){{text-align:left}}tbody tr:hover{{background:#f7fafb}}.empty{{padding:30px;text-align:center;color:var(--muted)}}
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.summary{{grid-template-columns:1fr}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}thead th{{position:static}}}}
 </style></head><body><main class="page">
-<nav class="nav"><a href="{_escape_html_attribute(quote(threads_filename))}">← Threads</a><a href="../{_escape_html_attribute(quote(report_filename))}">Token Usage Report</a><a href="{_escape_html_attribute(quote(steps_filename))}">View Steps</a></nav>
-<div class="eyebrow">Agent Report · thread detail</div><h1>Thread Token Detail</h1>
+<nav class="nav"><a href="{_escape_html_attribute(quote(threads_filename))}">← Threads</a><a href="../{_escape_html_attribute(quote(report_filename))}">Token Usage Report</a></nav>
+<div class="eyebrow">Agent Report · thread detail</div><h1>Thread Token Usage</h1>
 <p class="source">{_token_summary_html_cell(row.path)}</p><p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
 <section class="summary" aria-label="Thread totals"><article><div class="label">Processed tokens</div><strong>{row.usage.processed_tokens:,}</strong></article><article><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(row.cost.total_cost or 0)}</strong></article><article><div class="label">Allocated credit usage</div><strong>{_token_summary_html_credits(rollup['credits_used'])}</strong></article></section>
 <h2>Token event ledger</h2><p class="note">Each row is one recorded token event in the selected period. Zero-token rows preserve funding telemetry but do not add to the totals. Source-line links open an escaped local copy of the JSONL record.</p>
@@ -11661,6 +11662,7 @@ def _write_token_summary_html(
             row.path: key for key, group_rows in grouped_rows for row in group_rows
         }
         detail_links: dict[Path, str] = {}
+        event_links: dict[Path, str] = {}
         for row in rows:
             stem = _token_summary_thread_stem(row)
             detail_path = thread_directory / f"{stem}-token-detail.html"
@@ -11681,7 +11683,7 @@ def _write_token_summary_html(
                 steps_run,
                 steps_path,
                 nav_links=[
-                    ("Token events", detail_path.name),
+                    ("Thread Token Usage", detail_path.name),
                     ("Folder Threads", group_page_name),
                     ("All Threads", all_threads_page_name),
                     ("Log file", raw_path.name),
@@ -11704,19 +11706,20 @@ def _write_token_summary_html(
                         threads_filename=group_page_name,
                         all_threads_filename=all_threads_page_name,
                         raw_path=raw_path,
-                        steps_filename=steps_path.name,
                         ledger_csv_path=ledger_csv_path,
                     )
                 ),
                 encoding="utf-8",
             )
             detail_links[row.path] = detail_path.name
+            event_links[row.path] = steps_path.name
         (thread_directory / all_threads_page_name).write_text(
             _with_copyright_footer(
                 _render_token_summary_group_html(
                     rows,
                     report_filename=destination.name,
                     detail_links=detail_links,
+                    event_links=event_links,
                     page_title="All Threads",
                     eyebrow="Agent Report · thread index",
                 )
@@ -11731,6 +11734,7 @@ def _write_token_summary_html(
                         group_rows,
                         report_filename=destination.name,
                         detail_links=detail_links,
+                        event_links=event_links,
                         folder_label=key[1],
                     )
                 ),

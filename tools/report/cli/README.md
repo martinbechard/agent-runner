@@ -10,6 +10,18 @@ from the matching GitHub release.
 
 ## Install
 
+On 64-bit Windows, download `install-agent-report.ps1` from the GitHub release
+and run it from PowerShell. It downloads the latest matching wheel without a
+GitHub login, verifies its published SHA-256 checksum, installs it, and checks
+the command:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\install-agent-report.ps1
+```
+
+To install a specific release, add `-Version`, for example
+`-Version 1.0.0`.
+
 On Apple Silicon macOS 11 or newer:
 
 ```bash

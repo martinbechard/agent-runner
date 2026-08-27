@@ -743,9 +743,9 @@ printable and has no external assets. CSV and HTML may be generated in the
 same invocation by supplying both options.
 
 The main HTML table uses the same per-folder grouping and totals as the default
-terminal report. It omits the folder path and replaces it with an unnamed link
-column, while retaining the folder's earliest **Started** and latest **Last
-activity** timestamps in local time. The link above the table shows the
+terminal report. It places the folder path at the right edge and uses an
+unnamed link column for thread navigation, while retaining the folder's
+earliest **Started** and latest **Last activity** timestamps in local time. The link above the table shows the
 report-wide thread count. Add
 `--threads` to make each folder row's **View N Threads** link open the threads
 for that folder:
@@ -760,14 +760,14 @@ agent-report --token-summary \
 
 The extra pages are written beside the main report in
 `token-usage-report-threads/`. A folder page keeps the detailed per-thread
-metrics and uses **View Events** to open that thread's execution-cycle token
-ledger. The ledger preserves raw token snapshots while grouping reasoning,
+metrics and shows its folder path below the title. **View Usage** opens the
+thread's **Thread Token Usage** register, while **View Events** opens the full
+Agent Report timeline. The usage register preserves raw token snapshots while grouping reasoning,
 messages, tool calls, and tool results into the calls they belong to. It
 includes field definitions, token formulas, cache-history arithmetic, per-call
-and cumulative cost, local timestamps, and subscription/credit telemetry. Each
-ledger also has **View Steps** for the full Agent Report timeline and **Log
-file** for an escaped, line-addressable copy of the original JSONL. A structured
-ledger CSV is generated beside the HTML.
+and cumulative cost, local timestamps, and subscription/credit telemetry. It
+also has **Log file** for an escaped, line-addressable copy of the original
+JSONL. A structured register CSV is generated beside the HTML.
 
 The ledger renderer and pricing card are bundled in the `agent-report` wheel;
 the installed command does not depend on a source checkout or an audit-report
