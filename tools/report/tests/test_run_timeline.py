@@ -1810,8 +1810,8 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
     assert run.inference_size_bands[0].label == "<128"
     assert run.inference_size_bands[0].call_count == 2
     html = module.render_codex_rollout_html(run)
-    assert 'data-view-id="context-growth-view"' in html
-    assert html.count('"label":"Compaction","before":50,"after":30') == 2
+    assert 'data-view-id="context-growth-view-0"' in html
+    assert html.count('"label":"Compaction","before":50,"after":30') == 3
     assert "concat(markerValues" not in html
     assert "points.map(function(point) { return point.value; }).concat([1])" in html
     assert '"label":"Context used","color":"#2563a6"' in html
@@ -1997,40 +1997,39 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "<td>60</td><td>60</td><td>60.0%</td>" in html
     assert "Context evolution" in html
     assert "Growth and compactions" not in html
-    assert 'data-view-id="context-growth-view"' in html
-    assert 'aria-label="Context evolution · root agent view"' in html
-    assert "Context evolution · root agent</summary>" in html
+    assert 'data-context-scope-select' in html
+    assert 'data-context-scope="context-agent-0"' in html
+    assert 'data-view-id="context-growth-view-0"' in html
     assert 'class="per-agent-context-table"' in html
     assert 'class="per-agent-context-agent-column"' in html
     assert ".per-agent-context-agent-column { width:320px; }" in html
-    assert 'id="context-growth-view-table" data-trend-panel="table" hidden' in html
-    assert 'id="context-growth-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
-    assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="false"' in html
-    assert 'data-trend-mode="chart" aria-controls="context-growth-view-chart" aria-pressed="true"' in html
+    assert 'id="context-growth-view-0-table" data-trend-panel="table" hidden' in html
+    assert 'id="context-growth-view-0-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
+    assert 'data-trend-mode="chart" aria-controls="context-growth-view-0-chart" aria-pressed="true"' in html
     assert '"label":"Context window","color":"#455a64","dash":"10 6"' in html
     assert '"label":"15-minute max"' not in html
     assert "Interval maxima remain available in the table view" in html
     assert "Bucket high" not in html
     assert "Response-size bands" in html
-    assert 'data-view-id="response-size-view"' in html
-    assert 'aria-label="Response-size distribution view"' in html
-    assert 'id="response-size-view-table" data-trend-panel="table" hidden' in html
-    assert 'id="response-size-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
-    assert 'data-trend-mode="table" aria-controls="response-size-view-table" aria-pressed="false"' in html
-    assert 'data-trend-mode="chart" aria-controls="response-size-view-chart" aria-pressed="true"' in html
+    assert 'data-view-id="response-size-view-0"' in html
+    assert 'id="response-size-view-0-table" data-trend-panel="table" hidden' in html
+    assert 'id="response-size-view-0-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
+    assert 'data-trend-mode="chart" aria-controls="response-size-view-0-chart" aria-pressed="true"' in html
     assert '"chart_type":"distribution"' in html
     assert '"label":"<128","calls":1,"output_tokens":10' in html
     assert "function renderDistributionChart()" in html
     assert 'if (data.chart_type === "distribution")' in html
     assert 'class:"trend-chart-bar", tabindex:0, role:"img", "aria-label":detail' in html
     assert '"Output tokens per response"' in html
-    assert 'data-view-id="inference-trend-view"' in html
+    assert 'data-inference-scope-select' in html
+    assert '<option value="all" selected>all agents</option>' in html
+    assert 'data-inference-scope="agent-0" hidden' in html
+    assert 'data-view-id="inference-trend-view-0"' in html
     assert 'aria-label="Inference rate over time · all agents view"' in html
     assert "15-minute trend · all agents ·" in html
-    assert 'id="inference-trend-view-table" data-trend-panel="table" hidden' in html
-    assert 'id="inference-trend-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
-    assert 'data-trend-mode="table" aria-controls="inference-trend-view-table" aria-pressed="false"' in html
-    assert 'data-trend-mode="chart" aria-controls="inference-trend-view-chart" aria-pressed="true"' in html
+    assert 'id="inference-trend-view-0-table" data-trend-panel="table" hidden' in html
+    assert 'id="inference-trend-view-0-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
+    assert 'data-trend-mode="chart" aria-controls="inference-trend-view-0-chart" aria-pressed="true"' in html
     assert '"label":"Inference rate","color":"#2563a6"' in html
     assert "function initializeTrendView(view)" in html
     assert 'setMode("chart");' in html

@@ -7552,11 +7552,15 @@ def _format_tokens_per_second(value: float | None) -> str:
     return f"{value:.2f} tok/s" if value is not None else "—"
 
 
-def _compaction_chart_markers(run: CodexRunMetrics) -> list[dict[str, object]]:
-    """Return the root thread's compactions in the shared trend-chart form."""
+def _compaction_chart_markers(
+    run: CodexRunMetrics, *, all_threads: bool = False
+) -> list[dict[str, object]]:
+    """Return selected compactions in the shared trend-chart form."""
 
-    root_thread = next(
-        thread for thread in run.threads if thread.thread_id == run.root_thread_id
+    threads = (
+        run.threads
+        if all_threads
+        else [next(thread for thread in run.threads if thread.thread_id == run.root_thread_id)]
     )
     return [
         {
@@ -7565,7 +7569,8 @@ def _compaction_chart_markers(run: CodexRunMetrics) -> list[dict[str, object]]:
             "before": compaction.before_total_tokens,
             "after": compaction.after_total_tokens,
         }
-        for compaction in root_thread.compactions
+        for thread in threads
+        for compaction in thread.compactions
     ]
 
 
@@ -7601,8 +7606,10 @@ def _render_trend_table_chart(
     )
 
 
-def _render_context_metrics(run: CodexRunMetrics) -> str:
-    """Render current and maximum context measurements compactly."""
+def _render_context_metrics_panel(
+    run: CodexRunMetrics, *, scope_label: str, id_suffix: str
+) -> str:
+    """Render one agent's context measurements and evolution."""
 
     summary = run.context_summary
     if summary.capacity <= 0 or summary.occupancy_percent is None:
@@ -7669,11 +7676,11 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         for bucket in run.context_trends
     ]
     context_chart = _render_trend_table_chart(
-        "context-growth-view",
-        "Context evolution · root agent",
+        f"context-growth-view-{id_suffix}",
+        f"Context evolution · {scope_label}",
         growth_table,
         {
-            "title": "Context evolution · root agent",
+            "title": f"Context evolution · {scope_label}",
             "description": (
                 "Root-agent context tokens over time with compaction events marked in orange. "
                 "Interval maxima remain available in the table view."
@@ -7704,8 +7711,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         },
     )
     return (
-        '<section id="context-usage" class="metric-view">'
-        '<div class="agents-heading"><h2>Context usage</h2></div>'
+        '<div class="scoped-metric-panel">'
         '<div class="metrics compact-metrics">'
         '<div class="metric"><div class="label">Average</div>'
         f'<div class="value">{summary.average_total_tokens:,}</div>'
@@ -7721,14 +7727,54 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         '<thead><tr><th>Agent</th><th>Current</th>'
         '<th>Remaining tokens</th><th>Max</th><th>Compactions</th><th>Updated</th>'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
-        '<details class="metric-details"><summary>Context evolution · root agent</summary>'
+        f'<details class="metric-details"><summary>Context evolution · {_escape_html(scope_label)}</summary>'
         f"{context_chart}"
-        "</details></section>"
+        "</details></div>"
     )
 
 
-def _render_inference_metrics(run: CodexRunMetrics) -> str:
-    """Render call timing and size-aware rate trends without claiming decoder telemetry."""
+def _render_context_metrics(run: CodexRunMetrics) -> str:
+    """Render selectable per-agent context telemetry."""
+
+    candidates = [thread for thread, _depth in _agent_inventory_threads(run) if thread.context_snapshots]
+    if not candidates:
+        return ""
+    options = []
+    panels = []
+    for index, thread in enumerate(candidates):
+        scope_id = f"context-agent-{index}"
+        label = _compact_agent_assignment_label(thread, 52)
+        scoped_run = replace(
+            run,
+            root_thread_id=thread.thread_id,
+            context_summary=_context_summary(thread),
+            context_trends=_context_trends(thread),
+        )
+        selected = thread.thread_id == run.root_thread_id
+        options.append(
+            f'<option value="{scope_id}"{" selected" if selected else ""}>'
+            f'{_escape_html(label)}</option>'
+        )
+        panels.append(
+            f'<div data-context-scope="{scope_id}"{"" if selected else " hidden"}>'
+            f'{_render_context_metrics_panel(scoped_run, scope_label=label, id_suffix=str(index))}</div>'
+        )
+    return (
+        '<section id="context-usage" class="metric-view">'
+        '<div class="agents-heading"><h2>Context usage</h2></div>'
+        '<label class="metric-scope-picker">Agent <select data-context-scope-select>'
+        f'{"".join(options)}</select></label>{"".join(panels)}'
+        '<script>(function(){const section=document.getElementById("context-usage");'
+        'const select=section?.querySelector("[data-context-scope-select]");if(!select)return;'
+        'select.addEventListener("change",()=>section.querySelectorAll("[data-context-scope]").forEach('
+        'panel=>{panel.hidden=panel.dataset.contextScope!==select.value;}));})();</script></section>'
+    )
+
+
+def _render_inference_metrics_panel(
+    run: CodexRunMetrics, *, scope_label: str, id_suffix: str, all_agents: bool
+) -> str:
+    """Render one inference scope without claiming decoder telemetry."""
 
     summary = run.inference_summary
     if summary.call_count == 0:
@@ -7767,12 +7813,12 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f"<tbody>{trend_rows}</tbody></table></div>"
     )
     inference_chart = _render_trend_table_chart(
-        "inference-trend-view",
-        "Inference rate over time · all agents",
+        f"inference-trend-view-{id_suffix}",
+        f"Inference rate over time · {scope_label}",
         inference_table,
         {
-            "title": "Inference rate over time · all agents",
-            "description": "Run-wide measured output-token inference rate by 15-minute period across all included agents.",
+            "title": f"Inference rate over time · {scope_label}",
+            "description": f"Measured output-token inference rate by 15-minute period for {scope_label}.",
             "axis_label": "Tokens per second",
             "value_format": "rate",
             "series": [
@@ -7788,7 +7834,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
                     ],
                 }
             ],
-            "markers": _compaction_chart_markers(run),
+            "markers": _compaction_chart_markers(run, all_threads=all_agents),
             "empty_message": "No measured inference-rate data are available.",
         },
     )
@@ -7798,8 +7844,8 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f"<tbody>{size_rows}</tbody></table></div>"
     )
     size_chart = _render_trend_table_chart(
-        "response-size-view",
-        "Response-size distribution",
+        f"response-size-view-{id_suffix}",
+        f"Response-size distribution · {scope_label}",
         size_table,
         {
             "chart_type": "distribution",
@@ -7823,8 +7869,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         },
     )
     return (
-        '<section id="inference-rate" class="metric-view">'
-        '<div class="agents-heading"><h2>Inference rate</h2></div>'
+        '<div class="scoped-metric-panel">'
         '<div class="metrics compact-metrics">'
         '<div class="metric"><div class="label">End to end</div>'
         f'<div class="value">{_escape_html(_format_tokens_per_second(summary.end_to_end_tokens_per_second))}</div></div>'
@@ -7834,10 +7879,58 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f'<div class="value">{_escape_html(median_ttft)}</div></div>'
         '<div class="metric"><div class="label">Measured calls</div>'
         f'<div class="value">{summary.measured_call_count:,} / {summary.call_count:,}</div></div></div>'
-        f'<details class="metric-details"><summary>15-minute trend · all agents · {_escape_html(percentile_text)}</summary>'
+        f'<details class="metric-details"><summary>15-minute trend · {_escape_html(scope_label)} · {_escape_html(percentile_text)}</summary>'
         f"{inference_chart}</details>"
         '<details class="metric-details"><summary>Response-size bands</summary>'
-        f"{size_chart}</details></section>"
+        f"{size_chart}</details></div>"
+    )
+
+
+def _render_inference_metrics(run: CodexRunMetrics) -> str:
+    """Render all-agent and per-agent selectable inference telemetry."""
+
+    all_responses = [response for thread in run.threads for response in thread.responses]
+    if not all_responses:
+        return ""
+    scopes: list[tuple[str, str, CodexRunMetrics, bool]] = [("all", "all agents", run, True)]
+    for index, (thread, _depth) in enumerate(_agent_inventory_threads(run)):
+        if not thread.responses:
+            continue
+        label = _compact_agent_assignment_label(thread, 52)
+        scopes.append(
+            (
+                f"agent-{index}",
+                label,
+                replace(
+                    run,
+                    root_thread_id=thread.thread_id,
+                    inference_summary=_inference_summary(thread.responses),
+                    inference_trends=_inference_trends(thread.responses),
+                    inference_size_bands=_inference_size_bands(thread.responses),
+                ),
+                False,
+            )
+        )
+    options = []
+    panels = []
+    for index, (scope_id, label, scoped_run, all_agents) in enumerate(scopes):
+        selected = index == 0
+        options.append(
+            f'<option value="{scope_id}"{" selected" if selected else ""}>{_escape_html(label)}</option>'
+        )
+        panels.append(
+            f'<div data-inference-scope="{scope_id}"{"" if selected else " hidden"}>'
+            f'{_render_inference_metrics_panel(scoped_run, scope_label=label, id_suffix=str(index), all_agents=all_agents)}</div>'
+        )
+    return (
+        '<section id="inference-rate" class="metric-view">'
+        '<div class="agents-heading"><h2>Inference rate</h2></div>'
+        '<label class="metric-scope-picker">Agent <select data-inference-scope-select>'
+        f'{"".join(options)}</select></label>{"".join(panels)}'
+        '<script>(function(){const section=document.getElementById("inference-rate");'
+        'const select=section?.querySelector("[data-inference-scope-select]");if(!select)return;'
+        'select.addEventListener("change",()=>section.querySelectorAll("[data-inference-scope]").forEach('
+        'panel=>{panel.hidden=panel.dataset.inferenceScope!==select.value;}));})();</script></section>'
     )
 
 
@@ -11048,6 +11141,10 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metric-detail {{ display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }}
 .metric-view {{ margin-top:28px; }}
 .metric-view .agents-heading {{ margin-top:0; gap:9px; }}
+.metric-scope-picker {{ display:inline-flex; align-items:center; gap:8px; margin:8px 0 4px; color:#455a64; font-size:.84em; font-weight:700; }}
+.metric-scope-picker select {{ min-height:34px; max-width:min(620px,75vw); padding:5px 28px 5px 8px; color:#263238; background:#fff; border:1px solid #90a4ae; border-radius:5px; font:inherit; }}
+.metric-scope-picker select:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.scoped-metric-panel {{ margin-top:6px; }}
 .compact-metrics {{ grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); margin-top:10px; }}
 .compact-metrics .metric {{ padding:10px 11px; }}
 .evidence-badge {{ padding:3px 7px; color:#455a64; background:#eef4f8; border:1px solid #c5d3dc; border-radius:999px; font-size:.7em; font-weight:700; }}
