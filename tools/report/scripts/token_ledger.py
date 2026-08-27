@@ -143,7 +143,11 @@ COLUMN_DEFINITIONS = {
     "row": "Chronological row number. Row 0 is an explicitly unknown event before the selected trace.",
     "time_utc": "Event timestamp in UTC, or a bounded description when the exact time is unknown.",
     "event": "Short name of the runtime event.",
-    "model": "Raw turn_context.model applied to this call. Cost rates are selected by this value.",
+    "model": (
+        "Raw turn_context.model applied to this call. Cost rates are selected by this "
+        "value. HTML may show the raw model plus its thinking level; CSV retains the "
+        "raw model identifier."
+    ),
     "evidence_summary": "What the source log directly says about the event. Character counts are raw evidence, not token counts and not inputs to token arithmetic.",
     "skills": "Skill evidence extracted from the rollout by regular expressions. Labels mean: requested = user explicitly mentions a skill name; announced = assistant explicitly states intended skill use; load call = custom_tool_call loads or reads SKILL.md content; load result = tool output confirming that load. When available, skill names include estimated token size from skills_report.csv.",
     "included_in_snapshot": "The token snapshot that accounts for a model-produced event or whose request consumes an input event. Tool results skip the immediately following delayed usage record and map to the next model request. 'Not separate' means duplicate telemetry.",
@@ -588,6 +592,17 @@ def rollout_model(records: Sequence[dict[str, object]]) -> str:
     return ""
 
 
+def rollout_effort(records: Sequence[dict[str, object]]) -> str:
+    """Return the first thinking level declared by an active turn context."""
+    for record in records:
+        if record.get("type") != "turn_context":
+            continue
+        effort = payload_for(record).get("effort")
+        if isinstance(effort, str) and effort.strip():
+            return effort.strip()
+    return ""
+
+
 def build_ledger_from_rollout(
     rollout_path: Path,
     base_csv: Path,
@@ -596,6 +611,7 @@ def build_ledger_from_rollout(
     records, inherited_baseline = active_rollout_records(read_rollout(rollout_path))
     pricing_version, pricing_table = load_agent_report_pricing(pricing_path)
     model = rollout_model(records)
+    effort = rollout_effort(records)
     sol_rates = pricing_table.get("gpt-5.6-sol")
     call_details: dict[str, tuple[str, str, list[str]]] = {}
     for record in records:
@@ -667,6 +683,12 @@ def build_ledger_from_rollout(
             declared_model = payload.get("model")
             if isinstance(declared_model, str) and declared_model.strip():
                 model = declared_model.strip()
+            declared_effort = payload.get("effort")
+            effort = (
+                declared_effort.strip()
+                if isinstance(declared_effort, str)
+                else ""
+            )
         if record.get("type") == "event_msg" and payload.get("type") == "token_count":
             info = payload.get("info", {})
             if not isinstance(info, dict):
@@ -767,6 +789,7 @@ def build_ledger_from_rollout(
                     "time_utc": str(record.get("timestamp", "")),
                     "event": f"Token snapshot {snapshot_number}",
                     "model": model,
+                    "_effort": effort,
                     "_pricing_version": pricing_version,
                     "evidence_summary": (
                         f"{input_tokens:,} input + {output_tokens:,} output; "
@@ -853,6 +876,7 @@ def build_ledger_from_rollout(
                 "time_utc": str(record.get("timestamp", "")),
                 "event": event,
                 "model": model,
+                "_effort": effort,
                 "_pricing_version": pricing_version,
                 "evidence_summary": evidence,
                 "skills": skills,
@@ -1242,6 +1266,17 @@ def write_csv_atomically(
     temporary_path.replace(path)
 
 
+def project_html_rows(rows: Sequence[dict[str, str]]) -> list[dict[str, str]]:
+    """Copy ledger rows and add thinking levels only to HTML model labels."""
+    projected_rows = [dict(row) for row in rows]
+    for row in projected_rows:
+        model = row.get("model", "")
+        effort = row.get("_effort", "")
+        if model and effort:
+            row["model"] = f"{model} · {effort}"
+    return projected_rows
+
+
 def display_name(header: str) -> str:
     return DISPLAY_LABELS.get(header, header.replace("_", " ").strip().title())
 
@@ -1500,10 +1535,21 @@ def render_html(
         source_html = (
             f'<a href="{html.escape(source_href, quote=True)}">{source_html}</a>'
         )
+    compact_subtitle = " ".join(subtitle_value.split())
+    if len(compact_subtitle) > 96:
+        boundary = compact_subtitle.rfind(" ", 0, 96)
+        if boundary < 48:
+            boundary = 95
+        compact_subtitle = compact_subtitle[:boundary].rstrip(" ,:;-.") + "…"
+    subtitle_title = (
+        f' title="{html.escape(subtitle_value, quote=True)}"'
+        if compact_subtitle != subtitle_value
+        else ""
+    )
     subtitle_html = (
-        '<p class="subtitle"><strong>'
+        f'<p class="subtitle"{subtitle_title}><strong>'
         f'{html.escape(subtitle_label or "Thread Title")}:</strong> '
-        f'&quot;{html.escape(subtitle_value)}&quot;</p>'
+        f'&quot;{html.escape(compact_subtitle)}&quot;</p>'
         if subtitle_value
         else ""
     )
@@ -1672,6 +1718,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         headers, rows = enrich_skill_evidence(headers, rows, args.rollout, args.input_csv)
         if args.write_enriched_csv:
             write_csv_atomically(args.input_csv, headers, rows)
+    rows = project_html_rows(rows)
     explanation_html = ""
     explanation_name = None
     if args.explanation:

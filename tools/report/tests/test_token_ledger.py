@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
 import tempfile
@@ -412,7 +413,7 @@ class RolloutLedgerTests(unittest.TestCase):
                 {
                     "timestamp": "2026-08-18T12:00:00Z",
                     "type": "turn_context",
-                    "payload": {"model": "gpt-5.5"},
+                    "payload": {"model": "gpt-5.5", "effort": "high"},
                 },
                 {
                     "timestamp": "2026-08-18T12:00:01Z",
@@ -467,6 +468,29 @@ class RolloutLedgerTests(unittest.TestCase):
         _, rows = MODULE.build_ledger_from_rollout(path, Path("ledger.csv"))
 
         self.assertEqual(["gpt-5.5", "gpt-5.4"], [row["model"] for row in rows])
+        self.assertEqual(["high", ""], [row["_effort"] for row in rows])
+
+        csv_path = path.with_name("ledger.csv")
+        MODULE.write_csv_atomically(csv_path, MODULE.LEDGER_HEADERS, rows)
+        html_rows = MODULE.project_html_rows(rows)
+        document = MODULE.render_html(
+            MODULE.LEDGER_HEADERS,
+            html_rows,
+            title="Ledger",
+            source_name=csv_path.name,
+            explanation_html="",
+            explanation_name=None,
+        )
+        with csv_path.open(encoding="utf-8", newline="") as handle:
+            csv_rows = list(csv.DictReader(handle))
+
+        self.assertEqual("gpt-5.5", csv_rows[0]["model"])
+        self.assertIn(">gpt-5.5 · high</td>", document)
+        self.assertNotIn(">gpt-5.5</td>", document)
+        self.assertIn(
+            "HTML may show the raw model plus its thinking level; CSV retains the raw model identifier.",
+            document,
+        )
 
 
 if __name__ == "__main__":

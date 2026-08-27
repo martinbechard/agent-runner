@@ -12,6 +12,7 @@ import os
 import re
 import sys
 from datetime import datetime, timedelta, timezone
+from html.parser import HTMLParser
 from pathlib import Path
 
 import pytest
@@ -5090,7 +5091,10 @@ def test_native_codex_sequence_tooltips_only_truncated_participant_titles(tmp_pa
         '<g class="sequence-participant"', 1
     )[1].split("</g>", 1)[0]
     assert "<title>" not in long_participant
-    assert f'data-participant-name="{long_title}"' in sequence
+    assert (
+        f'data-participant-name="{module._escape_html_attribute(long_title)}"'
+        in sequence
+    )
     assert 'tabindex="0"' in long_participant
     assert module._sequence_compact_text(long_title, 24) in long_participant
     assert "<title>Process Backlog Items</title>" not in sequence
@@ -5134,10 +5138,12 @@ def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
 def test_codex_output_writer_splits_sequence_into_companion_file(tmp_path):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
+    quoted_title = 'Coordinator "quoted" Bob\'s & title'
     run = module.build_codex_rollout_run(
         "coordinator",
         tmp_path,
         include_delegations=True,
+        thread_titles={"coordinator": quoted_title},
     )
     output = tmp_path / "process-backlog-items.html"
 
@@ -5157,6 +5163,39 @@ def test_codex_output_writer_splits_sequence_into_companion_file(tmp_path):
     assert '<div id="timeline"' not in sequence_html
     assert 'class="agent-table"' not in sequence_html
     assert '<div class="metrics">' not in sequence_html
+    escaped_title = module._escape_html_attribute(quoted_title)
+    assert f'data-participant-name="{escaped_title}"' in sequence_html
+    assert (
+        f'aria-label="Focus on {escaped_title} · main · coordinator"'
+        in sequence_html
+    )
+    timeline_label = module._escape_html_attribute(
+        f"Thread: {quoted_title} · Agent: main turn activity"
+    )
+    assert f'aria-label="{timeline_label}' in main_html
+
+    class AttributeCollector(HTMLParser):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attributes: list[dict[str, str | None]] = []
+
+        def handle_starttag(
+            self,
+            tag: str,
+            attrs: list[tuple[str, str | None]],
+        ) -> None:
+            self.attributes.append(dict(attrs))
+
+    collector = AttributeCollector()
+    collector.feed(sequence_html)
+    assert any(
+        attrs.get("data-participant-name") == quoted_title
+        for attrs in collector.attributes
+    )
+    assert any(
+        attrs.get("aria-label") == f"Focus on {quoted_title} · main · coordinator"
+        for attrs in collector.attributes
+    )
 
 
 def test_codex_output_writer_url_encodes_sequence_companion_filename(tmp_path):
@@ -6734,9 +6773,18 @@ def test_token_summary_threads_can_be_enabled_from_yaml(tmp_path):
     assert rows[0][-1] == "total_est_usd"
 
 
-def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
+def test_token_summary_html_writes_local_verification_report(
+    tmp_path,
+    capsys,
+    monkeypatch,
+):
     module = _load_module()
     root = tmp_path / "logs"
+    raw_thread_title = (
+        'Review "quoted" Bob\'s & long thread title across every compact report surface '
+        "while retaining the complete raw local title for intentional hover and search "
+        "disclosure without allowing it into participant or timeline labels"
+    )
     rollout = _write_codex_catalog_rollout(
         root,
         thread_id="html-report",
@@ -6755,6 +6803,16 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
                         "model": "gpt-5.5",
                         "effort": "high",
                         "turn_id": "html-turn",
+                    },
+                },
+                {
+                    "timestamp": "2026-08-25T12:00:00.500Z",
+                    "type": "response_item",
+                    "payload": {
+                        "type": "reasoning",
+                        "summary": [
+                            {"type": "summary_text", "text": "Check the report."}
+                        ],
                     },
                 },
                 {
@@ -6866,6 +6924,15 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
             )
         )
     html_output = tmp_path / "reports" / "token-usage.html"
+    monkeypatch.setattr(
+        module,
+        "_local_codex_thread_titles",
+        lambda thread_ids: (
+            {"html-report": raw_thread_title}
+            if "html-report" in thread_ids
+            else {}
+        ),
+    )
 
     assert module.main(
         [
@@ -6948,6 +7015,9 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert f'href="{rollout.as_uri()}"' not in report
 
     all_threads_report = thread_index.read_text(encoding="utf-8")
+    compact_thread_title = module._compact_display_text(raw_thread_title, 96)
+    compact_list_title = module._compact_display_text(raw_thread_title, 52)
+    escaped_raw_title = module._escape_html_attribute(raw_thread_title)
     assert "All Threads" in all_threads_report
     assert '>Overall Usage</a>' in all_threads_report
     assert "Token Usage Report</a>" not in all_threads_report
@@ -6957,6 +7027,12 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "gpt-5.5 · high" in all_threads_report
     assert "gpt-5.4 · medium" in all_threads_report
     assert " · effort " not in all_threads_report
+    assert module._escape_html(compact_list_title) in all_threads_report
+    assert f'title="{escaped_raw_title}"' in all_threads_report
+    assert re.search(
+        rf'data-search="[^"]*{re.escape(escaped_raw_title.casefold())}[^"]*"',
+        all_threads_report,
+    )
     assert (
         '<th>Title</th><th>Estimate</th><th aria-label="Usage links"></th>'
         '<th aria-label="Event links"></th><th>Plan</th><th>Model</th>'
@@ -6982,6 +7058,12 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "gpt-5.5 · high" in folder_report
     assert "gpt-5.4 · medium" in folder_report
     assert " · effort " not in folder_report
+    assert module._escape_html(compact_list_title) in folder_report
+    assert f'title="{escaped_raw_title}"' in folder_report
+    assert re.search(
+        rf'data-search="[^"]*{re.escape(escaped_raw_title.casefold())}[^"]*"',
+        folder_report,
+    )
     assert '<th aria-label="Usage links"></th>' in folder_report
     assert '<th aria-label="Event links"></th>' in folder_report
     assert (
@@ -7015,6 +7097,7 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "Funding" in detail
     assert "Sub remaining" in detail
     assert "gpt-5.5" in detail
+    assert ">gpt-5.5 · high</td>" in detail
     assert "credits" in detail
     assert "1200000" in detail
     matching_steps = next(
@@ -7037,13 +7120,35 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert f'href="{folder_pages[0].name}">Threads in Folder</a>' in detail
     assert 'href="../token-usage.html">Overall Usage</a>' in detail
     assert "All Threads</a>" not in detail
-    assert '<strong>Thread Title:</strong> &quot;HTML report task&quot;' in detail
+    assert (
+        f'<p class="subtitle" title="{escaped_raw_title}"><strong>Thread Title:</strong> '
+        f'&quot;{module._escape_html_attribute(compact_thread_title)}&quot;</p>'
+        in detail
+    )
+    detail_csv = next(
+        page
+        for page in ledger_csv_pages
+        if page.name.startswith(detail_page.name.removesuffix("-token-detail.html"))
+    )
+    with detail_csv.open(encoding="utf-8", newline="") as handle:
+        csv_rows = list(csv.DictReader(handle))
+    assert csv_rows[0]["model"] == "gpt-5.5"
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in detail
 
     steps = matching_steps.read_text(encoding="utf-8")
     assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
     assert "<h1>Thread Events</h1>" in steps
-    assert '<strong>Thread Title:</strong> &quot;HTML report task&quot;' in steps
+    assert (
+        f'<p class="run-label" title="{escaped_raw_title}"><strong>Thread Title:</strong> '
+        f'&quot;{module._escape_html(compact_thread_title)}&quot;'
+        in steps
+    )
+    steps_without_hover = steps.replace(
+        f'title="{escaped_raw_title}"',
+        "",
+    )
+    assert module._escape_html(raw_thread_title) not in steps_without_hover
+    assert module._escape_html(compact_thread_title) in steps
     assert f'href="{matching_raw.name}">Log file</a>' in steps
     assert 'href="../token-usage.html">Overall Usage</a>' in steps
     assert f'href="{folder_pages[0].name}">Threads in Folder</a>' in steps
@@ -7051,6 +7156,17 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert steps.index(">Overall Usage</a>") < steps.index(">Threads in Folder</a>")
     assert steps.index('aria-label="Breadcrumb"') < steps.index("<h1>Thread Events</h1>")
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in steps
+
+    sequence_page = matching_steps.with_name(
+        f"{matching_steps.stem}-sequence.html"
+    )
+    assert sequence_page.exists()
+    sequence = sequence_page.read_text(encoding="utf-8")
+    assert (
+        f'data-participant-name="{module._escape_html_attribute(compact_thread_title)}"'
+        in sequence
+    )
+    assert escaped_raw_title not in sequence
 
     raw = matching_raw.read_text(encoding="utf-8")
     assert "Raw rollout" in raw

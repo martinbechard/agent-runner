@@ -6471,7 +6471,7 @@ def _sequence_repeat_metadata(
 
 
 def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
-    """Render one offline SVG sequence view plus an exact text event ledger."""
+    """Render one offline SVG sequence view with linked event details."""
 
     if run.runtime.casefold() != "codex":
         return ""
@@ -6637,7 +6637,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 'aria-label="Collapse descendants of {name}" aria-expanded="true">'
                 '<circle cx="100" cy="37" r="9"></circle>'
                 '<text x="100" y="41" text-anchor="middle">−</text></g>'
-            ).format(name=_escape_html(full_name))
+            ).format(name=_escape_html_attribute(full_name))
         participant_svg.append(
             '<g class="sequence-participant" data-depth="{depth}" '
             'data-thread-id="{thread_id}" data-parent-thread-id="{parent_id}" '
@@ -6651,11 +6651,11 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             '<tspan class="sequence-participant-detail" x="0" dy="18">{detail}</tspan>'
             "</text></g>{hierarchy_toggle}</g>".format(
                 depth=depth,
-                thread_id=_escape_html(thread.thread_id),
-                parent_id=_escape_html(thread.parent_thread_id),
-                full_name=_escape_html(full_name),
+                thread_id=_escape_html_attribute(thread.thread_id),
+                parent_id=_escape_html_attribute(thread.parent_thread_id),
+                full_name=_escape_html_attribute(full_name),
                 x=x,
-                aria=_escape_html(f"{full_name} · {detail}"),
+                aria=_escape_html_attribute(f"{full_name} · {detail}"),
                 name=_escape_html(visible_name),
                 detail=_escape_html(_sequence_compact_text(detail, 28)),
                 hierarchy_toggle=hierarchy_toggle,
@@ -6665,7 +6665,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         '<line class="sequence-lifeline" data-thread-id="{thread_id}" '
         'x1="{x}" y1="0" x2="{x}" '
         'y2="{end_y}"></line>'.format(
-            thread_id=_escape_html(thread.thread_id),
+            thread_id=_escape_html_attribute(thread.thread_id),
             x=x_by_thread_id[thread.thread_id],
             end_y=height - 16,
         )
@@ -6739,10 +6739,10 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             "</g></a>".format(
                 detail_id=detail_id,
                 kind=event.kind,
-                aria=_escape_html(event_description + repeat_aria),
+                aria=_escape_html_attribute(event_description + repeat_aria),
                 event_index=index,
-                source_id=_escape_html(event.source_thread_id),
-                target_id=_escape_html(event.target_thread_id),
+                source_id=_escape_html_attribute(event.source_thread_id),
+                target_id=_escape_html_attribute(event.target_thread_id),
                 category=category,
                 row_index=row_index,
                 sequence_order=sequence_order,
@@ -6801,7 +6801,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             )
             context_arrow_html = (
                 '<div class="sequence-context-arrow" role="img" '
-                'aria-label="{action_name} from {source} to {target}">'
+                'aria-label="{aria}">'
                 '<span class="sequence-context-party">{source}</span>'
                 '<span class="sequence-context-direction" aria-hidden="true">'
                 '<span class="sequence-context-line"></span>'
@@ -6810,7 +6810,9 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 '<span class="sequence-context-party sequence-context-target">{target}</span>'
                 "</div>"
             ).format(
-                action_name=context_action_name,
+                aria=_escape_html_attribute(
+                    f"{context_action_name} from {source_name} to {target_name}"
+                ),
                 action=_escape_html(context_action),
                 source=_escape_html(source_name),
                 target=_escape_html(target_name),
@@ -6900,12 +6902,12 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
             'text-anchor="middle">{visible_text}</text></g></a>'.format(
                 detail_id=detail_id,
                 thought_index=index,
-                thread_id=_escape_html(thought.thread_id),
+                thread_id=_escape_html_attribute(thought.thread_id),
                 row_index=row_index,
                 sequence_order=sequence_order,
                 y=y,
                 x=x,
-                aria=_escape_html(
+                aria=_escape_html_attribute(
                     f"{offset}: {participant_name} thinking: {full_detail}"
                 ),
                 offset=_escape_html(offset),
@@ -9743,7 +9745,7 @@ def render_codex_rollout_html(
             f'<span class="cell-secondary">({run_share:.1f}%)</span></td>'
             '<td class="agent-timeline-cell">'
             '<span class="timeline-track agent-timeline-track" role="img" '
-            f'aria-label="{_escape_html(timeline_label)}">'
+            f'aria-label="{_escape_html_attribute(timeline_label)}">'
             f"{agent_timeline_bars}"
             "</span></td>"
             "</tr>",
@@ -11795,6 +11797,7 @@ def _render_token_summary_ledger_html(
                 continue
         if funding_event is not None:
             ledger_row["model"] = funding_event.model or ledger_row.get("model", "")
+            ledger_row["_effort"] = funding_event.effort
             ledger_row["plan"] = funding_event.plan_type or "not observed"
             ledger_row["funding"] = funding_event.funding_source
             ledger_row["sub_remaining"] = (
@@ -11822,9 +11825,10 @@ def _render_token_summary_ledger_html(
     for index, ledger_row in enumerate(enriched_rows):
         ledger_row["row"] = str(index)
     engine.write_csv_atomically(ledger_csv_path, headers, enriched_rows)
+    html_rows = engine.project_html_rows(enriched_rows)
     return engine.render_html(
         headers,
-        enriched_rows,
+        html_rows,
         title="Thread Token Usage",
         source_name=row.path.name,
         source_href=raw_path.name,
@@ -12311,12 +12315,15 @@ def _write_token_summary_html(
                 for thread in steps_run.threads
                 if thread.thread_id == steps_run.root_thread_id
             )
-            thread_title = (
+            raw_thread_title = (
                 root_thread.task_title
                 or _derived_task_title(root_thread.activities)
                 or "Untitled thread"
             )
-            thread_titles[row.path] = thread_title
+            visible_thread_title = _compact_display_text(raw_thread_title, 96)
+            thread_titles[row.path] = raw_thread_title
+            root_thread.task_title = visible_thread_title
+            steps_run.run_label = _report_title(visible_thread_title)
             _write_codex_outputs(
                 steps_run,
                 steps_path,
@@ -12325,7 +12332,7 @@ def _write_token_summary_html(
                     ("Threads in Folder", group_page_name),
                 ],
                 page_title="Thread Events",
-                page_subtitle=thread_title,
+                page_subtitle=raw_thread_title,
                 page_action_links=[("Log file", raw_path.name)],
             )
             raw_path.write_text(
@@ -12343,7 +12350,7 @@ def _write_token_summary_html(
                         report_filename=destination.name,
                         threads_filename=group_page_name,
                         raw_path=raw_path,
-                        thread_title=thread_title,
+                        thread_title=raw_thread_title,
                         ledger_csv_path=ledger_csv_path,
                     )
                 ),
