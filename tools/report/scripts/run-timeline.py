@@ -3384,6 +3384,7 @@ class _RolloutDiscoveryMetadata:
     modified_at_ns: int
     last_observed_at: str = ""
     sub_agent_thread_ids: frozenset[str] = frozenset()
+    sub_agent_started_at: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -3578,6 +3579,7 @@ def _token_summary_discovery_snapshot(
     for path in candidate_paths:
         timestamps: list[datetime] = []
         sub_agent_thread_ids: set[str] = set()
+        sub_agent_started_at: list[tuple[str, str]] = []
         records, _diagnostics = _parse_jsonl_append_safe(path)
         for _ordinal, record in records:
             timestamp = _parse_iso_datetime(record.get("timestamp"))
@@ -3592,6 +3594,10 @@ def _token_summary_discovery_snapshot(
                 and payload["agent_thread_id"]
             ):
                 sub_agent_thread_ids.add(payload["agent_thread_id"])
+                if timestamp is not None:
+                    sub_agent_started_at.append(
+                        (payload["agent_thread_id"], timestamp.isoformat())
+                    )
         current = metadata[path]
         enriched[path] = replace(
             current,
@@ -3600,6 +3606,7 @@ def _token_summary_discovery_snapshot(
             ),
             last_observed_at=max(timestamps).isoformat() if timestamps else "",
             sub_agent_thread_ids=frozenset(sub_agent_thread_ids),
+            sub_agent_started_at=tuple(sub_agent_started_at),
         )
     return _TokenSummaryDiscoverySnapshot(
         candidate_paths=tuple(candidate_paths),
@@ -3616,6 +3623,7 @@ def _discover_rollout_paths(
     index_path: Path | None = None,
     metadata_by_path: dict[Path, _RolloutDiscoveryMetadata] | None = None,
     require_parent_activity: bool = False,
+    parent_activity_before: datetime | None = None,
 ) -> tuple[list[Path], list[str], _RolloutParentContext | None]:
     identities: dict[str, tuple[Path, str]] = {}
     children: dict[str, list[str]] = {}
@@ -3641,12 +3649,19 @@ def _discover_rollout_paths(
         if not parent_thread_id:
             continue
         parent_identity = identities.get(parent_thread_id)
-        if require_parent_activity and (
-            parent_identity is None
-            or thread_id
-            not in metadata_by_path[parent_identity[0]].sub_agent_thread_ids
-        ):
-            continue
+        if require_parent_activity:
+            if parent_identity is None:
+                continue
+            parent_metadata = metadata_by_path[parent_identity[0]]
+            if thread_id not in parent_metadata.sub_agent_thread_ids:
+                continue
+            if parent_activity_before is not None and not any(
+                child_thread_id == thread_id
+                and (started_at := _parse_iso_datetime(timestamp)) is not None
+                and started_at < parent_activity_before
+                for child_thread_id, timestamp in parent_metadata.sub_agent_started_at
+            ):
+                continue
         children.setdefault(parent_thread_id, []).append(thread_id)
     if root_thread_id not in identities:
         raise ValueError(f"Codex root thread not found: {root_thread_id}")
@@ -5248,12 +5263,12 @@ def _projected_mcp_skills(call: McpCallInterval) -> set[str]:
     }
 
 
-def _project_descendant_thread(
+def _project_thread_to_window(
     thread: CodexThreadMetrics,
     start: datetime,
     end: datetime,
 ) -> None:
-    """Project one descendant to the selected token-summary evidence window."""
+    """Project one thread to the selected token-summary evidence window."""
 
     thread.responses = [
         projected
@@ -5441,7 +5456,7 @@ def build_codex_rollout_run(
     and terminal included threads, then records source and pricing digests.
     A supplied discovery map must cover every candidate path. Parent-activity
     mode accepts only reciprocal recorded child edges. A descendant time range
-    projects every non-root thread before provenance and aggregation.
+    projects the selected event-page subtree before provenance and aggregation.
     """
     session_roots = (
         [sessions_root.resolve()]
@@ -5479,6 +5494,11 @@ def build_codex_rollout_run(
         index_path=discovery_index_path,
         metadata_by_path=discovery_metadata,
         require_parent_activity=require_parent_activity,
+        parent_activity_before=(
+            descendant_time_range[1]
+            if require_parent_activity and descendant_time_range is not None
+            else None
+        ),
     )
     if progress is not None:
         progress(
@@ -5557,8 +5577,7 @@ def build_codex_rollout_run(
     if descendant_time_range is not None:
         range_start, range_end = descendant_time_range
         for thread in threads:
-            if thread.thread_id != root_thread_id:
-                _project_descendant_thread(thread, range_start, range_end)
+            _project_thread_to_window(thread, range_start, range_end)
     if progress is not None:
         progress(65, "Resolving thread titles", "Matching parsed threads to Codex task titles.")
     title_thread_ids = {thread.thread_id for thread in threads}
@@ -12167,6 +12186,24 @@ def _token_summary_report_range_html(
     )
 
 
+def _token_summary_raw_report_html(
+    document: str,
+    from_time: datetime,
+    to_time: datetime,
+) -> str:
+    """Add the selected range header to one generated raw-source report."""
+
+    marker = "<body>"
+    if marker not in document:
+        raise ValueError("Raw-source report does not contain a body element")
+    banner = _token_summary_report_range_html(from_time, to_time)
+    header = (
+        '<header style="padding:.75rem 1rem;border-bottom:1px solid currentColor">'
+        f"{banner}</header>"
+    )
+    return document.replace(marker, f"{marker}\n{header}", 1)
+
+
 def _token_summary_groups(
     rows: list[_TokenSummaryRow],
 ) -> list[tuple[tuple[str, str], list[_TokenSummaryRow]]]:
@@ -12933,7 +12970,11 @@ def _write_token_summary_html(
             )
             raw_path.write_text(
                 _with_copyright_footer(
-                    _load_token_ledger_engine().render_raw_rollout_html(row.path)
+                    _token_summary_raw_report_html(
+                        _load_token_ledger_engine().render_raw_rollout_html(row.path),
+                        from_time,
+                        to_time,
+                    )
                 ),
                 encoding="utf-8",
             )

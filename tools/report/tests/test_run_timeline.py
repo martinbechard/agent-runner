@@ -7222,9 +7222,15 @@ def test_token_summary_html_writes_local_verification_report(
 
     raw = matching_raw.read_text(encoding="utf-8")
     assert "Raw rollout" in raw
+    assert 'class="report-range"' in raw
+    assert "2026-08-25 00:00 inclusive" in raw
+    assert "2026-08-26 00:00 exclusive" in raw
     assert 'id="L' in raw
     assert "&quot;token_count&quot;" in raw
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in raw
+    for generated_page in [html_output, *drilldown_directory.glob("*.html")]:
+        generated_html = generated_page.read_text(encoding="utf-8")
+        assert 'class="report-range"' in generated_html, generated_page
     captured = capsys.readouterr()
     assert captured.out == ""
     ordered_names = [path.name for path in sorted((rollout, second_rollout))]
@@ -7453,8 +7459,9 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
         timestamp="2026-08-25T12:17:00Z",
     )
     with root_path.open("a", encoding="utf-8") as handle:
-        handle.write(
-            json.dumps(
+        handle.writelines(
+            json.dumps(record) + "\n"
+            for record in (
                 {
                     "timestamp": "2026-08-25T12:17:00Z",
                     "type": "event_msg",
@@ -7463,14 +7470,29 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
                         "agent_thread_id": "evidence-only",
                         "kind": "started",
                     },
-                }
+                },
+                {
+                    "timestamp": "2026-08-25T13:00:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "sub_agent_activity",
+                        "agent_thread_id": "late-child",
+                        "kind": "started",
+                    },
+                },
             )
-            + "\n"
         )
+    late_child_path = write_rollout(
+        "2026/08/25/rollout-late-child.jsonl",
+        thread_id="late-child",
+        parent_thread_id="root-selected",
+        timestamp="2026-08-25T13:00:00Z",
+        records=(token_record("2026-08-25T13:01:00Z", 9),),
+    )
     before_range = datetime(2026, 8, 24, tzinfo=timezone.utc).timestamp()
     os.utime(grandchild_path, (before_range, before_range))
     current_range = datetime(2026, 8, 25, 12, 30, tzinfo=timezone.utc).timestamp()
-    for path in (root_path, child_path):
+    for path in (root_path, child_path, late_child_path):
         os.utime(path, (current_range, current_range))
 
     from_time = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
@@ -7514,6 +7536,7 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
     assert '<div class="label">Agents used</div><div class="value">3</div>' in root_html
     assert "one-sided" not in root_html
     assert "evidence-only" not in root_html
+    assert "late-child" not in root_html
     assert "grandchild-ungenerated" in root_html
     assert "Audit the generated report links and summarize any broken targets" in root_html
     assert "grandchild-ungenerated" in root_html
