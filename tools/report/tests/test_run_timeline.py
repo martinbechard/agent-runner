@@ -6862,6 +6862,8 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
 
     all_threads_report = thread_index.read_text(encoding="utf-8")
     assert "All Threads" in all_threads_report
+    assert '>Overall Usage</a>' in all_threads_report
+    assert "Token Usage Report</a>" not in all_threads_report
     assert "2 threads" in all_threads_report
     assert all_threads_report.count(">View Usage</a>") == 2
     assert all_threads_report.count(">View Events</a>") == 2
@@ -6873,9 +6875,13 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
 
     folder_report = folder_pages[0].read_text(encoding="utf-8")
     assert "Threads in Folder" in folder_report
+    assert '>Overall Usage</a>' in folder_report
+    assert "All Threads</a>" not in folder_report
     assert '<p class="folder-context"><span class="label">Folder</span>' in folder_report
     assert str(root) in folder_report
-    assert "HTML report task" not in folder_report
+    assert "HTML report task" in folder_report
+    assert "Second HTML report task" in folder_report
+    assert "<th>Title</th>" in folder_report
     assert "gpt-5.5" in folder_report
     assert "gpt-5.4" in folder_report
     assert '<th aria-label="Usage links"></th>' in folder_report
@@ -6925,15 +6931,22 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert f'href="{matching_steps.name}">View Events</a>' in folder_report
     assert "#L" in detail
     assert "../token-usage.html" in detail
-    assert f'href="{folder_pages[0].name}">← Folder Threads</a>' in detail
-    assert 'href="index.html">All Threads</a>' in detail
+    assert f'href="{folder_pages[0].name}">Threads in Folder</a>' in detail
+    assert 'href="../token-usage.html">Overall Usage</a>' in detail
+    assert "All Threads</a>" not in detail
+    assert '<strong>Thread Title:</strong> &quot;HTML report task&quot;' in detail
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in detail
 
     steps = matching_steps.read_text(encoding="utf-8")
     assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
-    assert "HTML report task" in steps
+    assert "<h1>Thread Events</h1>" in steps
+    assert '<strong>Thread Title:</strong> &quot;HTML report task&quot;' in steps
     assert f'href="{matching_raw.name}">Log file</a>' in steps
-    assert 'href="index.html">All Threads</a>' in steps
+    assert 'href="../token-usage.html">Overall Usage</a>' in steps
+    assert f'href="{folder_pages[0].name}">Threads in Folder</a>' in steps
+    assert "All Threads</a>" not in steps
+    assert steps.index(">Overall Usage</a>") < steps.index(">Threads in Folder</a>")
+    assert steps.index('aria-label="Breadcrumb"') < steps.index("<h1>Thread Events</h1>")
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in steps
 
     raw = matching_raw.read_text(encoding="utf-8")
@@ -6941,7 +6954,13 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert 'id="L' in raw
     assert "&quot;token_count&quot;" in raw
     assert "© 2026 Martin.Bechard@DevConsult.ca · MIT License" in raw
-    assert capsys.readouterr().out == ""
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    ordered_names = [path.name for path in sorted((rollout, second_rollout))]
+    assert f"Reading 1 of 2: {ordered_names[0]}" in captured.err
+    assert f"Reading 2 of 2: {ordered_names[1]}" in captured.err
+    assert f"Generating 1 of 2: {ordered_names[0]}" in captured.err
+    assert f"Generating 2 of 2: {ordered_names[1]}" in captured.err
 
 
 def test_token_summary_yaml_html_path_is_relative_to_config(tmp_path):

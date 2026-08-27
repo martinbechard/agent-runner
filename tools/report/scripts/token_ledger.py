@@ -1436,6 +1436,9 @@ def render_html(
     explanation_name: str | None,
     nav_links: Sequence[tuple[str, str]] = (),
     local_time: bool = False,
+    source_href: str | None = None,
+    subtitle_label: str | None = None,
+    subtitle_value: str = "",
 ) -> str:
     reordered_headers = display_headers(headers)
 
@@ -1488,10 +1491,22 @@ def render_html(
     )
     nav = ""
     if nav_links:
-        nav = '<nav class="ledger-nav">' + "".join(
+        nav = '<nav class="ledger-nav" aria-label="Breadcrumb">' + " › ".join(
             f'<a href="{html.escape(href, quote=True)}">{html.escape(label)}</a>'
             for label, href in nav_links
         ) + "</nav>"
+    source_html = html.escape(source_name)
+    if source_href:
+        source_html = (
+            f'<a href="{html.escape(source_href, quote=True)}">{source_html}</a>'
+        )
+    subtitle_html = (
+        '<p class="subtitle"><strong>'
+        f'{html.escape(subtitle_label or "Thread Title")}:</strong> '
+        f'&quot;{html.escape(subtitle_value)}&quot;</p>'
+        if subtitle_value
+        else ""
+    )
 
     return f"""<!doctype html>
 <html lang="en">
@@ -1512,6 +1527,7 @@ def render_html(
     .eyebrow {{ color:var(--accent); font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.09em; text-transform:uppercase; }}
     h1 {{ margin:7px 0 10px; font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif; letter-spacing:-.035em; }}
     h2 {{ margin: 1.2rem 0 .7rem; font:600 24px/1.2 "Iowan Old Style","Palatino Linotype",Georgia,serif; }}
+    .subtitle {{ margin:0 0 5px; color:var(--muted); font-size:1rem; }}
     .meta {{ max-width: 110rem; margin: 0; color: var(--muted); font-size: .94rem; }}
     .structured-explanation {{ max-width: 78rem; }}
     .ste-item {{ margin: .55rem 0; padding: .55rem .75rem; border-left: .3rem solid #728096; background: color-mix(in srgb, CanvasText 4%, Canvas); }}
@@ -1577,7 +1593,8 @@ def render_html(
   <header class="ledger-header">
     <div class="eyebrow">Agent Report · thread ledger</div>
     <h1>{html.escape(title)}</h1>
-    <p class="meta">{len(rows)} rows · source: {html.escape(source_name)}{explanation_source}{pricing_summary} · API-equivalent estimates, not actual charges · headers remain visible while rows scroll</p>
+    {subtitle_html}
+    <p class="meta">{len(rows)} rows · source: {source_html}{explanation_source}{pricing_summary} · API-equivalent estimates, not actual charges · headers remain visible while rows scroll</p>
   </header>
   <article class="structured-explanation" id="explanation">{explanation_html}</article>
   <details id="definitions">

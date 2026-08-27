@@ -760,14 +760,20 @@ agent-report --token-summary \
 
 The extra pages are written beside the main report in
 `token-usage-report-threads/`. A folder page keeps the detailed per-thread
-metrics and shows its folder path below the title. **View Usage** opens the
-thread's **Thread Token Usage** register, while **View Events** opens the full
-Agent Report timeline. The usage register preserves raw token snapshots while grouping reasoning,
+metrics and shows its folder path below the title. Each thread row includes the
+beginning of its title. **View Usage** opens the thread's **Thread Token Usage**
+register, while **View Events** opens **Thread Events** with the full thread
+title beneath the heading. The usage register preserves raw token snapshots while grouping reasoning,
 messages, tool calls, and tool results into the calls they belong to. It
 includes field definitions, token formulas, cache-history arithmetic, per-call
 and cumulative cost, local timestamps, and subscription/credit telemetry. It
 also has **Log file** for an escaped, line-addressable copy of the original
 JSONL. A structured register CSV is generated beside the HTML.
+
+Drill-down breadcrumbs always begin with **Overall Usage** and then move from
+broader to narrower context. **All Threads** is linked only from the overall
+usage page. While files are read and thread drill-downs are generated, progress
+is written to the console as `N of NN` with the current filename.
 
 The ledger renderer and pricing card are bundled in the `agent-report` wheel;
 the installed command does not depend on a source checkout or an audit-report

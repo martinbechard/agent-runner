@@ -9021,6 +9021,9 @@ def render_codex_rollout_html(
     formatter_config: ToolFormatterConfig | None = None,
     *,
     nav_links: list[tuple[str, str]] | None = None,
+    page_title: str | None = None,
+    page_subtitle: str = "",
+    page_action_links: list[tuple[str, str]] | None = None,
     progress: ProgressCallback | None = None,
     worker_progress: WorkerProgressCallback | None = None,
     workers: int = 1,
@@ -9031,7 +9034,7 @@ def render_codex_rollout_html(
     formatter_config = formatter_config or _load_tool_formatter_config()
     nav_html = ""
     if nav_links:
-        nav_html = '<nav class="report-nav">' + " | ".join(
+        nav_html = '<nav class="report-nav" aria-label="Breadcrumb">' + " › ".join(
             f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
             for label, href in nav_links
         ) + "</nav>"
@@ -9717,7 +9720,7 @@ def render_codex_rollout_html(
         if is_junie_ide
         else "Bars share a common run-wide time axis and show each agent and task span's observed span from Junie's timestamped session events. Costs are recorded by Junie and allocated to agent task spans by processed-token share."
     )
-    full_report_title = (
+    full_report_title = page_title or (
         run.run_label
         if run.runtime.casefold() == "codex" and run.run_label
         else AGENT_EXECUTION_METRICS_TITLE
@@ -9728,10 +9731,21 @@ def render_codex_rollout_html(
         if report_title != full_report_title
         else ""
     )
+    page_actions_html = ""
+    if page_action_links:
+        page_actions_html = " · " + " · ".join(
+            f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
+            for label, href in page_action_links
+        )
     run_label_html = (
-        f'<p class="run-label">{_escape_html(run.run_label)}</p>'
-        if run.run_label and run.run_label != full_report_title
-        else ""
+        '<p class="run-label"><strong>Thread Title:</strong> '
+        f'&quot;{_escape_html(page_subtitle)}&quot;{page_actions_html}</p>'
+        if page_subtitle
+        else (
+            f'<p class="run-label">{_escape_html(run.run_label)}</p>'
+            if run.run_label and run.run_label != full_report_title
+            else ""
+        )
     )
     if progress is not None:
         progress(89, "Rendering model usage", "Building model and token usage sections.")
@@ -10069,8 +10083,8 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {_EXECUTION_HEATMAP_CSS}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
-<h1{report_title_attribute}>{_escape_html(report_title)}</h1>
 {nav_html}
+<h1{report_title_attribute}>{_escape_html(report_title)}</h1>
 {run_label_html}
 <p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_local_time_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
 {view_nav_html}
@@ -10685,6 +10699,7 @@ def _token_summary_rows(
     *,
     from_time: datetime,
     to_time: datetime,
+    emit_progress: bool = False,
 ) -> list[_TokenSummaryRow]:
     """Parse each unique Codex rollout overlapping the selected UI range."""
     candidates: set[Path] = set()
@@ -10694,13 +10709,22 @@ def _token_summary_rows(
         candidates.update(
             path.resolve() for path in directory.rglob("*.jsonl") if path.is_file()
         )
-    rows: list[_TokenSummaryRow] = []
+    selected_candidates: list[tuple[Path, datetime]] = []
     for path in sorted(candidates):
         last_activity_at = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
         if last_activity_at < from_time:
             continue
         if _rollout_identity(path) is None:
             continue
+        selected_candidates.append((path, last_activity_at))
+    rows: list[_TokenSummaryRow] = []
+    for index, (path, last_activity_at) in enumerate(selected_candidates, start=1):
+        if emit_progress:
+            print(
+                f"Reading {index:,} of {len(selected_candidates):,}: {path.name}",
+                file=sys.stderr,
+                flush=True,
+            )
         funding_events: list[_TokenFundingEvent] = []
         thread = parse_codex_rollout(path, token_funding_events=funding_events)
         funding_events = [
@@ -11154,8 +11178,8 @@ def _render_token_summary_ledger_html(
     to_time: datetime,
     report_filename: str,
     threads_filename: str,
-    all_threads_filename: str,
     raw_path: Path,
+    thread_title: str,
     ledger_csv_path: Path,
 ) -> str:
     """Render the audit-grade execution-cycle ledger for one thread."""
@@ -11224,13 +11248,14 @@ def _render_token_summary_ledger_html(
         enriched_rows,
         title="Thread Token Usage",
         source_name=row.path.name,
+        source_href=raw_path.name,
+        subtitle_label="Thread Title",
+        subtitle_value=thread_title,
         explanation_html="",
         explanation_name=None,
         nav_links=(
-            ("← Folder Threads", threads_filename),
-            ("All Threads", all_threads_filename),
-            ("Token Usage Report", f"../{report_filename}"),
-            ("Log file", raw_path.name),
+            ("Overall Usage", f"../{report_filename}"),
+            ("Threads in Folder", threads_filename),
         ),
         local_time=True,
     )
@@ -11463,6 +11488,7 @@ def _render_token_summary_group_html(
     report_filename: str,
     detail_links: dict[Path, str],
     event_links: dict[Path, str],
+    thread_titles: dict[Path, str],
     page_title: str = "Threads in Folder",
     eyebrow: str = "Agent Report · folder detail",
     folder_label: str | None = None,
@@ -11485,12 +11511,22 @@ def _render_token_summary_group_html(
         ) or "unknown"
         usage_href = detail_links[row.path]
         events_href = event_links[row.path]
-        search_value = f"{row.user_id} {detail['plan']} {models}".casefold()
+        thread_title = thread_titles.get(row.path, "Untitled thread")
+        compact_title = _compact_display_text(thread_title, 52)
+        title_attribute = (
+            f' title="{_escape_html_attribute(thread_title)}"'
+            if compact_title != thread_title
+            else ""
+        )
+        search_value = (
+            f"{row.user_id} {thread_title} {detail['plan']} {models}".casefold()
+        )
         thread_rows.append(
             f'<tr data-search="{_escape_html_attribute(search_value)}">'
             f'<td class="nowrap">{_token_summary_html_cell(detail["started_at"])}</td>'
             f'<td class="nowrap">{_token_summary_html_cell(detail["last_activity_at"])}</td>'
             f"<td>{_token_summary_html_cell(row.user_id)}</td>"
+            f'<td{title_attribute}>{_token_summary_html_cell(compact_title)}</td>'
             f'<td><a href="{_escape_html_attribute(quote(usage_href))}">View Usage</a></td>'
             f'<td><a href="{_escape_html_attribute(quote(events_href))}">View Events</a></td>'
             f"<td>{_token_summary_html_cell(detail['plan'])}</td>"
@@ -11524,15 +11560,15 @@ def _render_token_summary_group_html(
 *{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
 .page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}.eyebrow{{margin-top:26px;color:var(--accent)}}
 h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}.folder-context{{margin:10px 0 4px;color:var(--muted);overflow-wrap:anywhere}}.folder-context .label{{margin-right:7px;color:var(--ink)}}.summary{{color:var(--muted);font-size:17px}}.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin:30px 0 13px}}.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
-.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+7),th:nth-child(-n+7){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
+.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+8),th:nth-child(-n+8){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.section-head{{display:block}}.search{{margin-top:12px}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.search{{display:none}}thead th{{position:static}}}}
 </style></head><body><main class="page">
-<nav class="nav"><a href="../{_escape_html_attribute(quote(report_filename))}">← Token Usage Report</a></nav>
+<nav class="nav" aria-label="Breadcrumb"><a href="../{_escape_html_attribute(quote(report_filename))}">Overall Usage</a></nav>
 <div class="eyebrow">{_token_summary_html_cell(eyebrow)}</div><h1>{_token_summary_html_cell(page_title)}</h1>
 {folder_context}
 <p class="summary">{thread_count:,} {thread_word} · {int(rollup['total_tokens']):,} processed tokens · {_token_summary_html_currency(rollup['total_est_usd'])} API-equivalent estimate</p>
 <section><div class="section-head"><div><div class="label">Thread summary</div><h2>Usage by thread</h2></div><label><span class="label">Filter rows</span><br><input id="thread-filter" class="search" type="search" placeholder="User, model, plan…"></label></div>
-<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th aria-label="Usage links"></th><th aria-label="Event links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
+<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th>Title</th><th aria-label="Usage links"></th><th aria-label="Event links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
 </main><script>const filter=document.getElementById('thread-filter');filter?.addEventListener('input',()=>{{const query=filter.value.trim().toLocaleLowerCase();document.querySelectorAll('#thread-table tbody tr[data-search]').forEach(row=>{{row.hidden=!row.dataset.search.includes(query)}})}});</script></body></html>"""
 
 
@@ -11617,7 +11653,7 @@ h2{{margin:32px 0 12px;font:600 27px/1.2 "Iowan Old Style","Palatino Linotype",G
 table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+5),th:nth-child(-n+5){{text-align:left}}tbody tr:hover{{background:#f7fafb}}.empty{{padding:30px;text-align:center;color:var(--muted)}}
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.summary{{grid-template-columns:1fr}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}thead th{{position:static}}}}
 </style></head><body><main class="page">
-<nav class="nav"><a href="{_escape_html_attribute(quote(threads_filename))}">← Threads</a><a href="../{_escape_html_attribute(quote(report_filename))}">Token Usage Report</a></nav>
+<nav class="nav" aria-label="Breadcrumb"><a href="../{_escape_html_attribute(quote(report_filename))}">Overall Usage</a> › <a href="{_escape_html_attribute(quote(threads_filename))}">Threads in Folder</a></nav>
 <div class="eyebrow">Agent Report · thread detail</div><h1>Thread Token Usage</h1>
 <p class="source">{_token_summary_html_cell(row.path)}</p><p class="range">{_token_summary_html_cell(local_from)} inclusive → {_token_summary_html_cell(local_to)} exclusive · local time</p>
 <section class="summary" aria-label="Thread totals"><article><div class="label">Processed tokens</div><strong>{row.usage.processed_tokens:,}</strong></article><article><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(row.cost.total_cost or 0)}</strong></article><article><div class="label">Allocated credit usage</div><strong>{_token_summary_html_credits(rollup['credits_used'])}</strong></article></section>
@@ -11647,6 +11683,7 @@ def _write_token_summary_html(
     to_time: datetime,
     directories: list[Path],
     threads: bool = False,
+    emit_progress: bool = False,
 ) -> None:
     group_links: dict[tuple[str, str], str] | None = None
     if threads:
@@ -11663,7 +11700,14 @@ def _write_token_summary_html(
         }
         detail_links: dict[Path, str] = {}
         event_links: dict[Path, str] = {}
-        for row in rows:
+        thread_titles: dict[Path, str] = {}
+        for index, row in enumerate(rows, start=1):
+            if emit_progress:
+                print(
+                    f"Generating {index:,} of {len(rows):,}: {row.path.name}",
+                    file=sys.stderr,
+                    flush=True,
+                )
             stem = _token_summary_thread_stem(row)
             detail_path = thread_directory / f"{stem}-token-detail.html"
             ledger_csv_path = thread_directory / f"{stem}-token-detail.csv"
@@ -11679,16 +11723,27 @@ def _write_token_summary_html(
                 include_children=False,
                 candidate_paths=[row.path],
             )
+            root_thread = next(
+                thread
+                for thread in steps_run.threads
+                if thread.thread_id == steps_run.root_thread_id
+            )
+            thread_title = (
+                root_thread.task_title
+                or _derived_task_title(root_thread.activities)
+                or "Untitled thread"
+            )
+            thread_titles[row.path] = thread_title
             _write_codex_outputs(
                 steps_run,
                 steps_path,
                 nav_links=[
-                    ("Thread Token Usage", detail_path.name),
-                    ("Folder Threads", group_page_name),
-                    ("All Threads", all_threads_page_name),
-                    ("Log file", raw_path.name),
-                    ("Token Usage Report", f"../{destination.name}"),
+                    ("Overall Usage", f"../{destination.name}"),
+                    ("Threads in Folder", group_page_name),
                 ],
+                page_title="Thread Events",
+                page_subtitle=thread_title,
+                page_action_links=[("Log file", raw_path.name)],
             )
             raw_path.write_text(
                 _with_copyright_footer(
@@ -11704,8 +11759,8 @@ def _write_token_summary_html(
                         to_time=to_time,
                         report_filename=destination.name,
                         threads_filename=group_page_name,
-                        all_threads_filename=all_threads_page_name,
                         raw_path=raw_path,
+                        thread_title=thread_title,
                         ledger_csv_path=ledger_csv_path,
                     )
                 ),
@@ -11720,6 +11775,7 @@ def _write_token_summary_html(
                     report_filename=destination.name,
                     detail_links=detail_links,
                     event_links=event_links,
+                    thread_titles=thread_titles,
                     page_title="All Threads",
                     eyebrow="Agent Report · thread index",
                 )
@@ -11735,6 +11791,7 @@ def _write_token_summary_html(
                         report_filename=destination.name,
                         detail_links=detail_links,
                         event_links=event_links,
+                        thread_titles=thread_titles,
                         folder_label=key[1],
                     )
                 ),
@@ -16277,6 +16334,9 @@ def _write_codex_outputs(
     *,
     formatter_config: ToolFormatterConfig | None = None,
     nav_links: list[tuple[str, str]] | None = None,
+    page_title: str | None = None,
+    page_subtitle: str = "",
+    page_action_links: list[tuple[str, str]] | None = None,
     json_output: Path | None = None,
     turn_csv_output: Path | None = None,
     work_unit_csv_output: Path | None = None,
@@ -16295,6 +16355,9 @@ def _write_codex_outputs(
         run,
         formatter_config,
         nav_links=nav_links,
+        page_title=page_title,
+        page_subtitle=page_subtitle,
+        page_action_links=page_action_links,
         progress=_emit_report_progress if emit_progress else None,
         worker_progress=_emit_report_progress if emit_progress else None,
         workers=workers,
@@ -16959,7 +17022,10 @@ def main(argv: list[str] | None = None) -> int:
             if from_time >= to_time:
                 raise ValueError("From date and time must be before To date and time")
             rows = _token_summary_rows(
-                directories, from_time=from_time, to_time=to_time
+                directories,
+                from_time=from_time,
+                to_time=to_time,
+                emit_progress=True,
             )
             csv_destination = (
                 args.csv if args.csv is not None else token_config.get("csv")
@@ -16996,6 +17062,7 @@ def main(argv: list[str] | None = None) -> int:
                     to_time=to_time,
                     directories=directories,
                     threads=include_threads,
+                    emit_progress=True,
                 )
             if csv_destination is None and html_destination is None:
                 _print_token_summary(rows, details=include_threads)
