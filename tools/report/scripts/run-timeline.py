@@ -7122,10 +7122,10 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
     ]
     context_chart = _render_trend_table_chart(
         "context-growth-view",
-        "Context growth and compactions",
+        "Context evolution",
         growth_table,
         {
-            "title": "Context growth and compactions",
+            "title": "Context evolution",
             "description": "Context tokens over local time with compaction events marked in orange.",
             "axis_label": "Context tokens",
             "value_format": "tokens",
@@ -7185,7 +7185,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         '<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Current</th>'
         '<th>Remaining tokens</th><th>Max</th><th>Compactions</th><th>Updated</th>'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
-        '<details class="metric-details"><summary>Growth and compactions</summary>'
+        '<details class="metric-details"><summary>Context evolution</summary>'
         f"{context_chart}"
         "</details></section>"
     )

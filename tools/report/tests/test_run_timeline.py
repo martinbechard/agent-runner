@@ -1980,9 +1980,10 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "<th>Remaining tokens</th><th>Max</th>" in html
     assert "<th>Last</th><th>Max</th><th>Context window</th>" in html
     assert "<td>60</td><td>60</td><td>60.0%</td>" in html
-    assert "Growth and compactions" in html
+    assert "Context evolution" in html
+    assert "Growth and compactions" not in html
     assert 'data-view-id="context-growth-view"' in html
-    assert 'aria-label="Context growth and compactions view"' in html
+    assert 'aria-label="Context evolution view"' in html
     assert 'id="context-growth-view-table" data-trend-panel="table"' in html
     assert 'id="context-growth-view-chart" class="trend-chart-panel" data-trend-panel="chart" hidden' in html
     assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="true"' in html
