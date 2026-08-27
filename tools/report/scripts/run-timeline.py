@@ -3371,6 +3371,8 @@ class _RolloutDiscoveryMetadata:
     task_title: str
     started_at: str
     modified_at_ns: int
+    last_observed_at: str = ""
+    sub_agent_thread_ids: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -3384,6 +3386,14 @@ class _RolloutParentContext:
 class _NativeRolloutDiscovery:
     metadata: dict[Path, _RolloutDiscoveryMetadata]
     stats: dict[str, int]
+
+
+@dataclass(frozen=True)
+class _TokenSummaryDiscoverySnapshot:
+    """Invocation-wide rollout metadata used by every thread-events page."""
+
+    candidate_paths: tuple[Path, ...]
+    metadata: dict[Path, _RolloutDiscoveryMetadata]
 
 
 def _native_discovery_engine_path() -> Path:
@@ -3538,6 +3548,54 @@ def _rollout_discovery_metadata(
     return _native_rollout_discovery(candidate_paths, index_path).metadata
 
 
+def _token_summary_discovery_snapshot(
+    directories: list[Path],
+    index_path: Path | None = None,
+) -> _TokenSummaryDiscoverySnapshot:
+    """Scan every configured rollout once for identity and reciprocal child evidence."""
+
+    candidate_paths = sorted(
+        {
+            path.resolve()
+            for directory in directories
+            for path in directory.rglob("*.jsonl")
+            if path.is_file()
+        }
+    )
+    metadata = _rollout_discovery_metadata(candidate_paths, index_path)
+    enriched: dict[Path, _RolloutDiscoveryMetadata] = {}
+    for path in candidate_paths:
+        timestamps: list[datetime] = []
+        sub_agent_thread_ids: set[str] = set()
+        records, _diagnostics = _parse_jsonl_append_safe(path)
+        for _ordinal, record in records:
+            timestamp = _parse_iso_datetime(record.get("timestamp"))
+            if timestamp is not None:
+                timestamps.append(timestamp.astimezone(timezone.utc))
+            payload = record.get("payload")
+            if (
+                record.get("type") == "event_msg"
+                and isinstance(payload, dict)
+                and payload.get("type") == "sub_agent_activity"
+                and isinstance(payload.get("agent_thread_id"), str)
+                and payload["agent_thread_id"]
+            ):
+                sub_agent_thread_ids.add(payload["agent_thread_id"])
+        current = metadata[path]
+        enriched[path] = replace(
+            current,
+            started_at=(
+                min(timestamps).isoformat() if timestamps else current.started_at
+            ),
+            last_observed_at=max(timestamps).isoformat() if timestamps else "",
+            sub_agent_thread_ids=frozenset(sub_agent_thread_ids),
+        )
+    return _TokenSummaryDiscoverySnapshot(
+        candidate_paths=tuple(candidate_paths),
+        metadata=enriched,
+    )
+
+
 def _discover_rollout_paths(
     root_thread_id: str,
     candidate_paths: list[Path],
@@ -3545,13 +3603,19 @@ def _discover_rollout_paths(
     include_children: bool = True,
     include_delegations: bool = False,
     index_path: Path | None = None,
+    metadata_by_path: dict[Path, _RolloutDiscoveryMetadata] | None = None,
+    require_parent_activity: bool = False,
 ) -> tuple[list[Path], list[str], _RolloutParentContext | None]:
     identities: dict[str, tuple[Path, str]] = {}
     children: dict[str, list[str]] = {}
     delegation_targets: dict[str, set[str]] = {}
     diagnostics: list[str] = []
-    metadata_by_path = _rollout_discovery_metadata(candidate_paths, index_path)
-    for path, metadata in metadata_by_path.items():
+    if metadata_by_path is None:
+        metadata_by_path = _rollout_discovery_metadata(candidate_paths, index_path)
+    for path in candidate_paths:
+        metadata = metadata_by_path.get(path)
+        if metadata is None:
+            raise ValueError(f"Missing discovery metadata for rollout: {path}")
         identity = metadata.identity
         if identity is None:
             continue
@@ -3562,12 +3626,21 @@ def _discover_rollout_paths(
                 f"{identities[thread_id][0]} and {path}"
             )
         identities[thread_id] = (path, parent_thread_id)
-        if parent_thread_id:
-            children.setdefault(parent_thread_id, []).append(thread_id)
+    for thread_id, (_path, parent_thread_id) in identities.items():
+        if not parent_thread_id:
+            continue
+        parent_identity = identities.get(parent_thread_id)
+        if require_parent_activity and (
+            parent_identity is None
+            or thread_id
+            not in metadata_by_path[parent_identity[0]].sub_agent_thread_ids
+        ):
+            continue
+        children.setdefault(parent_thread_id, []).append(thread_id)
     if root_thread_id not in identities:
         raise ValueError(f"Codex root thread not found: {root_thread_id}")
     root_path, root_parent_thread_id = identities[root_thread_id]
-    if not root_parent_thread_id:
+    if not require_parent_activity and not root_parent_thread_id:
         root_entry = _read_codex_catalog_entry(root_path, "codex")
         inferred_parent_thread_id = (
             root_entry.parent_thread_id if root_entry is not None else ""
@@ -3579,7 +3652,7 @@ def _discover_rollout_paths(
         if inferred_parent_thread_id in identities:
             identities[root_thread_id] = (root_path, inferred_parent_thread_id)
             children.setdefault(inferred_parent_thread_id, []).append(root_thread_id)
-    if include_delegations:
+    if include_delegations and not require_parent_activity:
         for target_thread_id, (path, target_parent_thread_id) in identities.items():
             for source_thread_id in metadata_by_path[path].delegation_source_ids:
                 source_identity = identities.get(source_thread_id)
@@ -3627,7 +3700,16 @@ def _discover_rollout_paths(
             diagnostics.append(f"missing included parent {parent_thread_id} for {thread_id}")
     parent_context = None
     parent_thread_id = identities[root_thread_id][1]
-    if parent_thread_id and parent_thread_id in identities:
+    parent_edge_confirmed = (
+        parent_thread_id
+        and parent_thread_id in identities
+        and (
+            not require_parent_activity
+            or root_thread_id
+            in metadata_by_path[identities[parent_thread_id][0]].sub_agent_thread_ids
+        )
+    )
+    if parent_edge_confirmed:
         parent_path = identities[parent_thread_id][0]
         parent_context = _RolloutParentContext(
             thread_id=parent_thread_id,
@@ -5025,6 +5107,301 @@ def _record_explicit_interrupt_provenance(threads: list[CodexThreadMetrics]) -> 
             turn.abort_request_source_ordinal = tool.source_start_ordinal
 
 
+def _timestamp_in_window(value: str, start: datetime, end: datetime) -> bool:
+    """Return whether one point timestamp is inside the half-open UTC window."""
+
+    parsed = _parse_iso_datetime(value)
+    return parsed is not None and start <= parsed.astimezone(timezone.utc) < end
+
+
+def _clipped_interval(
+    started_at: str,
+    completed_at: str,
+    start: datetime,
+    end: datetime,
+) -> tuple[str, str] | None:
+    """Clip one recorded interval to a half-open UTC window when it overlaps."""
+
+    started = _parse_iso_datetime(started_at)
+    completed = _parse_iso_datetime(completed_at)
+    if started is None:
+        return None
+    started = started.astimezone(timezone.utc)
+    completed = (
+        completed.astimezone(timezone.utc)
+        if completed is not None
+        else end
+    )
+    if completed < started:
+        completed = started
+    point_interval = completed == started
+    if point_interval:
+        if not start <= started < end:
+            return None
+    elif completed <= start or started >= end:
+        return None
+    clipped_start = max(started, start)
+    clipped_end = min(completed, end)
+    return clipped_start.isoformat(), clipped_end.isoformat()
+
+
+def _project_response_to_window(
+    response: ResponseUsage,
+    start: datetime,
+    end: datetime,
+) -> ResponseUsage | None:
+    """Keep one in-window usage point and clip its optional timing interval."""
+
+    if not _timestamp_in_window(response.event_timestamp, start, end):
+        return None
+    projected = replace(response, recorded_cost_usd=None)
+    clipped = _clipped_interval(
+        response.started_at,
+        response.completed_at or response.event_timestamp,
+        start,
+        end,
+    )
+    if clipped is None:
+        projected.started_at = ""
+        projected.first_output_at = ""
+        projected.last_output_at = ""
+        projected.completed_at = ""
+        projected.duration_ms = 0
+        projected.ttft_ms = None
+        projected.decode_time_ms = None
+        projected.timing_confidence = "unavailable"
+        projected.timing_method = "window-projected-point"
+        return projected
+    projected.started_at, projected.completed_at = clipped
+    for field_name in ("first_output_at", "last_output_at"):
+        value = getattr(response, field_name)
+        parsed = _parse_iso_datetime(value)
+        if parsed is None:
+            setattr(projected, field_name, "")
+            continue
+        bounded = min(max(parsed.astimezone(timezone.utc), start), end)
+        setattr(projected, field_name, bounded.isoformat())
+    projected.duration_ms = _interval_ms(*clipped)
+    projected.ttft_ms = (
+        _interval_ms(projected.started_at, projected.first_output_at)
+        if projected.first_output_at
+        else None
+    )
+    projected.decode_time_ms = (
+        _interval_ms(projected.first_output_at, projected.last_output_at)
+        if projected.first_output_at and projected.last_output_at
+        else None
+    )
+    projected.timing_method = "window-clipped-" + response.timing_method
+    return projected
+
+
+def _project_interval_record(
+    record: ToolInterval | McpCallInterval,
+    start: datetime,
+    end: datetime,
+) -> ToolInterval | McpCallInterval | None:
+    """Return one overlapping tool or MCP interval clipped to the window."""
+
+    clipped = _clipped_interval(record.started_at, record.completed_at, start, end)
+    if clipped is None:
+        return None
+    return replace(
+        record,
+        started_at=clipped[0],
+        completed_at=clipped[1],
+        duration_ms=_interval_ms(*clipped),
+    )
+
+
+def _projected_mcp_skills(call: McpCallInterval) -> set[str]:
+    """Recover skill identities from one retained MCP call's safe arguments."""
+
+    if call.server_name != "mcp-agent-ops":
+        return set()
+    arguments: object = None
+    if call.argument_content:
+        try:
+            arguments = json.loads(call.argument_content)
+        except json.JSONDecodeError:
+            arguments = None
+    if arguments is not None:
+        return _mcp_agent_ops_skill_names(call.tool_name, arguments)
+    prefix = "skills: " if call.tool_name == "skill_load" else "skill: "
+    if not call.argument_summary.startswith(prefix):
+        return set()
+    return {
+        value
+        for value in call.argument_summary.removeprefix(prefix).split(" · ")
+        if value and not value.startswith("+")
+    }
+
+
+def _project_descendant_thread(
+    thread: CodexThreadMetrics,
+    start: datetime,
+    end: datetime,
+) -> None:
+    """Project one descendant to the selected token-summary evidence window."""
+
+    thread.responses = [
+        projected
+        for response in thread.responses
+        if (projected := _project_response_to_window(response, start, end)) is not None
+    ]
+    thread.activities = [
+        activity
+        for activity in thread.activities
+        if _timestamp_in_window(activity.event_timestamp, start, end)
+    ]
+    thread.context_snapshots = [
+        snapshot
+        for snapshot in thread.context_snapshots
+        if _timestamp_in_window(snapshot.event_timestamp, start, end)
+    ]
+    thread.compactions = [
+        compaction
+        for compaction in thread.compactions
+        if _timestamp_in_window(compaction.event_timestamp, start, end)
+    ]
+    thread.work_item_claim_events = [
+        event
+        for event in thread.work_item_claim_events
+        if _timestamp_in_window(event.event_timestamp, start, end)
+    ]
+    thread.tool_intervals = [
+        projected
+        for tool in thread.tool_intervals
+        if (projected := _project_interval_record(tool, start, end)) is not None
+    ]
+    thread.mcp_calls = [
+        projected
+        for call in thread.mcp_calls
+        if (projected := _project_interval_record(call, start, end)) is not None
+    ]
+
+    responses_by_turn: dict[str, UsageTotals] = {}
+    for response in thread.responses:
+        if response.turn_id:
+            responses_by_turn[response.turn_id] = (
+                responses_by_turn.get(response.turn_id, UsageTotals()) + response.usage
+            )
+    retained_turns: list[AgentTurn] = []
+    for turn in thread.turns:
+        clipped = _clipped_interval(
+            turn.started_at,
+            turn.completed_at or thread.last_observed_at,
+            start,
+            end,
+        )
+        has_point_evidence = turn.turn_id in responses_by_turn
+        if clipped is None and not has_point_evidence:
+            continue
+        if clipped is None:
+            response_times = [
+                response.event_timestamp
+                for response in thread.responses
+                if response.turn_id == turn.turn_id
+            ]
+            clipped = (min(response_times), max(response_times))
+        projected_turn = replace(
+            turn,
+            started_at=clipped[0],
+            completed_at=clipped[1],
+            duration_ms=_interval_ms(*clipped),
+            usage=responses_by_turn.get(turn.turn_id, UsageTotals()),
+            skills_used=[],
+            mcp_skills_loaded=[],
+            bash_skills_loaded=[],
+            mcp_call_count=0,
+        )
+        original_completed = _parse_iso_datetime(turn.completed_at)
+        if original_completed is None or original_completed.astimezone(timezone.utc) >= end:
+            projected_turn.outcome = "active"
+            projected_turn.abort_reason = ""
+            projected_turn.abort_event_timestamp = ""
+        retained_turns.append(projected_turn)
+    thread.turns = retained_turns
+
+    turns_by_id = {turn.turn_id: turn for turn in thread.turns}
+    tool_skills_used: set[str] = set()
+    bash_skills: set[str] = set()
+    mcp_skills: set[str] = set()
+    for tool in thread.tool_intervals:
+        tool_skills = _skill_names_from_value(
+            tool.argument_content or tool.argument_summary
+        )
+        tool_skills_used.update(tool_skills)
+        if _is_bash_skill_loader(tool.tool_name, tool.argument_content, None):
+            bash_skills.update(tool_skills)
+        turn = turns_by_id.get(tool.turn_id or "")
+        if turn is not None:
+            turn.skills_used = sorted(
+                set(turn.skills_used) | tool_skills,
+                key=str.casefold,
+            )
+            if _is_bash_skill_loader(tool.tool_name, tool.argument_content, None):
+                turn.bash_skills_loaded = sorted(
+                    set(turn.bash_skills_loaded) | tool_skills,
+                    key=str.casefold,
+                )
+    for call in thread.mcp_calls:
+        call_skills = _projected_mcp_skills(call)
+        mcp_skills.update(call_skills)
+        turn = turns_by_id.get(call.turn_id or "")
+        if turn is not None:
+            turn.skills_used = sorted(
+                set(turn.skills_used) | call_skills,
+                key=str.casefold,
+            )
+            turn.mcp_skills_loaded = sorted(
+                set(turn.mcp_skills_loaded) | call_skills,
+                key=str.casefold,
+            )
+            turn.mcp_call_count += 1
+    thread.bash_skills_loaded = sorted(bash_skills, key=str.casefold)
+    thread.mcp_skills_loaded = sorted(mcp_skills, key=str.casefold)
+    thread.skills_used = sorted(tool_skills_used | mcp_skills, key=str.casefold)
+
+    thread.token_totals = UsageTotals()
+    for response in thread.responses:
+        thread.token_totals = thread.token_totals + response.usage
+    turn_usage = UsageTotals()
+    for turn in thread.turns:
+        turn_usage = turn_usage + turn.usage
+    thread.unattributed_usage = _usage_nonnegative_difference(
+        thread.token_totals,
+        turn_usage,
+    )
+    thread.recorded_cost_usd = None
+    if any(turn.outcome == "active" for turn in thread.turns):
+        thread.terminal_state = "active"
+    elif thread.turns:
+        thread.terminal_state = thread.turns[-1].outcome
+    else:
+        thread.terminal_state = "indeterminate"
+
+    evidence_times: list[datetime] = []
+    for value in (
+        *(response.event_timestamp for response in thread.responses),
+        *(activity.event_timestamp for activity in thread.activities),
+        *(snapshot.event_timestamp for snapshot in thread.context_snapshots),
+        *(compaction.event_timestamp for compaction in thread.compactions),
+        *(event.event_timestamp for event in thread.work_item_claim_events),
+        *(turn.started_at for turn in thread.turns),
+        *(turn.completed_at for turn in thread.turns),
+        *(tool.started_at for tool in thread.tool_intervals),
+        *(tool.completed_at for tool in thread.tool_intervals),
+        *(call.started_at for call in thread.mcp_calls),
+        *(call.completed_at for call in thread.mcp_calls),
+    ):
+        parsed = _parse_iso_datetime(value)
+        if parsed is not None:
+            evidence_times.append(parsed.astimezone(timezone.utc))
+    thread.started_at = min(evidence_times).isoformat() if evidence_times else ""
+    thread.last_observed_at = max(evidence_times).isoformat() if evidence_times else ""
+
+
 def build_codex_rollout_run(
     root_thread_id: str,
     sessions_root: Path | list[Path],
@@ -5038,6 +5415,9 @@ def build_codex_rollout_run(
     title: str = "",
     thread_titles: dict[str, str] | None = None,
     discovery_index_path: Path | None = None,
+    discovery_metadata: dict[Path, _RolloutDiscoveryMetadata] | None = None,
+    require_parent_activity: bool = False,
+    descendant_time_range: tuple[datetime, datetime] | None = None,
     cancelled: Callable[[], bool] | None = None,
     progress: ProgressCallback | None = None,
     worker_progress: WorkerProgressCallback | None = None,
@@ -5048,6 +5428,9 @@ def build_codex_rollout_run(
 
     `sessions_root` bounds discovery. Sealing requires a stable candidate set
     and terminal included threads, then records source and pricing digests.
+    A supplied discovery map must cover every candidate path. Parent-activity
+    mode accepts only reciprocal recorded child edges. A descendant time range
+    projects every non-root thread before provenance and aggregation.
     """
     session_roots = (
         [sessions_root.resolve()]
@@ -5083,6 +5466,8 @@ def build_codex_rollout_run(
         include_children=include_children,
         include_delegations=include_delegations,
         index_path=discovery_index_path,
+        metadata_by_path=discovery_metadata,
+        require_parent_activity=require_parent_activity,
     )
     if progress is not None:
         progress(
@@ -5158,6 +5543,11 @@ def build_codex_rollout_run(
                 for index, parsed in future.result():
                     thread_slots[index] = parsed
     threads = [thread for thread in thread_slots if thread is not None]
+    if descendant_time_range is not None:
+        range_start, range_end = descendant_time_range
+        for thread in threads:
+            if thread.thread_id != root_thread_id:
+                _project_descendant_thread(thread, range_start, range_end)
     if progress is not None:
         progress(65, "Resolving thread titles", "Matching parsed threads to Codex task titles.")
     title_thread_ids = {thread.thread_id for thread in threads}
@@ -6087,20 +6477,31 @@ def _clamped_inventory_html(
     )
 
 
-def _clamped_agent_title_html(thread: CodexThreadMetrics) -> str:
+def _clamped_agent_title_html(
+    thread: CodexThreadMetrics,
+    thread_events_href: str = "",
+) -> str:
     """Render a long table assignment behind the shared more/less disclosure."""
 
     full_label = _agent_assignment_label(thread)
     compact_label = _compact_agent_assignment_label(thread)
+
+    def heading(label: str) -> str:
+        strong = f"<strong>{_escape_html(label)}</strong>"
+        if not thread_events_href:
+            return strong
+        href = _escape_html_attribute(quote(thread_events_href, safe=""))
+        return f'<a class="agent-thread-link" href="{href}">{strong}</a>'
+
     if compact_label == full_label:
-        return f"<strong>{_escape_html(full_label)}</strong>"
+        return heading(full_label)
     return (
         '<details class="clamped-disclosure agent-title-disclosure">'
-        '<summary><span class="clamped-preview"><strong>'
-        f"{_escape_html(compact_label)}</strong></span>"
+        '<summary><span class="clamped-preview">'
+        f"{heading(compact_label)}</span>"
         '<span class="clamped-toggle clamped-more">more</span></summary>'
-        '<div class="clamped-full"><strong>'
-        f"{_escape_html(full_label)}</strong>"
+        '<div class="clamped-full">'
+        f"{heading(full_label)}"
         '<button type="button" class="clamped-toggle clamped-less">less</button>'
         "</div></details>"
     )
@@ -9624,11 +10025,16 @@ def render_codex_rollout_html(
     page_title: str | None = None,
     page_subtitle: str = "",
     page_action_links: list[tuple[str, str]] | None = None,
+    thread_events_filenames: dict[str, str] | None = None,
     progress: ProgressCallback | None = None,
     worker_progress: WorkerProgressCallback | None = None,
     workers: int = 1,
 ) -> str:
-    """Render execution detail with optional navigation to an owning catalog."""
+    """Render execution detail with optional catalog and generated-thread links.
+
+    `thread_events_filenames` maps exact generated descendant IDs to sibling
+    page names. The selected root is never linked to itself.
+    """
     if progress is not None:
         progress(80, "Rendering report summary", "Preparing headline metrics and agent inventory.")
     formatter_config = formatter_config or _load_tool_formatter_config()
@@ -9769,7 +10175,16 @@ def render_codex_rollout_html(
             f'<code class="model-name">{_escape_html(thread.model or "—")}</code>'
             f"{effort_html}</span>"
         )
-        agent_title_html = _clamped_agent_title_html(thread)
+        thread_events_href = ""
+        if thread.thread_id != run.root_thread_id:
+            thread_events_href = (thread_events_filenames or {}).get(
+                thread.thread_id,
+                "",
+            )
+        agent_title_html = _clamped_agent_title_html(
+            thread,
+            thread_events_href,
+        )
         agent_rows.append((
             thread.thread_id,
             f'<tr class="agent-summary-row" data-agent-detail="{agent_detail_id}">'
@@ -12119,11 +12534,24 @@ filter?.addEventListener('input',()=>{{const query=filter.value.trim().toLocaleL
 </html>"""
 
 
-def _token_summary_thread_stem(row: _TokenSummaryRow) -> str:
-    """Return a filesystem-safe, collision-resistant name for one thread."""
+def _token_summary_thread_stem(
+    row: _TokenSummaryRow,
+    thread_id: str,
+) -> str:
+    """Return a portable page stem keyed by the stable thread identity."""
+
     basename = re.sub(r"[^A-Za-z0-9._-]+", "-", row.path.stem).strip("-.")
-    digest = hashlib.sha256(str(row.path).encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(thread_id.encode("utf-8")).hexdigest()[:10]
     return f"{basename or 'thread'}-{digest}"
+
+
+def _token_summary_steps_filename(
+    row: _TokenSummaryRow,
+    thread_id: str,
+) -> str:
+    """Return a portable events-page name whose collision key is the thread ID."""
+
+    return f"{_token_summary_thread_stem(row, thread_id)}-steps.html"
 
 
 def _token_summary_group_stem(key: tuple[str, str]) -> str:
@@ -12343,6 +12771,10 @@ def _write_token_summary_html(
 ) -> None:
     group_links: dict[tuple[str, str], str] | None = None
     if threads:
+        discovery = _token_summary_discovery_snapshot(
+            directories,
+            _default_codex_discovery_index_path(),
+        )
         thread_directory = destination.parent / f"{destination.stem}-threads"
         thread_directory.mkdir(parents=True, exist_ok=True)
         all_threads_page_name = "index.html"
@@ -12357,6 +12789,26 @@ def _write_token_summary_html(
         detail_links: dict[Path, str] = {}
         event_links: dict[Path, str] = {}
         thread_titles: dict[Path, str] = {}
+        thread_ids_by_path: dict[Path, str] = {}
+        stems_by_path: dict[Path, str] = {}
+        steps_filenames_by_path: dict[Path, str] = {}
+        thread_events_filenames: dict[str, str] = {}
+        for row in rows:
+            metadata = discovery.metadata.get(row.path.resolve())
+            identity = metadata.identity if metadata is not None else None
+            if identity is None:
+                raise ValueError(f"No Codex thread identity found in {row.path}")
+            thread_id = identity[0]
+            if thread_id in thread_events_filenames:
+                raise ValueError(
+                    f"Duplicate rollout ownership for thread {thread_id}: "
+                    f"{row.path}"
+                )
+            thread_ids_by_path[row.path] = thread_id
+            stems_by_path[row.path] = _token_summary_thread_stem(row, thread_id)
+            filename = f"{stems_by_path[row.path]}-steps.html"
+            steps_filenames_by_path[row.path] = filename
+            thread_events_filenames[thread_id] = filename
         for index, row in enumerate(rows, start=1):
             if emit_progress:
                 print(
@@ -12364,20 +12816,20 @@ def _write_token_summary_html(
                     file=sys.stderr,
                     flush=True,
                 )
-            stem = _token_summary_thread_stem(row)
+            stem = stems_by_path[row.path]
             detail_path = thread_directory / f"{stem}-token-detail.html"
             ledger_csv_path = thread_directory / f"{stem}-token-detail.csv"
             raw_path = thread_directory / f"{stem}-raw.html"
-            steps_path = thread_directory / f"{stem}-steps.html"
+            steps_path = thread_directory / steps_filenames_by_path[row.path]
             group_page_name = group_page_names[row_group_keys[row.path]]
-            identity = _rollout_identity(row.path)
-            if identity is None:
-                raise ValueError(f"No Codex thread identity found in {row.path}")
             steps_run = build_codex_rollout_run(
-                identity[0],
-                row.path.parent,
-                include_children=False,
-                candidate_paths=[row.path],
+                thread_ids_by_path[row.path],
+                directories,
+                include_children=True,
+                candidate_paths=list(discovery.candidate_paths),
+                discovery_metadata=discovery.metadata,
+                require_parent_activity=True,
+                descendant_time_range=(from_time, to_time),
             )
             root_thread = next(
                 thread
@@ -12403,6 +12855,7 @@ def _write_token_summary_html(
                 page_title="Thread Events",
                 page_subtitle=raw_thread_title,
                 page_action_links=[("Log file", raw_path.name)],
+                thread_events_filenames=thread_events_filenames,
             )
             raw_path.write_text(
                 _with_copyright_footer(
@@ -16996,6 +17449,7 @@ def _write_codex_outputs(
     page_title: str | None = None,
     page_subtitle: str = "",
     page_action_links: list[tuple[str, str]] | None = None,
+    thread_events_filenames: dict[str, str] | None = None,
     json_output: Path | None = None,
     turn_csv_output: Path | None = None,
     work_unit_csv_output: Path | None = None,
@@ -17017,6 +17471,7 @@ def _write_codex_outputs(
         page_title=page_title,
         page_subtitle=page_subtitle,
         page_action_links=page_action_links,
+        thread_events_filenames=thread_events_filenames,
         progress=_emit_report_progress if emit_progress else None,
         worker_progress=_emit_report_progress if emit_progress else None,
         workers=workers,

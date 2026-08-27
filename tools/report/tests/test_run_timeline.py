@@ -7219,6 +7219,314 @@ def test_token_summary_html_writes_local_verification_report(
     assert f"Generating 2 of 2: {ordered_names[1]}" in captured.err
 
 
+def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_window(
+    tmp_path,
+    monkeypatch,
+):
+    module = _load_module()
+    root = tmp_path / "sessions"
+
+    def write_rollout(
+        relative_path,
+        *,
+        thread_id,
+        parent_thread_id="",
+        timestamp,
+        records=(),
+    ):
+        path = root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        source = "user"
+        if parent_thread_id:
+            source = {
+                "subagent": {
+                    "thread_spawn": {
+                        "parent_thread_id": parent_thread_id,
+                        "agent_path": f"/root/{thread_id}",
+                    }
+                }
+            }
+        metadata = {
+            "timestamp": timestamp,
+            "type": "session_meta",
+            "payload": {"id": thread_id, "source": source},
+        }
+        path.write_text(
+            "\n".join(json.dumps(record) for record in (metadata, *records)) + "\n",
+            encoding="utf-8",
+        )
+        return path
+
+    def token_record(timestamp, total_input, total_cost=None):
+        info = {
+            "total_token_usage": {
+                "input_tokens": total_input,
+                "cached_input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": total_input,
+            }
+        }
+        if total_cost is not None:
+            info["total_cost_usd"] = total_cost
+        return {
+            "timestamp": timestamp,
+            "type": "event_msg",
+            "payload": {
+                "type": "token_count",
+                "info": info,
+            },
+        }
+
+    root_path = write_rollout(
+        "2026/08/25/rollout-root-selected.jsonl",
+        thread_id="root-selected",
+        timestamp="2026-08-25T11:50:00Z",
+        records=(
+            {
+                "timestamp": "2026-08-25T11:55:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "sub_agent_activity",
+                    "agent_thread_id": "child-generated",
+                    "kind": "started",
+                },
+            },
+            token_record("2026-08-25T12:05:00Z", 10),
+        ),
+    )
+    child_path = write_rollout(
+        "2026/08/24/rollout-child-generated.jsonl",
+        thread_id="child-generated",
+        parent_thread_id="root-selected",
+        timestamp="2026-08-24T23:00:00Z",
+        records=(
+            {
+                "timestamp": "2026-08-25T11:58:00Z",
+                "type": "turn_context",
+                "payload": {"model": "gpt-5.5", "turn_id": "child-turn"},
+            },
+            {
+                "timestamp": "2026-08-25T11:58:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_started",
+                    "turn_id": "child-turn",
+                    "started_at": "2026-08-25T11:58:00Z",
+                },
+            },
+            token_record("2026-08-25T11:59:00Z", 100),
+            {
+                "timestamp": "2026-08-25T11:59:30Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "invocation": {
+                        "server": "mcp-agent-ops",
+                        "tool": "skill_load",
+                        "arguments": {"names": ["before-window-skill"]},
+                    },
+                    "duration_ms": 100,
+                    "result": {"content": []},
+                },
+            },
+            {
+                "timestamp": "2026-08-25T11:59:59Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "call_id": "cross-boundary-tool",
+                    "arguments": '{"cmd":"true"}',
+                },
+            },
+            {
+                "timestamp": "2026-08-25T12:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "at from"}],
+                },
+            },
+            {
+                "timestamp": "2026-08-25T12:00:01Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "cross-boundary-tool",
+                    "output": "ok",
+                },
+            },
+            token_record("2026-08-25T12:10:00Z", 160, 987.65),
+            {
+                "timestamp": "2026-08-25T12:15:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "mcp_tool_call_end",
+                    "invocation": {
+                        "server": "mcp-agent-ops",
+                        "tool": "skill_load",
+                        "arguments": {"names": ["in-window-skill"]},
+                    },
+                    "duration_ms": 100,
+                    "result": {"content": []},
+                },
+            },
+            {
+                "timestamp": "2026-08-25T12:20:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "sub_agent_activity",
+                    "agent_thread_id": "grandchild-ungenerated",
+                    "kind": "started",
+                },
+            },
+            {
+                "timestamp": "2026-08-25T13:00:00Z",
+                "type": "response_item",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "at to"}],
+                },
+            },
+            token_record("2026-08-25T13:00:00Z", 200),
+            {
+                "timestamp": "2026-08-25T13:10:00Z",
+                "type": "event_msg",
+                "payload": {
+                    "type": "task_complete",
+                    "turn_id": "child-turn",
+                    "completed_at": "2026-08-25T13:10:00Z",
+                },
+            },
+        ),
+    )
+    grandchild_path = write_rollout(
+        "2026/08/23/rollout-grandchild-ungenerated.jsonl",
+        thread_id="grandchild-ungenerated",
+        parent_thread_id="child-generated",
+        timestamp="2026-08-23T22:00:00Z",
+        records=(token_record("2026-08-25T12:30:00Z", 7),),
+    )
+    write_rollout(
+        "2026/08/25/rollout-one-sided.jsonl",
+        thread_id="one-sided",
+        parent_thread_id="root-selected",
+        timestamp="2026-08-25T12:15:00Z",
+        records=(token_record("2026-08-25T12:16:00Z", 3),),
+    )
+    write_rollout(
+        "2026/08/25/rollout-evidence-only.jsonl",
+        thread_id="evidence-only",
+        timestamp="2026-08-25T12:17:00Z",
+    )
+    with root_path.open("a", encoding="utf-8") as handle:
+        handle.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-08-25T12:17:00Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "sub_agent_activity",
+                        "agent_thread_id": "evidence-only",
+                        "kind": "started",
+                    },
+                }
+            )
+            + "\n"
+        )
+    before_range = datetime(2026, 8, 24, tzinfo=timezone.utc).timestamp()
+    os.utime(grandchild_path, (before_range, before_range))
+    current_range = datetime(2026, 8, 25, 12, 30, tzinfo=timezone.utc).timestamp()
+    for path in (root_path, child_path):
+        os.utime(path, (current_range, current_range))
+
+    from_time = datetime(2026, 8, 25, 12, tzinfo=timezone.utc)
+    to_time = datetime(2026, 8, 25, 13, tzinfo=timezone.utc)
+    rows = module._token_summary_rows(
+        [root],
+        from_time=from_time,
+        to_time=to_time,
+    )
+    selected_usage = {row.path: row.usage.processed_tokens for row in rows}
+    assert selected_usage[root_path.resolve()] == 10
+    assert selected_usage[child_path.resolve()] == 60
+    assert grandchild_path.resolve() not in selected_usage
+
+    native_calls = 0
+    native_discovery = module._native_rollout_discovery
+
+    def count_native_discovery(candidate_paths, index_path):
+        nonlocal native_calls
+        native_calls += 1
+        return native_discovery(candidate_paths, index_path)
+
+    monkeypatch.setattr(module, "_native_rollout_discovery", count_native_discovery)
+    output = tmp_path / "reports" / "usage.html"
+    module._write_token_summary_html(
+        rows,
+        output,
+        from_time=from_time,
+        to_time=to_time,
+        directories=[root],
+        threads=True,
+    )
+
+    assert native_calls == 1
+    steps_pages = list((output.parent / "usage-threads").glob("*-steps.html"))
+    root_page = next(page for page in steps_pages if "root-selected" in page.name)
+    child_page = next(page for page in steps_pages if "child-generated" in page.name)
+    assert len(steps_pages) == len(rows)
+    root_html = root_page.read_text(encoding="utf-8")
+    child_html = child_page.read_text(encoding="utf-8")
+    assert '<div class="label">Agents used</div><div class="value">3</div>' in root_html
+    assert "one-sided" not in root_html
+    assert "evidence-only" not in root_html
+    assert "grandchild-ungenerated" in root_html
+    assert f'href="{module.quote(child_page.name, safe="")}"' in root_html
+    assert f'href="{module.quote(root_page.name, safe="")}"' not in root_html
+    assert "grandchild-ungenerated-steps.html" not in root_html
+    assert "at from" in root_html
+    assert "at to" not in root_html
+    assert "exec_command" in root_html
+    assert "in-window-skill" in root_html
+    assert "before-window-skill" not in root_html
+    assert "$987.65" not in root_html
+    assert '<span class="state state-active">active</span>' in root_html
+    assert "2026-08-25T12:00:00+00:00" in root_html
+    assert "2026-08-25T13:00:00+00:00" in root_html
+    assert '<div class="label">Agents used</div><div class="value">2</div>' in child_html
+    assert f'href="{module.quote(child_page.name, safe="")}"' not in child_html
+    assert "grandchild-ungenerated" in child_html
+    assert sum(row.usage.processed_tokens for row in rows) == 73
+
+
+def test_token_summary_steps_filename_uses_thread_identity_not_absolute_path():
+    module = _load_module()
+    first = module._TokenSummaryRow(
+        path=Path("/Volumes/mac/same rollout.jsonl"),
+        user_id="user",
+        started_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        last_activity_at=datetime(2026, 8, 25, tzinfo=timezone.utc),
+        usage=module.UsageTotals(),
+        cost=module.CostAssessment(status="unavailable"),
+    )
+    second = module.replace(first, path=Path(r"C:\\logs\\same rollout.jsonl"))
+
+    first_name = module._token_summary_steps_filename(first, "stable-thread")
+    second_name = module._token_summary_steps_filename(second, "stable-thread")
+
+    first_suffix = re.search(r"-([0-9a-f]{10})-steps\.html$", first_name)
+    second_suffix = re.search(r"-([0-9a-f]{10})-steps\.html$", second_name)
+    assert first_suffix is not None
+    assert second_suffix is not None
+    assert first_suffix.group(1) == second_suffix.group(1)
+    assert "/" not in first_name
+    assert "\\" not in second_name
+    assert module.quote(second_name, safe="") == second_name
+
+
 def test_token_summary_yaml_html_path_is_relative_to_config(tmp_path):
     module = _load_module()
     root = tmp_path / "logs"
