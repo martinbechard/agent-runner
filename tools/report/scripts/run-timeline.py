@@ -12103,6 +12103,9 @@ def _render_token_summary_group_html(
             f'<td class="nowrap">{_token_summary_html_cell(detail["last_activity_at"])}</td>'
             f"<td>{_token_summary_html_cell(row.user_id)}</td>"
             f'<td{title_attribute}>{_token_summary_html_cell(compact_title)}</td>'
+            f"<td>{_token_summary_html_currency(detail['total_est_usd'])}</td>"
+            f'<td><a href="{_escape_html_attribute(quote(usage_href))}">View Usage</a></td>'
+            f'<td><a href="{_escape_html_attribute(quote(events_href))}">View Events</a></td>'
             f"<td>{_token_summary_html_cell(detail['plan'])}</td>"
             f"<td>{_token_summary_html_cell(models)}</td>"
             f"<td>{int(detail['sub_tokens']):,}</td>"
@@ -12114,9 +12117,6 @@ def _render_token_summary_group_html(
             f"<td>{int(detail['output_tokens']):,}</td>"
             f"<td>{int(detail['reasoning_tokens']):,}</td>"
             f"<td>{int(detail['processed_tokens']):,}</td>"
-            f"<td>{_token_summary_html_currency(detail['total_est_usd'])}</td>"
-            f'<td><a href="{_escape_html_attribute(quote(usage_href))}">View Usage</a></td>'
-            f'<td><a href="{_escape_html_attribute(quote(events_href))}">View Events</a></td>'
             "</tr>"
         )
     rollup = _token_summary_rollup(rows)
@@ -12136,7 +12136,7 @@ def _render_token_summary_group_html(
 *{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);font:15px/1.5 "Avenir Next",Avenir,"Segoe UI",sans-serif}}a{{color:#155f8c;text-underline-offset:3px}}a:focus-visible,input:focus-visible{{outline:3px solid var(--focus);outline-offset:3px}}
 .page{{max-width:1540px;margin:auto;padding:36px 28px 60px}}.nav a{{font-weight:700}}.eyebrow,thead,.label{{font:700 11px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.09em;text-transform:uppercase}}.eyebrow{{margin-top:26px;color:var(--accent)}}
 h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino Linotype",Georgia,serif;letter-spacing:-.035em}}.folder-context{{margin:10px 0 4px;color:var(--muted);overflow-wrap:anywhere}}.folder-context .label{{margin-right:7px;color:var(--ink)}}.summary{{color:var(--muted);font-size:17px}}.section-head{{display:flex;justify-content:space-between;gap:24px;align-items:end;margin:30px 0 13px}}.section-head h2{{margin:4px 0 0;font:600 27px/1.15 "Iowan Old Style","Palatino Linotype",Georgia,serif}}
-.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+6),th:nth-child(-n+6),td:nth-child(n+17),th:nth-child(n+17){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
+.search{{width:min(360px,100%);padding:10px 12px;border:1px solid #aebbc1;background:var(--sheet);color:var(--ink);font:inherit}}.table-wrap{{overflow:auto;background:var(--sheet);border:1px solid var(--line)}}table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numeric:tabular-nums}}th,td{{padding:10px 12px;border-bottom:1px solid var(--line);text-align:right}}thead th{{position:sticky;top:0;background:#e9eff1;color:#46545f}}td:nth-child(-n+4),th:nth-child(-n+4),td:nth-child(n+6):nth-child(-n+9),th:nth-child(n+6):nth-child(-n+9){{text-align:left}}tbody tr:hover{{background:#f7fafb}}
 @media(max-width:720px){{.page{{padding:24px 14px 44px}}.section-head{{display:block}}.search{{margin-top:12px}}}}@media print{{body{{background:#fff}}.page{{max-width:none;padding:0}}.search{{display:none}}thead th{{position:static}}}}
 </style></head><body><main class="page">
 <nav class="nav" aria-label="Breadcrumb"><a href="../{_escape_html_attribute(quote(report_filename))}">Overall Usage</a></nav>
@@ -12144,7 +12144,7 @@ h1{{margin:7px 0 8px;font:600 clamp(36px,6vw,68px)/1 "Iowan Old Style","Palatino
 {folder_context}
 <p class="summary">{thread_count:,} {thread_word} · {int(rollup['total_tokens']):,} processed tokens · {_token_summary_html_currency(rollup['total_est_usd'])} API-equivalent estimate</p>
 <section><div class="section-head"><div><div class="label">Thread summary</div><h2>Usage by thread</h2></div><label><span class="label">Filter rows</span><br><input id="thread-filter" class="search" type="search" placeholder="User, model, plan…"></label></div>
-<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th>Title</th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th><th aria-label="Usage links"></th><th aria-label="Event links"></th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
+<div class="table-wrap"><table id="thread-table"><thead><tr><th>Started</th><th>Last activity</th><th>User</th><th>Title</th><th>Estimate</th><th aria-label="Usage links"></th><th aria-label="Event links"></th><th>Plan</th><th>Model</th><th>Sub tokens</th><th>Credit tokens</th><th>Credits used</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th></tr></thead><tbody>{''.join(thread_rows)}</tbody></table></div></section>
 </main><script>const filter=document.getElementById('thread-filter');filter?.addEventListener('input',()=>{{const query=filter.value.trim().toLocaleLowerCase();document.querySelectorAll('#thread-table tbody tr[data-search]').forEach(row=>{{row.hidden=!row.dataset.search.includes(query)}})}});</script></body></html>"""
 
 

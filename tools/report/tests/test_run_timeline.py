@@ -6930,11 +6930,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert all_threads_report.count(">View Events</a>") == 2
     assert "gpt-5.5 · effort high" in all_threads_report
     assert "gpt-5.4 · effort medium" in all_threads_report
-    assert all_threads_report.index("<th>Estimate</th>") < all_threads_report.index(
-        '<th aria-label="Usage links"></th>'
-    )
-    assert all_threads_report.index('<th aria-label="Usage links"></th>') < (
-        all_threads_report.index('<th aria-label="Event links"></th>')
+    assert (
+        '<th>Title</th><th>Estimate</th><th aria-label="Usage links"></th>'
+        '<th aria-label="Event links"></th><th>Plan</th><th>Model</th>'
+        in all_threads_report
     )
     assert rollout.name not in all_threads_report
     assert second_rollout.name not in all_threads_report
@@ -6957,11 +6956,10 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "gpt-5.4 · effort medium" in folder_report
     assert '<th aria-label="Usage links"></th>' in folder_report
     assert '<th aria-label="Event links"></th>' in folder_report
-    assert folder_report.index("<th>Estimate</th>") < folder_report.index(
-        '<th aria-label="Usage links"></th>'
-    )
-    assert folder_report.index('<th aria-label="Usage links"></th>') < (
-        folder_report.index('<th aria-label="Event links"></th>')
+    assert (
+        '<th>Title</th><th>Estimate</th><th aria-label="Usage links"></th>'
+        '<th aria-label="Event links"></th><th>Plan</th><th>Model</th>'
+        in folder_report
     )
     assert folder_report.count(">View Usage</a>") == 2
     assert folder_report.count(">View Events</a>") == 2
