@@ -1981,8 +1981,8 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "60.0%" in html
     assert '<div class="metrics" aria-label="Run metrics">' in html
     assert "<strong>Generated On:</strong>" in html
-    assert html.index('<div class="metrics" aria-label="Run metrics">') < html.index(
-        '<nav class="view-nav"'
+    assert html.index('<nav class="view-nav"') < html.index(
+        '<div class="metrics" aria-label="Run metrics">'
     )
     assert 'class="local-timestamp"' not in html
     assert "Intl.DateTimeFormat" in html

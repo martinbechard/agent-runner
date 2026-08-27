@@ -11404,6 +11404,7 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <p class="generated-on"><strong>Generated On:</strong> {_local_time_html(report_generated_at)}</p>
 {run_label_html}
 {report_range_html}
+{view_nav_html}
 <div class="metrics" aria-label="Run metrics">
 <div class="metric"><div class="label">Runtime</div><div class="value">{_escape_html(run.runtime)} run</div></div>
 <div class="metric"><div class="label">State</div><div class="value">{_escape_html(run.state)}</div></div>
@@ -11419,7 +11420,6 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <div class="metric"><div class="label">Tool time</div><div class="value">{_format_ms(run.tool_time_ms)}</div></div>
 <div class="metric"><div class="label">Peak concurrency</div><div class="value">{run.peak_concurrency}</div></div>
 </div>
-{view_nav_html}
 {parent_context_html}
 <h2>Token composition</h2>
 <div class="token-composition" title="Processed token composition">
