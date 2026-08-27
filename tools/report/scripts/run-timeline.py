@@ -7700,7 +7700,7 @@ def _render_context_metrics_panel(run: CodexRunMetrics, *, id_suffix: str) -> st
         f'<span class="metric-detail">{summary.high_water_percent:.1f}%</span></div>'
         '<div class="metric"><div class="label">Compactions</div>'
         f'<div class="value">{summary.compaction_count:,}</div></div></div>'
-        '<details class="metric-details"><summary>Context evolution</summary>'
+        '<details class="metric-details" data-scope-detail="context-evolution"><summary>Context evolution</summary>'
         f"{context_chart}"
         "</details></div>"
     )
@@ -7739,8 +7739,13 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         f'{"".join(options)}</select></label>{"".join(panels)}'
         '<script>(function(){const section=document.getElementById("context-usage");'
         'const select=section?.querySelector("[data-context-scope-select]");if(!select)return;'
-        'select.addEventListener("change",()=>section.querySelectorAll("[data-context-scope]").forEach('
-        'panel=>{panel.hidden=panel.dataset.contextScope!==select.value;}));})();</script></section>'
+        'select.addEventListener("change",()=>{const current=section.querySelector("[data-context-scope]:not([hidden])");'
+        'const next=section.querySelector(`[data-context-scope="${select.value}"]`);'
+        'const states=Object.fromEntries(Array.from(current?.querySelectorAll("[data-scope-detail]")||[]).map('
+        'detail=>[detail.dataset.scopeDetail,detail.open]));next?.querySelectorAll("[data-scope-detail]").forEach('
+        'detail=>{if(detail.dataset.scopeDetail in states)detail.open=states[detail.dataset.scopeDetail];});'
+        'section.querySelectorAll("[data-context-scope]").forEach('
+        'panel=>{panel.hidden=panel!==next;});});})();</script></section>'
     )
 
 
@@ -7852,9 +7857,9 @@ def _render_inference_metrics_panel(
         f'<div class="value">{_escape_html(median_ttft)}</div></div>'
         '<div class="metric"><div class="label">Measured calls</div>'
         f'<div class="value">{summary.measured_call_count:,} / {summary.call_count:,}</div></div></div>'
-        f'<details class="metric-details"><summary>15-minute trend · {_escape_html(scope_label)} · {_escape_html(percentile_text)}</summary>'
+        f'<details class="metric-details" data-scope-detail="inference-trend"><summary>15-minute trend · {_escape_html(scope_label)} · {_escape_html(percentile_text)}</summary>'
         f"{inference_chart}</details>"
-        '<details class="metric-details"><summary>Response-size bands</summary>'
+        '<details class="metric-details" data-scope-detail="response-size-bands"><summary>Response-size bands</summary>'
         f"{size_chart}</details></div>"
     )
 
@@ -7902,8 +7907,13 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f'{"".join(options)}</select></label>{"".join(panels)}'
         '<script>(function(){const section=document.getElementById("inference-rate");'
         'const select=section?.querySelector("[data-inference-scope-select]");if(!select)return;'
-        'select.addEventListener("change",()=>section.querySelectorAll("[data-inference-scope]").forEach('
-        'panel=>{panel.hidden=panel.dataset.inferenceScope!==select.value;}));})();</script></section>'
+        'select.addEventListener("change",()=>{const current=section.querySelector("[data-inference-scope]:not([hidden])");'
+        'const next=section.querySelector(`[data-inference-scope="${select.value}"]`);'
+        'const states=Object.fromEntries(Array.from(current?.querySelectorAll("[data-scope-detail]")||[]).map('
+        'detail=>[detail.dataset.scopeDetail,detail.open]));next?.querySelectorAll("[data-scope-detail]").forEach('
+        'detail=>{if(detail.dataset.scopeDetail in states)detail.open=states[detail.dataset.scopeDetail];});'
+        'section.querySelectorAll("[data-inference-scope]").forEach('
+        'panel=>{panel.hidden=panel!==next;});});})();</script></section>'
     )
 
 

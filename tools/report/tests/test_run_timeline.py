@@ -2001,6 +2001,7 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert 'data-context-scope="context-agent-0"' in html
     assert 'data-view-id="context-growth-view-0"' in html
     assert "Context evolution ·" not in html
+    assert 'data-scope-detail="context-evolution"' in html
     assert 'id="context-growth-view-0-table" data-trend-panel="table" hidden' in html
     assert 'id="context-growth-view-0-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
     assert 'data-trend-mode="chart" aria-controls="context-growth-view-0-chart" aria-pressed="true"' in html
@@ -2009,6 +2010,9 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Interval maxima remain available in the table view" in html
     assert "Bucket high" not in html
     assert "Response-size bands" in html
+    assert 'data-scope-detail="inference-trend"' in html
+    assert 'data-scope-detail="response-size-bands"' in html
+    assert "detail.open=states[detail.dataset.scopeDetail]" in html
     assert 'data-view-id="response-size-view-0"' in html
     assert 'id="response-size-view-0-table" data-trend-panel="table" hidden' in html
     assert 'id="response-size-view-0-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
