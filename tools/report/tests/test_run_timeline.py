@@ -1998,7 +1998,11 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Context evolution" in html
     assert "Growth and compactions" not in html
     assert 'data-view-id="context-growth-view"' in html
-    assert 'aria-label="Context evolution view"' in html
+    assert 'aria-label="Context evolution · root agent view"' in html
+    assert "Context evolution · root agent</summary>" in html
+    assert 'class="per-agent-context-table"' in html
+    assert 'class="per-agent-context-agent-column"' in html
+    assert ".per-agent-context-agent-column { width:320px; }" in html
     assert 'id="context-growth-view-table" data-trend-panel="table" hidden' in html
     assert 'id="context-growth-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
     assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="false"' in html
@@ -2021,7 +2025,8 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert 'class:"trend-chart-bar", tabindex:0, role:"img", "aria-label":detail' in html
     assert '"Output tokens per response"' in html
     assert 'data-view-id="inference-trend-view"' in html
-    assert 'aria-label="Inference rate over time view"' in html
+    assert 'aria-label="Inference rate over time · all agents view"' in html
+    assert "15-minute trend · all agents ·" in html
     assert 'id="inference-trend-view-table" data-trend-panel="table" hidden' in html
     assert 'id="inference-trend-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
     assert 'data-trend-mode="table" aria-controls="inference-trend-view-table" aria-pressed="false"' in html

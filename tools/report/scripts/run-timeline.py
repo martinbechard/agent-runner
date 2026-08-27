@@ -7670,12 +7670,12 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
     ]
     context_chart = _render_trend_table_chart(
         "context-growth-view",
-        "Context evolution",
+        "Context evolution · root agent",
         growth_table,
         {
-            "title": "Context evolution",
+            "title": "Context evolution · root agent",
             "description": (
-                "Context tokens over time with compaction events marked in orange. "
+                "Root-agent context tokens over time with compaction events marked in orange. "
                 "Interval maxima remain available in the table view."
             ),
             "axis_label": "Context tokens",
@@ -7716,10 +7716,12 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         '<div class="metric"><div class="label">Compactions</div>'
         f'<div class="value">{summary.compaction_count:,}</div></div></div>'
         '<details class="metric-details"><summary>Per-agent context</summary>'
-        '<div class="table-scroll"><table><thead><tr><th>Agent</th><th>Current</th>'
+        '<div class="table-scroll"><table class="per-agent-context-table"><colgroup>'
+        '<col class="per-agent-context-agent-column"><col><col><col><col><col></colgroup>'
+        '<thead><tr><th>Agent</th><th>Current</th>'
         '<th>Remaining tokens</th><th>Max</th><th>Compactions</th><th>Updated</th>'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
-        '<details class="metric-details"><summary>Context evolution</summary>'
+        '<details class="metric-details"><summary>Context evolution · root agent</summary>'
         f"{context_chart}"
         "</details></section>"
     )
@@ -7766,11 +7768,11 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
     )
     inference_chart = _render_trend_table_chart(
         "inference-trend-view",
-        "Inference rate over time",
+        "Inference rate over time · all agents",
         inference_table,
         {
-            "title": "Inference rate over time",
-            "description": "Measured output-token inference rate by 15-minute period.",
+            "title": "Inference rate over time · all agents",
+            "description": "Run-wide measured output-token inference rate by 15-minute period across all included agents.",
             "axis_label": "Tokens per second",
             "value_format": "rate",
             "series": [
@@ -7832,7 +7834,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f'<div class="value">{_escape_html(median_ttft)}</div></div>'
         '<div class="metric"><div class="label">Measured calls</div>'
         f'<div class="value">{summary.measured_call_count:,} / {summary.call_count:,}</div></div></div>'
-        f'<details class="metric-details"><summary>15-minute trend · {_escape_html(percentile_text)}</summary>'
+        f'<details class="metric-details"><summary>15-minute trend · all agents · {_escape_html(percentile_text)}</summary>'
         f"{inference_chart}</details>"
         '<details class="metric-details"><summary>Response-size bands</summary>'
         f"{size_chart}</details></section>"
@@ -11052,6 +11054,9 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metric-details {{ margin-top:8px; }}
 .metric-details > summary {{ width:max-content; color:#2563a6; cursor:pointer; font-size:.84em; font-weight:700; }}
 .metric-details .table-scroll {{ margin-top:8px; max-height:42vh; }}
+.per-agent-context-table {{ table-layout:fixed; min-width:980px; }}
+.per-agent-context-agent-column {{ width:320px; }}
+.per-agent-context-table th:first-child, .per-agent-context-table td:first-child {{ width:320px; max-width:320px; white-space:normal; overflow-wrap:anywhere; }}
 .local-timestamp {{ font-variant-numeric:tabular-nums; }}
 .turn-state-detail {{ font-size:.66em; line-height:1.25; }}
 .turn-state-source {{ display:block; margin-top:2px; color:#78909c; font-size:.58em; font-weight:400; line-height:1.2; overflow-wrap:anywhere; }}
