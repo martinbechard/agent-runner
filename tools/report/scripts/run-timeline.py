@@ -4479,7 +4479,7 @@ def _runtime_intervals_for_thread(
             response_detail = response.model
             response_effort = _response_effort(thread, response)
             if response_effort:
-                effort_detail = f"effort {response_effort}"
+                effort_detail = response_effort
                 response_detail = (
                     f"{response_detail} · {effort_detail}"
                     if response_detail
@@ -6428,7 +6428,7 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
                 "</tr>"
             )
         effort_html = (
-            f' · <span class="model-effort">effort {_escape_html(effort)}</span>'
+            f' · <span class="model-effort">{_escape_html(effort)}</span>'
             if effort
             else ""
         )
@@ -6479,7 +6479,7 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
                 f'<td>{usage.cache_create_input_tokens:,}</td>' if show_cache_write else ""
             )
             effort_html = (
-                f' <span class="model-effort">· effort {_escape_html(effort)}</span>'
+                f' <span class="model-effort">· {_escape_html(effort)}</span>'
                 if effort
                 else ""
             )
@@ -8463,7 +8463,7 @@ function initializeExecutionHeatmap(section) {
       return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
     }).map(function(response) {
       var modelLabel = response.model || "Model response";
-      if (response.effort) modelLabel += " · effort " + response.effort;
+      if (response.effort) modelLabel += " · " + response.effort;
       if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
       return {
         started_at:response.completed_at || response.started_at,
@@ -9572,7 +9572,7 @@ def _execution_heatmap_payload(
                     {
                         "id": model_id,
                         "label": response_model
-                        + (f" · effort {response_effort}" if response_effort else ""),
+                        + (f" · {response_effort}" if response_effort else ""),
                     }
                 )
             responses.append(
@@ -9888,7 +9888,7 @@ def query_codex_run_time_range(
                 continue
             model_label = response["model"] or "Model response"
             if response["effort"]:
-                model_label += f" · effort {response['effort']}"
+                model_label += f" · {response['effort']}"
             events.append(
                 {
                     "event_id": response["event_id"],
@@ -10303,7 +10303,7 @@ def render_codex_rollout_html(
             f"{_timestamp_offset_label(run, agent_timeline_intervals[0][0])}"
         )
         effort_html = (
-            f' · <span class="effort-level">effort {_escape_html(thread.effort)}</span>'
+            f' · <span class="effort-level">{_escape_html(thread.effort)}</span>'
             if thread.effort
             else ""
         )

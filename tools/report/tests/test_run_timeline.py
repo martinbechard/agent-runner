@@ -1484,8 +1484,8 @@ def test_model_usage_separates_the_same_model_by_effort_level(tmp_path):
 
     assert model_usage.count('class="model-usage-group"') == 2
     assert model_usage.count(f'<code class="model-name">{main.model}</code>') == 4
-    assert '<span class="model-effort">effort max</span>' in model_usage
-    assert '<span class="model-effort">effort medium</span>' in model_usage
+    assert '<span class="model-effort">max</span>' in model_usage
+    assert '<span class="model-effort">medium</span>' in model_usage
     assert "effort mixed" not in model_usage
     assert "Each model and effort combination is a separate group." in model_usage
 
@@ -1780,7 +1780,7 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
         for interval in run.runtime_intervals
         if interval.state == "model_inference"
     ]
-    assert inference_intervals[0].detail == "gpt-5.6-sol · effort high"
+    assert inference_intervals[0].detail == "gpt-5.6-sol · high"
     payload = module._execution_heatmap_payload(run)
     inference_payload = next(
         interval
@@ -2551,6 +2551,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "var drilldownMinutes = [1440, 360, 60, 30, 15, 5, 1];" in html
     assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
+    assert 'modelLabel += " · " + response.effort' in html
+    assert 'modelLabel += " · effort "' not in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
     assert ".heatmap-event-table { width:100%; table-layout:fixed;" in html
     assert '<th>Time</th><th>Event</th><th>Details</th><th>Action</th>' in html
@@ -3510,13 +3512,13 @@ def test_native_codex_unsupported_subscription_model_has_no_monetary_estimate(tm
         '<span class="state state-complete">complete</span>'
         '<span class="agent-model-metadata">'
         '<code class="model-name">internal-subscription-model</code> · '
-        '<span class="effort-level">effort high</span></span>'
+        '<span class="effort-level">high</span></span>'
         in agent_table
     )
     model_usage = html.split('<section id="model-usage"', 1)[1].split(
         '<div id="timeline"', 1
     )[0]
-    assert '<span class="model-effort">effort high</span>' in model_usage
+    assert '<span class="model-effort">high</span>' in model_usage
 
 
 def test_pricing_registry_contains_current_codex_and_claude_rates():
