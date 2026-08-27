@@ -11695,7 +11695,7 @@ def _token_summary_model_rollup(
 
 def _token_summary_model_label(model: str, effort: str) -> str:
     """Return one compact model label with its logged thinking level."""
-    return f"{model or 'unknown'} · effort {effort}" if effort else model or "unknown"
+    return f"{model or 'unknown'} · {effort}" if effort else model or "unknown"
 
 
 def _token_summary_html_currency(value: object) -> str:
