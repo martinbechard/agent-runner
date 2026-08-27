@@ -7624,7 +7624,11 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-drilldown-path button { padding:3px 6px; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:4px; cursor:pointer; font:600 1em var(--font-ui); }
 .heatmap-drilldown-path button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
 .heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
-.heatmap-event-list li { margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.heatmap-event-list li { display:flex; align-items:baseline; gap:10px; margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
+.heatmap-event-copy { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.heatmap-event-turn-link { flex:0 0 auto; color:#2563a6; font-weight:700; text-decoration:none; }
+.heatmap-event-turn-link:hover { text-decoration:underline; }
+.heatmap-event-turn-link:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
 .heatmap-event-list code { color:#263238; }
 @media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame, .heatmap-drilldown-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
 """
@@ -7790,7 +7794,9 @@ function initializeExecutionHeatmap(section) {
         return {
           started_at:interval.started_at,
           label:interval.detail || stateLabels.get(interval.state) || interval.state,
-          detail:duration(interval.duration_ms) + (interval.preview ? " · " + interval.preview : "")
+          detail:duration(interval.duration_ms) + (interval.preview ? " · " + interval.preview : ""),
+          turn_target:interval.turn_target,
+          event_target:interval.event_target
         };
       });
     }
@@ -7802,7 +7808,9 @@ function initializeExecutionHeatmap(section) {
         return {
           started_at:tool.started_at,
           label:tool.tool_name,
-          detail:duration(tool.duration_ms) + (tool.preview ? " · " + tool.preview : "")
+          detail:duration(tool.duration_ms) + (tool.preview ? " · " + tool.preview : ""),
+          turn_target:tool.turn_target,
+          event_target:tool.event_target
         };
       });
     }
@@ -7817,7 +7825,9 @@ function initializeExecutionHeatmap(section) {
       return {
         started_at:response.completed_at || response.started_at,
         label:modelLabel + " · " + formatValue(metric, metric === "models" ? (row.id === "cost_usd" ? response.cost_usd : response.usage.processed_tokens) : responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + (metric === "models" && row.id !== "cost_usd" ? "processed tokens" : row.label.toLowerCase()),
-        detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : "")
+        detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : ""),
+        turn_target:response.turn_target,
+        event_target:response.event_target
       };
     });
   }
@@ -7946,9 +7956,22 @@ function initializeExecutionHeatmap(section) {
     }
     events.slice(0, 100).forEach(function(event) {
       var item = document.createElement("li");
+      var copy = document.createElement("span");
+      copy.className = "heatmap-event-copy";
       var time = document.createElement("code");
       time.textContent = timeFormatter.format(new Date(event.started_at));
-      item.append(time, document.createTextNode(" · " + event.label + " · " + event.detail));
+      copy.append(time, document.createTextNode(" · " + event.label + " · " + event.detail));
+      item.appendChild(copy);
+      if (event.turn_target) {
+        var turnLink = document.createElement("a");
+        turnLink.className = "heatmap-event-turn-link";
+        turnLink.href = "#" + event.turn_target;
+        turnLink.textContent = "View in turn";
+        turnLink.dataset.turnDetailLink = "";
+        turnLink.dataset.returnTarget = "#execution-heatmap";
+        if (event.event_target) turnLink.dataset.turnEventTarget = event.event_target;
+        item.appendChild(turnLink);
+      }
       eventList.appendChild(item);
     });
     if (events.length > 100) {
@@ -8690,6 +8713,89 @@ def _response_event_id(thread: CodexThreadMetrics, response: ResponseUsage) -> s
     )
 
 
+def _tool_event_id(thread: CodexThreadMetrics, tool: ToolInterval) -> str:
+    return _time_range_event_id(
+        "tool_call",
+        thread.thread_id,
+        tool.turn_id,
+        tool.started_at,
+        tool.completed_at,
+        tool.source_path,
+        tool.source_start_ordinal,
+    )
+
+
+def _mcp_event_id(thread: CodexThreadMetrics, call: McpCallInterval) -> str:
+    return _time_range_event_id(
+        "mcp_call",
+        thread.thread_id,
+        call.turn_id,
+        call.started_at,
+        call.completed_at,
+        call.source_path,
+        call.source_ordinal,
+    )
+
+
+def _turn_detail_targets(run: CodexRunMetrics) -> dict[tuple[str, str], str]:
+    """Return stable turn-popup IDs shared by the timeline and heatmap."""
+
+    return {
+        (thread.thread_id, turn.turn_id): (
+            f"turn-tool-call-list-{thread_index}-{turn_index}"
+        )
+        for thread_index, thread in enumerate(run.threads, start=1)
+        for turn_index, turn in enumerate(thread.turns, start=1)
+    }
+
+
+def _runtime_interval_event_target(
+    thread: CodexThreadMetrics | None,
+    interval: RuntimeStateInterval,
+) -> str:
+    """Return the closest concrete turn-row target for one runtime interval."""
+
+    if thread is None or not interval.turn_id:
+        return ""
+    candidates: list[tuple[int, str]] = []
+    if interval.state == "model_inference":
+        for response in thread.responses:
+            if response.turn_id != interval.turn_id:
+                continue
+            overlap = _interval_overlap_ms(
+                interval.started_at,
+                interval.completed_at,
+                response.started_at,
+                response.last_output_at or response.completed_at,
+            )
+            if overlap:
+                candidates.append((overlap, _response_event_id(thread, response)))
+    else:
+        for tool in thread.tool_intervals:
+            if tool.turn_id != interval.turn_id:
+                continue
+            overlap = _interval_overlap_ms(
+                interval.started_at,
+                interval.completed_at,
+                tool.started_at,
+                tool.completed_at,
+            )
+            if overlap:
+                candidates.append((overlap, _tool_event_id(thread, tool)))
+        for call in thread.mcp_calls:
+            if call.turn_id != interval.turn_id:
+                continue
+            overlap = _interval_overlap_ms(
+                interval.started_at,
+                interval.completed_at,
+                call.started_at,
+                call.completed_at,
+            )
+            if overlap:
+                candidates.append((overlap, _mcp_event_id(thread, call)))
+    return max(candidates, default=(0, ""), key=lambda item: item[0])[1]
+
+
 def _execution_heatmap_payload(
     run: CodexRunMetrics,
     *,
@@ -8725,6 +8831,7 @@ def _execution_heatmap_payload(
         for thread in run.threads
     ]
     threads_by_id = {thread.thread_id: thread for thread in run.threads}
+    turn_targets = _turn_detail_targets(run)
     intervals = []
     interval_previews = (
         _runtime_interval_previews(
@@ -8756,6 +8863,10 @@ def _execution_heatmap_payload(
                 "state": interval.state,
                 "thread_id": interval.thread_id,
                 "turn_id": interval.turn_id or "",
+                "turn_target": turn_targets.get(
+                    (interval.thread_id, interval.turn_id or ""), ""
+                ),
+                "event_target": _runtime_interval_event_target(thread, interval),
                 "started_at": interval.started_at,
                 "ended_at": interval.completed_at,
                 "duration_ms": interval.duration_ms,
@@ -8813,6 +8924,10 @@ def _execution_heatmap_payload(
                     "event_id": _response_event_id(thread, response),
                     "thread_id": thread.thread_id,
                     "turn_id": response.turn_id or "",
+                    "turn_target": turn_targets.get(
+                        (thread.thread_id, response.turn_id or ""), ""
+                    ),
+                    "event_target": _response_event_id(thread, response),
                     "model": response_model,
                     "model_id": model_id,
                     "effort": response_effort,
@@ -8838,6 +8953,10 @@ def _execution_heatmap_payload(
         {
             "thread_id": thread.thread_id,
             "turn_id": tool.turn_id or "",
+            "turn_target": turn_targets.get(
+                (thread.thread_id, tool.turn_id or ""), ""
+            ),
+            "event_target": _tool_event_id(thread, tool),
             "tool_name": tool.tool_name,
             "started_at": tool.started_at,
             "completed_at": tool.completed_at,
@@ -9584,7 +9703,8 @@ def render_codex_rollout_html(
             turn_cost = _cost_for_turn(thread, turn)
             turn_detail_overlay_id = f"{tool_call_overlay_id}-{turn_index}"
             turn_link = (
-                f'<a class="drilldown-link" href="#{turn_detail_overlay_id}">'
+                f'<a class="drilldown-link" href="#{turn_detail_overlay_id}" '
+                'data-turn-detail-link data-return-target="#timeline">'
                 f"<code>{_escape_html(turn.turn_id)}</code></a>"
             )
             turn_state_badge = (
@@ -9706,7 +9826,9 @@ def render_codex_rollout_html(
                         f'<td>{_timestamp_offset_label(run, response.event_timestamp)}</td>'
                         f'<td>{response_cost_label}</td>'
                         f'<td>{_render_model_names([response.model] if response.model else [])}</td>'
-                        '<td><span class="activity-name">model</span></td>'
+                        '<td><span class="activity-name">model</span>'
+                        f'<span id="{_response_event_id(thread, response)}" '
+                        'class="turn-event-anchor"></span></td>'
                         f'<td>{model_arguments}</td>'
                         f'<td>{model_result}</td>'
                         "</tr>",
@@ -9779,7 +9901,9 @@ def render_codex_rollout_html(
                         f"<td>{_timestamp_offset_label(run, tool.started_at)}</td>"
                         '<td>—</td>'
                         f'<td>{_render_model_names(tool_models, attributed=not bool(tool.model))}</td>'
-                        f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code></td>'
+                        f'<td><code class="tool-name">{_escape_html(tool.tool_name)}</code>'
+                        f'<span id="{_tool_event_id(thread, tool)}" '
+                        'class="turn-event-anchor"></span></td>'
                         f"<td>{_render_tool_argument(tool, formatter_config)}</td>"
                         f"<td>{_render_tool_result(tool)}</td>"
                         "</tr>",
@@ -9806,7 +9930,9 @@ def render_codex_rollout_html(
                         f"<td>{_timestamp_offset_label(run, call.started_at)}</td>"
                         '<td>—</td>'
                         f'<td>{_render_model_names(call_models, attributed=not bool(call.model))}</td>'
-                        f'<td><code class="tool-name mcp-tool-name">{_escape_html(mcp_name)}</code></td>'
+                        f'<td><code class="tool-name mcp-tool-name">{_escape_html(mcp_name)}</code>'
+                        f'<span id="{_mcp_event_id(thread, call)}" '
+                        'class="turn-event-anchor"></span></td>'
                         f"<td>{_render_mcp_argument(call)}</td>"
                         f"<td>{_render_mcp_result(call)}</td>"
                         "</tr>",
@@ -10422,6 +10548,9 @@ td {{ font-size:.85em; }}
 .tool-call-panel .table-scroll {{ flex:1 1 auto; min-height:0; max-height:none; }}
 .turn-detail-table {{ min-width:900px; margin:0; table-layout:fixed; }}
 .turn-detail-table th, .turn-detail-table td {{ vertical-align:top; white-space:normal; }}
+.turn-detail-event-highlight > td {{ background:#fff4e5; box-shadow:inset 3px 0 0 #e87523; }}
+.turn-detail-table tr:focus {{ outline:2px solid #e87523; outline-offset:-2px; }}
+.turn-event-anchor {{ display:none; }}
 .turn-detail-table .turn-detail-index-column {{ width:4%; }}
 .turn-detail-table .turn-detail-offset-column {{ width:7%; }}
 .turn-detail-table .turn-detail-cost-column {{ width:7%; }}
@@ -10949,6 +11078,28 @@ document.querySelectorAll(".clamped-less").forEach(function(button) {{
     event.stopPropagation();
     var disclosure = button.closest(".clamped-disclosure");
     if (disclosure) disclosure.open = false;
+  }});
+}});
+document.addEventListener("click", function(event) {{
+  var link = event.target.closest("[data-turn-detail-link]");
+  if (!link) return;
+  var targetId = (link.getAttribute("href") || "").replace(/^#/, "");
+  var overlay = document.getElementById(targetId);
+  if (!overlay) return;
+  var closeLink = overlay.querySelector(".tool-call-close");
+  if (closeLink) closeLink.setAttribute("href", link.dataset.returnTarget || "#timeline");
+  requestAnimationFrame(function() {{
+    document.querySelectorAll(".turn-detail-event-highlight").forEach(function(row) {{
+      row.classList.remove("turn-detail-event-highlight");
+    }});
+    if (!link.dataset.turnEventTarget) return;
+    var eventTarget = document.getElementById(link.dataset.turnEventTarget);
+    var eventRow = eventTarget ? eventTarget.closest("tr") : null;
+    if (!eventRow || !overlay.contains(eventRow)) return;
+    eventRow.classList.add("turn-detail-event-highlight");
+    eventRow.setAttribute("tabindex", "-1");
+    eventRow.scrollIntoView({{ block:"center", inline:"nearest" }});
+    eventRow.focus({{ preventScroll:true }});
   }});
 }});
 {_TREND_CHART_SCRIPT}

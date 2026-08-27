@@ -2497,7 +2497,13 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
     assert ".heatmap-event-list li {" in html
-    assert "white-space:nowrap; overflow:hidden; text-overflow:ellipsis;" in html
+    assert ".heatmap-event-copy { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }" in html
+    assert 'turnLink.textContent = "View in turn";' in html
+    assert 'turnLink.dataset.returnTarget = "#execution-heatmap";' in html
+    assert "turnLink.dataset.turnEventTarget = event.event_target" in html
+    assert 'document.addEventListener("click", function(event)' in html
+    assert 'eventRow.classList.add("turn-detail-event-highlight")' in html
+    assert 'eventRow.scrollIntoView({ block:"center", inline:"nearest" })' in html
 
     payload_text = html.split('id="execution-heatmap-data">', 1)[1].split(
         "</script>", 1
@@ -2528,6 +2534,15 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
         "context_tokens",
     }
     assert all("model_id" in response for response in payload["responses"])
+    assert all(response["turn_target"] for response in payload["responses"])
+    assert all(response["event_target"] for response in payload["responses"])
+    assert all(tool["turn_target"] for tool in payload["tools"])
+    assert all(tool["event_target"] for tool in payload["tools"])
+    assert any(interval["turn_target"] for interval in payload["intervals"])
+    assert any(interval["event_target"] for interval in payload["intervals"])
+    for event in payload["responses"] + payload["tools"]:
+        assert f'id="{event["turn_target"]}"' in html
+        assert f'id="{event["event_target"]}"' in html
     assert "effort" in payload["responses"][0]
     assert "preview" in payload["responses"][0]
     assert all(len(response["preview"]) <= 150 for response in payload["responses"])
@@ -2915,6 +2930,7 @@ def test_native_codex_html_links_to_privacy_safe_agent_and_turn_drilldowns():
     assert 'href="#turn-tool-call-list-3"' not in html
     assert "View turns and tool calls" not in html
     assert html.count('href="#turn-tool-call-list-1-1"') == 2
+    assert 'data-turn-detail-link data-return-target="#timeline"' in html
     assert "root — turns and tool calls" in html
     assert "module-a — turns and tool calls" in html
     assert "reviewer — turns and tool calls" in html
