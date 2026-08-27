@@ -10983,11 +10983,10 @@ td {{ font-size:.85em; }}
 .model-usage-table {{ min-width:940px; margin:0; }}
 .model-usage-table th:first-child, .model-usage-table td:first-child {{ white-space:normal; }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
-.run-summary {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; margin:12px 0 18px; overflow:hidden; background:#cfd8dc; border:1px solid #cfd8dc; border-radius:7px; }}
-.run-summary > div {{ min-width:0; padding:10px 12px; background:#fff; }}
-.run-summary dt {{ margin:0 0 4px; color:#607d8b; font-size:.75em; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }}
-.run-summary dd {{ margin:0; overflow-wrap:anywhere; color:#263238; }}
-.run-summary code {{ font-size:.78em; }}
+.generated-on {{ margin:4px 0 14px; color:#607d8b; font-size:.86em; }}
+.run-metadata {{ margin:12px 0 16px; }}
+.run-metadata .value {{ font-size:.92em; line-height:1.35; overflow-wrap:anywhere; }}
+.run-metadata code {{ font-size:.82em; }}
 .agent-table .agent-assignment-column {{ width:30%; }}
 .agent-table .agent-skills-column {{ width:15%; }}
 .agent-table .agent-count-column {{ width:10%; }}
@@ -11189,17 +11188,17 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 </style></head><body>
 {nav_html}
 <h1{report_title_attribute}>{_escape_html(report_title)}</h1>
+<p class="generated-on"><strong>Generated On:</strong> {_local_time_html(report_generated_at)}</p>
 {run_label_html}
 {report_range_html}
-<dl class="run-summary" aria-label="Run summary">
-<div><dt>Runtime</dt><dd>{_escape_html(run.runtime)} run</dd></div>
-<div><dt>Thread ID</dt><dd><code>{_escape_html(run.root_thread_id)}</code></dd></div>
-<div><dt>State</dt><dd>{_escape_html(run.state)}</dd></div>
-<div><dt>Started</dt><dd>{_local_time_html(run.wall_started_at)}</dd></div>
-<div><dt>Last activity</dt><dd>{_local_time_html(run.wall_ended_at)}</dd></div>
-<div><dt>Report generated</dt><dd>{_local_time_html(report_generated_at)}</dd></div>
-<div><dt>Estimate</dt><dd>{_escape_html(_cost_summary(run.cost))}</dd></div>
-</dl>
+<div class="metrics run-metadata" aria-label="Run metadata">
+<div class="metric"><div class="label">Runtime</div><div class="value">{_escape_html(run.runtime)} run</div></div>
+<div class="metric"><div class="label">Thread ID</div><div class="value"><code>{_escape_html(run.root_thread_id)}</code></div></div>
+<div class="metric"><div class="label">State</div><div class="value">{_escape_html(run.state)}</div></div>
+<div class="metric"><div class="label">Started</div><div class="value">{_local_time_html(run.wall_started_at)}</div></div>
+<div class="metric"><div class="label">Last activity</div><div class="value">{_local_time_html(run.wall_ended_at)}</div></div>
+<div class="metric"><div class="label">Estimate</div><div class="value">{_escape_html(_cost_summary(run.cost))}</div></div>
+</div>
 {view_nav_html}
 {parent_context_html}
 <div class="metrics">

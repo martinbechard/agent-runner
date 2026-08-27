@@ -1969,7 +1969,11 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Inference rate" in html
     assert "Runtime activity" in html
     assert "60.0%" in html
-    assert '<dl class="run-summary" aria-label="Run summary">' in html
+    assert '<div class="metrics run-metadata" aria-label="Run metadata">' in html
+    assert "<strong>Generated On:</strong>" in html
+    assert html.index('<div class="metrics run-metadata"') < html.index(
+        '<nav class="view-nav"'
+    ) < html.index('<div class="metrics">')
     assert 'class="local-timestamp"' not in html
     assert "Intl.DateTimeFormat" in html
     assert "Direct telemetry" not in html
@@ -2033,7 +2037,7 @@ def test_rollout_html_uses_render_time_for_report_generated(runtime):
     render_completed_at = datetime.now(timezone.utc)
 
     generated_match = re.search(
-        r'<dt>Report generated</dt><dd><time datetime="([^"]+)" title="[^"]+">([^<]+)</time></dd>',
+        r'<p class="generated-on"><strong>Generated On:</strong> <time datetime="([^"]+)" title="[^"]+">([^<]+)</time></p>',
         html,
     )
     assert generated_match is not None
@@ -3564,8 +3568,9 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     run.observed_at = "2026-07-16T22:15:00+00:00"
     html = module.render_codex_rollout_html(run)
     assert (
-        "<dt>Estimate</dt><dd>API-equivalent estimate: $917.35 USD "
-        "(estimate, not an actual charge or invoice)</dd>"
+        '<div class="label">Estimate</div><div class="value">'
+        "API-equivalent estimate: $917.35 USD "
+        "(estimate, not an actual charge or invoice)</div>"
     ) in html
     assert html.count("not an actual charge or invoice") == 1
     assert '<p class="notice">' not in html
@@ -7246,7 +7251,7 @@ def test_token_summary_html_writes_local_verification_report(
     assert "2026-08-25 00:00 inclusive" in steps
     assert "2026-08-26 00:00 exclusive" in steps
     generated_match = re.search(
-        r'<dt>Report generated</dt><dd><time datetime="([^"]+)" title="[^"]+">([^<]+)</time></dd>',
+        r'<p class="generated-on"><strong>Generated On:</strong> <time datetime="([^"]+)" title="[^"]+">([^<]+)</time></p>',
         steps,
     )
     assert generated_match is not None
