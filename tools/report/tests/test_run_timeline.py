@@ -6726,7 +6726,11 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
                 {
                     "timestamp": "2026-08-25T12:00:00Z",
                     "type": "turn_context",
-                    "payload": {"model": "gpt-5.5", "turn_id": "html-turn"},
+                    "payload": {
+                        "model": "gpt-5.5",
+                        "effort": "high",
+                        "turn_id": "html-turn",
+                    },
                 },
                 {
                     "timestamp": "2026-08-25T12:00:01Z",
@@ -6800,7 +6804,11 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
                 {
                     "timestamp": "2026-08-25T12:00:00Z",
                     "type": "turn_context",
-                    "payload": {"model": "gpt-5.4", "turn_id": "second-turn"},
+                    "payload": {
+                        "model": "gpt-5.4",
+                        "effort": "medium",
+                        "turn_id": "second-turn",
+                    },
                 },
                 {
                     "timestamp": "2026-08-25T12:00:01.500Z",
@@ -6853,7 +6861,8 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "<title>Token Usage Report</title>" in report
     assert "audit" not in report.casefold()
     assert "1,200,120" in report
-    assert "gpt-5.5" in report
+    assert "gpt-5.5 · effort high" in report
+    assert "gpt-5.4 · effort medium" in report
     assert rollout.name not in report
     assert report.count("<th>Folder</th>") == 1
     assert "<th>Filename</th>" not in report
@@ -6919,6 +6928,8 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "2 threads" in all_threads_report
     assert all_threads_report.count(">View Usage</a>") == 2
     assert all_threads_report.count(">View Events</a>") == 2
+    assert "gpt-5.5 · effort high" in all_threads_report
+    assert "gpt-5.4 · effort medium" in all_threads_report
     assert all_threads_report.index("<th>Estimate</th>") < all_threads_report.index(
         '<th aria-label="Usage links"></th>'
     )
@@ -6942,6 +6953,8 @@ def test_token_summary_html_writes_local_verification_report(tmp_path, capsys):
     assert "<th>Title</th>" in folder_report
     assert "gpt-5.5" in folder_report
     assert "gpt-5.4" in folder_report
+    assert "gpt-5.5 · effort high" in folder_report
+    assert "gpt-5.4 · effort medium" in folder_report
     assert '<th aria-label="Usage links"></th>' in folder_report
     assert '<th aria-label="Event links"></th>' in folder_report
     assert folder_report.index("<th>Estimate</th>") < folder_report.index(

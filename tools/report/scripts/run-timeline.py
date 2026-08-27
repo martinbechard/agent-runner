@@ -417,6 +417,7 @@ class _TokenFundingEvent:
     source_ordinal: int
     usage: UsageTotals = field(default_factory=UsageTotals)
     model: str = ""
+    effort: str = ""
     plan_type: str = ""
     funding_source: str = "subscription"
     subscription_used_percent: float | None = None
@@ -2737,6 +2738,7 @@ def parse_codex_rollout(
                             source_ordinal=ordinal,
                             usage=usage or UsageTotals(),
                             model=model,
+                            effort=current_effort,
                             plan_type=event_plan_type or plan_type,
                             funding_source=funding_source,
                             subscription_used_percent=subscription_used_percent,
@@ -11655,34 +11657,45 @@ def _write_token_summary_csv(
 
 def _token_summary_model_rollup(
     rows: list[_TokenSummaryRow],
-) -> list[tuple[str, UsageTotals, CostAssessment]]:
-    """Return model-aware usage and price totals for the selected events."""
-    usages: dict[str, UsageTotals] = {}
-    plan_types: dict[str, set[str]] = {}
+) -> list[tuple[str, str, UsageTotals, CostAssessment]]:
+    """Return model-and-effort usage and model-aware prices for selected events."""
+    usages: dict[tuple[str, str], UsageTotals] = {}
+    plan_types: dict[tuple[str, str], set[str]] = {}
     for row in rows:
         for event in row.funding_events:
             if _usage_is_zero(event.usage):
                 continue
             model = event.model or "unknown"
-            usages[model] = usages.get(model, UsageTotals()) + event.usage
+            key = (model, event.effort)
+            usages[key] = usages.get(key, UsageTotals()) + event.usage
             if event.plan_type:
-                plan_types.setdefault(model, set()).add(event.plan_type)
-    result: list[tuple[str, UsageTotals, CostAssessment]] = []
-    for model in sorted(usages, key=str.casefold):
-        usage = usages[model]
+                plan_types.setdefault(key, set()).add(event.plan_type)
+    result: list[tuple[str, str, UsageTotals, CostAssessment]] = []
+    for model, effort in sorted(
+        usages,
+        key=lambda item: (item[0].casefold(), item[1].casefold()),
+    ):
+        key = (model, effort)
+        usage = usages[key]
         model_usage = {} if model == "unknown" else {model: usage}
         result.append(
             (
                 model,
+                effort,
                 usage,
                 _cost_for_usage(
                     usage,
                     model_usage,
-                    plan_types=plan_types.get(model, set()),
+                    plan_types=plan_types.get(key, set()),
                 ),
             )
         )
     return result
+
+
+def _token_summary_model_label(model: str, effort: str) -> str:
+    """Return one compact model label with its logged thinking level."""
+    return f"{model or 'unknown'} · effort {effort}" if effort else model or "unknown"
 
 
 def _token_summary_html_currency(value: object) -> str:
@@ -11846,10 +11859,10 @@ def _render_token_summary_html(
     local_to = _token_summary_local_datetime(to_time)
 
     model_rows: list[str] = []
-    for model, usage, cost in _token_summary_model_rollup(rows):
+    for model, effort, usage, cost in _token_summary_model_rollup(rows):
         model_rows.append(
             "<tr>"
-            f"<th scope=\"row\">{_token_summary_html_cell(model)}</th>"
+            f"<th scope=\"row\">{_token_summary_html_cell(_token_summary_model_label(model, effort))}</th>"
             f"<td>{usage.input_tokens:,}</td>"
             f"<td>{usage.cached_input_tokens:,}</td>"
             f"<td>{usage.uncached_input_tokens:,}</td>"
@@ -12064,7 +12077,11 @@ def _render_token_summary_group_html(
         )
         models = ", ".join(
             sorted(
-                {event.model for event in row.funding_events if event.model},
+                {
+                    _token_summary_model_label(event.model, event.effort)
+                    for event in row.funding_events
+                    if event.model
+                },
                 key=str.casefold,
             )
         ) or "unknown"
