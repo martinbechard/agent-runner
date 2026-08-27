@@ -11045,7 +11045,7 @@ def render_codex_rollout_html(
     if sequence_html:
         view_links.append(
             '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
-            'data-sequence-window>Sequence window</a>'
+            'data-sequence-window>Sequence</a>'
         )
     view_nav_html = (
         '<nav class="view-nav" aria-label="Report views"><span>Views</span>'

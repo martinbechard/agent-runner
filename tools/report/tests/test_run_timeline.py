@@ -5049,7 +5049,7 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert '<a href="#timeline">Timeline</a>' in html
     assert (
         '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
-        'data-sequence-window>Sequence window</a>'
+        'data-sequence-window>Sequence</a>'
         in html
     )
     assert "Sequence tab" not in html
@@ -5203,7 +5203,7 @@ def test_native_codex_sequence_supports_standalone_window_mode(tmp_path):
 
     assert (
         '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
-        'data-sequence-window>Sequence window</a>'
+        'data-sequence-window>Sequence</a>'
     ) in html
     sequence = html.split('<section id="agent-sequence"', 1)[1]
     assert "Open in new tab" not in sequence
