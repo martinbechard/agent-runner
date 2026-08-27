@@ -7606,33 +7606,12 @@ def _render_trend_table_chart(
     )
 
 
-def _render_context_metrics_panel(
-    run: CodexRunMetrics, *, scope_label: str, id_suffix: str
-) -> str:
+def _render_context_metrics_panel(run: CodexRunMetrics, *, id_suffix: str) -> str:
     """Render one agent's context measurements and evolution."""
 
     summary = run.context_summary
     if summary.capacity <= 0 or summary.occupancy_percent is None:
         return ""
-    rows = []
-    for thread in run.threads:
-        if not thread.context_snapshots:
-            continue
-        current = thread.context_snapshots[-1]
-        high_water = max(
-            thread.context_snapshots,
-            key=lambda snapshot: snapshot.total_tokens,
-        )
-        rows.append(
-            "<tr>"
-            f"<td>{_clamped_agent_title_html(thread)}</td>"
-            f"<td>{current.total_tokens:,} / {current.capacity:,} ({current.occupancy_percent:.1f}%)</td>"
-            f"<td>{current.remaining_tokens:,}</td>"
-            f"<td>{high_water.total_tokens:,} ({high_water.occupancy_percent:.1f}%)</td>"
-            f"<td>{len(thread.compactions):,}</td>"
-            f"<td>{_local_time_html(current.event_timestamp)}</td>"
-            "</tr>"
-        )
     trend_rows = "".join(
         "<tr>"
         f"<td>{_local_time_html(bucket.started_at)}</td>"
@@ -7677,10 +7656,10 @@ def _render_context_metrics_panel(
     ]
     context_chart = _render_trend_table_chart(
         f"context-growth-view-{id_suffix}",
-        f"Context evolution · {scope_label}",
+        "Context evolution",
         growth_table,
         {
-            "title": f"Context evolution · {scope_label}",
+            "title": "Context evolution",
             "description": (
                 "Root-agent context tokens over time with compaction events marked in orange. "
                 "Interval maxima remain available in the table view."
@@ -7721,13 +7700,7 @@ def _render_context_metrics_panel(
         f'<span class="metric-detail">{summary.high_water_percent:.1f}%</span></div>'
         '<div class="metric"><div class="label">Compactions</div>'
         f'<div class="value">{summary.compaction_count:,}</div></div></div>'
-        '<details class="metric-details"><summary>Per-agent context</summary>'
-        '<div class="table-scroll"><table class="per-agent-context-table"><colgroup>'
-        '<col class="per-agent-context-agent-column"><col><col><col><col><col></colgroup>'
-        '<thead><tr><th>Agent</th><th>Current</th>'
-        '<th>Remaining tokens</th><th>Max</th><th>Compactions</th><th>Updated</th>'
-        f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
-        f'<details class="metric-details"><summary>Context evolution · {_escape_html(scope_label)}</summary>'
+        '<details class="metric-details"><summary>Context evolution</summary>'
         f"{context_chart}"
         "</details></div>"
     )
@@ -7757,7 +7730,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         )
         panels.append(
             f'<div data-context-scope="{scope_id}"{"" if selected else " hidden"}>'
-            f'{_render_context_metrics_panel(scoped_run, scope_label=label, id_suffix=str(index))}</div>'
+            f'{_render_context_metrics_panel(scoped_run, id_suffix=str(index))}</div>'
         )
     return (
         '<section id="context-usage" class="metric-view">'
@@ -11164,9 +11137,6 @@ h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
 .metric-details {{ margin-top:8px; }}
 .metric-details > summary {{ width:max-content; color:#2563a6; cursor:pointer; font-size:.84em; font-weight:700; }}
 .metric-details .table-scroll {{ margin-top:8px; max-height:42vh; }}
-.per-agent-context-table {{ table-layout:fixed; min-width:980px; }}
-.per-agent-context-agent-column {{ width:320px; }}
-.per-agent-context-table th:first-child, .per-agent-context-table td:first-child {{ width:320px; max-width:320px; white-space:normal; overflow-wrap:anywhere; }}
 .local-timestamp {{ font-variant-numeric:tabular-nums; }}
 .turn-state-detail {{ font-size:.66em; line-height:1.25; }}
 .turn-state-source {{ display:block; margin-top:2px; color:#78909c; font-size:.58em; font-weight:400; line-height:1.2; overflow-wrap:anywhere; }}

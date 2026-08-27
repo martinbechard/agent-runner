@@ -1992,7 +1992,7 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert '<div class="label">Max</div>' in html
     assert '<div class="label">Current</div>' not in html
     assert '<div class="label">Remaining tokens</div>' not in html
-    assert "<th>Remaining tokens</th><th>Max</th>" in html
+    assert "Per-agent context" not in html
     assert "<th>Last</th><th>15-minute max</th><th>Context window</th>" in html
     assert "<td>60</td><td>60</td><td>60.0%</td>" in html
     assert "Context evolution" in html
@@ -2000,9 +2000,7 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert 'data-context-scope-select' in html
     assert 'data-context-scope="context-agent-0"' in html
     assert 'data-view-id="context-growth-view-0"' in html
-    assert 'class="per-agent-context-table"' in html
-    assert 'class="per-agent-context-agent-column"' in html
-    assert ".per-agent-context-agent-column { width:320px; }" in html
+    assert "Context evolution ·" not in html
     assert 'id="context-growth-view-0-table" data-trend-panel="table" hidden' in html
     assert 'id="context-growth-view-0-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
     assert 'data-trend-mode="chart" aria-controls="context-growth-view-0-chart" aria-pressed="true"' in html
