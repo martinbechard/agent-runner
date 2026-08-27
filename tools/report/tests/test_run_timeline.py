@@ -1800,6 +1800,10 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
     assert run.context_trends[0].compaction_count == 1
     assert run.inference_size_bands[0].label == "<128"
     assert run.inference_size_bands[0].call_count == 2
+    html = module.render_codex_rollout_html(run)
+    assert 'data-view-id="context-growth-view"' in html
+    assert '"label":"Compaction","before":50,"after":30' in html
+    assert '"label":"Context used","color":"#2563a6"' in html
 
 
 def test_native_codex_classifies_runtime_and_counts_only_global_agent_wait(tmp_path):
@@ -1977,7 +1981,23 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "<th>Last</th><th>Max</th><th>Context window</th>" in html
     assert "<td>60</td><td>60</td><td>60.0%</td>" in html
     assert "Growth and compactions" in html
+    assert 'data-view-id="context-growth-view"' in html
+    assert 'aria-label="Context growth and compactions view"' in html
+    assert 'id="context-growth-view-table" data-trend-panel="table"' in html
+    assert 'id="context-growth-view-chart" class="trend-chart-panel" data-trend-panel="chart" hidden' in html
+    assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="true"' in html
+    assert 'data-trend-mode="chart" aria-controls="context-growth-view-chart" aria-pressed="false"' in html
+    assert '"label":"Context window","color":"#455a64","dash":"10 6"' in html
     assert "Response-size bands" in html
+    assert 'data-view-id="inference-trend-view"' in html
+    assert 'aria-label="Inference rate over time view"' in html
+    assert 'id="inference-trend-view-table" data-trend-panel="table"' in html
+    assert 'id="inference-trend-view-chart" class="trend-chart-panel" data-trend-panel="chart" hidden' in html
+    assert 'data-trend-mode="table" aria-controls="inference-trend-view-table" aria-pressed="true"' in html
+    assert 'data-trend-mode="chart" aria-controls="inference-trend-view-chart" aria-pressed="false"' in html
+    assert '"label":"Inference rate","color":"#2563a6"' in html
+    assert "function initializeTrendView(view)" in html
+    assert 'document.querySelectorAll("[data-trend-view]").forEach(initializeTrendView);' in html
     assert "P50" in html
     assert "P90" in html
     assert "3s inference" in html

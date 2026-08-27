@@ -7021,6 +7021,38 @@ def _format_tokens_per_second(value: float | None) -> str:
     return f"{value:.2f} tok/s" if value is not None else "—"
 
 
+def _render_trend_table_chart(
+    view_id: str,
+    label: str,
+    table_html: str,
+    chart_payload: dict[str, object],
+) -> str:
+    """Render an accessible table/chart switch backed by offline chart data."""
+
+    payload = json.dumps(
+        chart_payload,
+        ensure_ascii=False,
+        separators=(",", ":"),
+    ).replace("</", "<\\/")
+    safe_id = _escape_html_attribute(view_id)
+    safe_label = _escape_html_attribute(label)
+    return (
+        f'<div class="trend-view" data-trend-view data-view-id="{safe_id}">'
+        f'<div class="trend-view-switch" role="group" aria-label="{safe_label} view">'
+        f'<button type="button" data-trend-mode="table" aria-controls="{safe_id}-table" '
+        'aria-pressed="true">Table</button>'
+        f'<button type="button" data-trend-mode="chart" aria-controls="{safe_id}-chart" '
+        'aria-pressed="false">Chart</button></div>'
+        f'<div id="{safe_id}-table" data-trend-panel="table">{table_html}</div>'
+        f'<div id="{safe_id}-chart" class="trend-chart-panel" data-trend-panel="chart" hidden>'
+        f'<svg class="trend-chart" data-trend-chart role="img" aria-label="{safe_label} chart" '
+        'viewBox="0 0 1000 360" preserveAspectRatio="xMidYMid meet"></svg>'
+        '<div class="trend-chart-legend" data-trend-legend></div>'
+        '<p class="trend-chart-empty" data-trend-empty hidden></p></div>'
+        f'<script type="application/json" data-trend-data>{payload}</script></div>'
+    )
+
+
 def _render_context_metrics(run: CodexRunMetrics) -> str:
     """Render current and maximum context measurements compactly."""
 
@@ -7056,17 +7088,16 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         f"<td>{bucket.compaction_count:,}</td></tr>"
         for bucket in run.context_trends
     )
+    root_thread = next(
+        thread for thread in run.threads if thread.thread_id == run.root_thread_id
+    )
     compaction_rows = "".join(
         "<tr>"
         f"<td>{_local_time_html(compaction.event_timestamp)}</td>"
         f"<td>{compaction.before_total_tokens:,}</td>"
         f"<td>{compaction.after_total_tokens:,}</td>"
         f"<td>{_escape_html('direct' if compaction.recorded else 'inferred')}</td></tr>"
-        for compaction in next(
-            thread.compactions
-            for thread in run.threads
-            if thread.thread_id == run.root_thread_id
-        )
+        for compaction in root_thread.compactions
     )
     compaction_table = (
         '<div class="table-scroll compact-table"><table><thead><tr>'
@@ -7074,6 +7105,69 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         f"</tr></thead><tbody>{compaction_rows}</tbody></table></div>"
         if compaction_rows
         else ""
+    )
+    growth_table = (
+        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
+        '<th>Last</th><th>Max</th><th>Context window</th><th>Compactions</th></tr></thead>'
+        f"<tbody>{trend_rows}</tbody></table></div>{compaction_table}"
+    )
+    context_points = [
+        {
+            "timestamp": _normalize_timestamp(bucket.started_at),
+            "last": bucket.last_total_tokens,
+            "high": bucket.high_total_tokens,
+            "capacity": bucket.capacity,
+        }
+        for bucket in run.context_trends
+    ]
+    context_chart = _render_trend_table_chart(
+        "context-growth-view",
+        "Context growth and compactions",
+        growth_table,
+        {
+            "title": "Context growth and compactions",
+            "description": "Context tokens over local time with compaction events marked in orange.",
+            "axis_label": "Context tokens",
+            "value_format": "tokens",
+            "series": [
+                {
+                    "label": "Context used",
+                    "color": "#2563a6",
+                    "values": [
+                        {"timestamp": point["timestamp"], "value": point["last"]}
+                        for point in context_points
+                    ],
+                },
+                {
+                    "label": "Bucket high",
+                    "color": "#78909c",
+                    "dash": "5 5",
+                    "values": [
+                        {"timestamp": point["timestamp"], "value": point["high"]}
+                        for point in context_points
+                    ],
+                },
+                {
+                    "label": "Context window",
+                    "color": "#455a64",
+                    "dash": "10 6",
+                    "values": [
+                        {"timestamp": point["timestamp"], "value": point["capacity"]}
+                        for point in context_points
+                    ],
+                },
+            ],
+            "markers": [
+                {
+                    "timestamp": _normalize_timestamp(compaction.event_timestamp),
+                    "label": "Compaction",
+                    "before": compaction.before_total_tokens,
+                    "after": compaction.after_total_tokens,
+                }
+                for compaction in root_thread.compactions
+            ],
+            "empty_message": "No context-growth measurements are available.",
+        },
     )
     return (
         '<section id="context-usage" class="metric-view">'
@@ -7092,10 +7186,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         '<th>Remaining tokens</th><th>Max</th><th>Compactions</th><th>Updated</th>'
         f"</tr></thead><tbody>{''.join(rows)}</tbody></table></div></details>"
         '<details class="metric-details"><summary>Growth and compactions</summary>'
-        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
-        '<th>Last</th><th>Max</th><th>Context window</th><th>Compactions</th></tr></thead>'
-        f"<tbody>{trend_rows}</tbody></table></div>"
-        f"{compaction_table}"
+        f"{context_chart}"
         "</details></section>"
     )
 
@@ -7134,6 +7225,37 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f"<td>{_escape_html(_format_tokens_per_second(band.median_call_tokens_per_second))}</td></tr>"
         for band in run.inference_size_bands
     )
+    inference_table = (
+        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>Calls</th>'
+        '<th>Output</th><th>Inference</th><th>Rate</th></tr></thead>'
+        f"<tbody>{trend_rows}</tbody></table></div>"
+    )
+    inference_chart = _render_trend_table_chart(
+        "inference-trend-view",
+        "Inference rate over time",
+        inference_table,
+        {
+            "title": "Inference rate over time",
+            "description": "Measured output-token inference rate by 15-minute period in local time.",
+            "axis_label": "Tokens per second",
+            "value_format": "rate",
+            "series": [
+                {
+                    "label": "Inference rate",
+                    "color": "#2563a6",
+                    "values": [
+                        {
+                            "timestamp": _normalize_timestamp(bucket.started_at),
+                            "value": bucket.tokens_per_second,
+                        }
+                        for bucket in run.inference_trends
+                    ],
+                }
+            ],
+            "markers": [],
+            "empty_message": "No measured inference-rate data are available.",
+        },
+    )
     return (
         '<section id="inference-rate" class="metric-view">'
         '<div class="agents-heading"><h2>Inference rate</h2></div>'
@@ -7147,9 +7269,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         '<div class="metric"><div class="label">Measured calls</div>'
         f'<div class="value">{summary.measured_call_count:,} / {summary.call_count:,}</div></div></div>'
         f'<details class="metric-details"><summary>15-minute trend · {_escape_html(percentile_text)}</summary>'
-        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>Calls</th>'
-        '<th>Output</th><th>Inference</th><th>Rate</th></tr></thead>'
-        f"<tbody>{trend_rows}</tbody></table></div></details>"
+        f"{inference_chart}</details>"
         '<details class="metric-details"><summary>Response-size bands</summary>'
         '<div class="table-scroll"><table><thead><tr><th>Output tokens</th><th>Calls</th>'
         '<th>Output</th><th>Weighted rate</th><th>Median call rate</th></tr></thead>'
@@ -7242,6 +7362,228 @@ def _render_work_item_metrics(run: CodexRunMetrics) -> str:
         '<th>Processed</th><th>Inference rate</th></tr></thead>'
         f"<tbody>{''.join(rows)}</tbody></table></div></section>"
     )
+
+
+_TREND_CHART_CSS = """
+.trend-view { margin-top:9px; }
+.trend-view-switch { display:inline-flex; padding:2px; background:#eef3f6; border:1px solid #cfd8dc; border-radius:6px; }
+.trend-view-switch button { min-height:30px; padding:4px 12px; color:#546e7a; background:transparent; border:0; border-radius:4px; cursor:pointer; font:700 .78em var(--font-ui); }
+.trend-view-switch button[aria-pressed="true"] { color:#0d47a1; background:#fff; box-shadow:0 1px 3px rgba(38,50,56,.16); }
+.trend-view-switch button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.trend-chart-panel { min-height:260px; margin-top:8px; overflow:auto; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.trend-chart { display:block; width:100%; min-width:720px; height:auto; }
+.trend-chart-grid { stroke:#e1e6ea; stroke-width:1; }
+.trend-chart-axis { stroke:#90a4ae; stroke-width:1.25; }
+.trend-chart-label { fill:#607d8b; font:12px var(--font-ui); }
+.trend-chart-axis-title { fill:#455a64; font:700 12px var(--font-ui); letter-spacing:.02em; }
+.trend-chart-line { fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.trend-chart-point { stroke:#fff; stroke-width:2; }
+.trend-chart-marker { stroke:#e87523; stroke-width:2; stroke-dasharray:4 4; }
+.trend-chart-marker-symbol { fill:#e87523; stroke:#fff; stroke-width:1.5; }
+.trend-chart-legend { display:flex; flex-wrap:wrap; gap:8px 16px; padding:0 16px 13px; color:#546e7a; font-size:.78em; }
+.trend-chart-legend span { display:inline-flex; align-items:center; gap:6px; }
+.trend-chart-swatch { width:20px; height:3px; background:var(--trend-color); }
+.trend-chart-swatch.is-dashed { height:0; background:none; border-top:2px dashed var(--trend-color); }
+.trend-chart-swatch.is-marker { width:8px; height:8px; background:#e87523; transform:rotate(45deg); }
+.trend-chart-empty { margin:0; padding:24px; color:#607d8b; }
+@media (max-width:760px) { .trend-chart-panel { min-height:220px; } }
+"""
+
+
+_TREND_CHART_SCRIPT = r"""
+function initializeTrendView(view) {
+  var dataElement = view.querySelector("[data-trend-data]");
+  var svg = view.querySelector("[data-trend-chart]");
+  var legend = view.querySelector("[data-trend-legend]");
+  var emptyState = view.querySelector("[data-trend-empty]");
+  var buttons = Array.from(view.querySelectorAll("[data-trend-mode]"));
+  var panels = Array.from(view.querySelectorAll("[data-trend-panel]"));
+  if (!dataElement || !svg || !legend || !emptyState || !buttons.length) return;
+
+  var data;
+  try { data = JSON.parse(dataElement.textContent); }
+  catch (error) { data = { series:[], markers:[], empty_message:"Chart data could not be loaded." }; }
+  var rendered = false;
+  var namespace = "http://www.w3.org/2000/svg";
+  var localTime = new Intl.DateTimeFormat(undefined, {
+    month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"
+  });
+
+  function node(name, attributes, content) {
+    var element = document.createElementNS(namespace, name);
+    Object.keys(attributes || {}).forEach(function(key) {
+      element.setAttribute(key, String(attributes[key]));
+    });
+    if (content !== undefined) element.textContent = content;
+    return element;
+  }
+  function timestamp(value) {
+    var result = new Date(value).getTime();
+    return Number.isFinite(result) ? result : null;
+  }
+  function numeric(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+  function compact(value) {
+    if (value >= 1000000000) return (value / 1000000000).toFixed(1).replace(/\.0$/, "") + "B";
+    if (value >= 1000000) return (value / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+    return Math.round(value).toLocaleString();
+  }
+  function valueLabel(value) {
+    if (data.value_format === "rate") return value.toFixed(2) + " tok/s";
+    return Math.round(value).toLocaleString() + " tokens";
+  }
+  function axisValue(value) {
+    if (data.value_format === "rate") return value.toFixed(value < 10 ? 1 : 0);
+    return compact(value);
+  }
+  function appendTitle(element, text) {
+    element.appendChild(node("title", {}, text));
+  }
+  function renderLegend() {
+    legend.replaceChildren();
+    (data.series || []).forEach(function(series) {
+      var item = document.createElement("span");
+      var swatch = document.createElement("i");
+      swatch.className = "trend-chart-swatch" + (series.dash ? " is-dashed" : "");
+      swatch.style.setProperty("--trend-color", series.color || "#2563a6");
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(series.label));
+      legend.appendChild(item);
+    });
+    if ((data.markers || []).length) {
+      var markerItem = document.createElement("span");
+      var markerSwatch = document.createElement("i");
+      markerSwatch.className = "trend-chart-swatch is-marker";
+      markerItem.appendChild(markerSwatch);
+      markerItem.appendChild(document.createTextNode("Compaction"));
+      legend.appendChild(markerItem);
+    }
+  }
+  function renderChart() {
+    if (rendered) return;
+    rendered = true;
+    var series = data.series || [];
+    var markers = data.markers || [];
+    var points = [];
+    series.forEach(function(item) {
+      (item.values || []).forEach(function(point) {
+        var time = timestamp(point.timestamp);
+        var value = numeric(point.value);
+        if (time !== null && value !== null) points.push({ time:time, value:value });
+      });
+    });
+    var markerValues = [];
+    markers.forEach(function(marker) {
+      [numeric(marker.before), numeric(marker.after)].forEach(function(value) {
+        if (value !== null) markerValues.push(value);
+      });
+    });
+    svg.replaceChildren();
+    svg.appendChild(node("title", {}, data.title || "Trend chart"));
+    svg.appendChild(node("desc", {}, data.description || "Time-series chart."));
+    renderLegend();
+    if (!points.length) {
+      emptyState.hidden = false;
+      emptyState.textContent = data.empty_message || "No chart data are available.";
+      svg.setAttribute("hidden", "");
+      legend.hidden = true;
+      return;
+    }
+    emptyState.hidden = true;
+    svg.removeAttribute("hidden");
+    legend.hidden = false;
+
+    var width = 1000;
+    var height = 360;
+    var margin = { top:28, right:26, bottom:58, left:78 };
+    var plotWidth = width - margin.left - margin.right;
+    var plotHeight = height - margin.top - margin.bottom;
+    var times = points.map(function(point) { return point.time; }).concat(
+      markers.map(function(marker) { return timestamp(marker.timestamp); }).filter(function(value) { return value !== null; })
+    );
+    var minimumTime = Math.min.apply(null, times);
+    var maximumTime = Math.max.apply(null, times);
+    if (minimumTime === maximumTime) {
+      minimumTime -= 30 * 60 * 1000;
+      maximumTime += 30 * 60 * 1000;
+    }
+    var maximumValue = Math.max.apply(null, points.map(function(point) { return point.value; }).concat(markerValues, [1]));
+    var yMaximum = maximumValue * 1.08;
+    function x(time) { return margin.left + (time - minimumTime) / (maximumTime - minimumTime) * plotWidth; }
+    function y(value) { return margin.top + plotHeight - value / yMaximum * plotHeight; }
+
+    for (var index = 0; index <= 4; index += 1) {
+      var yValue = yMaximum * index / 4;
+      var yPosition = y(yValue);
+      svg.appendChild(node("line", { x1:margin.left, y1:yPosition, x2:width - margin.right, y2:yPosition, class:"trend-chart-grid" }));
+      svg.appendChild(node("text", { x:margin.left - 10, y:yPosition + 4, "text-anchor":"end", class:"trend-chart-label" }, axisValue(yValue)));
+    }
+    for (var tick = 0; tick <= 4; tick += 1) {
+      var tickTime = minimumTime + (maximumTime - minimumTime) * tick / 4;
+      var tickX = x(tickTime);
+      svg.appendChild(node("line", { x1:tickX, y1:margin.top, x2:tickX, y2:margin.top + plotHeight, class:"trend-chart-grid" }));
+      svg.appendChild(node("text", { x:tickX, y:height - 25, "text-anchor":"middle", class:"trend-chart-label" }, localTime.format(new Date(tickTime))));
+    }
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top + plotHeight, x2:width - margin.right, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top, x2:margin.left, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("text", { x:18, y:margin.top + plotHeight / 2, transform:"rotate(-90 18 " + (margin.top + plotHeight / 2) + ")", "text-anchor":"middle", class:"trend-chart-axis-title" }, data.axis_label || "Value"));
+    svg.appendChild(node("text", { x:margin.left + plotWidth / 2, y:height - 5, "text-anchor":"middle", class:"trend-chart-axis-title" }, "Local time"));
+
+    markers.forEach(function(marker) {
+      var markerTime = timestamp(marker.timestamp);
+      if (markerTime === null) return;
+      var markerX = x(markerTime);
+      var line = node("line", { x1:markerX, y1:margin.top, x2:markerX, y2:margin.top + plotHeight, class:"trend-chart-marker" });
+      appendTitle(line, marker.label + " · " + localTime.format(new Date(markerTime)) + " · " + compact(marker.before || 0) + " → " + compact(marker.after || 0) + " tokens");
+      svg.appendChild(line);
+      var symbol = node("polygon", { points:(markerX - 6) + "," + (margin.top + 1) + " " + (markerX + 6) + "," + (margin.top + 1) + " " + markerX + "," + (margin.top + 12), class:"trend-chart-marker-symbol" });
+      appendTitle(symbol, marker.label + " at " + localTime.format(new Date(markerTime)));
+      svg.appendChild(symbol);
+    });
+
+    series.forEach(function(item) {
+      var pathParts = [];
+      var connected = false;
+      (item.values || []).forEach(function(point) {
+        var pointTime = timestamp(point.timestamp);
+        var pointValue = numeric(point.value);
+        if (pointTime === null || pointValue === null) {
+          connected = false;
+          return;
+        }
+        pathParts.push((connected ? "L" : "M") + x(pointTime).toFixed(2) + " " + y(pointValue).toFixed(2));
+        connected = true;
+      });
+      if (pathParts.length) {
+        svg.appendChild(node("path", {
+          d:pathParts.join(" "), class:"trend-chart-line", stroke:item.color || "#2563a6",
+          "stroke-dasharray":item.dash || ""
+        }));
+      }
+      (item.values || []).forEach(function(point) {
+        var pointTime = timestamp(point.timestamp);
+        var pointValue = numeric(point.value);
+        if (pointTime === null || pointValue === null) return;
+        var circle = node("circle", { cx:x(pointTime), cy:y(pointValue), r:4.5, fill:item.color || "#2563a6", class:"trend-chart-point" });
+        appendTitle(circle, item.label + " · " + localTime.format(new Date(pointTime)) + " · " + valueLabel(pointValue));
+        svg.appendChild(circle);
+      });
+    });
+  }
+  function setMode(mode) {
+    buttons.forEach(function(button) {
+      button.setAttribute("aria-pressed", button.dataset.trendMode === mode ? "true" : "false");
+    });
+    panels.forEach(function(panel) { panel.hidden = panel.dataset.trendPanel !== mode; });
+    if (mode === "chart") renderChart();
+  }
+  buttons.forEach(function(button) {
+    button.addEventListener("click", function() { setMode(button.dataset.trendMode); });
+  });
+}
+"""
 
 
 _EXECUTION_HEATMAP_CSS = """
@@ -10088,6 +10430,7 @@ td {{ font-size:.85em; }}
 .turn-detail-table .tool-arguments,
 .turn-detail-table .tool-result-summary {{ max-width:none; }}
 code {{ font-family:var(--font-code); font-size:.9em; }}
+{_TREND_CHART_CSS}
 {_EXECUTION_HEATMAP_CSS}
 @media (max-width:900px) {{ .turn-detail-metrics {{ grid-template-columns:repeat(2,minmax(0,1fr)); }} .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric {{ grid-column:1 / -1; }} }}
 </style></head><body>
@@ -10606,6 +10949,8 @@ document.querySelectorAll(".clamped-less").forEach(function(button) {{
     if (disclosure) disclosure.open = false;
   }});
 }});
+{_TREND_CHART_SCRIPT}
+document.querySelectorAll("[data-trend-view]").forEach(initializeTrendView);
 {_EXECUTION_HEATMAP_SCRIPT}
 var executionHeatmap = document.getElementById("execution-heatmap");
 if (executionHeatmap && !sequenceOnly) initializeExecutionHeatmap(executionHeatmap);
