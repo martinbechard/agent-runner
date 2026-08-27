@@ -8993,7 +8993,7 @@ def _render_execution_heatmap(
         '<div class="heatmap-control"><label for="heatmap-metric">Measure</label>'
         '<select id="heatmap-metric">'
         '<option value="wall_time">Wall time</option>'
-        '<option value="tokens">Tokens</option>'
+        '<option value="tokens" selected>Tokens</option>'
         '<option value="models">Models</option>'
         '</select></div>'
         '<fieldset class="heatmap-granularity"><legend>Period</legend>'

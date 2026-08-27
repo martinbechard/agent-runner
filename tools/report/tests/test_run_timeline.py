@@ -2388,7 +2388,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<a href="#execution-heatmap">Heatmap</a>' in html
     assert '<label for="heatmap-metric">Measure</label>' in html
     assert '<option value="wall_time">Wall time</option>' in html
-    assert '<option value="tokens">Tokens</option>' in html
+    assert '<option value="tokens" selected>Tokens</option>' in html
+    assert '<option value="wall_time" selected>' not in html
     assert '<option value="models">Models</option>' in html
     assert '<option value="uncached_input_tokens">' not in html
     assert '<option value="cached_input_tokens">' not in html
