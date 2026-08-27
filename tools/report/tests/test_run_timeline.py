@@ -5067,6 +5067,43 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     ) < spawn_event.index(recipient_text)
 
 
+def test_native_codex_sequence_renders_event_agent_messages_on_lifeline(tmp_path):
+    module = _load_module()
+    _write_codex_sequence_graph(tmp_path)
+    with (tmp_path / "orchestrator.jsonl").open("a", encoding="utf-8") as stream:
+        stream.write(
+            json.dumps(
+                {
+                    "timestamp": "2026-07-14T04:00:02.500Z",
+                    "type": "event_msg",
+                    "payload": {
+                        "type": "agent_message",
+                        "message": "I am reviewing the implementation now.",
+                        "phase": "commentary",
+                    },
+                }
+            )
+            + "\n"
+        )
+
+    run = module.build_codex_rollout_run(
+        "coordinator", tmp_path, include_delegations=True
+    )
+    activity = next(
+        activity
+        for thread in run.threads
+        if thread.thread_id == "orchestrator"
+        for activity in thread.activities
+        if activity.content == "I am reviewing the implementation now."
+    )
+    html = module.render_codex_rollout_html(run)
+
+    assert activity.activity_type == "output"
+    assert 'class="sequence-conversation-bubble sequence-agent-message"' in html
+    assert "I am reviewing the implementation now." in html
+    assert "Agent message" in html
+
+
 def test_native_codex_sequence_tooltips_only_truncated_participant_titles(tmp_path):
     module = _load_module()
     _write_codex_sequence_graph(tmp_path)
@@ -5408,7 +5445,7 @@ def test_native_codex_sequence_renders_toggleable_privacy_safe_conversation_bubb
     timeline_positions = sorted(
         (int(order), float(y))
         for order, y in re.findall(
-            r'class="sequence-(?:event-link|conversation-bubble)"[^>]*'
+            r'class="sequence-(?:event-link|conversation-bubble)[^"]*"[^>]*'
             r'data-sequence-order="(\d+)"[^>]*data-base-y="([^"]+)"',
             sequence,
         )

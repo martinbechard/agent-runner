@@ -1,0 +1,1651 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>"Agent message sequence example" Agent Report</title>
+<style>
+:root { --font-ui:-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; --font-code:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; --token-cached:#3498db; --token-cache-write:#2ecc71; --token-fresh:#95a5a6; --token-output:#e74c3c; --token-reasoning:#8e44ad; --sequence-rail:#b0bec5; --sequence-delegation:#00695c; --sequence-message:#2563a6; --sequence-followup:#6d4c8e; --sequence-interrupt:#b3261e; --sequence-complete:#24733b; --sequence-thinking:#8e44ad; }
+body { font-family:var(--font-ui); margin: 2em; color: #263238; background:#fafbfc; }
+body.sequence-only { margin:16px; overflow:hidden; }
+body.sequence-only > :not(#agent-sequence) { display:none; }
+body.sequence-only #agent-sequence { display:flex; height:calc(100vh - 32px); min-height:0; flex-direction:column; }
+body.sequence-only #agent-sequence > .agents-heading { flex:0 0 auto; margin-top:0; }
+body.sequence-only #agent-sequence > .execution-note,
+body.sequence-only #agent-sequence > .sequence-controls { flex:0 0 auto; }
+body.sequence-only .sequence-scroll { flex:1 1 auto; min-height:0; max-height:none; }
+h1 { margin-bottom:.25em; }
+h2 { margin-top:30px; }
+h3 { margin:14px 0 6px; font-size:.95em; color:#546e7a; }
+.report-nav { margin:0 0 14px; }
+.report-nav a { color:#2563a6; font-weight:600; text-decoration:none; }
+.report-nav a:hover { text-decoration:underline; }
+.view-nav { display:flex; align-items:center; gap:6px; margin:12px 0 18px; }
+.view-nav span { margin-right:2px; color:#607d8b; font-size:.78em; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.view-nav a { padding:5px 10px; color:#2563a6; background:#fff; border:1px solid #cfd8dc; border-radius:999px; font-size:.86em; font-weight:600; text-decoration:none; }
+.view-nav a:hover { border-color:#2563a6; }
+.view-nav a:focus-visible, .sequence-scroll:focus-visible, .sequence-event-link:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.parent-context { display:flex; align-items:center; justify-content:space-between; gap:18px; margin:0 0 18px; padding:12px 14px; background:#eef4f8; border:1px solid #b8cad5; border-radius:7px; }
+.parent-context-copy { display:grid; min-width:0; gap:3px; }
+.parent-context-label { color:#546e7a; font-size:.72em; font-weight:700; letter-spacing:.08em; text-transform:uppercase; }
+.parent-context strong { overflow-wrap:anywhere; }
+.parent-context code { color:#607d8b; }
+.parent-report-button { flex:0 0 auto; padding:7px 11px; color:#fff; background:#2563a6; border:1px solid #2563a6; border-radius:5px; font-size:.86em; font-weight:700; text-decoration:none; }
+.parent-report-button:hover { background:#174f85; border-color:#174f85; }
+.parent-report-button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.visually-hidden { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; border:0; }
+.metrics { display:grid; grid-template-columns:repeat(auto-fit,minmax(180px,1fr)); gap:10px; }
+.metric { background:#fff; border:1px solid #e1e6ea; border-radius:6px; padding:12px; }
+.label { color:#666; font-size:.82em; }
+.value { font-size:1.2em; font-weight:600; margin-top:3px; }
+.metric-detail { display:block; margin-top:4px; color:#607d8b; font-size:.68em; font-weight:400; line-height:1.35; overflow-wrap:anywhere; }
+.metric-view { margin-top:28px; }
+.metric-view .agents-heading { margin-top:0; gap:9px; }
+.compact-metrics { grid-template-columns:repeat(auto-fit,minmax(145px,1fr)); margin-top:10px; }
+.compact-metrics .metric { padding:10px 11px; }
+.evidence-badge { padding:3px 7px; color:#455a64; background:#eef4f8; border:1px solid #c5d3dc; border-radius:999px; font-size:.7em; font-weight:700; }
+.metric-details { margin-top:8px; }
+.metric-details > summary { width:max-content; color:#2563a6; cursor:pointer; font-size:.84em; font-weight:700; }
+.metric-details .table-scroll { margin-top:8px; max-height:42vh; }
+.local-timestamp { font-variant-numeric:tabular-nums; }
+.turn-state-detail { font-size:.66em; line-height:1.25; }
+.turn-state-source { display:block; margin-top:2px; color:#78909c; font-size:.58em; font-weight:400; line-height:1.2; overflow-wrap:anywhere; }
+table { border-collapse:collapse; width:100%; margin:10px 0; background:#fff; }
+th,td { border-bottom:1px solid #e1e6ea; padding:7px; text-align:left; white-space:nowrap; }
+th { color:#546e7a; font-size:.8em; background:#f5f7f8; position:sticky; top:0; }
+td { font-size:.85em; }
+.table-scroll { overflow:auto; max-height:65vh; border:1px solid #e1e6ea; border-radius:5px; }
+.token-composition { display:flex; height:18px; overflow:hidden; border-radius:5px; background:#e8edf0; max-width:900px; }
+.token-segment { min-width:1px; }
+.fresh { background:var(--token-fresh); } .cached { background:var(--token-cached); } .cache-write { background:var(--token-cache-write); } .output { background:var(--token-output); } .reasoning { background:var(--token-reasoning); }
+.composition-legend { color:#607d8b; font-size:.85em; margin-top:7px; }
+.composition-fresh { color:var(--token-fresh); } .composition-cached { color:var(--token-cached); } .composition-cache-write { color:var(--token-cache-write); } .composition-output { color:var(--token-output); } .composition-reasoning { color:var(--token-reasoning); }
+.model-usage-groups { display:grid; gap:8px; }
+.model-usage-group { overflow:hidden; border:1px solid #e1e6ea; border-radius:6px; background:#fff; }
+.model-usage-group > summary { display:flex; align-items:center; gap:8px; padding:11px 13px; color:#455a64; cursor:pointer; list-style:none; }
+.model-usage-group > summary::-webkit-details-marker { display:none; }
+.model-usage-group[open] > summary { border-bottom:1px solid #e1e6ea; }
+.model-usage-parent { display:flex; flex:1 1 auto; align-items:baseline; justify-content:space-between; gap:18px; min-width:0; }
+.model-identity { display:flex; align-items:baseline; gap:4px; }
+.model-effort, .model-usage-total { color:#607d8b; font-size:.85em; }
+.model-usage-total { text-align:right; }
+.model-usage-group .table-scroll { max-height:45vh; border:0; border-radius:0; }
+.model-usage-table { min-width:940px; margin:0; }
+.model-usage-table th:first-child, .model-usage-table td:first-child { white-space:normal; }
+.agent-table { table-layout:fixed; min-width:1200px; }
+.agent-table .agent-assignment-column { width:30%; }
+.agent-table .agent-skills-column { width:15%; }
+.agent-table .agent-count-column { width:10%; }
+.agent-table .agent-time-column { width:10%; }
+.agent-table .agent-processed-column { width:10%; }
+.agent-table .agent-timeline-column { width:25%; }
+.agent-table th { white-space:normal; }
+.agent-table td { vertical-align:top; }
+.agent-table .agent-assignment-cell, .agent-table .agent-skills-cell { white-space:normal; overflow-wrap:anywhere; line-height:1.4; }
+.agent-table .agent-skills-cell { font-size:.7em; }
+.clamped-disclosure > summary { list-style:none; cursor:pointer; }
+.clamped-disclosure > summary::-webkit-details-marker { display:none; }
+.clamped-preview { display:-webkit-box; -webkit-box-orient:vertical; -webkit-line-clamp:5; overflow:hidden; }
+.clamped-toggle { display:inline-block; margin-top:2px; padding:0; border:0; color:#2563a6; background:none; cursor:pointer; font:inherit; text-decoration:underline; }
+.clamped-disclosure[open] > summary { display:none; }
+.clamped-full { margin-top:0; }
+.clamped-less { display:block; margin-top:3px; }
+.agent-title-disclosure { min-width:0; max-width:100%; }
+.agent-title-disclosure .clamped-preview { -webkit-line-clamp:3; }
+.agent-assignment-line { display:flex; align-items:flex-start; gap:8px; }
+.agent-assignment-heading { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.agent-assignment-heading .state { flex:0 0 auto; }
+.agent-model-metadata { white-space:nowrap; }
+.agent-model-metadata .model-name { font-size:.82em; }
+.effort-level { color:#607d8b; font-size:.82em; }
+.agent-row-toggle, .model-usage-toggle-icon { box-sizing:border-box; flex:0 0 auto; width:20px; height:20px; margin-top:1px; padding:0; border:1px solid #90a4ae; border-radius:50%; color:#455a64; background:#fff; cursor:pointer; font:700 14px/18px var(--font-ui); text-align:center; }
+.agent-row-toggle-icon::before { content:"+"; }
+.agent-row-toggle[aria-expanded="true"] .agent-row-toggle-icon::before { content:"−"; }
+.model-usage-toggle-icon::before { content:"+"; }
+.model-usage-group[open] > summary .model-usage-toggle-icon::before { content:"−"; }
+.agent-row-toggle:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.column-detail { color:#78909c; font-size:.78em; font-weight:400; }
+.cell-primary, .cell-secondary { display:block; }
+.cell-secondary { margin-top:2px; color:#607d8b; font-size:.86em; }
+.agent-table .agent-timeline-track { width:100%; min-width:220px; }
+.agent-assignment-cell { --agent-indent:calc(var(--agent-depth) * 20px); padding-left:calc(7px + var(--agent-indent)); background:linear-gradient(to right,#0d47a1 0 var(--agent-indent),transparent var(--agent-indent)); }
+.agents-heading { position:relative; display:flex; align-items:center; margin-top:30px; }
+.agents-heading h2 { margin:0; }
+.agent-info { position:static; margin-left:8px; }
+.agent-info > summary { list-style:none; color:#2563a6; cursor:pointer; font-size:1.15em; line-height:1; }
+.agent-info > summary::-webkit-details-marker { display:none; }
+.agent-note-popover { position:absolute; z-index:20; top:calc(100% + 8px); right:0; box-sizing:border-box; width:min(620px,calc(100vw - 4em)); padding:12px 14px; color:#455a64; background:#fff; border:1px solid #cfd8dc; border-radius:6px; box-shadow:0 8px 24px rgba(38,50,56,.18); font-size:.88em; font-weight:400; line-height:1.45; }
+.execution-note { color:#607d8b; font-size:.88em; }
+#agent-sequence { display:none; scroll-margin-top:12px; }
+.sequence-controls { display:flex; flex-wrap:wrap; align-items:center; gap:7px 10px; margin:2px 0 10px; color:#455a64; font-size:.8em; }
+.sequence-control-group { display:inline-flex; align-items:center; gap:5px; }
+.sequence-controls button { min-height:30px; padding:4px 9px; color:#455a64; background:#fff; border:1px solid #90a4ae; border-radius:5px; cursor:pointer; font:600 1em var(--font-ui); }
+.sequence-controls button:hover { color:#0d47a1; border-color:#2563a6; }
+.sequence-controls button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.sequence-controls button:disabled { color:#90a4ae; background:#f5f7f8; border-color:#cfd8dc; cursor:not-allowed; }
+.sequence-controls button[aria-pressed="true"] { color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }
+.sequence-controls output[data-sequence-zoom-value] { min-width:42px; color:#263238; text-align:center; font-family:var(--font-code); }
+.sequence-filter-fieldset { display:flex; flex-wrap:wrap; align-items:center; gap:5px 9px; min-width:0; margin:0; padding:4px 8px 5px; border:1px solid #cfd8dc; border-radius:5px; }
+.sequence-filter-fieldset legend { padding:0 4px; color:#546e7a; font-weight:600; }
+.sequence-filter-fieldset label { display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
+.sequence-filter-fieldset input { accent-color:#2563a6; }
+.sequence-view-status { margin-left:auto; color:#546e7a; font-family:var(--font-code); }
+.sequence-inspect-detail { box-sizing:border-box; min-height:2.8em; max-height:2.8em; margin:0 0 8px; overflow:auto; color:#455a64; font-size:.84em; line-height:1.4; }
+.sequence-filter-empty { margin:0 0 8px; padding:8px 10px; color:#455a64; background:#fff8e1; border:1px solid #ffe082; border-radius:5px; font-size:.84em; }
+.sequence-hidden { display:none; }
+.sequence-empty { padding:18px; color:#607d8b; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }
+.sequence-legend { position:sticky; left:0; display:flex; width:max-content; flex-wrap:wrap; gap:8px 16px; box-sizing:border-box; margin:0; padding:8px 12px 2px; color:#546e7a; background:#fff; font-size:.78em; }
+.sequence-legend span { display:inline-flex; align-items:center; gap:6px; }
+.legend-line { display:inline-block; width:24px; height:0; border-top:2px solid currentColor; }
+.legend-delegation { color:var(--sequence-delegation); }
+.legend-message { color:var(--sequence-message); }
+.legend-followup { color:var(--sequence-followup); }
+.legend-interrupt { color:var(--sequence-interrupt); }
+.legend-complete { color:var(--sequence-complete); border-top-style:dashed; }
+.legend-conversation-bubble { position:relative; display:inline-block; width:22px; height:12px; box-sizing:border-box; background:#f3e5f5; border:1px solid var(--sequence-thinking); border-radius:4px; }
+.legend-conversation-bubble::after { position:absolute; top:3px; left:-5px; width:0; height:0; border-top:3px solid transparent; border-right:5px solid var(--sequence-thinking); border-bottom:3px solid transparent; content:""; }
+.legend-agent-message { display:inline-block; width:22px; height:12px; box-sizing:border-box; background:#e3f2fd; border:1px solid var(--sequence-message); border-radius:2px; }
+.sequence-scroll { position:relative; max-height:72vh; overflow:auto; margin:0 0 10px; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.sequence-canvas { min-width:100%; background:#fff; }
+.sequence-sticky-header { position:sticky; top:0; z-index:5; background:#fff; border-bottom:1px solid #d7e0e5; box-shadow:0 3px 8px rgba(38,50,56,.08); }
+.sequence-participant-header { display:block; background:#fff; }
+.agent-sequence-diagram { display:block; background:#fff; }
+.sequence-participant rect { fill:#f5f7f8; stroke:#90a4ae; stroke-width:1; }
+.sequence-participant[data-depth="0"] rect { fill:#eef4f8; stroke:#607d8b; }
+.sequence-focus-target { cursor:pointer; }
+.sequence-focus-target:focus-visible, .sequence-hierarchy-toggle:focus-visible { outline:none; }
+.sequence-focus-target:focus-visible rect, .sequence-focus-target[aria-pressed="true"] rect { fill:#e3f2fd; stroke:#2563a6; stroke-width:2; }
+.sequence-hierarchy-toggle { cursor:pointer; }
+.sequence-hierarchy-toggle circle { fill:#fff; stroke:#607d8b; stroke-width:1; }
+.sequence-hierarchy-toggle:focus-visible circle { stroke:#2563a6; stroke-width:2; }
+.sequence-hierarchy-toggle text { font-size:13px; font-weight:700; }
+.sequence-participant text { fill:#263238; font-family:var(--font-ui); }
+.sequence-participant-name { font-size:12px; font-weight:700; }
+.sequence-participant-detail { fill:#607d8b; font-family:var(--font-code); font-size:9px; }
+.sequence-lifeline { stroke:var(--sequence-rail); stroke-width:1; stroke-dasharray:4 5; }
+.sequence-event-band { fill:transparent; }
+.sequence-line { stroke-width:2; }
+.sequence-event-link .sequence-event > * { pointer-events:none; }
+.sequence-event-link .sequence-event > .sequence-event-hit { pointer-events:stroke; fill:none; stroke:transparent; stroke-width:24px; stroke-linecap:round; cursor:pointer; }
+.sequence-event-link:has(.sequence-event-hit:hover) .sequence-line,
+.sequence-event-link:focus-visible .sequence-line { stroke-width:3; }
+.sequence-offset { fill:#78909c; font-family:var(--font-code); font-size:9px; }
+.sequence-event-label { fill:#263238; stroke:#fff; stroke-width:5px; paint-order:stroke; font-family:var(--font-ui); font-size:10px; font-weight:600; }
+.sequence-conversation-bubble { cursor:pointer; }
+.sequence-conversation-bubble rect,
+.sequence-conversation-tail { fill:#f3e5f5; stroke:var(--sequence-thinking); stroke-width:1; stroke-linejoin:round; }
+.sequence-agent-message rect,
+.sequence-agent-message .sequence-conversation-tail { fill:#e3f2fd; stroke:var(--sequence-message); }
+.sequence-agent-message rect { rx:4px; }
+.sequence-agent-message .sequence-thinking-text { fill:#163f67; }
+.sequence-conversation-link:focus-visible .sequence-conversation-bubble rect { stroke-width:2; }
+.sequence-thinking-text { fill:#4a235a; font-family:var(--font-ui); font-size:10px; font-weight:400; }
+.sequence-thinking-offset { fill:#546e7a; font-family:var(--font-code); font-size:9px; }
+.sequence-repeat-count { display:none; }
+.sequence-group-repeats .sequence-repeat-count { display:inline; }
+.sequence-group-repeats .sequence-event-link[data-repeat-index]:not([data-repeat-index="0"]) { display:none; }
+.tool-call-panel.sequence-event-panel { width:min(920px,94vw); overflow:auto; }
+.sequence-event-metrics { grid-template-columns:repeat(4,minmax(0,1fr)); }
+.sequence-event-metrics .value { overflow-wrap:anywhere; font-size:.92em; }
+.sequence-event-full { max-height:7.5em; margin:4px 0 12px; padding:10px 12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; color:#263238; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.9em; line-height:1.5; }
+.sequence-event-full:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.sequence-thought-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); }
+.sequence-thought-full { margin:12px 0 0; padding:12px; white-space:pre-wrap; overflow-wrap:anywhere; color:#263238; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.9em; font-weight:400; line-height:1.5; }
+.sequence-sender-update, .sequence-recipient-update { max-height:22vh; margin:4px 0 0; padding:12px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border:1px solid #d7e0e5; border-radius:5px; font-family:var(--font-ui); font-size:.88em; line-height:1.5; }
+.sequence-sender-update:focus-visible, .sequence-recipient-update:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.sequence-context-arrow { display:grid; grid-template-columns:minmax(0,1fr) minmax(150px,1fr) minmax(0,1fr); align-items:center; gap:10px; margin:14px 0; color:#455a64; font-size:.78em; font-weight:600; }
+.sequence-context-party { overflow-wrap:anywhere; }
+.sequence-context-target { text-align:right; }
+.sequence-context-direction { display:flex; min-width:0; align-items:center; gap:6px; color:#2563a6; white-space:nowrap; }
+.sequence-context-line { min-width:18px; flex:1 1 auto; border-top:2px solid currentColor; }
+.sequence-context-arrowhead { font-size:1.4em; line-height:1; }
+.tool-name { font-family:var(--font-code); font-size:.9em; font-weight:400; }
+.model-name { font-family:var(--font-code); font-size:.84em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }
+.activity-name { font-family:var(--font-ui); font-size:.92em; font-weight:600; color:#455a64; }
+.activity-summary { font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }
+.activity-raw { margin-top:4px; }
+.activity-raw summary { color:#b23a2b; cursor:pointer; font-size:.84em; }
+.activity-raw pre { max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }
+.tool-arguments { display:block; max-width:720px; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:normal; overflow-wrap:anywhere; }
+.tool-argument-formatted { font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }
+.tool-plan { margin:0; padding-left:1.25em; font-family:var(--font-ui); white-space:normal; }
+.tool-plan-item { margin:0 0 5px; line-height:1.35; }
+.tool-plan .state { margin-left:5px; white-space:nowrap; }
+.tool-argument-raw { margin-top:4px; }
+.tool-argument-raw summary { color:#b23a2b; cursor:pointer; font-size:.84em; }
+.tool-argument-raw[open] .tool-arguments { margin-top:5px; }
+.tool-result-summary { max-width:420px; font-family:var(--font-ui); font-size:1em; font-weight:400; line-height:1.35; color:#263238; white-space:normal; overflow-wrap:anywhere; }
+.tool-result-raw { margin-top:4px; }
+.tool-result-raw summary { color:#b23a2b; cursor:pointer; font-size:.84em; }
+.tool-result-raw pre { max-width:720px; max-height:360px; margin:5px 0 0; padding:8px; overflow:auto; font-family:var(--font-code); font-size:.9em; font-weight:400; line-height:1.35; white-space:pre-wrap; overflow-wrap:anywhere; background:#f5f7f8; border-radius:4px; }
+.drilldown-link { color:#2563a6; font-weight:600; text-decoration:none; }
+.drilldown-link:hover { text-decoration:underline; }
+.agent-summary-row { cursor:pointer; }
+.agent-summary-row.is-expanded > td { border-bottom:0; background-color:#f7f9fa; }
+.agent-expanded-row > td { padding:0 13px 13px; white-space:normal; background:#f7f9fa; }
+.agent-expanded-row h3 { margin-left:13px; margin-right:13px; }
+.agent-expanded-row .table-scroll { max-height:none; margin:0 -13px; }
+.timeline-track { position:relative; display:block; height:12px; background:#e8edf0; border-radius:3px; min-width:180px; }
+.timeline-bar { position:absolute; top:0; bottom:0; background:#4a90d9; border-radius:3px; }
+.turn-table .turn-timeline-header, .turn-table .turn-timeline-cell { width:25%; min-width:220px; }
+.turn-table .turn-timeline-track { width:100%; min-width:220px; }
+.state { display:inline-block; border-radius:10px; padding:2px 7px; background:#eceff1; font-size:.82em; }
+.state-complete, .state-sealed { background:#e6f4ea; color:#24733b; }
+.state-aborted, .state-failed { background:#fdecea; color:#b3261e; }
+.state-active, .state-live { background:#fff3cd; color:#7a5b00; }
+.model-pricing-overlay { display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:#fafbfc; }
+.model-pricing-overlay:target { display:flex; }
+.model-pricing-panel { width:min(1200px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; }
+.model-pricing-header { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }
+.model-pricing-header h2 { margin:0; }
+.model-pricing-panel .table-scroll { max-height:calc(92vh - 110px); }
+.tool-call-overlay { display:none; position:fixed; inset:0; z-index:1000; padding:4vh 3vw; box-sizing:border-box; background:rgba(25,35,45,.62); }
+.tool-call-overlay:target { display:flex; }
+.tool-call-panel { display:flex; flex-direction:column; box-sizing:border-box; width:min(1500px,94vw); max-height:92vh; margin:auto; padding:0 16px 16px; overflow:hidden; background:#fafbfc; border-radius:8px; box-shadow:0 12px 45px rgba(0,0,0,.35); }
+.turn-detail-panel { width:min(1500px,94vw); }
+.turn-detail-metrics { grid-template-columns:repeat(6,minmax(0,1fr)); }
+.turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric { grid-column:span 2; }
+.turn-tools-metric { grid-column:span 6; }
+.tool-call-header { display:flex; justify-content:space-between; align-items:center; gap:20px; padding:14px 2px 4px; }
+.tool-call-header h2 { margin:0; }
+.tool-call-close { color:#b3261e; font-weight:600; text-decoration:none; }
+.tool-call-panel .table-scroll { flex:1 1 auto; min-height:0; max-height:none; }
+.turn-detail-table { min-width:900px; margin:0; table-layout:fixed; }
+.turn-detail-table th, .turn-detail-table td { vertical-align:top; white-space:normal; }
+.turn-detail-event-highlight > td { background:#fff4e5; box-shadow:inset 3px 0 0 #e87523; }
+.turn-detail-table tr:focus { outline:2px solid #e87523; outline-offset:-2px; }
+.turn-event-anchor { display:none; }
+.turn-detail-table .turn-detail-index-column { width:4%; }
+.turn-detail-table .turn-detail-offset-column { width:7%; }
+.turn-detail-table .turn-detail-cost-column { width:7%; }
+.turn-detail-table .turn-detail-model-column { width:14%; }
+.turn-detail-table .turn-detail-activity-column { width:9%; }
+.turn-detail-table .turn-detail-arguments-column,
+.turn-detail-table .turn-detail-result-column { width:29.5%; }
+.turn-detail-table .tool-arguments,
+.turn-detail-table .tool-result-summary { max-width:none; }
+code { font-family:var(--font-code); font-size:.9em; }
+
+.trend-view { margin-top:9px; }
+.trend-view-switch { display:inline-flex; padding:2px; background:#eef3f6; border:1px solid #cfd8dc; border-radius:6px; }
+.trend-view-switch button { min-height:30px; padding:4px 12px; color:#546e7a; background:transparent; border:0; border-radius:4px; cursor:pointer; font:700 .78em var(--font-ui); }
+.trend-view-switch button[aria-pressed="true"] { color:#0d47a1; background:#fff; box-shadow:0 1px 3px rgba(38,50,56,.16); }
+.trend-view-switch button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.trend-chart-panel { min-height:260px; margin-top:8px; overflow:auto; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.trend-chart { display:block; width:100%; min-width:720px; height:auto; }
+.trend-chart-grid { stroke:#e1e6ea; stroke-width:1; }
+.trend-chart-axis { stroke:#90a4ae; stroke-width:1.25; }
+.trend-chart-label { fill:#607d8b; font:12px var(--font-ui); }
+.trend-chart-axis-title { fill:#455a64; font:700 12px var(--font-ui); letter-spacing:.02em; }
+.trend-chart-line { fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
+.trend-chart-point { stroke:#fff; stroke-width:2; }
+.trend-chart-bar { fill:#2563a6; }
+.trend-chart-bar:hover { fill:#174f85; }
+.trend-chart-bar:focus { fill:#174f85; stroke:#e87523; stroke-width:3; outline:none; }
+.trend-chart-bar-value { fill:#263238; font:700 12px var(--font-code); }
+.trend-chart-marker { stroke:#e87523; stroke-width:2; stroke-dasharray:4 4; }
+.trend-chart-marker-symbol { fill:#e87523; stroke:#fff; stroke-width:1.5; }
+.trend-chart-legend { display:flex; flex-wrap:wrap; gap:8px 16px; padding:0 16px 13px; color:#546e7a; font-size:.78em; }
+.trend-chart-legend span { display:inline-flex; align-items:center; gap:6px; }
+.trend-chart-swatch { width:20px; height:3px; background:var(--trend-color); }
+.trend-chart-swatch.is-dashed { height:0; background:none; border-top:2px dashed var(--trend-color); }
+.trend-chart-swatch.is-marker { width:8px; height:8px; background:#e87523; transform:rotate(45deg); }
+.trend-chart-empty { margin:0; padding:24px; color:#607d8b; }
+@media (max-width:760px) { .trend-chart-panel { min-height:220px; } }
+
+
+.heatmap-controls { display:flex; flex-wrap:wrap; align-items:end; gap:10px 16px; margin:10px 0; }
+.heatmap-control { display:grid; gap:4px; color:#455a64; font-size:.8em; font-weight:700; }
+.heatmap-control select { min-height:34px; padding:5px 28px 5px 8px; color:#263238; background:#fff; border:1px solid #90a4ae; border-radius:5px; font:inherit; }
+.heatmap-granularity { display:flex; gap:4px; margin:0; padding:0; border:0; }
+.heatmap-granularity legend { margin-bottom:4px; color:#455a64; font-size:.8em; font-weight:700; }
+.heatmap-granularity button { min-height:34px; padding:5px 10px; color:#455a64; background:#fff; border:1px solid #90a4ae; border-radius:5px; cursor:pointer; font:600 .8em var(--font-ui); }
+.heatmap-granularity button[aria-pressed="true"] { color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }
+.heatmap-control select:focus-visible, .heatmap-granularity button:focus-visible, .heatmap-cell:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-scroll-frame { display:grid; grid-template-columns:36px minmax(0,1fr) 36px; align-items:center; gap:6px; margin-top:8px; }
+.heatmap-scroll { min-width:0; overflow:auto; scrollbar-width:none; background:#fff; border:1px solid #d7e0e5; border-radius:6px; }
+.heatmap-scroll::-webkit-scrollbar { display:none; }
+.heatmap-scroll-button { width:36px; height:48px; padding:0; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:6px; cursor:pointer; font:700 1.3em var(--font-ui); }
+.heatmap-scroll-button:hover:not(:disabled) { color:#0d47a1; border-color:#2563a6; }
+.heatmap-scroll-button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-scroll-button:disabled { opacity:.35; cursor:default; }
+.heatmap-grid { display:grid; width:max-content; min-width:100%; align-items:stretch; }
+.heatmap-corner, .heatmap-column, .heatmap-row-label { position:sticky; z-index:2; box-sizing:border-box; padding:7px 8px; color:#455a64; background:#f5f7f8; border-right:1px solid #d7e0e5; border-bottom:1px solid #d7e0e5; font-size:.76em; font-weight:700; }
+.heatmap-corner, .heatmap-row-label { left:0; }
+.heatmap-corner { z-index:4; }
+.heatmap-column { top:0; z-index:3; min-width:72px; text-align:center; font-family:var(--font-code); }
+.heatmap-row-label { display:flex; align-items:center; min-width:170px; max-width:220px; white-space:normal; }
+.heatmap-cell { --heatmap-color:198,40,40; --heatmap-accent:#8e1b16; min-width:72px; min-height:48px; padding:5px 4px; color:#263238; background:rgba(var(--heatmap-color),var(--heatmap-alpha,.06)); border:0; border-right:1px solid rgba(144,164,174,.45); border-bottom:1px solid rgba(144,164,174,.45); cursor:pointer; font:600 .72em var(--font-code); }
+.heatmap-cell.is-context { white-space:pre-line; line-height:1.25; }
+.heatmap-cell.is-inactive { --heatmap-color:37,99,166; --heatmap-accent:#0d47a1; }
+.heatmap-cell.is-cost { --heatmap-color:31,122,69; --heatmap-accent:#176b3a; }
+.heatmap-cell:hover { box-shadow:inset 0 0 0 2px var(--heatmap-accent); }
+.heatmap-cell[aria-pressed="true"] { box-shadow:inset 0 0 0 3px var(--heatmap-accent); }
+.heatmap-empty { padding:16px; color:#607d8b; }
+.heatmap-status { margin-left:auto; color:#546e7a; font-family:var(--font-code); font-size:.78em; }
+.heatmap-drilldown-frame { display:grid; grid-template-columns:36px minmax(0,1fr) 36px; align-items:center; gap:6px; margin-top:10px; }
+.heatmap-drilldown { min-width:0; padding:12px 14px; background:#fff; border:1px solid #cfd8dc; border-radius:6px; }
+.heatmap-drilldown h3 { margin:0 0 4px; color:#263238; }
+.heatmap-drilldown-summary { margin:0; color:#455a64; font-size:.86em; }
+.heatmap-drilldown-path { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:9px; color:#607d8b; font-size:.78em; }
+.heatmap-drilldown-path button { padding:3px 6px; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:4px; cursor:pointer; font:600 1em var(--font-ui); }
+.heatmap-drilldown-path button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
+.heatmap-event-list li { display:flex; align-items:baseline; gap:10px; margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
+.heatmap-event-copy { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.heatmap-event-turn-link { flex:0 0 auto; color:#2563a6; font-weight:700; text-decoration:none; }
+.heatmap-event-turn-link:hover { text-decoration:underline; }
+.heatmap-event-turn-link:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
+.heatmap-event-list code { color:#263238; }
+@media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame, .heatmap-drilldown-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
+
+@media (max-width:900px) { .turn-detail-metrics { grid-template-columns:repeat(2,minmax(0,1fr)); } .turn-mcp-count-metric, .turn-mcp-skills-metric, .turn-bash-skills-metric, .turn-tools-metric { grid-column:1 / -1; } }
+</style></head><body>
+
+<h1>"Agent message sequence example" Agent Report</h1>
+
+<p>Codex run <code>example-agent-message</code> · state <strong>complete</strong> · observed <time class="local-timestamp" datetime="2026-08-27T02:48:11.397669+00:00">2026-08-27T02:48:11.397669+00:00</time> · Cost unavailable.</p>
+<nav class="view-nav" aria-label="Report views"><span>Views</span><a href="#execution-heatmap">Heatmap</a><a href="#timeline">Timeline</a><a href="report-sequence.html?view=sequence#agent-sequence" target="_blank" rel="noopener" data-sequence-window>Sequence window</a></nav>
+
+<div class="metrics">
+<div class="metric"><div class="label">Processed tokens</div><div class="value">0</div></div>
+<div class="metric"><div class="label">Agents used</div><div class="value">1</div></div>
+<div class="metric"><div class="label">Turns</div><div class="value">1</div></div><div class="metric"><div class="label">Model responses</div><div class="value">0</div></div>
+<div class="metric"><div class="label">Matched tool calls</div><div class="value">0</div></div>
+<div class="metric"><div class="label">MCP calls</div><div class="value">0</div></div>
+<div class="metric"><div class="label">Wall time</div><div class="value">3s</div></div>
+<div class="metric"><div class="label">Tool time</div><div class="value">0s</div></div>
+<div class="metric"><div class="label">Peak concurrency</div><div class="value">1</div></div>
+</div>
+<h2>Token composition</h2>
+<div class="token-composition" title="Processed token composition">
+<span class="token-segment fresh" style="width:0.000%"></span>
+<span class="token-segment cached" style="width:0.000%"></span>
+
+
+
+</div>
+<div class="composition-legend"><span class="composition-fresh">Fresh input 0</span> · <span class="composition-cached">Cache read 0</span> · <span class="composition-output">output 0</span> · <span class="composition-reasoning">reasoning 0</span></div>
+<p class="execution-note"><a class="drilldown-link" href="#model-pricing" target="_blank" rel="noopener">Open model pricing</a>.</p>
+<section id="model-usage"><div class="agents-heading"><h2>Usage by model</h2></div><p class="execution-note">Each model and effort combination is a separate group. Expand a group to see the agents that contributed to its total. Fresh input excludes cache reads. Codex telemetry does not report cache-write tokens, so that column is omitted.</p><div class="model-usage-groups"><p class="execution-note">No model usage was recorded.</p></div></section>
+
+
+<section id="runtime-activity" class="metric-view"><div class="agents-heading"><h2>Runtime activity</h2></div><div class="metrics compact-metrics"><div class="metric"><div class="label">All agents waiting</div><div class="value">0s</div></div><div class="metric"><div class="label">Inference</div><div class="value">0s</div></div><div class="metric"><div class="label">Build / Test</div><div class="value">0s</div></div></div><details class="metric-details"><summary>State breakdown</summary><div class="table-scroll"><table><thead><tr><th>State</th><th>Agent time</th><th>Wall time</th><th>Intervals</th><th>Evidence</th></tr></thead><tbody><tr><td>Unattributed</td><td>2s</td><td>2s</td><td>1</td><td>inferred</td></tr></tbody></table></div></details></section>
+<section id="execution-heatmap" class="metric-view"><div class="agents-heading"><h2>Execution heatmap</h2></div><p class="execution-note">Compare time or response-attributed tokens across the run. Single-click a cell to inspect its events. Double-click to drill down; right-click to step back.</p><div class="heatmap-controls"><div class="heatmap-control"><label for="heatmap-metric">Measure</label><select id="heatmap-metric"><option value="wall_time">Wall time</option><option value="tokens" selected>Tokens</option><option value="models">Models</option></select></div><fieldset class="heatmap-granularity"><legend>Period</legend><button type="button" data-heatmap-minutes="1">1 min</button><button type="button" data-heatmap-minutes="5" aria-pressed="true">5 min</button><button type="button" data-heatmap-minutes="15">15 min</button><button type="button" data-heatmap-minutes="30">30 min</button><button type="button" data-heatmap-minutes="60">1 hour</button><button type="button" data-heatmap-minutes="360">6 hours</button><button type="button" data-heatmap-minutes="1440">1 day</button></fieldset><output class="heatmap-status" data-heatmap-status></output></div><p class="execution-note">Cost follows the report's recorded or API-equivalent estimate method.</p><div class="heatmap-scroll-frame"><button type="button" class="heatmap-scroll-button" data-heatmap-scroll="left" aria-label="Scroll heatmap left">←</button><div class="heatmap-scroll" tabindex="0" aria-label="Scrollable execution heatmap"><div class="heatmap-grid" data-heatmap-grid></div><p class="heatmap-empty" data-heatmap-empty hidden>No heatmap evidence is available.</p></div><button type="button" class="heatmap-scroll-button" data-heatmap-scroll="right" aria-label="Scroll heatmap right">→</button></div><div class="heatmap-drilldown-frame"><button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="-1" aria-label="Previous drilldown period" disabled>←</button><div class="heatmap-drilldown"><h3 id="heatmap-drilldown-title">Select a heatmap cell</h3><p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">Choose a cell to inspect its events.</p><nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav><ol class="heatmap-event-list" data-heatmap-event-list></ol></div><button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown period" disabled>→</button></div><script type="application/json" id="execution-heatmap-data">{"started_at":"2026-08-27T01:44:58+00:00","ended_at":"2026-08-27T01:45:01.100000+00:00","context_capacity":0,"states":[{"id":"unattributed","label":"Unattributed"}],"agents":[{"id":"example-agent-message","label":"main"}],"models":[],"intervals":[{"event_id":"evt_79923276f1e396dfb46d6983","state":"unattributed","thread_id":"example-agent-message","turn_id":"example-turn","turn_target":"turn-tool-call-list-1-1","event_target":"","started_at":"2026-08-27T01:44:58.500000+00:00","ended_at":"2026-08-27T01:45:01.100000+00:00","duration_ms":2600,"confidence":"inferred","detail":"","preview":""}],"responses":[],"tools":[]}</script></section>
+
+<div id="timeline" class="agents-heading"><h2>Timeline</h2><details class="agent-info"><summary aria-label="About Timeline">ⓘ</summary><div class="agent-note-popover" role="note">Agent rows follow the recorded assignment hierarchy. Each identity separates the thread name, resolved agent type, and optional runtime nickname. Main identifies the root agent; default is Codex's built-in role when a spawn omits agent_type; any other value is the explicitly selected role. Nested rows are indented under their parent assignment. Skills are listed only when a SKILL.md reference appears in recorded tool arguments.</div></details></div>
+<p class="execution-note">Bars share a common run-wide time axis and show each agent's active turns and each turn's observed span. Agent and turn costs use each agent's recorded model and the linked pricing table. Expand an agent for turn, token, cost, and tool-call detail.</p>
+<div class="table-scroll"><table class="agent-table"><colgroup><col class="agent-assignment-column"><col class="agent-skills-column"><col class="agent-count-column"><col class="agent-time-column"><col class="agent-processed-column"><col class="agent-timeline-column"></colgroup><thead><tr><th>Assignment</th><th>Skills used</th><th>Turns<br><span class="column-detail">(Tools/MCP)</span></th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Processed</th><th class="agent-timeline-header">Timeline</th></tr></thead><tbody><tr class="agent-summary-row" data-agent-detail="agent-detail-1"><td class="agent-assignment-cell" data-depth="0" style="--agent-depth:0"><span class="visually-hidden">Top-level assignment.</span><div class="agent-assignment-line"><button type="button" class="agent-row-toggle" aria-expanded="false" aria-controls="agent-detail-1" aria-label="Toggle details for Thread: root · Agent: main"><span class="agent-row-toggle-icon" aria-hidden="true"></span></button><div class="agent-assignment"><div class="agent-assignment-heading"><strong>Thread: root · Agent: main</strong><span class="state state-complete">complete</span><span class="agent-model-metadata"><code class="model-name">—</code></span></div></div></div></td><td class="agent-skills-cell">—</td><td class="agent-activity-cell"><span class="cell-primary">1</span><span class="cell-secondary">(0/0)</span></td><td class="agent-time-cell"><span class="cell-primary">2s</span><span class="cell-secondary">(—)</span></td><td class="agent-processed-cell"><span class="cell-primary">0</span><span class="cell-secondary">(0.0%)</span></td><td class="agent-timeline-cell"><span class="timeline-track agent-timeline-track" role="img" aria-label="Thread: root · Agent: main turn activity · T+&lt;1s"><span class="timeline-bar agent-timeline-bar" style="left:16.129%;width:83.871%"></span></span></td></tr><tr id="agent-detail-1" class="agent-expanded-row" hidden><td colspan="6"><h3>Turn activity</h3><div class="table-scroll"><table class="turn-table"><thead><tr><th>Turn</th><th>T+</th><th>Turns<br><span class="column-detail">(Tools/MCP)</span></th><th>Agent time<br><span class="column-detail">(Cost)</span></th><th>Fresh Input</th><th>Cache read</th><th>Output</th><th>Reasoning</th><th class="turn-timeline-header">Timeline</th></tr></thead><tbody><tr><td><a class="drilldown-link" href="#turn-tool-call-list-1-1" data-turn-detail-link data-return-target="#timeline"><code>example-turn</code></a> <span class="state state-complete">complete</span></td><td>T+<1s</td><td class="turn-activity-cell"><span class="cell-primary">1</span><span class="cell-secondary">(0/0)</span></td><td class="turn-time-cell"><span class="cell-primary">2s</span><span class="cell-secondary">(—)</span></td><td>0</td><td>0</td><td>0</td><td>0</td><td class="turn-timeline-cell"><span class="timeline-track turn-timeline-track" role="img" aria-label="Turn T+&lt;1s · 2s"><span class="timeline-bar turn-timeline-bar" style="left:16.129%;width:83.871%"></span></span></td></tr></tbody></table></div></td></tr></tbody></table></div>
+
+<section id="model-pricing" class="model-pricing-overlay" role="dialog" aria-modal="true" aria-labelledby="model-pricing-title"><div class="model-pricing-panel"><div class="model-pricing-header"><h2 id="model-pricing-title">Model pricing</h2><span class="execution-note">Close this tab to return to the report.</span></div><p class="execution-note">Rates updated 2026-07-14 and shown per 1M tokens in input / cached input / output order. API USD estimates are comparison values, not subscription invoices. Long-context and fast-mode multipliers are not inferred from aggregate telemetry. Sources: <a href="https://developers.openai.com/api/docs/pricing">OpenAI API</a> and <a href="https://platform.claude.com/docs/en/about-claude/pricing">Anthropic API</a>.</p><div class="table-scroll"><table class="pricing-table"><thead><tr><th>Provider</th><th>Model</th><th>API USD / 1M tokens<br>input / cached / output</th><th>Note</th></tr></thead><tbody><tr><td>Anthropic</td><td><strong>Claude Fable 5</strong><br><code>claude-fable-5</code></td><td>$10 / $1 / $50</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Haiku 4.5</strong><br><code>claude-haiku-4-5</code></td><td>$1 / $0.1 / $5</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Mythos 5</strong><br><code>claude-mythos-5</code></td><td>$10 / $1 / $50</td><td>Limited availability</td></tr><tr><td>Anthropic</td><td><strong>Claude Opus 4.5</strong><br><code>claude-opus-4-5</code></td><td>$5 / $0.5 / $25</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Opus 4.6</strong><br><code>claude-opus-4-6</code></td><td>$5 / $0.5 / $25</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Opus 4.7</strong><br><code>claude-opus-4-7</code></td><td>$5 / $0.5 / $25</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Opus 4.8</strong><br><code>claude-opus-4-8</code></td><td>$5 / $0.5 / $25</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Sonnet 4.5</strong><br><code>claude-sonnet-4-5</code></td><td>$3 / $0.3 / $15</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Sonnet 4.6</strong><br><code>claude-sonnet-4-6</code></td><td>$3 / $0.3 / $15</td><td>—</td></tr><tr><td>Anthropic</td><td><strong>Claude Sonnet 5</strong><br><code>claude-sonnet-5</code></td><td>$2 / $0.2 / $10</td><td>Introductory pricing through 2026-08-31; standard rates become $3 / $0.30 / $15 on 2026-09-01</td></tr><tr><td>OpenAI</td><td><strong>GPT-5</strong><br><code>gpt-5</code></td><td>$1.25 / $0.125 / $10</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.3 Codex Spark</strong><br><code>gpt-5.3-codex-spark</code></td><td>$0 / $0 / $0</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.4</strong><br><code>gpt-5.4</code></td><td>$2.5 / $0.25 / $15</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.4 Mini</strong><br><code>gpt-5.4-mini</code></td><td>$0.75 / $0.075 / $4.5</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.4 Nano</strong><br><code>gpt-5.4-nano</code></td><td>$0.2 / $0.02 / $1.25</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.5</strong><br><code>gpt-5.5</code></td><td>$5 / $0.5 / $30</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.6 Luna</strong><br><code>gpt-5.6-luna</code></td><td>$1 / $0.1 / $6</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.6 Sol</strong><br><code>gpt-5.6-sol</code></td><td>$5 / $0.5 / $30</td><td>—</td></tr><tr><td>OpenAI</td><td><strong>GPT-5.6 Terra</strong><br><code>gpt-5.6-terra</code></td><td>$2.5 / $0.25 / $15</td><td>—</td></tr></tbody></table></div></div></section>
+<section id="turn-tool-call-list-1" class="tool-call-overlay agent-tool-call-overlay" role="dialog" aria-modal="true" aria-labelledby="turn-tool-call-list-1-title"><div class="tool-call-panel"><div class="tool-call-header"><h2 id="turn-tool-call-list-1-title">root — turns and tool calls</h2><a class="tool-call-close" href="#timeline">close</a></div><p class="execution-note">Select a turn to see its timing, attribution, tokens, and ordered privacy-safe tool-call sequence.</p><div class="table-scroll"><table><thead><tr><th>Turn</th><th>T+</th><th>Duration</th><th>State</th><th>Calls</th><th>Tools</th><th>Cost estimate</th></tr></thead><tbody><tr class="turn-tool-row"><td><a class="drilldown-link" href="#turn-tool-call-list-1-1" data-turn-detail-link data-return-target="#timeline"><code>example-turn</code></a></td><td>T+<1s</td><td>2s</td><td><span class="state state-complete">complete</span></td><td>0</td><td title="0 calls · 0s">—</td><td>—</td></tr></tbody></table></div></div></section>
+<section id="turn-tool-call-list-1-1" class="tool-call-overlay turn-detail-overlay" role="dialog" aria-modal="true" aria-labelledby="turn-tool-call-list-1-1-title"><div class="tool-call-panel turn-detail-panel"><div class="tool-call-header"><h2 id="turn-tool-call-list-1-1-title">root — Turn example-turn</h2><a class="tool-call-close" href="#timeline">close</a></div><div class="metrics turn-detail-metrics"><div class="metric"><div class="label">Start T+</div><div class="value"><1s</div></div><div class="metric"><div class="label">Duration</div><div class="value">2s</div></div><div class="metric turn-state-metric"><div class="label">State</div><div class="value"><span class="state state-complete">complete</span></div></div><div class="metric"><div class="label">Processed tokens</div><div class="value">0</div></div><div class="metric"><div class="label">Model</div><div class="value">—</div></div><div class="metric"><div class="label">Cost estimate</div><div class="value">—</div></div><div class="metric turn-mcp-count-metric"><div class="label">MCP calls</div><div class="value">0</div><div class="metric-detail">—</div><span class="turn-state-source">0 calls · 0ms</span></div><div class="metric turn-mcp-skills-metric"><div class="label">Skills via MCP</div><div class="value">0</div><div class="metric-detail">—</div></div><div class="metric turn-bash-skills-metric"><div class="label">Skills via Bash</div><div class="value">0</div><div class="metric-detail">—</div></div><div class="metric turn-tools-metric"><div class="label">Tools used</div><div class="value">—</div><span class="metric-detail">0 calls · 0s</span></div></div><div class="table-scroll"><table class="turn-detail-table"><colgroup><col class="turn-detail-index-column"><col class="turn-detail-offset-column"><col class="turn-detail-cost-column"><col class="turn-detail-model-column"><col class="turn-detail-activity-column"><col class="turn-detail-arguments-column"><col class="turn-detail-result-column"></colgroup><thead><tr><th>#</th><th>T+</th><th title="Cost of the model response on this row; tool execution has no separately recorded model cost">Cost</th><th>Model</th><th>Activity</th><th>Arguments</th><th>Result</th></tr></thead><tbody><tr class="turn-detail-lifecycle-row turn-detail-output-row"><td>—</td><td>T+3s</td><td>—</td><td>—</td><td><span class="activity-name">output</span></td><td><div class="activity-summary">Output generation aggregate</div><div class="activity-summary">Final answer · 74 characters</div><details class="activity-raw"><summary>raw output</summary><pre>The review is complete and the sequence renderer now shows agent messages.</pre></details></td><td><div class="activity-summary">0 model-output tokens across 0 responses</div></td></tr></tbody></table></div></div></section>
+<script>
+var localTimestampFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short"
+});
+document.querySelectorAll("time.local-timestamp").forEach(function(element) {
+  var timestamp = new Date(element.dateTime);
+  if (!Number.isNaN(timestamp.getTime())) {
+    element.textContent = localTimestampFormatter.format(timestamp);
+    element.title = element.dateTime;
+  }
+});
+var sequenceOnly =
+  document.body.classList.contains("sequence-only") ||
+  new URLSearchParams(window.location.search).get("view") === "sequence";
+if (sequenceOnly) {
+  document.body.classList.add("sequence-only");
+  document.title = "Agent sequence · " + document.title;
+}
+document.querySelectorAll("[data-sequence-window]").forEach(function(link) {
+  link.addEventListener("click", function(event) {
+    if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+    var width = Math.max(720, Math.floor(window.screen.availWidth * 0.92));
+    var height = Math.max(600, Math.floor(window.screen.availHeight * 0.92));
+    var popup = window.open(
+      link.href,
+      "_blank",
+      "popup=yes,width=" + width + ",height=" + height +
+        ",resizable=yes,scrollbars=yes"
+    );
+    if (popup) {
+      event.preventDefault();
+      popup.opener = null;
+    }
+  });
+});
+function initializeAgentSequence(section) {
+  var scroll = section.querySelector(".sequence-scroll");
+  var canvas = section.querySelector(".sequence-canvas");
+  var participantHeader = section.querySelector(".sequence-participant-header");
+  var diagram = section.querySelector(".agent-sequence-diagram");
+  if (!scroll || !canvas || !participantHeader || !diagram) return;
+
+  var participants = Array.from(section.querySelectorAll(".sequence-participant"));
+  var lifelines = Array.from(section.querySelectorAll(".sequence-lifeline"));
+  var eventLinks = Array.from(diagram.querySelectorAll(".sequence-event-link"));
+  var thoughtNodes = Array.from(
+    diagram.querySelectorAll(".sequence-conversation-bubble")
+  );
+  var thoughtLinks = thoughtNodes.map(function(node) {
+    return node.closest(".sequence-conversation-link");
+  });
+  var participantGap = Number(canvas.dataset.participantGap);
+  var sidePadding = Number(canvas.dataset.sidePadding);
+  var headerHeight = Number(canvas.dataset.headerHeight);
+  var eventHeight = Number(canvas.dataset.eventHeight);
+  var footerHeight = Number(canvas.dataset.footerHeight);
+  var minZoom = 0.1;
+  var maxZoom = 2;
+  var zoom = 1;
+  var baseWidth = 760;
+  var baseHeight = footerHeight;
+  var collapsedThreadIds = new Set();
+  var focusedThreadId = "";
+  var groupRepeats = true;
+  var firstVisibleActivity = null;
+  var parentByThreadId = new Map();
+  var participantByThreadId = new Map();
+  var lifelineByThreadId = new Map();
+
+  participants.forEach(function(participant) {
+    participantByThreadId.set(participant.dataset.threadId, participant);
+    parentByThreadId.set(
+      participant.dataset.threadId,
+      participant.dataset.parentThreadId || ""
+    );
+  });
+  lifelines.forEach(function(lifeline) {
+    lifelineByThreadId.set(lifeline.dataset.threadId, lifeline);
+  });
+  var events = eventLinks.map(function(element) {
+    return {
+      element: element,
+      group: element.querySelector(".sequence-event"),
+      line: element.querySelector(".sequence-line"),
+      dot: element.querySelector(".sequence-source-dot"),
+      hit: element.querySelector(".sequence-event-hit"),
+      label: element.querySelector(".sequence-event-label"),
+      band: element.querySelector(".sequence-event-band"),
+      sourceId: element.dataset.sourceThreadId,
+      targetId: element.dataset.targetThreadId,
+      category: element.dataset.eventCategory,
+      rowIndex: Number(element.dataset.rowIndex),
+      sequenceOrder: Number(element.dataset.sequenceOrder),
+      baseY: Number(element.dataset.baseY),
+      repeatCount: Number(element.dataset.repeatCount),
+      repeatIndex: Number(element.dataset.repeatIndex)
+    };
+  });
+  var thoughts = thoughtNodes.map(function(element) {
+    return {
+      element: element,
+      rect: element.querySelector("rect"),
+      tail: element.querySelector(".sequence-conversation-tail"),
+      text: element.querySelector(".sequence-thinking-text"),
+      textLines: Array.from(element.querySelectorAll(".sequence-thinking-line")),
+      threadId: element.dataset.threadId,
+      category: element.dataset.activityCategory,
+      rowIndex: Number(element.dataset.rowIndex),
+      sequenceOrder: Number(element.dataset.sequenceOrder),
+      baseY: Number(element.dataset.baseY)
+    };
+  });
+
+  var zoomOutButton = section.querySelector("[data-sequence-zoom-out]");
+  var zoomInButton = section.querySelector("[data-sequence-zoom-in]");
+  var zoomValue = section.querySelector("[data-sequence-zoom-value]");
+  var fitButton = section.querySelector("[data-sequence-fit]");
+  var collapseAllButton = section.querySelector("[data-sequence-collapse-all]");
+  var expandAllButton = section.querySelector("[data-sequence-expand-all]");
+  var clearFocusButton = section.querySelector("[data-sequence-clear-focus]");
+  var groupRepeatsButton = section.querySelector("[data-sequence-group-repeats]");
+  var resetButton = section.querySelector("[data-sequence-reset]");
+  var filterInputs = Array.from(section.querySelectorAll("[data-sequence-event-filter]"));
+  var viewStatus = section.querySelector("[data-sequence-view-status]");
+  var emptyState = section.querySelector("[data-sequence-empty]");
+  var description = section.querySelector("[data-sequence-description]");
+  var inspectDetail = section.querySelector("[data-sequence-inspect-detail]");
+  var inspectDefault = inspectDetail.textContent;
+
+  function showInspectDetail(value) { inspectDetail.textContent = value; }
+  function clearInspectDetail() { inspectDetail.textContent = inspectDefault; }
+
+  function updateZoomControls() {
+    zoomValue.textContent = Math.round(zoom * 100) + "%";
+    zoomOutButton.disabled = zoom <= minZoom;
+    zoomInButton.disabled = zoom >= maxZoom;
+  }
+
+  function applyDimensions() {
+    var scaledWidth = Math.round(baseWidth * zoom);
+    var scaledHeaderHeight = Math.round(headerHeight * zoom);
+    var scaledHeight = Math.round(baseHeight * zoom);
+    canvas.style.width = scaledWidth + "px";
+    participantHeader.setAttribute("viewBox", "0 0 " + baseWidth + " " + headerHeight);
+    participantHeader.setAttribute("width", String(scaledWidth));
+    participantHeader.setAttribute("height", String(scaledHeaderHeight));
+    diagram.setAttribute("viewBox", "0 0 " + baseWidth + " " + baseHeight);
+    diagram.setAttribute("width", String(scaledWidth));
+    diagram.setAttribute("height", String(scaledHeight));
+    updateZoomControls();
+  }
+
+  function setZoom(nextZoom) {
+    zoom = Math.max(minZoom, Math.min(maxZoom, nextZoom));
+    applyDimensions();
+  }
+
+  function fitSequence() {
+    var availableWidth = Math.max(320, scroll.clientWidth - 2);
+    setZoom(Math.min(1, availableWidth / baseWidth));
+    scroll.scrollLeft = 0;
+  }
+
+  function revealFirstActivity() {
+    if (!firstVisibleActivity) return;
+    var activityRect = firstVisibleActivity.getBoundingClientRect();
+    var scrollRect = scroll.getBoundingClientRect();
+    var activityCenter = (activityRect.left + activityRect.right) / 2;
+    var scrollCenter = (scrollRect.left + scrollRect.right) / 2;
+    var centeredLeft = scroll.scrollLeft + activityCenter - scrollCenter;
+    var maxLeft = Math.max(0, scroll.scrollWidth - scroll.clientWidth);
+    scroll.scrollLeft = Math.max(0, Math.min(maxLeft, Math.round(centeredLeft)));
+    scroll.scrollTop = 0;
+  }
+
+  function hiddenByCollapsedAncestor(threadId) {
+    var parentId = parentByThreadId.get(threadId) || "";
+    var visited = new Set();
+    while (parentId && !visited.has(parentId)) {
+      if (collapsedThreadIds.has(parentId)) return true;
+      visited.add(parentId);
+      parentId = parentByThreadId.get(parentId) || "";
+    }
+    return false;
+  }
+
+  function focusThreadIds() {
+    if (!focusedThreadId) return null;
+    var ids = new Set([focusedThreadId]);
+    events.forEach(function(event) {
+      if (event.sourceId === focusedThreadId) ids.add(event.targetId);
+      if (event.targetId === focusedThreadId) ids.add(event.sourceId);
+    });
+    return ids;
+  }
+
+  function updateParticipantControl(participant) {
+    var threadId = participant.dataset.threadId;
+    var focusTarget = participant.querySelector(".sequence-focus-target");
+    var hierarchyToggle = participant.querySelector(".sequence-hierarchy-toggle");
+    focusTarget.setAttribute(
+      "aria-pressed",
+      threadId === focusedThreadId ? "true" : "false"
+    );
+    if (!hierarchyToggle) return;
+    var collapsed = collapsedThreadIds.has(threadId);
+    hierarchyToggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+    hierarchyToggle.setAttribute(
+      "aria-label",
+      (collapsed ? "Expand" : "Collapse") +
+        " descendants of " + participant.dataset.participantName
+    );
+    hierarchyToggle.querySelector("text").textContent = collapsed ? "+" : "−";
+  }
+
+  function layoutSequence() {
+    var focusIds = focusThreadIds();
+    var visibleParticipants = participants.filter(function(participant) {
+      var threadId = participant.dataset.threadId;
+      if (focusIds && !focusIds.has(threadId)) return false;
+      if (threadId === focusedThreadId) return true;
+      return !hiddenByCollapsedAncestor(threadId);
+    });
+    var visibleThreadIds = new Set(
+      visibleParticipants.map(function(participant) { return participant.dataset.threadId; })
+    );
+    var xByThreadId = new Map();
+    visibleParticipants.forEach(function(participant, index) {
+      var threadId = participant.dataset.threadId;
+      var x = sidePadding + index * participantGap;
+      xByThreadId.set(threadId, x);
+      participant.setAttribute("transform", "translate(" + x + " 0)");
+    });
+    participants.forEach(function(participant) {
+      var visible = visibleThreadIds.has(participant.dataset.threadId);
+      participant.classList.toggle("sequence-hidden", !visible);
+      updateParticipantControl(participant);
+    });
+
+    baseWidth = Math.max(
+      760,
+      sidePadding * 2 + participantGap * Math.max(0, visibleParticipants.length - 1)
+    );
+    var enabledCategories = new Set(
+      filterInputs.filter(function(input) { return input.checked; }).map(
+        function(input) { return input.dataset.sequenceEventFilter; }
+      )
+    );
+    var visibleEvents = [];
+    events.forEach(function(event) {
+      var visible =
+        enabledCategories.has(event.category) &&
+        visibleThreadIds.has(event.sourceId) &&
+        visibleThreadIds.has(event.targetId) &&
+        (!focusedThreadId ||
+          event.sourceId === focusedThreadId ||
+          event.targetId === focusedThreadId) &&
+        (!groupRepeats || event.repeatIndex === 0);
+      event.element.classList.toggle("sequence-hidden", !visible);
+      if (visible) visibleEvents.push(event);
+    });
+    var visibleThoughts = [];
+    var thinkingEnabled = enabledCategories.has("thinking");
+    thoughts.forEach(function(thought) {
+      var visible =
+        (thought.category === "thinking"
+          ? thinkingEnabled
+          : enabledCategories.has(thought.category)) &&
+        visibleThreadIds.has(thought.threadId);
+      thought.element.classList.toggle("sequence-hidden", !visible);
+      if (visible) visibleThoughts.push(thought);
+    });
+    var visibleMessages = visibleThoughts.filter(function(thought) {
+      return thought.category === "message";
+    });
+    var visibleReasoning = visibleThoughts.filter(function(thought) {
+      return thought.category === "thinking";
+    });
+    var visibleTimelineRows = visibleEvents.map(function(event) {
+      return { sequenceOrder: event.sequenceOrder, event: event };
+    }).concat(visibleThoughts.map(function(thought) {
+      return { sequenceOrder: thought.sequenceOrder, thought: thought };
+    }));
+    visibleTimelineRows.sort(function(left, right) {
+      return left.sequenceOrder - right.sequenceOrder;
+    });
+
+    firstVisibleActivity = null;
+    if (visibleTimelineRows.length) {
+      var firstEntry = visibleTimelineRows[0];
+      firstVisibleActivity = firstEntry.event
+        ? firstEntry.event.element
+        : firstEntry.thought.element;
+    }
+
+    baseHeight = eventHeight * visibleTimelineRows.length + footerHeight;
+    visibleTimelineRows.forEach(function(entry, index) {
+      var y = index * eventHeight + 34;
+      if (entry.event) {
+        var event = entry.event;
+        var sourceX = xByThreadId.get(event.sourceId);
+        var targetX = xByThreadId.get(event.targetId);
+        event.group.setAttribute("transform", "translate(0 " + (y - event.baseY) + ")");
+        event.line.setAttribute("x1", String(sourceX));
+        event.line.setAttribute("x2", String(targetX));
+        event.dot.setAttribute("cx", String(sourceX));
+        event.hit.setAttribute("cx", String(targetX));
+        event.label.setAttribute("x", String((sourceX + targetX) / 2));
+        event.band.setAttribute("width", String(baseWidth));
+        return;
+      }
+      var thought = entry.thought;
+      var thoughtX = xByThreadId.get(thought.threadId);
+      thought.rect.setAttribute("x", "-98");
+      thought.tail.setAttribute("d", "M -8 22 L 0 30 L 8 22 Z");
+      thought.text.setAttribute("x", "0");
+      thought.textLines.forEach(function(line) {
+        line.setAttribute("x", "0");
+      });
+      thought.element.setAttribute(
+        "transform",
+        "translate(" + thoughtX + " " + y + ")"
+      );
+    });
+    lifelines.forEach(function(lifeline) {
+      var threadId = lifeline.dataset.threadId;
+      var visible = visibleThreadIds.has(threadId);
+      lifeline.classList.toggle("sequence-hidden", !visible);
+      if (!visible) return;
+      var x = xByThreadId.get(threadId);
+      lifeline.setAttribute("x1", String(x));
+      lifeline.setAttribute("x2", String(x));
+      lifeline.setAttribute("y2", String(Math.max(14, baseHeight - 16)));
+    });
+
+    section.classList.toggle("sequence-group-repeats", groupRepeats);
+    groupRepeatsButton.setAttribute("aria-pressed", groupRepeats ? "true" : "false");
+    clearFocusButton.disabled = !focusedThreadId;
+    emptyState.hidden = visibleTimelineRows.length !== 0;
+    var statusText = visibleParticipants.length + " of " + participants.length +
+      (participants.length === 1 ? " agent · " : " agents · ") +
+      visibleEvents.length + " of " + events.length +
+      (events.length === 1 ? " event · " : " events · ") +
+      visibleMessages.length + " of " + viewStatus.dataset.sequenceMessageCount +
+      " agent messages · " +
+      visibleReasoning.length + " of " + viewStatus.dataset.sequenceThinkingCount +
+      " thoughts";
+    if (focusedThreadId && participantByThreadId.has(focusedThreadId)) {
+      statusText = "Focus: " +
+        participantByThreadId.get(focusedThreadId).dataset.participantName + " · " +
+        statusText;
+    }
+    viewStatus.textContent = statusText;
+    participantHeader.setAttribute("aria-label", statusText);
+    description.textContent = visibleEvents.length + " visible events and " +
+      visibleMessages.length + " visible agent messages and " +
+      visibleReasoning.length + " visible thinking summaries across " +
+      visibleParticipants.length + " visible agent lifelines.";
+    applyDimensions();
+  }
+
+  function activateWithKeyboard(element, action) {
+    element.addEventListener("keydown", function(event) {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      action();
+    });
+  }
+
+  participants.forEach(function(participant) {
+    var threadId = participant.dataset.threadId;
+    var focusTarget = participant.querySelector(".sequence-focus-target");
+    var selectFocus = function() {
+      focusedThreadId = focusedThreadId === threadId ? "" : threadId;
+      layoutSequence();
+      scroll.scrollLeft = 0;
+    };
+    focusTarget.addEventListener("click", selectFocus);
+    activateWithKeyboard(focusTarget, selectFocus);
+    focusTarget.addEventListener("pointerenter", function() {
+      showInspectDetail(participant.dataset.participantName);
+    });
+    focusTarget.addEventListener("pointerleave", clearInspectDetail);
+    focusTarget.addEventListener("focus", function() {
+      showInspectDetail(participant.dataset.participantName);
+    });
+    focusTarget.addEventListener("blur", clearInspectDetail);
+    var hierarchyToggle = participant.querySelector(".sequence-hierarchy-toggle");
+    if (!hierarchyToggle) return;
+    var toggleHierarchy = function() {
+      if (collapsedThreadIds.has(threadId)) collapsedThreadIds.delete(threadId);
+      else collapsedThreadIds.add(threadId);
+      layoutSequence();
+    };
+    hierarchyToggle.addEventListener("click", toggleHierarchy);
+    activateWithKeyboard(hierarchyToggle, toggleHierarchy);
+  });
+
+  thoughtLinks.forEach(function(link) {
+    if (!link) return;
+    var showThought = function() {
+      showInspectDetail(link.getAttribute("aria-label") || "Thinking detail");
+    };
+    link.addEventListener("pointerenter", showThought);
+    link.addEventListener("pointerleave", clearInspectDetail);
+    link.addEventListener("focus", showThought);
+    link.addEventListener("blur", clearInspectDetail);
+  });
+
+  zoomOutButton.addEventListener("click", function() { setZoom(zoom - 0.15); });
+  zoomInButton.addEventListener("click", function() { setZoom(zoom + 0.15); });
+  fitButton.addEventListener("click", fitSequence);
+  collapseAllButton.addEventListener("click", function() {
+    participants.forEach(function(participant) {
+      if (participant.querySelector(".sequence-hierarchy-toggle")) {
+        collapsedThreadIds.add(participant.dataset.threadId);
+      }
+    });
+    layoutSequence();
+    scroll.scrollLeft = 0;
+  });
+  expandAllButton.addEventListener("click", function() {
+    collapsedThreadIds.clear();
+    layoutSequence();
+  });
+  clearFocusButton.addEventListener("click", function() {
+    focusedThreadId = "";
+    layoutSequence();
+  });
+  groupRepeatsButton.addEventListener("click", function() {
+    groupRepeats = !groupRepeats;
+    layoutSequence();
+  });
+  resetButton.addEventListener("click", function() {
+    collapsedThreadIds.clear();
+    focusedThreadId = "";
+    groupRepeats = true;
+    filterInputs.forEach(function(input) { input.checked = true; });
+    zoom = 1;
+    layoutSequence();
+    revealFirstActivity();
+  });
+  filterInputs.forEach(function(input) {
+    input.addEventListener("change", layoutSequence);
+  });
+  layoutSequence();
+  requestAnimationFrame(revealFirstActivity);
+}
+var sequenceSection = document.getElementById("agent-sequence");
+if (sequenceOnly && sequenceSection) initializeAgentSequence(sequenceSection);
+document.querySelectorAll(".agent-summary-row").forEach(function(row) {
+  var button = row.querySelector(".agent-row-toggle");
+  var detail = document.getElementById(row.dataset.agentDetail);
+  if (!button || !detail) return;
+  function toggleAgentDetail() {
+    var expanded = button.getAttribute("aria-expanded") === "true";
+    button.setAttribute("aria-expanded", expanded ? "false" : "true");
+    detail.hidden = expanded;
+    row.classList.toggle("is-expanded", !expanded);
+  }
+  button.addEventListener("click", function(event) {
+    event.stopPropagation();
+    toggleAgentDetail();
+  });
+  row.addEventListener("click", function(event) {
+    if (event.target.closest("a, button, details, summary")) return;
+    toggleAgentDetail();
+  });
+});
+document.querySelectorAll(".clamped-less").forEach(function(button) {
+  button.addEventListener("click", function(event) {
+    event.stopPropagation();
+    var disclosure = button.closest(".clamped-disclosure");
+    if (disclosure) disclosure.open = false;
+  });
+});
+document.addEventListener("click", function(event) {
+  var link = event.target.closest("[data-turn-detail-link]");
+  if (!link) return;
+  var targetId = (link.getAttribute("href") || "").replace(/^#/, "");
+  var overlay = document.getElementById(targetId);
+  if (!overlay) return;
+  var closeLink = overlay.querySelector(".tool-call-close");
+  if (closeLink) closeLink.setAttribute("href", link.dataset.returnTarget || "#timeline");
+  requestAnimationFrame(function() {
+    document.querySelectorAll(".turn-detail-event-highlight").forEach(function(row) {
+      row.classList.remove("turn-detail-event-highlight");
+    });
+    if (!link.dataset.turnEventTarget) return;
+    var eventTarget = document.getElementById(link.dataset.turnEventTarget);
+    var eventRow = eventTarget ? eventTarget.closest("tr") : null;
+    if (!eventRow || !overlay.contains(eventRow)) return;
+    eventRow.classList.add("turn-detail-event-highlight");
+    eventRow.setAttribute("tabindex", "-1");
+    eventRow.scrollIntoView({ block:"center", inline:"nearest" });
+    eventRow.focus({ preventScroll:true });
+  });
+});
+
+function initializeTrendView(view) {
+  var dataElement = view.querySelector("[data-trend-data]");
+  var svg = view.querySelector("[data-trend-chart]");
+  var legend = view.querySelector("[data-trend-legend]");
+  var emptyState = view.querySelector("[data-trend-empty]");
+  var buttons = Array.from(view.querySelectorAll("[data-trend-mode]"));
+  var panels = Array.from(view.querySelectorAll("[data-trend-panel]"));
+  if (!dataElement || !svg || !legend || !emptyState || !buttons.length) return;
+
+  var data;
+  try { data = JSON.parse(dataElement.textContent); }
+  catch (error) { data = { series:[], markers:[], empty_message:"Chart data could not be loaded." }; }
+  var rendered = false;
+  var namespace = "http://www.w3.org/2000/svg";
+  var localTime = new Intl.DateTimeFormat(undefined, {
+    month:"short", day:"numeric", hour:"2-digit", minute:"2-digit"
+  });
+
+  function node(name, attributes, content) {
+    var element = document.createElementNS(namespace, name);
+    Object.keys(attributes || {}).forEach(function(key) {
+      element.setAttribute(key, String(attributes[key]));
+    });
+    if (content !== undefined) element.textContent = content;
+    return element;
+  }
+  function timestamp(value) {
+    var result = new Date(value).getTime();
+    return Number.isFinite(result) ? result : null;
+  }
+  function numeric(value) {
+    return typeof value === "number" && Number.isFinite(value) ? value : null;
+  }
+  function compact(value) {
+    if (value >= 1000000000) return (value / 1000000000).toFixed(1).replace(/\.0$/, "") + "B";
+    if (value >= 1000000) return (value / 1000000).toFixed(1).replace(/\.0$/, "") + "M";
+    if (value >= 1000) return (value / 1000).toFixed(1).replace(/\.0$/, "") + "K";
+    return Math.round(value).toLocaleString();
+  }
+  function valueLabel(value) {
+    if (data.value_format === "rate") return value.toFixed(2) + " tok/s";
+    return Math.round(value).toLocaleString() + " tokens";
+  }
+  function axisValue(value) {
+    if (data.value_format === "rate") return value.toFixed(value < 10 ? 1 : 0);
+    return compact(value);
+  }
+  function appendTitle(element, text) {
+    element.appendChild(node("title", {}, text));
+  }
+  function renderLegend() {
+    legend.replaceChildren();
+    (data.series || []).forEach(function(series) {
+      var item = document.createElement("span");
+      var swatch = document.createElement("i");
+      swatch.className = "trend-chart-swatch" + (series.dash ? " is-dashed" : "");
+      swatch.style.setProperty("--trend-color", series.color || "#2563a6");
+      item.appendChild(swatch);
+      item.appendChild(document.createTextNode(series.label));
+      legend.appendChild(item);
+    });
+    if ((data.markers || []).length) {
+      var markerItem = document.createElement("span");
+      var markerSwatch = document.createElement("i");
+      markerSwatch.className = "trend-chart-swatch is-marker";
+      markerItem.appendChild(markerSwatch);
+      markerItem.appendChild(document.createTextNode("Compaction"));
+      legend.appendChild(markerItem);
+    }
+  }
+  function rateLabel(value) {
+    return numeric(value) === null ? "unavailable" : value.toFixed(2) + " tok/s";
+  }
+  function renderDistributionChart() {
+    var categories = data.categories || [];
+    var measured = categories.filter(function(category) {
+      return numeric(category.calls) !== null && category.calls > 0;
+    });
+    svg.replaceChildren();
+    svg.appendChild(node("title", {}, data.title || "Distribution chart"));
+    svg.appendChild(node("desc", {}, data.description || "Distribution by category."));
+    renderLegend();
+    if (!measured.length) {
+      emptyState.hidden = false;
+      emptyState.textContent = data.empty_message || "No distribution data are available.";
+      svg.setAttribute("hidden", "");
+      legend.hidden = true;
+      return;
+    }
+    emptyState.hidden = true;
+    svg.removeAttribute("hidden");
+    legend.hidden = false;
+
+    var width = 1000;
+    var height = 360;
+    var margin = { top:32, right:26, bottom:64, left:78 };
+    var plotWidth = width - margin.left - margin.right;
+    var plotHeight = height - margin.top - margin.bottom;
+    var maximumCalls = Math.max.apply(null, categories.map(function(category) {
+      return numeric(category.calls) || 0;
+    }).concat([1]));
+    var yMaximum = Math.max(4, Math.ceil(maximumCalls / 4) * 4);
+    var slotWidth = plotWidth / Math.max(1, categories.length);
+    var barWidth = Math.min(110, slotWidth * .62);
+    function y(value) { return margin.top + plotHeight - value / yMaximum * plotHeight; }
+
+    for (var index = 0; index <= 4; index += 1) {
+      var yValue = yMaximum * index / 4;
+      var yPosition = y(yValue);
+      svg.appendChild(node("line", { x1:margin.left, y1:yPosition, x2:width - margin.right, y2:yPosition, class:"trend-chart-grid" }));
+      svg.appendChild(node("text", { x:margin.left - 10, y:yPosition + 4, "text-anchor":"end", class:"trend-chart-label" }, compact(yValue)));
+    }
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top + plotHeight, x2:width - margin.right, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top, x2:margin.left, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("text", { x:18, y:margin.top + plotHeight / 2, transform:"rotate(-90 18 " + (margin.top + plotHeight / 2) + ")", "text-anchor":"middle", class:"trend-chart-axis-title" }, data.axis_label || "Count"));
+    svg.appendChild(node("text", { x:margin.left + plotWidth / 2, y:height - 5, "text-anchor":"middle", class:"trend-chart-axis-title" }, "Output tokens per response"));
+
+    categories.forEach(function(category, index) {
+      var calls = numeric(category.calls) || 0;
+      var center = margin.left + slotWidth * (index + .5);
+      var top = y(calls);
+      var detail = category.label + " output tokens · " + calls.toLocaleString() +
+        " measured calls · " + compact(category.output_tokens || 0) +
+        " output tokens · weighted " + rateLabel(category.weighted_rate) +
+        " · median " + rateLabel(category.median_rate);
+      var bar = node("rect", {
+        x:center - barWidth / 2, y:top, width:barWidth,
+        height:Math.max(0, margin.top + plotHeight - top), rx:3,
+        class:"trend-chart-bar", tabindex:0, role:"img", "aria-label":detail
+      });
+      appendTitle(bar, detail);
+      svg.appendChild(bar);
+      if (calls) {
+        svg.appendChild(node("text", {
+          x:center, y:Math.max(margin.top + 12, top - 7),
+          "text-anchor":"middle", class:"trend-chart-bar-value"
+        }, calls.toLocaleString()));
+      }
+      svg.appendChild(node("text", {
+        x:center, y:height - 31, "text-anchor":"middle", class:"trend-chart-label"
+      }, category.label));
+    });
+  }
+  function renderChart() {
+    if (rendered) return;
+    rendered = true;
+    if (data.chart_type === "distribution") {
+      renderDistributionChart();
+      return;
+    }
+    var series = data.series || [];
+    var markers = data.markers || [];
+    var points = [];
+    series.forEach(function(item) {
+      (item.values || []).forEach(function(point) {
+        var time = timestamp(point.timestamp);
+        var value = numeric(point.value);
+        if (time !== null && value !== null) points.push({ time:time, value:value });
+      });
+    });
+    var markerValues = [];
+    markers.forEach(function(marker) {
+      [numeric(marker.before), numeric(marker.after)].forEach(function(value) {
+        if (value !== null) markerValues.push(value);
+      });
+    });
+    svg.replaceChildren();
+    svg.appendChild(node("title", {}, data.title || "Trend chart"));
+    svg.appendChild(node("desc", {}, data.description || "Time-series chart."));
+    renderLegend();
+    if (!points.length) {
+      emptyState.hidden = false;
+      emptyState.textContent = data.empty_message || "No chart data are available.";
+      svg.setAttribute("hidden", "");
+      legend.hidden = true;
+      return;
+    }
+    emptyState.hidden = true;
+    svg.removeAttribute("hidden");
+    legend.hidden = false;
+
+    var width = 1000;
+    var height = 360;
+    var margin = { top:28, right:26, bottom:58, left:78 };
+    var plotWidth = width - margin.left - margin.right;
+    var plotHeight = height - margin.top - margin.bottom;
+    var times = points.map(function(point) { return point.time; }).concat(
+      markers.map(function(marker) { return timestamp(marker.timestamp); }).filter(function(value) { return value !== null; })
+    );
+    var minimumTime = Math.min.apply(null, times);
+    var maximumTime = Math.max.apply(null, times);
+    if (minimumTime === maximumTime) {
+      minimumTime -= 30 * 60 * 1000;
+      maximumTime += 30 * 60 * 1000;
+    }
+    var maximumValue = Math.max.apply(null, points.map(function(point) { return point.value; }).concat(markerValues, [1]));
+    var yMaximum = maximumValue * 1.08;
+    function x(time) { return margin.left + (time - minimumTime) / (maximumTime - minimumTime) * plotWidth; }
+    function y(value) { return margin.top + plotHeight - value / yMaximum * plotHeight; }
+
+    for (var index = 0; index <= 4; index += 1) {
+      var yValue = yMaximum * index / 4;
+      var yPosition = y(yValue);
+      svg.appendChild(node("line", { x1:margin.left, y1:yPosition, x2:width - margin.right, y2:yPosition, class:"trend-chart-grid" }));
+      svg.appendChild(node("text", { x:margin.left - 10, y:yPosition + 4, "text-anchor":"end", class:"trend-chart-label" }, axisValue(yValue)));
+    }
+    for (var tick = 0; tick <= 4; tick += 1) {
+      var tickTime = minimumTime + (maximumTime - minimumTime) * tick / 4;
+      var tickX = x(tickTime);
+      svg.appendChild(node("line", { x1:tickX, y1:margin.top, x2:tickX, y2:margin.top + plotHeight, class:"trend-chart-grid" }));
+      svg.appendChild(node("text", { x:tickX, y:height - 25, "text-anchor":"middle", class:"trend-chart-label" }, localTime.format(new Date(tickTime))));
+    }
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top + plotHeight, x2:width - margin.right, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top, x2:margin.left, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("text", { x:18, y:margin.top + plotHeight / 2, transform:"rotate(-90 18 " + (margin.top + plotHeight / 2) + ")", "text-anchor":"middle", class:"trend-chart-axis-title" }, data.axis_label || "Value"));
+    svg.appendChild(node("text", { x:margin.left + plotWidth / 2, y:height - 5, "text-anchor":"middle", class:"trend-chart-axis-title" }, "Local time"));
+
+    markers.forEach(function(marker) {
+      var markerTime = timestamp(marker.timestamp);
+      if (markerTime === null) return;
+      var markerX = x(markerTime);
+      var line = node("line", { x1:markerX, y1:margin.top, x2:markerX, y2:margin.top + plotHeight, class:"trend-chart-marker" });
+      appendTitle(line, marker.label + " · " + localTime.format(new Date(markerTime)) + " · " + compact(marker.before || 0) + " → " + compact(marker.after || 0) + " tokens");
+      svg.appendChild(line);
+      var symbol = node("polygon", { points:(markerX - 6) + "," + (margin.top + 1) + " " + (markerX + 6) + "," + (margin.top + 1) + " " + markerX + "," + (margin.top + 12), class:"trend-chart-marker-symbol" });
+      appendTitle(symbol, marker.label + " at " + localTime.format(new Date(markerTime)));
+      svg.appendChild(symbol);
+    });
+
+    series.forEach(function(item) {
+      var pathParts = [];
+      var connected = false;
+      (item.values || []).forEach(function(point) {
+        var pointTime = timestamp(point.timestamp);
+        var pointValue = numeric(point.value);
+        if (pointTime === null || pointValue === null) {
+          connected = false;
+          return;
+        }
+        pathParts.push((connected ? "L" : "M") + x(pointTime).toFixed(2) + " " + y(pointValue).toFixed(2));
+        connected = true;
+      });
+      if (pathParts.length) {
+        svg.appendChild(node("path", {
+          d:pathParts.join(" "), class:"trend-chart-line", stroke:item.color || "#2563a6",
+          "stroke-dasharray":item.dash || ""
+        }));
+      }
+      (item.values || []).forEach(function(point) {
+        var pointTime = timestamp(point.timestamp);
+        var pointValue = numeric(point.value);
+        if (pointTime === null || pointValue === null) return;
+        var circle = node("circle", { cx:x(pointTime), cy:y(pointValue), r:4.5, fill:item.color || "#2563a6", class:"trend-chart-point" });
+        appendTitle(circle, item.label + " · " + localTime.format(new Date(pointTime)) + " · " + valueLabel(pointValue));
+        svg.appendChild(circle);
+      });
+    });
+  }
+  function setMode(mode) {
+    buttons.forEach(function(button) {
+      button.setAttribute("aria-pressed", button.dataset.trendMode === mode ? "true" : "false");
+    });
+    panels.forEach(function(panel) { panel.hidden = panel.dataset.trendPanel !== mode; });
+    if (mode === "chart") renderChart();
+  }
+  buttons.forEach(function(button) {
+    button.addEventListener("click", function() { setMode(button.dataset.trendMode); });
+  });
+}
+
+document.querySelectorAll("[data-trend-view]").forEach(initializeTrendView);
+
+function initializeExecutionHeatmap(section) {
+  var dataElement = section.querySelector("#execution-heatmap-data");
+  var grid = section.querySelector("[data-heatmap-grid]");
+  var heatmapScroll = section.querySelector(".heatmap-scroll");
+  var scrollButtons = Array.from(section.querySelectorAll("[data-heatmap-scroll]"));
+  var emptyState = section.querySelector("[data-heatmap-empty]");
+  var metricSelect = section.querySelector("#heatmap-metric");
+  var minuteButtons = Array.from(section.querySelectorAll("[data-heatmap-minutes]"));
+  var status = section.querySelector("[data-heatmap-status]");
+  var drilldownTitle = section.querySelector("#heatmap-drilldown-title");
+  var drilldownSummary = section.querySelector("[data-heatmap-drilldown-summary]");
+  var drilldownPath = section.querySelector("[data-heatmap-drilldown-path]");
+  var drilldownStepButtons = Array.from(section.querySelectorAll("[data-heatmap-drilldown-step]"));
+  var eventList = section.querySelector("[data-heatmap-event-list]");
+  if (!dataElement || !grid || !heatmapScroll || !metricSelect) return;
+
+  var data;
+  try { data = JSON.parse(dataElement.textContent); }
+  catch (error) {
+    emptyState.hidden = false;
+    emptyState.textContent = "Heatmap data could not be loaded.";
+    return;
+  }
+  var selectedMinutes = 5;
+  var drilldownMinutes = [1440, 360, 60, 30, 15, 5, 1];
+  var selectedCell = null;
+  var selectedCellViewportOffset = null;
+  var pendingCellSelection = null;
+  var currentDrilldown = null;
+  var stateLabels = new Map(data.states.map(function(state) { return [state.id, state.label]; }));
+  var agentLabels = new Map(data.agents.map(function(agent) { return [agent.id, agent.label]; }));
+  var tokenRows = [
+    { id:"uncached_input_tokens", label:"Uncached input" },
+    { id:"cached_input_tokens", label:"Cached input" },
+    { id:"reasoning_tokens", label:"Reasoning" },
+    { id:"output_tokens", label:"Output" },
+    { id:"tool_calls", label:"Tool calls", format:"count" },
+    { id:"average_context_tokens", source:"context_tokens", label:"Context size (avg)", aggregation:"average", format:"context" },
+    { id:"maximum_context_tokens", source:"context_tokens", label:"Context size (max)", aggregation:"maximum", format:"context" },
+    { id:"cost_usd", label:"Cost", format:"currency" }
+  ];
+  var modelRows = data.models.concat([{ id:"cost_usd", label:"Cost", format:"currency" }]);
+  var timeFormatter = new Intl.DateTimeFormat(undefined, { hour:"2-digit", minute:"2-digit" });
+  var fullTimeFormatter = new Intl.DateTimeFormat(undefined, { dateStyle:"medium", timeStyle:"medium" });
+
+  function timestamp(value) { return new Date(value).getTime(); }
+  function compact(value) {
+    if (value >= 1000000000) return (value / 1000000000).toFixed(value >= 10000000000 ? 0 : 1) + "B";
+    if (value >= 1000000) return (value / 1000000).toFixed(value >= 10000000 ? 0 : 1) + "M";
+    if (value >= 1000) return (value / 1000).toFixed(value >= 10000 ? 0 : 1) + "K";
+    return Math.round(value).toLocaleString();
+  }
+  function rangeLabel(bucket) {
+    return timeFormatter.format(new Date(bucket.start)) + "–" + timeFormatter.format(new Date(bucket.end));
+  }
+  function duration(value) {
+    if (value < 1000) return Math.round(value) + "ms";
+    if (value < 60000) return (value / 1000).toFixed(value < 10000 ? 1 : 0) + "s";
+    var minutes = Math.floor(value / 60000);
+    var seconds = Math.round((value % 60000) / 1000);
+    return minutes + "m " + seconds + "s";
+  }
+  function currency(value) {
+    if (value === 0) return "$0.00";
+    if (value < .01) return "$" + value.toFixed(4);
+    return "$" + value.toFixed(2);
+  }
+  function responseValue(response, metric, row) {
+    return row.id === "cost_usd" ? response.cost_usd : response.usage[row.source || row.id];
+  }
+  function formatValue(metric, value, row) {
+    if (metric === "wall_time") return duration(value);
+    if (row && row.format === "currency") return currency(value);
+    if (row && row.format === "context") {
+      var percent = data.context_capacity ? Math.round(value / data.context_capacity * 100) : 0;
+      return percent + "%\n" + compact(value);
+    }
+    return compact(value);
+  }
+  function buckets() {
+    var width = selectedMinutes * 60000;
+    var runStart = timestamp(data.started_at);
+    var runEnd = timestamp(data.ended_at);
+    var first = Math.floor(runStart / width) * width;
+    var values = [];
+    for (var start = first; start < runEnd; start += width) {
+      values.push({ start:start, end:start + width });
+    }
+    return values;
+  }
+  function responseTime(response) {
+    return timestamp(response.completed_at || response.ended_at || response.started_at);
+  }
+  function updateHeatmapScrollButtons() {
+    var atStart = heatmapScroll.scrollLeft <= 1;
+    var atEnd = heatmapScroll.scrollLeft + heatmapScroll.clientWidth >= heatmapScroll.scrollWidth - 1;
+    scrollButtons.forEach(function(button) {
+      button.disabled = button.dataset.heatmapScroll === "left" ? atStart : atEnd;
+    });
+  }
+  function rows(metric) {
+    if (metric === "wall_time") {
+      return data.states.map(function(state) { return { id:state.id, label:state.label }; });
+    }
+    if (metric === "tokens") return tokenRows;
+    if (metric === "models") return modelRows;
+    return data.agents.map(function(agent) { return { id:agent.id, label:agent.label }; });
+  }
+  function cellValue(metric, row, bucket) {
+    if (metric === "wall_time") {
+      var segments = data.intervals.filter(function(interval) {
+        return interval.state === row.id && timestamp(interval.ended_at) > bucket.start && timestamp(interval.started_at) < bucket.end;
+      }).map(function(interval) {
+        return [Math.max(timestamp(interval.started_at), bucket.start), Math.min(timestamp(interval.ended_at), bucket.end)];
+      }).sort(function(left, right) { return left[0] - right[0]; });
+      if (!segments.length) return 0;
+      var total = 0;
+      var mergedStart = segments[0][0];
+      var mergedEnd = segments[0][1];
+      segments.slice(1).forEach(function(segment) {
+        if (segment[0] <= mergedEnd) mergedEnd = Math.max(mergedEnd, segment[1]);
+        else {
+          total += mergedEnd - mergedStart;
+          mergedStart = segment[0];
+          mergedEnd = segment[1];
+        }
+      });
+      return total + mergedEnd - mergedStart;
+    }
+    if (row.id === "tool_calls") {
+      return data.tools.filter(function(tool) {
+        var occurredAt = timestamp(tool.completed_at || tool.started_at);
+        return occurredAt >= bucket.start && occurredAt < bucket.end;
+      }).length;
+    }
+    var values = data.responses.filter(function(response) {
+      var occurredAt = responseTime(response);
+      var matchesRow = metric === "tokens" || (metric === "models" && (row.id === "cost_usd" || response.model_id === row.id)) || response.thread_id === row.id;
+      return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
+    }).map(function(response) {
+      return metric === "models" ? (row.id === "cost_usd" ? response.cost_usd : response.usage.processed_tokens) : responseValue(response, metric, row);
+    });
+    if (row.format === "context") values = values.filter(function(value) { return value > 0; });
+    if (row.aggregation === "average") {
+      return values.length ? values.reduce(function(total, value) { return total + value; }, 0) / values.length : 0;
+    }
+    if (row.aggregation === "maximum") {
+      return values.reduce(function(largest, value) { return Math.max(largest, value); }, 0);
+    }
+    return values.reduce(function(total, value) { return total + value; }, 0);
+  }
+  function matchingEvents(metric, row, bucket) {
+    if (metric === "wall_time") {
+      return data.intervals.filter(function(interval) {
+        return interval.state === row.id && timestamp(interval.ended_at) > bucket.start && timestamp(interval.started_at) < bucket.end;
+      }).map(function(interval) {
+        return {
+          started_at:interval.started_at,
+          label:interval.detail || stateLabels.get(interval.state) || interval.state,
+          detail:duration(interval.duration_ms) + (interval.preview ? " · " + interval.preview : ""),
+          turn_target:interval.turn_target,
+          event_target:interval.event_target
+        };
+      });
+    }
+    if (row.id === "tool_calls") {
+      return data.tools.filter(function(tool) {
+        var occurredAt = timestamp(tool.completed_at || tool.started_at);
+        return occurredAt >= bucket.start && occurredAt < bucket.end;
+      }).map(function(tool) {
+        return {
+          started_at:tool.started_at,
+          label:tool.tool_name,
+          detail:duration(tool.duration_ms) + (tool.preview ? " · " + tool.preview : ""),
+          turn_target:tool.turn_target,
+          event_target:tool.event_target
+        };
+      });
+    }
+    return data.responses.filter(function(response) {
+      var occurredAt = responseTime(response);
+      var matchesRow = metric === "tokens" || (metric === "models" && (row.id === "cost_usd" || response.model_id === row.id)) || response.thread_id === row.id;
+      return matchesRow && occurredAt >= bucket.start && occurredAt < bucket.end;
+    }).map(function(response) {
+      var modelLabel = response.model || "Model response";
+      if (response.effort) modelLabel += " · effort " + response.effort;
+      if (metric === "tokens") modelLabel = (agentLabels.get(response.thread_id) || response.thread_id) + " · " + modelLabel;
+      return {
+        started_at:response.completed_at || response.started_at,
+        label:modelLabel + " · " + formatValue(metric, metric === "models" ? (row.id === "cost_usd" ? response.cost_usd : response.usage.processed_tokens) : responseValue(response, metric, row), row).replaceAll("\n", " · ") + " " + (metric === "models" && row.id !== "cost_usd" ? "processed tokens" : row.label.toLowerCase()),
+        detail:duration(response.duration_ms) + (response.preview ? " · " + response.preview : ""),
+        turn_target:response.turn_target,
+        event_target:response.event_target
+      };
+    });
+  }
+  function alignedBucket(value, minutes) {
+    var width = minutes * 60000;
+    var start = Math.floor(value / width) * width;
+    return { start:start, end:start + width };
+  }
+  function visibleBucket(value, minutes) {
+    return alignedBucket(Math.max(value, timestamp(data.started_at)), minutes);
+  }
+  function trailItem(metric, row, minutes, bucket) {
+    return { bucket:bucket, minutes:minutes, value:cellValue(metric, row, bucket) };
+  }
+  function selectionTrail(metric, row, minutes, bucket, existingTrail) {
+    if (!existingTrail || !existingTrail.length) return [trailItem(metric, row, minutes, bucket)];
+    var existingIndex = existingTrail.findIndex(function(item) { return item.minutes === minutes; });
+    if (existingIndex >= 0) {
+      var restored = existingTrail.slice(0, existingIndex + 1);
+      restored[existingIndex] = trailItem(metric, row, minutes, bucket);
+      return restored;
+    }
+    var current = existingTrail[existingTrail.length - 1];
+    var currentIndex = drilldownMinutes.indexOf(current.minutes);
+    var targetIndex = drilldownMinutes.indexOf(minutes);
+    if (targetIndex > currentIndex) {
+      var extended = existingTrail.slice();
+      drilldownMinutes.slice(currentIndex + 1, targetIndex + 1).forEach(function(levelMinutes) {
+        extended.push(trailItem(metric, row, levelMinutes, visibleBucket(bucket.start, levelMinutes)));
+      });
+      return extended;
+    }
+    return [trailItem(metric, row, minutes, bucket)];
+  }
+  function setMinuteControl(minutes) {
+    selectedMinutes = minutes;
+    minuteButtons.forEach(function(button) {
+      button.setAttribute("aria-pressed", Number(button.dataset.heatmapMinutes) === minutes ? "true" : "false");
+    });
+  }
+  function selectDrilldown(metric, row, trail) {
+    currentDrilldown = { metric:metric, row:row, trail:trail };
+    setMinuteControl(trail[trail.length - 1].minutes);
+    render();
+  }
+  function updateDrilldownStepButtons() {
+    drilldownStepButtons.forEach(function(button) {
+      if (!currentDrilldown) {
+        button.disabled = true;
+        return;
+      }
+      var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+      var direction = Number(button.dataset.heatmapDrilldownStep);
+      var shiftedStart = current.bucket.start + direction * current.minutes * 60000;
+      var shiftedEnd = current.bucket.end + direction * current.minutes * 60000;
+      button.disabled = shiftedEnd <= timestamp(data.started_at) || shiftedStart >= timestamp(data.ended_at);
+    });
+  }
+  function shiftDrilldown(direction) {
+    if (!currentDrilldown) return;
+    var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+    var shifted = {
+      start:current.bucket.start + direction * current.minutes * 60000,
+      end:current.bucket.end + direction * current.minutes * 60000
+    };
+    if (shifted.end <= timestamp(data.started_at) || shifted.start >= timestamp(data.ended_at)) return;
+    var shiftedTrail = currentDrilldown.trail.map(function(item, index, trail) {
+      var bucket = index === trail.length - 1 ? shifted : alignedBucket(shifted.start, item.minutes);
+      return trailItem(currentDrilldown.metric, currentDrilldown.row, item.minutes, bucket);
+    });
+    selectDrilldown(
+      currentDrilldown.metric,
+      currentDrilldown.row,
+      shiftedTrail
+    );
+  }
+  function stepBack() {
+    if (!currentDrilldown) return;
+    var trail = currentDrilldown.trail;
+    if (trail.length > 1) {
+      selectDrilldown(currentDrilldown.metric, currentDrilldown.row, trail.slice(0, -1));
+      return;
+    }
+    var current = trail[0];
+    var currentIndex = drilldownMinutes.indexOf(current.minutes);
+    if (currentIndex <= 0) return;
+    var largerMinutes = drilldownMinutes[currentIndex - 1];
+    var largerBucket = alignedBucket(current.bucket.start, largerMinutes);
+    selectDrilldown(
+      currentDrilldown.metric,
+      currentDrilldown.row,
+      [trailItem(currentDrilldown.metric, currentDrilldown.row, largerMinutes, largerBucket)]
+    );
+  }
+  function renderDrilldownPath(metric, row, trail) {
+    drilldownPath.replaceChildren();
+    trail.forEach(function(item, index) {
+      if (index) drilldownPath.appendChild(document.createTextNode("›"));
+      var label = item.minutes + " min · " + rangeLabel(item.bucket);
+      if (index === trail.length - 1) {
+        var current = document.createElement("strong");
+        current.textContent = label;
+        drilldownPath.appendChild(current);
+        return;
+      }
+      var button = document.createElement("button");
+      button.type = "button";
+      button.textContent = label;
+      button.setAttribute("aria-label", "Return to " + label);
+      button.addEventListener("click", function() {
+        selectDrilldown(metric, row, trail.slice(0, index + 1));
+      });
+      drilldownPath.appendChild(button);
+    });
+  }
+  function renderEvents(metric, row, bucket) {
+    eventList.hidden = false;
+    var events = matchingEvents(metric, row, bucket).sort(function(left, right) {
+      return timestamp(left.started_at) - timestamp(right.started_at);
+    });
+    if (!events.length) {
+      var empty = document.createElement("li");
+      empty.textContent = "No recorded evidence in this cell.";
+      eventList.appendChild(empty);
+      return;
+    }
+    events.slice(0, 100).forEach(function(event) {
+      var item = document.createElement("li");
+      var copy = document.createElement("span");
+      copy.className = "heatmap-event-copy";
+      var time = document.createElement("code");
+      time.textContent = timeFormatter.format(new Date(event.started_at));
+      copy.append(time, document.createTextNode(" · " + event.label + " · " + event.detail));
+      item.appendChild(copy);
+      if (event.turn_target) {
+        var turnLink = document.createElement("a");
+        turnLink.className = "heatmap-event-turn-link";
+        turnLink.href = "#" + event.turn_target;
+        turnLink.textContent = "View in turn";
+        turnLink.dataset.turnDetailLink = "";
+        turnLink.dataset.returnTarget = "#execution-heatmap";
+        if (event.event_target) turnLink.dataset.turnEventTarget = event.event_target;
+        item.appendChild(turnLink);
+      }
+      eventList.appendChild(item);
+    });
+    if (events.length > 100) {
+      var remainder = document.createElement("li");
+      remainder.textContent = (events.length - 100).toLocaleString() + " additional events omitted from this view.";
+      eventList.appendChild(remainder);
+    }
+  }
+  function renderDrilldownLevel(metric, row, trail) {
+    currentDrilldown = { metric:metric, row:row, trail:trail };
+    updateDrilldownStepButtons();
+    var current = trail[trail.length - 1];
+    var metricLabel = metric === "tokens" || metric === "models" ? row.label : metricSelect.options[metricSelect.selectedIndex].text;
+    drilldownTitle.textContent = row.label + " · " + rangeLabel(current.bucket);
+    drilldownSummary.textContent = metricLabel + ": " + formatValue(metric, current.value, row) + ". Events in this period are listed below.";
+    renderDrilldownPath(metric, row, trail);
+    eventList.replaceChildren();
+    renderEvents(metric, row, current.bucket);
+  }
+  function selectCell(metric, row, bucket, sourceCell) {
+    selectedCellViewportOffset = sourceCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
+    var existingTrail = currentDrilldown && currentDrilldown.metric === metric && currentDrilldown.row.id === row.id
+      ? currentDrilldown.trail
+      : [];
+    selectDrilldown(metric, row, selectionTrail(metric, row, selectedMinutes, bucket, existingTrail));
+  }
+  function drillIntoCell(metric, row, bucket, sourceCell) {
+    selectedCellViewportOffset = sourceCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
+    var existingTrail = currentDrilldown && currentDrilldown.metric === metric && currentDrilldown.row.id === row.id
+      ? currentDrilldown.trail
+      : [];
+    var trail = selectionTrail(metric, row, selectedMinutes, bucket, existingTrail);
+    var currentIndex = drilldownMinutes.indexOf(selectedMinutes);
+    var smallerMinutes = drilldownMinutes[currentIndex + 1];
+    if (smallerMinutes) {
+      trail = selectionTrail(metric, row, smallerMinutes, visibleBucket(bucket.start, smallerMinutes), trail);
+    }
+    selectDrilldown(metric, row, trail);
+  }
+  function render() {
+    var metric = metricSelect.value;
+    var bucketValues = buckets();
+    var rowValues = rows(metric);
+    var matrix = rowValues.map(function(row) {
+      return bucketValues.map(function(bucket) { return cellValue(metric, row, bucket); });
+    });
+    selectedCell = null;
+    grid.replaceChildren();
+    grid.style.gridTemplateColumns = "minmax(170px,220px) repeat(" + bucketValues.length + ",minmax(72px,1fr))";
+    var corner = document.createElement("div");
+    corner.className = "heatmap-corner";
+    corner.textContent = "Periods";
+    grid.appendChild(corner);
+    bucketValues.forEach(function(bucket) {
+      var heading = document.createElement("div");
+      heading.className = "heatmap-column";
+      heading.textContent = timeFormatter.format(new Date(bucket.start));
+      heading.title = fullTimeFormatter.format(new Date(bucket.start));
+      grid.appendChild(heading);
+    });
+    rowValues.forEach(function(row, rowIndex) {
+      var rowMaximum = matrix[rowIndex].reduce(function(largest, value) { return Math.max(largest, value); }, 0);
+      var scaleMaximum = row.format === "context" ? data.context_capacity : rowMaximum;
+      var label = document.createElement("div");
+      label.className = "heatmap-row-label";
+      label.textContent = row.label;
+      grid.appendChild(label);
+      bucketValues.forEach(function(bucket, bucketIndex) {
+        var value = matrix[rowIndex][bucketIndex];
+        var intensity = scaleMaximum ? Math.min(1, value / scaleMaximum) : 0;
+        var cell = document.createElement("button");
+        cell.type = "button";
+        cell.className = "heatmap-cell" + (metric === "wall_time" && row.id === "user_pause" ? " is-inactive" : "") + (row.format === "context" ? " is-context" : "") + (row.id === "cost_usd" ? " is-cost" : "");
+        cell.style.setProperty("--heatmap-alpha", String(.05 + intensity * .5));
+        var isSelected = currentDrilldown
+          && currentDrilldown.metric === metric
+          && currentDrilldown.row.id === row.id
+          && currentDrilldown.trail[currentDrilldown.trail.length - 1].bucket.start === bucket.start;
+        cell.setAttribute("aria-pressed", isSelected ? "true" : "false");
+        cell.textContent = formatValue(metric, value, row);
+        cell.setAttribute("aria-label", row.label + ", " + fullTimeFormatter.format(new Date(bucket.start)) + ", " + metricSelect.options[metricSelect.selectedIndex].text + " " + cell.textContent.replaceAll("\n", ", "));
+        cell.addEventListener("click", function() {
+          clearTimeout(pendingCellSelection);
+          pendingCellSelection = setTimeout(function() { selectCell(metric, row, bucket, cell); }, 300);
+        });
+        cell.addEventListener("dblclick", function() {
+          clearTimeout(pendingCellSelection);
+          pendingCellSelection = null;
+          drillIntoCell(metric, row, bucket, cell);
+        });
+        if (isSelected) selectedCell = cell;
+        grid.appendChild(cell);
+      });
+    });
+    emptyState.hidden = rowValues.length > 0 && bucketValues.length > 0;
+    grid.hidden = !emptyState.hidden;
+    if (currentDrilldown && currentDrilldown.metric === metric) {
+      renderDrilldownLevel(metric, currentDrilldown.row, currentDrilldown.trail);
+    } else {
+      selectedCell = null;
+      currentDrilldown = null;
+      updateDrilldownStepButtons();
+      drilldownTitle.textContent = "Select a heatmap cell";
+      drilldownSummary.textContent = "Choose a cell to inspect its events.";
+      drilldownPath.replaceChildren();
+      eventList.replaceChildren();
+      eventList.hidden = true;
+    }
+    status.textContent = bucketValues.length + " periods";
+    requestAnimationFrame(function() {
+      if (selectedCell && selectedCellViewportOffset !== null) {
+        var currentOffset = selectedCell.getBoundingClientRect().left - heatmapScroll.getBoundingClientRect().left;
+        heatmapScroll.scrollLeft += currentOffset - selectedCellViewportOffset;
+        selectedCellViewportOffset = null;
+      } else if (selectedCell) {
+        selectedCell.scrollIntoView({ block:"nearest", inline:"nearest" });
+      }
+      updateHeatmapScrollButtons();
+    });
+  }
+  metricSelect.addEventListener("change", function() {
+    currentDrilldown = null;
+    render();
+  });
+  minuteButtons.forEach(function(button) {
+    button.addEventListener("click", function() {
+      var minutes = Number(button.dataset.heatmapMinutes);
+      if (!currentDrilldown) {
+        setMinuteControl(minutes);
+        render();
+        return;
+      }
+      var current = currentDrilldown.trail[currentDrilldown.trail.length - 1];
+      var bucket = visibleBucket(current.bucket.start, minutes);
+      var trail = selectionTrail(currentDrilldown.metric, currentDrilldown.row, minutes, bucket, currentDrilldown.trail);
+      selectDrilldown(currentDrilldown.metric, currentDrilldown.row, trail);
+    });
+  });
+  scrollButtons.forEach(function(button) {
+    button.addEventListener("click", function() {
+      var direction = button.dataset.heatmapScroll === "left" ? -1 : 1;
+      var column = grid.querySelector(".heatmap-column");
+      var bucketWidth = column ? column.getBoundingClientRect().width : 72;
+      heatmapScroll.scrollBy({ left:direction * bucketWidth, behavior:"smooth" });
+    });
+  });
+  drilldownStepButtons.forEach(function(button) {
+    button.addEventListener("click", function() {
+      shiftDrilldown(Number(button.dataset.heatmapDrilldownStep));
+    });
+  });
+  grid.addEventListener("contextmenu", function(event) {
+    if (!event.target.closest(".heatmap-cell")) return;
+    event.preventDefault();
+    stepBack();
+  });
+  heatmapScroll.addEventListener("scroll", updateHeatmapScrollButtons, { passive:true });
+  render();
+}
+
+var executionHeatmap = document.getElementById("execution-heatmap");
+if (executionHeatmap && !sequenceOnly) initializeExecutionHeatmap(executionHeatmap);
+</script>
+<footer class="agent-report-copyright" style="margin:2rem 1rem .75rem;padding-top:.75rem;border-top:1px solid currentColor;opacity:.62;text-align:center;font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace">© 2026 Martin.Bechard@DevConsult.ca · MIT License</footer></body></html>

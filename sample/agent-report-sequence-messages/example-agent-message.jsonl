@@ -1,0 +1,5 @@
+{"timestamp":"2026-08-27T01:44:58.000Z","type":"session_meta","payload":{"id":"example-agent-message","timestamp":"2026-08-27T01:44:58.000Z","cwd":"/example/agent-report","originator":"Codex Desktop","source":"vscode","model_provider":"openai"}}
+{"timestamp":"2026-08-27T01:44:58.500Z","type":"event_msg","payload":{"type":"task_started","turn_id":"example-turn","started_at":"2026-08-27T01:44:58.500Z"}}
+{"timestamp":"2026-08-27T01:44:59.284Z","type":"event_msg","payload":{"type":"agent_message","message":"I’m reviewing the plan against the report code and tests.","phase":"commentary"}}
+{"timestamp":"2026-08-27T01:45:01.000Z","type":"event_msg","payload":{"type":"agent_message","message":"The review is complete and the sequence renderer now shows agent messages.","phase":"final_answer"}}
+{"timestamp":"2026-08-27T01:45:01.100Z","type":"event_msg","payload":{"type":"task_complete","turn_id":"example-turn","completed_at":"2026-08-27T01:45:01.100Z","duration_ms":2600}}
