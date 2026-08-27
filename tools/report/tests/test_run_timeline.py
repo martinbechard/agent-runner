@@ -2422,6 +2422,8 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert '<button type="button" data-heatmap-minutes="15">15 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="30">30 min</button>' in html
     assert '<button type="button" data-heatmap-minutes="60">1 hour</button>' in html
+    assert '<button type="button" data-heatmap-minutes="360">6 hours</button>' in html
+    assert '<button type="button" data-heatmap-minutes="1440">1 day</button>' in html
     assert 'data-heatmap-scroll="left" aria-label="Scroll heatmap left"' in html
     assert 'data-heatmap-scroll="right" aria-label="Scroll heatmap right"' in html
     assert "heatmapScroll.scrollBy" in html
@@ -2490,7 +2492,7 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert 'grid.addEventListener("contextmenu"' in html
     assert "renderEvents(metric, row, current.bucket);" in html
     assert "Single-click a cell to inspect its events. Double-click to drill down" in html
-    assert "var drilldownMinutes = [60, 30, 15, 5, 1];" in html
+    assert "var drilldownMinutes = [1440, 360, 60, 30, 15, 5, 1];" in html
     assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html

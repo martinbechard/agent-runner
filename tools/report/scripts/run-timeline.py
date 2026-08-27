@@ -7655,7 +7655,7 @@ function initializeExecutionHeatmap(section) {
     return;
   }
   var selectedMinutes = 5;
-  var drilldownMinutes = [60, 30, 15, 5, 1];
+  var drilldownMinutes = [1440, 360, 60, 30, 15, 5, 1];
   var selectedCell = null;
   var selectedCellViewportOffset = null;
   var pendingCellSelection = null;
@@ -9344,6 +9344,8 @@ def _render_execution_heatmap(
         '<button type="button" data-heatmap-minutes="15">15 min</button>'
         '<button type="button" data-heatmap-minutes="30">30 min</button>'
         '<button type="button" data-heatmap-minutes="60">1 hour</button>'
+        '<button type="button" data-heatmap-minutes="360">6 hours</button>'
+        '<button type="button" data-heatmap-minutes="1440">1 day</button>'
         '</fieldset><output class="heatmap-status" data-heatmap-status></output></div>'
         '<p class="execution-note">Cost follows the report\'s recorded or API-equivalent estimate method.</p>'
         '<div class="heatmap-scroll-frame">'
