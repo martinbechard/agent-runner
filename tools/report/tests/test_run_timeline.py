@@ -2256,6 +2256,11 @@ def test_native_codex_identifies_encrypted_reasoning_without_exposing_it(tmp_pat
     assert activity.content == ""
     assert "Encrypted reasoning" in activity.summary
     assert "plaintext unavailable" in html
+    sequence = html.split('<section id="agent-sequence"', 1)[1]
+    assert "Internal reasoning (content unavailable)" in sequence
+    assert 'class="sequence-participant"' in sequence
+    assert "1 agent · 0 events · 1 thought" in sequence
+    assert 'class="sequence-empty"' not in sequence
     assert "CIPHER-TEXT-MUST-NOT-APPEAR" not in html
 
 
@@ -5193,7 +5198,7 @@ def test_native_codex_sequence_arrow_hover_target_spans_start_line_and_head(
     assert ".sequence-event-link:has(.sequence-event-hit:hover) .sequence-line," in html
 
 
-def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles(
+def test_native_codex_sequence_renders_toggleable_privacy_safe_conversation_bubbles(
     tmp_path,
 ):
     module = _load_module()
@@ -5228,7 +5233,8 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
         'checked>Thinking</label>'
         in sequence
     )
-    assert sequence.count('class="sequence-conversation-bubble"') == 5
+    assert sequence.count('class="sequence-conversation-bubble"') == 6
+    assert "Internal reasoning (content unavailable)" in sequence
     assert 'data-thread-id="orchestrator"' in sequence
     assert 'data-thought-index="0"' in sequence
     assert (
@@ -5260,7 +5266,7 @@ def test_native_codex_sequence_renders_toggleable_plaintext_conversation_bubbles
     assert 'class="tool-call-overlay sequence-thought-overlay"' in sequence
     assert "sequence-thinking-tail-large" not in sequence
     assert "sequence-thinking-tail-small" not in sequence
-    assert 'data-sequence-thinking-count="5"' in sequence
+    assert 'data-sequence-thinking-count="6"' in sequence
     assert "var thoughtNodes = Array.from(" in html
     assert "var visibleThoughts = [];" in html
     assert "var visibleTimelineRows = visibleEvents.map" in html

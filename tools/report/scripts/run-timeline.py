@@ -5733,14 +5733,18 @@ def _codex_sequence_thoughts(
     run: CodexRunMetrics,
     _events: list[AgentSequenceEvent],
 ) -> list[AgentSequenceThought]:
-    """Return distinct plaintext reasoning fragments in timeline order."""
+    """Return privacy-safe plaintext or opaque reasoning markers in timeline order."""
 
-    latest_by_fragment: dict[tuple[str, str], AgentSequenceThought] = {}
+    latest_by_fragment: dict[tuple[str, str, int], AgentSequenceThought] = {}
     for thread in run.threads:
         for activity in thread.activities:
-            if activity.activity_type != "reasoning" or not activity.content:
+            if activity.activity_type != "reasoning":
                 continue
-            detail = _sequence_plain_text(activity.content)
+            detail = (
+                _sequence_plain_text(activity.content)
+                if activity.content
+                else "Internal reasoning (content unavailable)"
+            )
             if not detail:
                 continue
             thought = AgentSequenceThought(
@@ -5749,7 +5753,10 @@ def _codex_sequence_thoughts(
                 detail=detail,
                 source_ordinal=activity.source_ordinal,
             )
-            latest_by_fragment[(thread.thread_id, detail.casefold())] = thought
+            deduplication_ordinal = 0 if activity.content else activity.source_ordinal
+            latest_by_fragment[
+                (thread.thread_id, detail.casefold(), deduplication_ordinal)
+            ] = thought
 
     return sorted(latest_by_fragment.values(), key=_sequence_thought_sort_key)
 
@@ -6480,7 +6487,7 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         "Solid arrows are delegation or control messages; dashed return arrows mark native "
         "subagent turn endings. Conversation bubbles select explanatory plaintext "
         "reasoning summaries and use the same bounded, secret-redacted text as the "
-        "turn details; opaque reasoning is omitted."
+        "turn details; opaque reasoning appears only as a content-unavailable marker."
         "</div></details></div>"
         '<p class="execution-note">Read downward to follow who dispatched, resumed, interrupted, '
         "or completed work. Select an agent to focus it; use the +/− control beside a parent "
@@ -6521,8 +6528,9 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         'Thinking</label></fieldset>'
         '<output class="sequence-view-status" data-sequence-view-status '
         f'data-sequence-thinking-count="{len(thoughts)}" aria-live="polite">'
-        f'{len(participants):,} agents · {len(events):,} events · '
-        f'{len(thoughts):,} thoughts</output>'
+        f'{len(participants):,} {"agent" if len(participants) == 1 else "agents"} · '
+        f'{len(events):,} {"event" if len(events) == 1 else "events"} · '
+        f'{len(thoughts):,} {"thought" if len(thoughts) == 1 else "thoughts"}</output>'
         '</div><p class="sequence-inspect-detail" data-sequence-inspect-detail '
         'aria-live="polite">Hover or focus an agent title for its full name; '
         'select a thinking bubble for its full text.</p>'
@@ -10461,8 +10469,11 @@ function initializeAgentSequence(section) {{
     clearFocusButton.disabled = !focusedThreadId;
     emptyState.hidden = visibleTimelineRows.length !== 0;
     var statusText = visibleParticipants.length + " of " + participants.length +
-      " agents · " + visibleEvents.length + " of " + events.length + " events · " +
-      visibleThoughts.length + " of " + thoughts.length + " thoughts";
+      (participants.length === 1 ? " agent · " : " agents · ") +
+      visibleEvents.length + " of " + events.length +
+      (events.length === 1 ? " event · " : " events · ") +
+      visibleThoughts.length + " of " + thoughts.length +
+      (thoughts.length === 1 ? " thought" : " thoughts");
     if (focusedThreadId && participantByThreadId.has(focusedThreadId)) {{
       statusText = "Focus: " +
         participantByThreadId.get(focusedThreadId).dataset.participantName + " · " +
