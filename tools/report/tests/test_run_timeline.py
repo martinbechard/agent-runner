@@ -2541,9 +2541,11 @@ def test_native_codex_html_renders_accessible_execution_heatmap():
     assert "Select a 1-minute bucket to continue." not in html
     assert "started_at:response.completed_at || response.started_at" in html
     assert "Cost follows the report's recorded or API-equivalent estimate method." in html
-    assert ".heatmap-event-list li {" in html
-    assert ".heatmap-event-copy { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }" in html
-    assert 'turnLink.textContent = "View in turn";' in html
+    assert ".heatmap-event-table { width:100%; table-layout:fixed;" in html
+    assert '<th>Time</th><th>Event</th><th>Details</th><th>Action</th>' in html
+    assert '<tbody data-heatmap-event-list></tbody>' in html
+    assert 'turnLink.textContent = "View";' in html
+    assert 'turnLink.setAttribute("aria-label", "View " + event.label + " in turn");' in html
     assert 'turnLink.dataset.returnTarget = "#execution-heatmap";' in html
     assert "turnLink.dataset.turnEventTarget = event.event_target" in html
     assert 'document.addEventListener("click", function(event)' in html

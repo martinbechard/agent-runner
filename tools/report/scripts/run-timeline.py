@@ -8182,13 +8182,17 @@ _EXECUTION_HEATMAP_CSS = """
 .heatmap-drilldown-path { display:flex; flex-wrap:wrap; align-items:center; gap:5px; margin-top:9px; color:#607d8b; font-size:.78em; }
 .heatmap-drilldown-path button { padding:3px 6px; color:#2563a6; background:#fff; border:1px solid #90a4ae; border-radius:4px; cursor:pointer; font:600 1em var(--font-ui); }
 .heatmap-drilldown-path button:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
-.heatmap-event-list { max-height:38vh; margin:10px 0 0; padding-left:24px; overflow:auto; }
-.heatmap-event-list li { display:flex; align-items:baseline; gap:10px; margin:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }
-.heatmap-event-copy { min-width:0; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+.heatmap-event-table-wrap { max-height:38vh; margin-top:10px; overflow:auto; border:1px solid #e1e6ea; border-radius:5px; }
+.heatmap-event-table { width:100%; table-layout:fixed; border-collapse:collapse; color:#455a64; font-size:.8em; line-height:1.4; }
+.heatmap-event-table th, .heatmap-event-table td { padding:6px 8px; overflow:hidden; border-bottom:1px solid #e1e6ea; text-align:left; text-overflow:ellipsis; vertical-align:top; white-space:nowrap; }
+.heatmap-event-table th { position:sticky; top:0; z-index:1; color:#455a64; background:#f5f7f8; font-weight:700; }
+.heatmap-event-table tbody tr:last-child td { border-bottom:0; }
+.heatmap-event-table .heatmap-event-detail { white-space:normal; overflow-wrap:anywhere; }
+.heatmap-event-table .heatmap-event-empty { white-space:normal; }
 .heatmap-event-turn-link { flex:0 0 auto; color:#2563a6; font-weight:700; text-decoration:none; }
 .heatmap-event-turn-link:hover { text-decoration:underline; }
 .heatmap-event-turn-link:focus-visible { outline:2px solid #2563a6; outline-offset:2px; }
-.heatmap-event-list code { color:#263238; }
+.heatmap-event-table code { color:#263238; }
 @media (max-width:700px) { .heatmap-status { width:100%; margin-left:0; } .heatmap-scroll-frame, .heatmap-drilldown-frame { grid-template-columns:32px minmax(0,1fr) 32px; gap:4px; } .heatmap-scroll-button { width:32px; } .heatmap-row-label { min-width:140px; } }
 """
 
@@ -8207,6 +8211,7 @@ function initializeExecutionHeatmap(section) {
   var drilldownSummary = section.querySelector("[data-heatmap-drilldown-summary]");
   var drilldownPath = section.querySelector("[data-heatmap-drilldown-path]");
   var drilldownStepButtons = Array.from(section.querySelectorAll("[data-heatmap-drilldown-step]"));
+  var eventTable = section.querySelector("[data-heatmap-event-table]");
   var eventList = section.querySelector("[data-heatmap-event-list]");
   if (!dataElement || !grid || !heatmapScroll || !metricSelect) return;
 
@@ -8503,40 +8508,53 @@ function initializeExecutionHeatmap(section) {
     });
   }
   function renderEvents(metric, row, bucket) {
-    eventList.hidden = false;
+    eventTable.hidden = false;
     var events = matchingEvents(metric, row, bucket).sort(function(left, right) {
       return timestamp(left.started_at) - timestamp(right.started_at);
     });
     if (!events.length) {
-      var empty = document.createElement("li");
+      var empty = document.createElement("td");
+      var emptyRow = document.createElement("tr");
+      empty.colSpan = 4;
+      empty.className = "heatmap-event-empty";
       empty.textContent = "No recorded evidence in this cell.";
-      eventList.appendChild(empty);
+      emptyRow.appendChild(empty);
+      eventList.appendChild(emptyRow);
       return;
     }
     events.slice(0, 100).forEach(function(event) {
-      var item = document.createElement("li");
-      var copy = document.createElement("span");
-      copy.className = "heatmap-event-copy";
+      var item = document.createElement("tr");
+      var timeCell = document.createElement("td");
+      var eventCell = document.createElement("td");
+      var detailCell = document.createElement("td");
+      var actionCell = document.createElement("td");
+      detailCell.className = "heatmap-event-detail";
       var time = document.createElement("code");
       time.textContent = timeFormatter.format(new Date(event.started_at));
-      copy.append(time, document.createTextNode(" · " + event.label + " · " + event.detail));
-      item.appendChild(copy);
+      timeCell.appendChild(time);
+      eventCell.textContent = event.label;
+      detailCell.textContent = event.detail;
+      item.append(timeCell, eventCell, detailCell, actionCell);
       if (event.turn_target) {
         var turnLink = document.createElement("a");
         turnLink.className = "heatmap-event-turn-link";
         turnLink.href = "#" + event.turn_target;
-        turnLink.textContent = "View in turn";
+        turnLink.textContent = "View";
+        turnLink.setAttribute("aria-label", "View " + event.label + " in turn");
         turnLink.dataset.turnDetailLink = "";
         turnLink.dataset.returnTarget = "#execution-heatmap";
         if (event.event_target) turnLink.dataset.turnEventTarget = event.event_target;
-        item.appendChild(turnLink);
+        actionCell.appendChild(turnLink);
       }
       eventList.appendChild(item);
     });
     if (events.length > 100) {
-      var remainder = document.createElement("li");
+      var remainder = document.createElement("td");
+      var remainderRow = document.createElement("tr");
+      remainder.colSpan = 4;
       remainder.textContent = (events.length - 100).toLocaleString() + " additional events omitted from this view.";
-      eventList.appendChild(remainder);
+      remainderRow.appendChild(remainder);
+      eventList.appendChild(remainderRow);
     }
   }
   function renderDrilldownLevel(metric, row, trail) {
@@ -8637,7 +8655,7 @@ function initializeExecutionHeatmap(section) {
       drilldownSummary.textContent = "Choose a cell to inspect its events.";
       drilldownPath.replaceChildren();
       eventList.replaceChildren();
-      eventList.hidden = true;
+      eventTable.hidden = true;
     }
     status.textContent = bucketValues.length + " periods";
     requestAnimationFrame(function() {
@@ -10039,7 +10057,10 @@ def _render_execution_heatmap(
         '<p class="heatmap-drilldown-summary" data-heatmap-drilldown-summary aria-live="polite">'
         'Choose a cell to inspect its events.</p>'
         '<nav class="heatmap-drilldown-path" data-heatmap-drilldown-path aria-label="Drilldown path"></nav>'
-        '<ol class="heatmap-event-list" data-heatmap-event-list></ol></div>'
+        '<div class="heatmap-event-table-wrap" data-heatmap-event-table hidden>'
+        '<table class="heatmap-event-table"><colgroup><col style="width:96px"><col style="width:22%"><col><col style="width:64px"></colgroup>'
+        '<thead><tr><th>Time</th><th>Event</th><th>Details</th><th>Action</th></tr></thead>'
+        '<tbody data-heatmap-event-list></tbody></table></div></div>'
         '<button type="button" class="heatmap-scroll-button" data-heatmap-drilldown-step="1" aria-label="Next drilldown period" disabled>→</button></div>'
         f'<script type="application/json" id="execution-heatmap-data">{payload}</script>'
         '</section>'
