@@ -1989,10 +1989,10 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Growth and compactions" not in html
     assert 'data-view-id="context-growth-view"' in html
     assert 'aria-label="Context evolution view"' in html
-    assert 'id="context-growth-view-table" data-trend-panel="table"' in html
-    assert 'id="context-growth-view-chart" class="trend-chart-panel" data-trend-panel="chart" hidden' in html
-    assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="true"' in html
-    assert 'data-trend-mode="chart" aria-controls="context-growth-view-chart" aria-pressed="false"' in html
+    assert 'id="context-growth-view-table" data-trend-panel="table" hidden' in html
+    assert 'id="context-growth-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
+    assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="false"' in html
+    assert 'data-trend-mode="chart" aria-controls="context-growth-view-chart" aria-pressed="true"' in html
     assert '"label":"Context window","color":"#455a64","dash":"10 6"' in html
     assert '"label":"15-minute max"' not in html
     assert "Interval maxima remain available in the table view" in html
@@ -2000,10 +2000,10 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Response-size bands" in html
     assert 'data-view-id="response-size-view"' in html
     assert 'aria-label="Response-size distribution view"' in html
-    assert 'id="response-size-view-table" data-trend-panel="table"' in html
-    assert 'id="response-size-view-chart" class="trend-chart-panel" data-trend-panel="chart" hidden' in html
-    assert 'data-trend-mode="table" aria-controls="response-size-view-table" aria-pressed="true"' in html
-    assert 'data-trend-mode="chart" aria-controls="response-size-view-chart" aria-pressed="false"' in html
+    assert 'id="response-size-view-table" data-trend-panel="table" hidden' in html
+    assert 'id="response-size-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
+    assert 'data-trend-mode="table" aria-controls="response-size-view-table" aria-pressed="false"' in html
+    assert 'data-trend-mode="chart" aria-controls="response-size-view-chart" aria-pressed="true"' in html
     assert '"chart_type":"distribution"' in html
     assert '"label":"<128","calls":1,"output_tokens":10' in html
     assert "function renderDistributionChart()" in html
@@ -2012,12 +2012,13 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert '"Output tokens per response"' in html
     assert 'data-view-id="inference-trend-view"' in html
     assert 'aria-label="Inference rate over time view"' in html
-    assert 'id="inference-trend-view-table" data-trend-panel="table"' in html
-    assert 'id="inference-trend-view-chart" class="trend-chart-panel" data-trend-panel="chart" hidden' in html
-    assert 'data-trend-mode="table" aria-controls="inference-trend-view-table" aria-pressed="true"' in html
-    assert 'data-trend-mode="chart" aria-controls="inference-trend-view-chart" aria-pressed="false"' in html
+    assert 'id="inference-trend-view-table" data-trend-panel="table" hidden' in html
+    assert 'id="inference-trend-view-chart" class="trend-chart-panel" data-trend-panel="chart">' in html
+    assert 'data-trend-mode="table" aria-controls="inference-trend-view-table" aria-pressed="false"' in html
+    assert 'data-trend-mode="chart" aria-controls="inference-trend-view-chart" aria-pressed="true"' in html
     assert '"label":"Inference rate","color":"#2563a6"' in html
     assert "function initializeTrendView(view)" in html
+    assert 'setMode("chart");' in html
     assert 'document.querySelectorAll("[data-trend-view]").forEach(initializeTrendView);' in html
     assert "P50" in html
     assert "P90" in html

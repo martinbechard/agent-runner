@@ -7495,16 +7495,16 @@ def _render_trend_table_chart(
     return (
         f'<div class="trend-view" data-trend-view data-view-id="{safe_id}">'
         f'<div class="trend-view-switch" role="group" aria-label="{safe_label} view">'
-        f'<button type="button" data-trend-mode="table" aria-controls="{safe_id}-table" '
-        'aria-pressed="true">Table</button>'
         f'<button type="button" data-trend-mode="chart" aria-controls="{safe_id}-chart" '
-        'aria-pressed="false">Chart</button></div>'
-        f'<div id="{safe_id}-table" data-trend-panel="table">{table_html}</div>'
-        f'<div id="{safe_id}-chart" class="trend-chart-panel" data-trend-panel="chart" hidden>'
+        'aria-pressed="true">Chart</button>'
+        f'<button type="button" data-trend-mode="table" aria-controls="{safe_id}-table" '
+        'aria-pressed="false">Table</button></div>'
+        f'<div id="{safe_id}-chart" class="trend-chart-panel" data-trend-panel="chart">'
         f'<svg class="trend-chart" data-trend-chart role="img" aria-label="{safe_label} chart" '
         'viewBox="0 0 1000 360" preserveAspectRatio="xMidYMid meet"></svg>'
         '<div class="trend-chart-legend" data-trend-legend></div>'
         '<p class="trend-chart-empty" data-trend-empty hidden></p></div>'
+        f'<div id="{safe_id}-table" data-trend-panel="table" hidden>{table_html}</div>'
         f'<script type="application/json" data-trend-data>{payload}</script></div>'
     )
 
@@ -8141,6 +8141,7 @@ function initializeTrendView(view) {
   buttons.forEach(function(button) {
     button.addEventListener("click", function() { setMode(button.dataset.trendMode); });
   });
+  setMode("chart");
 }
 """
 
