@@ -7463,7 +7463,7 @@ def _local_time_html(timestamp: str) -> str:
     parsed = _parse_iso_datetime(normalized)
     if parsed is None:
         return "<time>—</time>"
-    local_text = f"{parsed.astimezone().strftime('%Y-%m-%d %H:%M')} local"
+    local_text = parsed.astimezone().strftime("%Y-%m-%d %H:%M")
     return (
         f'<time datetime="{_escape_html_attribute(normalized)}" '
         f'title="{_escape_html_attribute(normalized)}">'
@@ -7563,7 +7563,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         else ""
     )
     growth_table = (
-        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
+        '<div class="table-scroll"><table><thead><tr><th>Time</th><th>First</th>'
         '<th>Last</th><th>15-minute max</th><th>Context window</th><th>Compactions</th></tr></thead>'
         f"<tbody>{trend_rows}</tbody></table></div>{compaction_table}"
     )
@@ -7583,7 +7583,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         {
             "title": "Context evolution",
             "description": (
-                "Context tokens over local time with compaction events marked in orange. "
+                "Context tokens over time with compaction events marked in orange. "
                 "Interval maxima remain available in the table view."
             ),
             "axis_label": "Context tokens",
@@ -7676,7 +7676,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         for band in run.inference_size_bands
     )
     inference_table = (
-        '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>Calls</th>'
+        '<div class="table-scroll"><table><thead><tr><th>Time</th><th>Calls</th>'
         '<th>Output</th><th>Inference</th><th>Rate</th></tr></thead>'
         f"<tbody>{trend_rows}</tbody></table></div>"
     )
@@ -7686,7 +7686,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         inference_table,
         {
             "title": "Inference rate over time",
-            "description": "Measured output-token inference rate by 15-minute period in local time.",
+            "description": "Measured output-token inference rate by 15-minute period.",
             "axis_label": "Tokens per second",
             "value_format": "rate",
             "series": [
@@ -8088,7 +8088,7 @@ function initializeTrendView(view) {
     svg.appendChild(node("line", { x1:margin.left, y1:margin.top + plotHeight, x2:width - margin.right, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
     svg.appendChild(node("line", { x1:margin.left, y1:margin.top, x2:margin.left, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
     svg.appendChild(node("text", { x:18, y:margin.top + plotHeight / 2, transform:"rotate(-90 18 " + (margin.top + plotHeight / 2) + ")", "text-anchor":"middle", class:"trend-chart-axis-title" }, data.axis_label || "Value"));
-    svg.appendChild(node("text", { x:margin.left + plotWidth / 2, y:height - 5, "text-anchor":"middle", class:"trend-chart-axis-title" }, "Local time"));
+    svg.appendChild(node("text", { x:margin.left + plotWidth / 2, y:height - 5, "text-anchor":"middle", class:"trend-chart-axis-title" }, "Time"));
 
     markers.forEach(function(marker) {
       var markerTime = timestamp(marker.timestamp);
@@ -12174,7 +12174,7 @@ def _token_summary_report_range_html(
     return (
         '<section class="report-range" aria-label="Filter range">'
         '<strong>Filter range:</strong> '
-        f"{_escape_html(local_from)} inclusive → {_escape_html(local_to)} exclusive · local time"
+        f"{_escape_html(local_from)} inclusive → {_escape_html(local_to)} exclusive"
         "</section>"
     )
 
@@ -12620,11 +12620,11 @@ footer{{margin-top:38px;padding-top:18px;border-top:1px solid var(--line);color:
 </section>
 {thread_section}
 <section class="section notes">
-<article><div class="label">Counting contract</div><h3>How totals are built</h3><ul><li>Only token events inside the selected local range count.</li><li>Processed tokens equal input plus output.</li><li>Cached input is already included in input tokens.</li><li>Reasoning tokens are already included in output tokens and are not added again.</li></ul></article>
+<article><div class="label">Counting contract</div><h3>How totals are built</h3><ul><li>Only token events inside the selected range count.</li><li>Processed tokens equal input plus output.</li><li>Cached input is already included in input tokens.</li><li>Reasoning tokens are already included in output tokens and are not added again.</li></ul></article>
 <article><div class="label">Cost contract</div><h3>What the dollar estimate means</h3><ul><li>Each event uses its logged model and the Agent Report pricing card.</li><li>Uncached input, cached input, and output use separate rates.</li><li>Subscription and credit usage keep the same API-equivalent estimate.</li><li>Observed credit burn is tracked separately and allocated to files by model-aware estimated cost weight.</li></ul></article>
 </section>
 <section class="section sources"><div class="label">Scanned directories</div><ul>{source_items}</ul></section>
-<footer>Generated {_token_summary_html_cell(generation_time)} local time · Agent Report · all amounts shown as USD are API-equivalent estimates.</footer>
+<footer>Generated {_token_summary_html_cell(generation_time)} · Agent Report · all amounts shown as USD are API-equivalent estimates.</footer>
 </main>
 <script>
 const filter=document.getElementById('folder-filter');
@@ -12844,8 +12844,8 @@ table{{width:100%;border-collapse:collapse;white-space:nowrap;font-variant-numer
 <div class="eyebrow">Agent Report · thread detail</div><h1>Thread Token Usage</h1>
 <p class="source">{_token_summary_html_cell(row.path)}</p>{_token_summary_report_range_html(from_time, to_time)}
 <section class="summary" aria-label="Thread totals"><article><div class="label">Processed tokens</div><strong>{row.usage.processed_tokens:,}</strong></article><article><div class="label">API-equivalent estimate</div><strong>{_token_summary_html_currency(row.cost.total_cost or 0)}</strong></article><article><div class="label">Allocated credit usage</div><strong>{_token_summary_html_credits(rollup['credits_used'])}</strong></article></section>
-<h2>Token event ledger</h2><p class="note">Each row is one recorded token event in the selected period. Zero-token rows preserve funding telemetry but do not add to the totals. Source-line links open an escaped local copy of the JSONL record.</p>
-<div class="table-wrap"><table><thead><tr><th>Local time</th><th>Source line</th><th>Model</th><th>Plan</th><th>Funding</th><th>Sub used</th><th>Credits available</th><th>Credits remaining</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(event_rows)}</tbody></table></div>
+<h2>Token event ledger</h2><p class="note">Each row is one recorded token event in the selected period. Zero-token rows preserve funding telemetry but do not add to the totals. Source-line links open an escaped copy of the JSONL record.</p>
+<div class="table-wrap"><table><thead><tr><th>Time</th><th>Source line</th><th>Model</th><th>Plan</th><th>Funding</th><th>Sub used</th><th>Credits available</th><th>Credits remaining</th><th>Input</th><th>Cached input</th><th>Uncached input</th><th>Output</th><th>Reasoning</th><th>Processed</th><th>Estimate</th></tr></thead><tbody>{''.join(event_rows)}</tbody></table></div>
 </main></body></html>"""
 
 
@@ -12859,7 +12859,7 @@ def _render_token_summary_raw_html(row: _TokenSummaryRow) -> str:
     return f"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Raw Source Log</title>
 <style>:root{{--ink:#dce7ec;--muted:#8295a1;--bg:#10181d;--line:#26363f;--link:#75c7f0}}*{{box-sizing:border-box}}body{{margin:0;background:var(--bg);color:var(--ink);font:13px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace}}header{{position:sticky;top:0;z-index:1;padding:14px 20px;background:#152229;border-bottom:1px solid var(--line)}}h1{{display:inline;margin:0 14px 0 0;font-size:15px}}header span{{color:var(--muted)}}.line{{display:grid;grid-template-columns:72px max-content;border-bottom:1px solid rgba(38,54,63,.45)}}.line:target{{background:#3b3220}}.line>a{{padding:3px 12px;color:var(--link);text-align:right;text-decoration:none;border-right:1px solid var(--line)}}code{{padding:3px 12px;white-space:pre}}@media print{{header{{position:static}}}}</style></head>
-<body><header><h1>Raw Source Log</h1><span>{_token_summary_html_cell(row.path)} · privacy-sensitive local copy</span></header><main>{lines}</main></body></html>"""
+<body><header><h1>Raw Source Log</h1><span>{_token_summary_html_cell(row.path)} · privacy-sensitive copy</span></header><main>{lines}</main></body></html>"""
 
 
 def _write_token_summary_html(
@@ -17457,7 +17457,7 @@ document.addEventListener('keydown', function(e) {{
 {''.join(rows)}
 </tbody>
 </table>
-{'<div style="margin:12px 0 0;color:#666;font-size:0.9em">Pricing note: when the backend log does not provide direct cost, this report estimates cost from local model pricing metadata in docs/reference/openai-model-pricing.json and the token counts available for the call.</div>' if has_estimated_cost else ''}
+{'<div style="margin:12px 0 0;color:#666;font-size:0.9em">Pricing note: when the backend log does not provide direct cost, this report estimates cost from bundled model pricing metadata in docs/reference/openai-model-pricing.json and the token counts available for the call.</div>' if has_estimated_cost else ''}
 {''.join(popups)}
 </body>
 </html>"""

@@ -2045,7 +2045,7 @@ def test_rollout_html_uses_render_time_for_report_generated(runtime):
     assert render_started_at <= generated_at <= render_completed_at
     assert generated_at != datetime.fromisoformat(run.observed_at)
     assert generated_match.group(2) == generated_at.astimezone().strftime(
-        "%Y-%m-%d %H:%M local"
+        "%Y-%m-%d %H:%M"
     )
     assert "localTimestampFormatter" not in html
 
@@ -7196,7 +7196,8 @@ def test_token_summary_html_writes_local_verification_report(
     assert "cycle" in detail
     assert "Cumulative total tokens" in detail
     assert "Cumulative cost" in detail
-    assert "Local time" in detail
+    assert 'data-compact="Time" data-full="Time">Time</span>' in detail
+    assert "Local time" not in detail
     assert 'class="report-range"' in detail
     assert "2026-08-25 00:00 inclusive" in detail
     assert "2026-08-26 00:00 exclusive" in detail
@@ -7263,7 +7264,7 @@ def test_token_summary_html_writes_local_verification_report(
     assert generated_match is not None
     expected_generated_at = datetime.fromisoformat(generated_match.group(1)).astimezone()
     assert generated_match.group(2) == expected_generated_at.strftime(
-        "%Y-%m-%d %H:%M local"
+        "%Y-%m-%d %H:%M"
     )
     assert "<strong>Thread Title:</strong>" not in steps
     assert f'href="{matching_raw.name}">Log file</a>' in steps

@@ -1479,17 +1479,17 @@ def render_html(
 
     def compact_label(header: str) -> str:
         if local_time and header == "time_utc":
-            return "Local time"
+            return "Time"
         return readable_display_name(header)
 
     def full_label(header: str) -> str:
         if local_time and header == "time_utc":
-            return "Local time"
+            return "Time"
         return display_name(header)
 
     def definition(header: str) -> str:
         if local_time and header == "time_utc":
-            return "Event timestamp converted to the computer's local time."
+            return "Event timestamp."
         return COLUMN_DEFINITIONS.get(header, header)
 
     head_cells = "".join(
