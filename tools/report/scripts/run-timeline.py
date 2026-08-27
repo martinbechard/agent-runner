@@ -7256,6 +7256,36 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
             "empty_message": "No measured inference-rate data are available.",
         },
     )
+    size_table = (
+        '<div class="table-scroll"><table><thead><tr><th>Output tokens</th><th>Calls</th>'
+        '<th>Output</th><th>Weighted rate</th><th>Median call rate</th></tr></thead>'
+        f"<tbody>{size_rows}</tbody></table></div>"
+    )
+    size_chart = _render_trend_table_chart(
+        "response-size-view",
+        "Response-size distribution",
+        size_table,
+        {
+            "chart_type": "distribution",
+            "title": "Response-size distribution",
+            "description": "Measured response count grouped by output-token band.",
+            "axis_label": "Measured calls",
+            "value_format": "count",
+            "series": [{"label": "Measured calls", "color": "#2563a6"}],
+            "categories": [
+                {
+                    "label": band.label,
+                    "calls": band.call_count,
+                    "output_tokens": band.output_tokens,
+                    "weighted_rate": band.weighted_tokens_per_second,
+                    "median_rate": band.median_call_tokens_per_second,
+                }
+                for band in run.inference_size_bands
+            ],
+            "markers": [],
+            "empty_message": "No measured response-size data are available.",
+        },
+    )
     return (
         '<section id="inference-rate" class="metric-view">'
         '<div class="agents-heading"><h2>Inference rate</h2></div>'
@@ -7271,9 +7301,7 @@ def _render_inference_metrics(run: CodexRunMetrics) -> str:
         f'<details class="metric-details"><summary>15-minute trend · {_escape_html(percentile_text)}</summary>'
         f"{inference_chart}</details>"
         '<details class="metric-details"><summary>Response-size bands</summary>'
-        '<div class="table-scroll"><table><thead><tr><th>Output tokens</th><th>Calls</th>'
-        '<th>Output</th><th>Weighted rate</th><th>Median call rate</th></tr></thead>'
-        f"<tbody>{size_rows}</tbody></table></div></details></section>"
+        f"{size_chart}</details></section>"
     )
 
 
@@ -7378,6 +7406,10 @@ _TREND_CHART_CSS = """
 .trend-chart-axis-title { fill:#455a64; font:700 12px var(--font-ui); letter-spacing:.02em; }
 .trend-chart-line { fill:none; stroke-width:3; stroke-linecap:round; stroke-linejoin:round; }
 .trend-chart-point { stroke:#fff; stroke-width:2; }
+.trend-chart-bar { fill:#2563a6; }
+.trend-chart-bar:hover { fill:#174f85; }
+.trend-chart-bar:focus { fill:#174f85; stroke:#e87523; stroke-width:3; outline:none; }
+.trend-chart-bar-value { fill:#263238; font:700 12px var(--font-code); }
 .trend-chart-marker { stroke:#e87523; stroke-width:2; stroke-dasharray:4 4; }
 .trend-chart-marker-symbol { fill:#e87523; stroke:#fff; stroke-width:1.5; }
 .trend-chart-legend { display:flex; flex-wrap:wrap; gap:8px 16px; padding:0 16px 13px; color:#546e7a; font-size:.78em; }
@@ -7461,9 +7493,86 @@ function initializeTrendView(view) {
       legend.appendChild(markerItem);
     }
   }
+  function rateLabel(value) {
+    return numeric(value) === null ? "unavailable" : value.toFixed(2) + " tok/s";
+  }
+  function renderDistributionChart() {
+    var categories = data.categories || [];
+    var measured = categories.filter(function(category) {
+      return numeric(category.calls) !== null && category.calls > 0;
+    });
+    svg.replaceChildren();
+    svg.appendChild(node("title", {}, data.title || "Distribution chart"));
+    svg.appendChild(node("desc", {}, data.description || "Distribution by category."));
+    renderLegend();
+    if (!measured.length) {
+      emptyState.hidden = false;
+      emptyState.textContent = data.empty_message || "No distribution data are available.";
+      svg.setAttribute("hidden", "");
+      legend.hidden = true;
+      return;
+    }
+    emptyState.hidden = true;
+    svg.removeAttribute("hidden");
+    legend.hidden = false;
+
+    var width = 1000;
+    var height = 360;
+    var margin = { top:32, right:26, bottom:64, left:78 };
+    var plotWidth = width - margin.left - margin.right;
+    var plotHeight = height - margin.top - margin.bottom;
+    var maximumCalls = Math.max.apply(null, categories.map(function(category) {
+      return numeric(category.calls) || 0;
+    }).concat([1]));
+    var yMaximum = Math.max(4, Math.ceil(maximumCalls / 4) * 4);
+    var slotWidth = plotWidth / Math.max(1, categories.length);
+    var barWidth = Math.min(110, slotWidth * .62);
+    function y(value) { return margin.top + plotHeight - value / yMaximum * plotHeight; }
+
+    for (var index = 0; index <= 4; index += 1) {
+      var yValue = yMaximum * index / 4;
+      var yPosition = y(yValue);
+      svg.appendChild(node("line", { x1:margin.left, y1:yPosition, x2:width - margin.right, y2:yPosition, class:"trend-chart-grid" }));
+      svg.appendChild(node("text", { x:margin.left - 10, y:yPosition + 4, "text-anchor":"end", class:"trend-chart-label" }, compact(yValue)));
+    }
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top + plotHeight, x2:width - margin.right, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("line", { x1:margin.left, y1:margin.top, x2:margin.left, y2:margin.top + plotHeight, class:"trend-chart-axis" }));
+    svg.appendChild(node("text", { x:18, y:margin.top + plotHeight / 2, transform:"rotate(-90 18 " + (margin.top + plotHeight / 2) + ")", "text-anchor":"middle", class:"trend-chart-axis-title" }, data.axis_label || "Count"));
+    svg.appendChild(node("text", { x:margin.left + plotWidth / 2, y:height - 5, "text-anchor":"middle", class:"trend-chart-axis-title" }, "Output tokens per response"));
+
+    categories.forEach(function(category, index) {
+      var calls = numeric(category.calls) || 0;
+      var center = margin.left + slotWidth * (index + .5);
+      var top = y(calls);
+      var detail = category.label + " output tokens · " + calls.toLocaleString() +
+        " measured calls · " + compact(category.output_tokens || 0) +
+        " output tokens · weighted " + rateLabel(category.weighted_rate) +
+        " · median " + rateLabel(category.median_rate);
+      var bar = node("rect", {
+        x:center - barWidth / 2, y:top, width:barWidth,
+        height:Math.max(0, margin.top + plotHeight - top), rx:3,
+        class:"trend-chart-bar", tabindex:0, role:"img", "aria-label":detail
+      });
+      appendTitle(bar, detail);
+      svg.appendChild(bar);
+      if (calls) {
+        svg.appendChild(node("text", {
+          x:center, y:Math.max(margin.top + 12, top - 7),
+          "text-anchor":"middle", class:"trend-chart-bar-value"
+        }, calls.toLocaleString()));
+      }
+      svg.appendChild(node("text", {
+        x:center, y:height - 31, "text-anchor":"middle", class:"trend-chart-label"
+      }, category.label));
+    });
+  }
   function renderChart() {
     if (rendered) return;
     rendered = true;
+    if (data.chart_type === "distribution") {
+      renderDistributionChart();
+      return;
+    }
     var series = data.series || [];
     var markers = data.markers || [];
     var points = [];
