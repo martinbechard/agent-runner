@@ -2840,6 +2840,31 @@ def test_native_codex_html_compacts_long_page_title_and_discloses_table_titles()
     assert full_report_title not in compact_report_title
 
 
+def test_native_codex_html_compacts_long_thread_event_subtitle():
+    module = _load_module()
+    long_title = (
+        "Verify this raw-source ingest pre-move. Read-only: do not edit files. "
+        "Repository root: /workspace/wiki. Verification gate: inspect every topic, "
+        "folder hub, digest, source link, and federation boundary before returning."
+    )
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    compact_title = module._compact_display_text(long_title, 96)
+
+    html = module.render_codex_rollout_html(
+        run,
+        page_title="Thread Events",
+        page_subtitle=long_title,
+    )
+
+    assert compact_title.endswith("…")
+    assert (
+        f'<p class="run-label" title="{long_title}"><strong>Thread Title:</strong> '
+        f'&quot;{compact_title}&quot;</p>'
+        in html
+    )
+    assert f'&quot;{long_title}&quot;</p>' not in html
+
+
 @pytest.mark.parametrize(
     ("task_title", "expected"),
     [

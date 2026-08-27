@@ -10291,9 +10291,16 @@ def render_codex_rollout_html(
             f'<a href="{_escape_html(href)}">{_escape_html(label)}</a>'
             for label, href in page_action_links
         )
+    compact_page_subtitle = _compact_display_text(page_subtitle, 96)
+    page_subtitle_attribute = (
+        f' title="{_escape_html_attribute(page_subtitle)}"'
+        if compact_page_subtitle != page_subtitle
+        else ""
+    )
     run_label_html = (
-        '<p class="run-label"><strong>Thread Title:</strong> '
-        f'&quot;{_escape_html(page_subtitle)}&quot;{page_actions_html}</p>'
+        f'<p class="run-label"{page_subtitle_attribute}>'
+        '<strong>Thread Title:</strong> '
+        f'&quot;{_escape_html(compact_page_subtitle)}&quot;{page_actions_html}</p>'
         if page_subtitle
         else (
             f'<p class="run-label">{_escape_html(run.run_label)}</p>'
