@@ -1969,8 +1969,8 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "Inference rate" in html
     assert "Runtime activity" in html
     assert "60.0%" in html
-    assert f"observed {module._local_time_html(run.observed_at)}" in html
-    assert 'class="local-timestamp" datetime="2026-08-05T18:00:00+00:00"' in html
+    assert '<dl class="run-summary" aria-label="Run summary">' in html
+    assert 'class="local-timestamp"' not in html
     assert "Intl.DateTimeFormat" in html
     assert "Direct telemetry" not in html
     assert "Inferred boundaries" not in html
@@ -1979,7 +1979,7 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert '<div class="label">Current</div>' not in html
     assert '<div class="label">Remaining tokens</div>' not in html
     assert "<th>Remaining tokens</th><th>Max</th>" in html
-    assert "<th>Last</th><th>Max</th><th>Context window</th>" in html
+    assert "<th>Last</th><th>15-minute max</th><th>Context window</th>" in html
     assert "<td>60</td><td>60</td><td>60.0%</td>" in html
     assert "Context evolution" in html
     assert "Growth and compactions" not in html
@@ -1990,6 +1990,9 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert 'data-trend-mode="table" aria-controls="context-growth-view-table" aria-pressed="true"' in html
     assert 'data-trend-mode="chart" aria-controls="context-growth-view-chart" aria-pressed="false"' in html
     assert '"label":"Context window","color":"#455a64","dash":"10 6"' in html
+    assert '"label":"15-minute max"' not in html
+    assert "Interval maxima remain available in the table view" in html
+    assert "Bucket high" not in html
     assert "Response-size bands" in html
     assert 'data-view-id="response-size-view"' in html
     assert 'aria-label="Response-size distribution view"' in html
@@ -2016,6 +2019,31 @@ def test_native_codex_html_renders_compact_local_time_metric_views(tmp_path):
     assert "P90" in html
     assert "3s inference" in html
     assert "context 60 / 100 (60.0%)" in html
+
+
+@pytest.mark.parametrize("runtime", ["Codex", "Junie"])
+def test_rollout_html_uses_render_time_for_report_generated(runtime):
+    module = _load_module()
+    run = module.build_codex_rollout_run("root-thread", CODEX_ROLLOUT_FIXTURES)
+    run.runtime = runtime
+    run.observed_at = "2026-07-16T22:15:00+00:00"
+
+    render_started_at = datetime.now(timezone.utc)
+    html = module.render_codex_rollout_html(run)
+    render_completed_at = datetime.now(timezone.utc)
+
+    generated_match = re.search(
+        r'<dt>Report generated</dt><dd><time datetime="([^"]+)" title="[^"]+">([^<]+)</time></dd>',
+        html,
+    )
+    assert generated_match is not None
+    generated_at = datetime.fromisoformat(generated_match.group(1))
+    assert render_started_at <= generated_at <= render_completed_at
+    assert generated_at != datetime.fromisoformat(run.observed_at)
+    assert generated_match.group(2) == generated_at.astimezone().strftime(
+        "%Y-%m-%d %H:%M local"
+    )
+    assert "localTimestampFormatter" not in html
 
 
 def test_native_codex_older_token_logs_keep_usage_without_new_telemetry(tmp_path):
@@ -3536,9 +3564,8 @@ def test_native_codex_cost_display_is_compact_and_rounded():
     run.observed_at = "2026-07-16T22:15:00+00:00"
     html = module.render_codex_rollout_html(run)
     assert (
-        f"· observed {module._local_time_html(run.observed_at)} · "
-        "API-equivalent estimate: $917.35 USD "
-        "(estimate, not an actual charge or invoice).</p>"
+        "<dt>Estimate</dt><dd>API-equivalent estimate: $917.35 USD "
+        "(estimate, not an actual charge or invoice)</dd>"
     ) in html
     assert html.count("not an actual charge or invoice") == 1
     assert '<p class="notice">' not in html
@@ -6225,6 +6252,35 @@ def test_render_html_includes_elapsed_start_and_links_columns(tmp_path):
     assert 'step-toggle' in html
 
 
+def test_pretty_json_script_escapes_hostile_object_keys_and_previews(tmp_path):
+    module = _load_module()
+    document = module.ReportDocument(run_title="Demo", workspace=tmp_path)
+
+    html = module.render_html(document)
+
+    hostile_key = '</span><img src=x onerror="alert(1)">&\''
+    escaped_key = (
+        hostile_key.replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+        .replace("'", "&#39;")
+    )
+    assert "<" not in escaped_key
+    assert ">" not in escaped_key
+    assert '"' not in escaped_key
+    assert "'" not in escaped_key
+    assert "function escapeJsonHtml(value)" in html
+    assert (
+        "String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;')"
+        ".replace(/>/g,'&gt;').replace(/\"/g,'&quot;').replace(/'/g,'&#39;')"
+        in html
+    )
+    assert "escapeJsonHtml(k)" in html
+    assert "var preview = escapeJsonHtml(keys.slice(0, 3).join(', ')" in html
+    assert "' + k + '" not in html
+
+
 def test_backfill_prompts_from_file_sets_model_and_estimates_cost(tmp_path):
     module = _load_module()
     prompt_file = tmp_path / "prompt-file.md"
@@ -7185,8 +7241,19 @@ def test_token_summary_html_writes_local_verification_report(
     assert '<div id="timeline" class="agents-heading"><h2>Timeline</h2>' in steps
     assert "<h1>Thread Events</h1>" in steps
     assert 'class="report-range"' in steps
+    assert 'aria-label="Filter range"' in steps
+    assert "<strong>Filter range:</strong>" in steps
     assert "2026-08-25 00:00 inclusive" in steps
     assert "2026-08-26 00:00 exclusive" in steps
+    generated_match = re.search(
+        r'<dt>Report generated</dt><dd><time datetime="([^"]+)" title="[^"]+">([^<]+)</time></dd>',
+        steps,
+    )
+    assert generated_match is not None
+    expected_generated_at = datetime.fromisoformat(generated_match.group(1)).astimezone()
+    assert generated_match.group(2) == expected_generated_at.strftime(
+        "%Y-%m-%d %H:%M local"
+    )
     assert (
         f'<p class="run-label" title="{escaped_raw_title}"><strong>Thread Title:</strong> '
         f'&quot;{module._escape_html(compact_thread_title)}&quot;'

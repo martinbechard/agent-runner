@@ -7457,12 +7457,17 @@ def _render_codex_sequence_section(
 
 
 def _local_time_html(timestamp: str) -> str:
-    """Render an ISO fallback that the offline report localizes in-place."""
+    """Render a stable local timestamp directly in the generated document."""
 
     normalized = _normalize_timestamp(timestamp)
+    parsed = _parse_iso_datetime(normalized)
+    if parsed is None:
+        return "<time>—</time>"
+    local_text = f"{parsed.astimezone().strftime('%Y-%m-%d %H:%M')} local"
     return (
-        f'<time class="local-timestamp" datetime="{_escape_html_attribute(normalized)}">'
-        f"{_escape_html(normalized or '—')}</time>"
+        f'<time datetime="{_escape_html_attribute(normalized)}" '
+        f'title="{_escape_html_attribute(normalized)}">'
+        f"{_escape_html(local_text)}</time>"
     )
 
 
@@ -7559,7 +7564,7 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
     )
     growth_table = (
         '<div class="table-scroll"><table><thead><tr><th>Local time</th><th>First</th>'
-        '<th>Last</th><th>Max</th><th>Context window</th><th>Compactions</th></tr></thead>'
+        '<th>Last</th><th>15-minute max</th><th>Context window</th><th>Compactions</th></tr></thead>'
         f"<tbody>{trend_rows}</tbody></table></div>{compaction_table}"
     )
     context_points = [
@@ -7577,7 +7582,10 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
         growth_table,
         {
             "title": "Context evolution",
-            "description": "Context tokens over local time with compaction events marked in orange.",
+            "description": (
+                "Context tokens over local time with compaction events marked in orange. "
+                "Interval maxima remain available in the table view."
+            ),
             "axis_label": "Context tokens",
             "value_format": "tokens",
             "series": [
@@ -7586,15 +7594,6 @@ def _render_context_metrics(run: CodexRunMetrics) -> str:
                     "color": "#2563a6",
                     "values": [
                         {"timestamp": point["timestamp"], "value": point["last"]}
-                        for point in context_points
-                    ],
-                },
-                {
-                    "label": "Bucket high",
-                    "color": "#78909c",
-                    "dash": "5 5",
-                    "values": [
-                        {"timestamp": point["timestamp"], "value": point["high"]}
                         for point in context_points
                     ],
                 },
@@ -10066,6 +10065,7 @@ def render_codex_rollout_html(
     `thread_events_filenames` maps exact generated descendant IDs to sibling
     page names. The selected root is never linked to itself.
     """
+    report_generated_at = datetime.now(timezone.utc).isoformat()
     if progress is not None:
         progress(80, "Rendering report summary", "Preparing headline metrics and agent inventory.")
     formatter_config = formatter_config or _load_tool_formatter_config()
@@ -10983,6 +10983,11 @@ td {{ font-size:.85em; }}
 .model-usage-table {{ min-width:940px; margin:0; }}
 .model-usage-table th:first-child, .model-usage-table td:first-child {{ white-space:normal; }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
+.run-summary {{ display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:1px; margin:12px 0 18px; overflow:hidden; background:#cfd8dc; border:1px solid #cfd8dc; border-radius:7px; }}
+.run-summary > div {{ min-width:0; padding:10px 12px; background:#fff; }}
+.run-summary dt {{ margin:0 0 4px; color:#607d8b; font-size:.75em; font-weight:700; letter-spacing:.04em; text-transform:uppercase; }}
+.run-summary dd {{ margin:0; overflow-wrap:anywhere; color:#263238; }}
+.run-summary code {{ font-size:.78em; }}
 .agent-table .agent-assignment-column {{ width:30%; }}
 .agent-table .agent-skills-column {{ width:15%; }}
 .agent-table .agent-count-column {{ width:10%; }}
@@ -11186,7 +11191,15 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 <h1{report_title_attribute}>{_escape_html(report_title)}</h1>
 {run_label_html}
 {report_range_html}
-<p>{_escape_html(run.runtime)} run <code>{_escape_html(run.root_thread_id)}</code> · state <strong>{_escape_html(run.state)}</strong> · observed {_local_time_html(run.observed_at)} · {_escape_html(_cost_summary(run.cost))}.</p>
+<dl class="run-summary" aria-label="Run summary">
+<div><dt>Runtime</dt><dd>{_escape_html(run.runtime)} run</dd></div>
+<div><dt>Thread ID</dt><dd><code>{_escape_html(run.root_thread_id)}</code></dd></div>
+<div><dt>State</dt><dd>{_escape_html(run.state)}</dd></div>
+<div><dt>Started</dt><dd>{_local_time_html(run.wall_started_at)}</dd></div>
+<div><dt>Last activity</dt><dd>{_local_time_html(run.wall_ended_at)}</dd></div>
+<div><dt>Report generated</dt><dd>{_local_time_html(report_generated_at)}</dd></div>
+<div><dt>Estimate</dt><dd>{_escape_html(_cost_summary(run.cost))}</dd></div>
+</dl>
 {view_nav_html}
 {parent_context_html}
 <div class="metrics">
@@ -11223,17 +11236,6 @@ code {{ font-family:var(--font-code); font-size:.9em; }}
 {''.join(tool_call_overlays)}
 {''.join(turn_detail_overlays)}
 <script>
-var localTimestampFormatter = new Intl.DateTimeFormat(undefined, {{
-  dateStyle: "medium",
-  timeStyle: "short"
-}});
-document.querySelectorAll("time.local-timestamp").forEach(function(element) {{
-  var timestamp = new Date(element.dateTime);
-  if (!Number.isNaN(timestamp.getTime())) {{
-    element.textContent = localTimestampFormatter.format(timestamp);
-    element.title = element.dateTime;
-  }}
-}});
 var sequenceOnly =
   document.body.classList.contains("sequence-only") ||
   new URLSearchParams(window.location.search).get("view") === "sequence";
@@ -12180,9 +12182,10 @@ def _token_summary_report_range_html(
     local_from = _token_summary_local_datetime(from_time)
     local_to = _token_summary_local_datetime(to_time)
     return (
-        '<p class="report-range"><strong>Selected range:</strong> '
+        '<section class="report-range" aria-label="Filter range">'
+        '<strong>Filter range:</strong> '
         f"{_escape_html(local_from)} inclusive → {_escape_html(local_to)} exclusive · local time"
-        "</p>"
+        "</section>"
     )
 
 
@@ -17371,14 +17374,17 @@ function jsonToTree(val, key, depth) {{
     var keys = Object.keys(val);
     if (keys.length === 0) return '<span class="jv-brace">{{}}</span>';
     var entries = keys.map(function(k) {{
-      return indent + '  <span class="jv-key">"' + k + '"</span>: ' + jsonToTree(val[k], k, depth + 1);
+      return indent + '  <span class="jv-key">"' + escapeJsonHtml(k) + '"</span>: ' + jsonToTree(val[k], k, depth + 1);
     }});
-    var preview = keys.slice(0, 3).join(', ') + (keys.length > 3 ? ', …' : '');
+    var preview = escapeJsonHtml(keys.slice(0, 3).join(', ') + (keys.length > 3 ? ', …' : ''));
     var open = depth < 2 ? ' open' : '';
     return '<details class="jv-fold"' + open + '><summary><span class="jv-brace">{{</span> <span class="jv-dim">' + preview + '</span></summary>' +
       entries.join(',\\n') + '\\n' + indent + '<span class="jv-brace">}}</span></details>';
   }}
   return String(val);
+}}
+function escapeJsonHtml(value) {{
+  return String(value).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
 }}
 function togglePrettyJson(uid) {{
   var el = document.getElementById(uid);
