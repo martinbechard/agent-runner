@@ -1426,16 +1426,20 @@ def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path)
     )[0]
 
     assert html.index('<section id="model-usage"') < html.index('<div id="timeline"')
-    assert "<h2>Usage by model</h2>" in model_usage
+    assert "<h2>Usage</h2>" in model_usage
+    assert 'data-usage-mode="model" aria-controls="usage-model-view" aria-pressed="true"' in model_usage
+    assert 'data-usage-mode="agent" aria-controls="usage-agent-view" aria-pressed="false"' in model_usage
+    assert 'id="usage-agent-view" data-usage-panel="agent" hidden' in model_usage
     assert model_usage.count('class="model-usage-group"') == 1
     assert (
         '<summary><span class="model-usage-toggle-icon" aria-hidden="true"></span>'
         '<span class="model-usage-parent">'
     ) in model_usage
-    assert '.model-usage-group > summary::-webkit-details-marker { display:none; }' in html
+    assert '.model-usage-group > summary::-webkit-details-marker, .agent-usage-group > summary::-webkit-details-marker { display:none; }' in html
     assert '.model-usage-toggle-icon::before { content:"+"; }' in html
     assert (
-        '.model-usage-group[open] > summary .model-usage-toggle-icon::before '
+        '.model-usage-group[open] > summary .model-usage-toggle-icon::before, '
+        '.agent-usage-group[open] > summary .model-usage-toggle-icon::before '
         '{ content:"−"; }'
     ) in html
     assert f'<code class="model-name">{main.model}</code>' in model_usage
@@ -1445,6 +1449,10 @@ def test_model_usage_section_groups_agents_under_model_before_timeline(tmp_path)
     assert "Thread: main · Agent: main" in model_usage
     assert "Thread: Review the implementation · Agent: reviewer" in model_usage
     assert model_usage.count('class="model-usage-agent-row"') == 2
+    assert model_usage.count('class="agent-usage-group"') == 2
+    assert model_usage.count('class="agent-usage-model-row"') == 2
+    assert "<th>Model</th><th>Fresh Input</th><th>Cache read</th>" in model_usage
+    assert "<th>Agent share</th>" in model_usage
     assert (
         "<th>Agent</th><th>Fresh Input</th><th>Cache read</th>"
         "<th>Cache write</th><th>Output</th><th>Reasoning</th><th>Processed</th>"
@@ -1475,7 +1483,7 @@ def test_model_usage_separates_the_same_model_by_effort_level(tmp_path):
     )[0]
 
     assert model_usage.count('class="model-usage-group"') == 2
-    assert model_usage.count(f'<code class="model-name">{main.model}</code>') == 2
+    assert model_usage.count(f'<code class="model-name">{main.model}</code>') == 4
     assert '<span class="model-effort">effort max</span>' in model_usage
     assert '<span class="model-effort">effort medium</span>' in model_usage
     assert "effort mixed" not in model_usage
@@ -1804,6 +1812,8 @@ def test_native_codex_records_inference_boundaries_context_and_compaction(tmp_pa
     html = module.render_codex_rollout_html(run)
     assert 'data-view-id="context-growth-view"' in html
     assert html.count('"label":"Compaction","before":50,"after":30') == 2
+    assert "concat(markerValues" not in html
+    assert "points.map(function(point) { return point.value; }).concat([1])" in html
     assert '"label":"Context used","color":"#2563a6"' in html
 
 

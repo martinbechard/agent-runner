@@ -6370,7 +6370,7 @@ def _model_usage_by_agent(
 
 
 def _render_model_usage_section(run: CodexRunMetrics) -> str:
-    """Render expandable model totals with contributing agents as children."""
+    """Render model-first and agent-first views of one usage allocation."""
 
     show_cache_write = _reports_cache_write_tokens(run)
     model_usage = _model_usage_by_agent(run)
@@ -6455,6 +6455,64 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
         rendered_groups.append(
             '<p class="execution-note">No model usage was recorded.</p>'
         )
+    rendered_agent_groups = []
+    for thread, _depth in inventory:
+        agent_total = UsageTotals()
+        thread_models = []
+        for (model, effort), agents in model_usage.items():
+            usage = agents.get(thread.thread_id)
+            if usage is None or _usage_is_zero(usage):
+                continue
+            thread_models.append((model, effort, usage))
+            agent_total = agent_total + usage
+        thread_models.sort(
+            key=lambda item: (-item[2].processed_tokens, item[0].casefold(), item[1].casefold())
+        )
+        model_rows = []
+        for model, effort, usage in thread_models:
+            agent_share = (
+                usage.processed_tokens / agent_total.processed_tokens * 100
+                if agent_total.processed_tokens
+                else 0
+            )
+            cache_write_cell = (
+                f'<td>{usage.cache_create_input_tokens:,}</td>' if show_cache_write else ""
+            )
+            effort_html = (
+                f' <span class="model-effort">· effort {_escape_html(effort)}</span>'
+                if effort
+                else ""
+            )
+            model_rows.append(
+                '<tr class="agent-usage-model-row">'
+                f'<td><code class="model-name">{_escape_html(model)}</code>{effort_html}</td>'
+                f'<td>{usage.direct_input_tokens:,}</td><td>{usage.cached_input_tokens:,}</td>'
+                f'{cache_write_cell}<td>{usage.output_tokens:,}</td>'
+                f'<td>{usage.reasoning_tokens:,}</td><td>{usage.processed_tokens:,}</td>'
+                f'<td>{agent_share:.1f}%</td></tr>'
+            )
+        if not model_rows:
+            continue
+        agent_label = _agent_assignment_label(thread)
+        compact_agent_label = _compact_agent_assignment_label(thread)
+        run_share = agent_total.processed_tokens / run_total * 100
+        model_label = "model" if len(thread_models) == 1 else "models"
+        rendered_agent_groups.append(
+            '<details class="agent-usage-group">'
+            '<summary><span class="model-usage-toggle-icon" aria-hidden="true"></span>'
+            '<span class="model-usage-parent">'
+            f'<strong title="{_escape_html_attribute(agent_label)}">'
+            f'{_escape_html(compact_agent_label)}</strong>'
+            f'<span class="model-usage-total">{agent_total.processed_tokens:,} processed tokens · '
+            f'{len(thread_models):,} {model_label} · {run_share:.1f}% of run</span>'
+            '</span></summary><div class="table-scroll"><table class="model-usage-table">'
+            '<thead><tr><th>Model</th><th>Fresh Input</th><th>Cache read</th>'
+            f'{"<th>Cache write</th>" if show_cache_write else ""}'
+            '<th>Output</th><th>Reasoning</th><th>Processed</th><th>Agent share</th>'
+            f'</tr></thead><tbody>{"".join(model_rows)}</tbody></table></div></details>'
+        )
+    if not rendered_agent_groups:
+        rendered_agent_groups.append('<p class="execution-note">No agent usage was recorded.</p>')
     usage_note = (
         "Fresh input excludes cache reads and cache writes."
         if show_cache_write
@@ -6465,11 +6523,28 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
     )
     return (
         '<section id="model-usage">'
-        '<div class="agents-heading"><h2>Usage by model</h2></div>'
+        '<div class="agents-heading"><h2>Usage</h2></div>'
+        '<div class="usage-view-switch" role="group" aria-label="Usage breakdown view">'
+        '<button type="button" data-usage-mode="model" aria-controls="usage-model-view" '
+        'aria-pressed="true">Model</button>'
+        '<button type="button" data-usage-mode="agent" aria-controls="usage-agent-view" '
+        'aria-pressed="false">Agent</button></div>'
+        '<div id="usage-model-view" data-usage-panel="model">'
         '<p class="execution-note">Each model and effort combination is a separate '
         'group. Expand a group to see the agents that contributed to its total. '
         f'{usage_note}</p>'
-        f'<div class="model-usage-groups">{"".join(rendered_groups)}</div>'
+        f'<div class="model-usage-groups">{"".join(rendered_groups)}</div></div>'
+        '<div id="usage-agent-view" data-usage-panel="agent" hidden>'
+        '<p class="execution-note">Each agent is a separate group. Expand an agent '
+        'to see its model and effort breakdown. '
+        f'{usage_note}</p>'
+        f'<div class="model-usage-groups">{"".join(rendered_agent_groups)}</div></div>'
+        '<script>(function(){const section=document.getElementById("model-usage");'
+        'if(!section)return;const buttons=section.querySelectorAll("[data-usage-mode]");'
+        'const panels=section.querySelectorAll("[data-usage-panel]");'
+        'buttons.forEach(button=>button.addEventListener("click",()=>{const mode=button.dataset.usageMode;'
+        'buttons.forEach(item=>item.setAttribute("aria-pressed",item.dataset.usageMode===mode?"true":"false"));'
+        'panels.forEach(panel=>{panel.hidden=panel.dataset.usagePanel!==mode;});}));})();</script>'
         "</section>"
     )
 
@@ -8042,12 +8117,6 @@ function initializeTrendView(view) {
         if (time !== null && value !== null) points.push({ time:time, value:value });
       });
     });
-    var markerValues = [];
-    markers.forEach(function(marker) {
-      [numeric(marker.before), numeric(marker.after)].forEach(function(value) {
-        if (value !== null) markerValues.push(value);
-      });
-    });
     svg.replaceChildren();
     svg.appendChild(node("title", {}, data.title || "Trend chart"));
     svg.appendChild(node("desc", {}, data.description || "Time-series chart."));
@@ -8077,7 +8146,7 @@ function initializeTrendView(view) {
       minimumTime -= 30 * 60 * 1000;
       maximumTime += 30 * 60 * 1000;
     }
-    var maximumValue = Math.max.apply(null, points.map(function(point) { return point.value; }).concat(markerValues, [1]));
+    var maximumValue = Math.max.apply(null, points.map(function(point) { return point.value; }).concat([1]));
     var yMaximum = maximumValue * 1.08;
     function x(time) { return margin.left + (time - minimumTime) / (maximumTime - minimumTime) * plotWidth; }
     function y(value) { return margin.top + plotHeight - value / yMaximum * plotHeight; }
@@ -10997,15 +11066,19 @@ td {{ font-size:.85em; }}
 .composition-legend {{ color:#607d8b; font-size:.85em; margin-top:7px; }}
 .composition-fresh {{ color:var(--token-fresh); }} .composition-cached {{ color:var(--token-cached); }} .composition-cache-write {{ color:var(--token-cache-write); }} .composition-output {{ color:var(--token-output); }} .composition-reasoning {{ color:var(--token-reasoning); }}
 .model-usage-groups {{ display:grid; gap:8px; }}
-.model-usage-group {{ overflow:hidden; border:1px solid #e1e6ea; border-radius:6px; background:#fff; }}
-.model-usage-group > summary {{ display:flex; align-items:center; gap:8px; padding:11px 13px; color:#455a64; cursor:pointer; list-style:none; }}
-.model-usage-group > summary::-webkit-details-marker {{ display:none; }}
-.model-usage-group[open] > summary {{ border-bottom:1px solid #e1e6ea; }}
+.usage-view-switch {{ display:inline-flex; gap:4px; margin:8px 0 2px; }}
+.usage-view-switch button {{ min-height:32px; padding:5px 12px; color:#455a64; background:#fff; border:1px solid #90a4ae; border-radius:5px; cursor:pointer; font:600 .82em var(--font-ui); }}
+.usage-view-switch button[aria-pressed="true"] {{ color:#0d47a1; background:#e3f2fd; border-color:#2563a6; }}
+.usage-view-switch button:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
+.model-usage-group, .agent-usage-group {{ overflow:hidden; border:1px solid #e1e6ea; border-radius:6px; background:#fff; }}
+.model-usage-group > summary, .agent-usage-group > summary {{ display:flex; align-items:center; gap:8px; padding:11px 13px; color:#455a64; cursor:pointer; list-style:none; }}
+.model-usage-group > summary::-webkit-details-marker, .agent-usage-group > summary::-webkit-details-marker {{ display:none; }}
+.model-usage-group[open] > summary, .agent-usage-group[open] > summary {{ border-bottom:1px solid #e1e6ea; }}
 .model-usage-parent {{ display:flex; flex:1 1 auto; align-items:baseline; justify-content:space-between; gap:18px; min-width:0; }}
 .model-identity {{ display:flex; align-items:baseline; gap:4px; }}
 .model-effort, .model-usage-total {{ color:#607d8b; font-size:.85em; }}
 .model-usage-total {{ text-align:right; }}
-.model-usage-group .table-scroll {{ max-height:45vh; border:0; border-radius:0; }}
+.model-usage-group .table-scroll, .agent-usage-group .table-scroll {{ max-height:45vh; border:0; border-radius:0; }}
 .model-usage-table {{ min-width:940px; margin:0; }}
 .model-usage-table th:first-child, .model-usage-table td:first-child {{ white-space:normal; }}
 .agent-table {{ table-layout:fixed; min-width:1200px; }}
@@ -11040,7 +11113,7 @@ td {{ font-size:.85em; }}
 .agent-row-toggle-icon::before {{ content:"+"; }}
 .agent-row-toggle[aria-expanded="true"] .agent-row-toggle-icon::before {{ content:"−"; }}
 .model-usage-toggle-icon::before {{ content:"+"; }}
-.model-usage-group[open] > summary .model-usage-toggle-icon::before {{ content:"−"; }}
+.model-usage-group[open] > summary .model-usage-toggle-icon::before, .agent-usage-group[open] > summary .model-usage-toggle-icon::before {{ content:"−"; }}
 .agent-row-toggle:focus-visible {{ outline:2px solid #2563a6; outline-offset:2px; }}
 .column-detail {{ color:#78909c; font-size:.78em; font-weight:400; }}
 .cell-primary, .cell-secondary {{ display:block; }}
