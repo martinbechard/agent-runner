@@ -4969,11 +4969,8 @@ def test_native_codex_html_renders_offline_agent_sequence_view(tmp_path):
     assert '<svg class="agent-sequence-diagram"' in html
     assert 'class="sequence-event sequence-event-delegation"' in html
     assert 'class="sequence-event sequence-event-interrupt"' in html
-    assert (
-        '<summary data-sequence-ledger-summary>Event ledger · '
-        '7 recorded events</summary>'
-        in html
-    )
+    assert "Event ledger" not in html
+    assert "sequence-ledger" not in html
     assert '<a href="#timeline">Timeline</a>' in html
     assert (
         '<a href="?view=sequence#agent-sequence" target="_blank" rel="noopener" '
@@ -5393,10 +5390,10 @@ def test_native_codex_sequence_marks_consecutive_repetitive_messages(
     html = module.render_codex_rollout_html(run)
     sequence = html.split('<section id="agent-sequence"', 1)[1]
 
-    assert sequence.count('data-repeat-count="3"') == 6
-    assert sequence.count('data-repeat-index="0"') == 2
-    assert sequence.count('data-repeat-index="1"') == 2
-    assert sequence.count('data-repeat-index="2"') == 2
+    assert sequence.count('data-repeat-count="3"') == 3
+    assert sequence.count('data-repeat-index="0"') == 1
+    assert sequence.count('data-repeat-index="1"') == 1
+    assert sequence.count('data-repeat-index="2"') == 1
     assert '<tspan class="sequence-repeat-count" dx="4">×3</tspan>' in sequence
     assert 'data-event-category="message"' in sequence
 
@@ -5443,11 +5440,8 @@ def test_main_sequence_view_scans_repeated_codex_session_roots(tmp_path, monkeyp
 
     assert rc == 0
     html = (tmp_path / "sequence-report-sequence.html").read_text(encoding="utf-8")
-    assert (
-        '<summary data-sequence-ledger-summary>Event ledger · '
-        '7 recorded events</summary>'
-        in html
-    )
+    assert "Event ledger" not in html
+    assert "sequence-ledger" not in html
     assert "List unmerged branches" in html
     assert "Process Backlog Items" in html
     assert "worker" in html

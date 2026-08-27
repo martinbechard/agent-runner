@@ -6671,7 +6671,6 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
     )
     event_svg = []
     thought_svg = []
-    ledger_rows = []
     event_overlays = []
     thought_overlays = []
     return_kinds = {"complete", "aborted", "failed"}
@@ -6761,34 +6760,6 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
                 label_y=y - 8,
                 label=_escape_html(visible_label),
                 repeat_count_html=repeat_count_html,
-            )
-        )
-        ledger_repeat_count = (
-            '<span class="sequence-ledger-repeat-count"> · ×{count} grouped</span>'.format(
-                count=repeat_count
-            )
-            if repeat_count > 1
-            else ""
-        )
-        ledger_rows.append(
-            '<li data-event-index="{event_index}" data-source-thread-id="{source_id}" '
-            'data-target-thread-id="{target_id}" data-event-category="{category}" '
-            'data-repeat-count="{repeat_count}" data-repeat-index="{repeat_index}">'
-            '<a class="sequence-ledger-link" href="#{detail_id}">'
-            '<time>{offset}</time><strong>{source}</strong><span aria-hidden="true">→</span>'
-            '<strong>{target}</strong><span>{label}</span>{repeat_count_html}</a></li>'.format(
-                detail_id=detail_id,
-                event_index=index,
-                source_id=_escape_html(event.source_thread_id),
-                target_id=_escape_html(event.target_thread_id),
-                category=category,
-                repeat_count=repeat_count,
-                repeat_index=repeat_index,
-                offset=_escape_html(offset),
-                source=_escape_html(source_name),
-                target=_escape_html(target_name),
-                label=_escape_html(event.label),
-                repeat_count_html=ledger_repeat_count,
             )
         )
         opaque_message_note = (
@@ -6989,16 +6960,10 @@ def _render_codex_sequence_section(run: CodexRunMetrics) -> str:
         f"<defs>{marker_defs}</defs>{lifeline_svg}{''.join(thought_svg)}"
         f"{''.join(event_svg)}</svg></div></div>"
     )
-    ledger = (
-        '<details class="sequence-ledger"><summary data-sequence-ledger-summary>'
-        'Event ledger · '
-        f"{len(events):,} recorded events</summary><ol>{''.join(ledger_rows)}</ol></details>"
-    )
     return (
         heading
         + controls
         + diagram
-        + ledger
         + "".join(event_overlays)
         + "".join(thought_overlays)
         + "</section>"
@@ -10410,10 +10375,8 @@ body.sequence-only > :not(#agent-sequence) {{ display:none; }}
 body.sequence-only #agent-sequence {{ display:flex; height:calc(100vh - 32px); min-height:0; flex-direction:column; }}
 body.sequence-only #agent-sequence > .agents-heading {{ flex:0 0 auto; margin-top:0; }}
 body.sequence-only #agent-sequence > .execution-note,
-body.sequence-only #agent-sequence > .sequence-controls,
-body.sequence-only #agent-sequence > .sequence-ledger {{ flex:0 0 auto; }}
+body.sequence-only #agent-sequence > .sequence-controls {{ flex:0 0 auto; }}
 body.sequence-only .sequence-scroll {{ flex:1 1 auto; min-height:0; max-height:none; }}
-body.sequence-only .sequence-ledger[open] {{ max-height:35vh; overflow:auto; }}
 h1 {{ margin-bottom:.25em; }}
 h2 {{ margin-top:30px; }}
 h3 {{ margin:14px 0 6px; font-size:.95em; color:#546e7a; }}
@@ -10576,19 +10539,9 @@ td {{ font-size:.85em; }}
 .sequence-conversation-link:focus-visible .sequence-conversation-bubble rect {{ stroke-width:2; }}
 .sequence-thinking-text {{ fill:#4a235a; font-family:var(--font-ui); font-size:10px; font-weight:400; }}
 .sequence-thinking-offset {{ fill:#546e7a; font-family:var(--font-code); font-size:9px; }}
-.sequence-repeat-count, .sequence-ledger-repeat-count {{ display:none; }}
-.sequence-group-repeats .sequence-repeat-count, .sequence-group-repeats .sequence-ledger-repeat-count {{ display:inline; }}
-.sequence-group-repeats .sequence-event-link[data-repeat-index]:not([data-repeat-index="0"]),
-.sequence-group-repeats .sequence-ledger li[data-repeat-index]:not([data-repeat-index="0"]) {{ display:none; }}
-.sequence-ledger {{ margin-top:10px; background:#fff; border:1px solid #e1e6ea; border-radius:6px; }}
-.sequence-ledger > summary {{ padding:10px 12px; color:#455a64; cursor:pointer; font-size:.86em; font-weight:600; }}
-.sequence-ledger ol {{ margin:0; padding:0 18px 12px 44px; }}
-.sequence-ledger li {{ padding:5px 0; color:#455a64; font-size:.8em; line-height:1.4; }}
-.sequence-ledger-link {{ color:inherit; text-decoration:none; }}
-.sequence-ledger-link:hover, .sequence-ledger-link:focus-visible {{ color:#2563a6; text-decoration:underline; }}
-.sequence-ledger-link > * {{ margin-right:7px; }}
-.sequence-ledger time {{ color:#78909c; font-family:var(--font-code); }}
-.sequence-ledger li span:last-child {{ color:#607d8b; }}
+.sequence-repeat-count {{ display:none; }}
+.sequence-group-repeats .sequence-repeat-count {{ display:inline; }}
+.sequence-group-repeats .sequence-event-link[data-repeat-index]:not([data-repeat-index="0"]) {{ display:none; }}
 .tool-call-panel.sequence-event-panel {{ width:min(920px,94vw); overflow:auto; }}
 .sequence-event-metrics {{ grid-template-columns:repeat(4,minmax(0,1fr)); }}
 .sequence-event-metrics .value {{ overflow-wrap:anywhere; font-size:.92em; }}
@@ -10765,7 +10718,6 @@ function initializeAgentSequence(section) {{
   var thoughtLinks = thoughtNodes.map(function(node) {{
     return node.closest(".sequence-conversation-link");
   }});
-  var ledgerRows = Array.from(section.querySelectorAll(".sequence-ledger li[data-event-index]"));
   var participantGap = Number(canvas.dataset.participantGap);
   var sidePadding = Number(canvas.dataset.sidePadding);
   var headerHeight = Number(canvas.dataset.headerHeight);
@@ -10783,7 +10735,6 @@ function initializeAgentSequence(section) {{
   var parentByThreadId = new Map();
   var participantByThreadId = new Map();
   var lifelineByThreadId = new Map();
-  var ledgerByEventIndex = new Map();
 
   participants.forEach(function(participant) {{
     participantByThreadId.set(participant.dataset.threadId, participant);
@@ -10794,9 +10745,6 @@ function initializeAgentSequence(section) {{
   }});
   lifelines.forEach(function(lifeline) {{
     lifelineByThreadId.set(lifeline.dataset.threadId, lifeline);
-  }});
-  ledgerRows.forEach(function(row) {{
-    ledgerByEventIndex.set(row.dataset.eventIndex, row);
   }});
   var events = eventLinks.map(function(element) {{
     return {{
@@ -10814,8 +10762,7 @@ function initializeAgentSequence(section) {{
       sequenceOrder: Number(element.dataset.sequenceOrder),
       baseY: Number(element.dataset.baseY),
       repeatCount: Number(element.dataset.repeatCount),
-      repeatIndex: Number(element.dataset.repeatIndex),
-      ledger: ledgerByEventIndex.get(element.dataset.eventIndex)
+      repeatIndex: Number(element.dataset.repeatIndex)
     }};
   }});
   var thoughts = thoughtNodes.map(function(element) {{
@@ -10844,7 +10791,6 @@ function initializeAgentSequence(section) {{
   var filterInputs = Array.from(section.querySelectorAll("[data-sequence-event-filter]"));
   var viewStatus = section.querySelector("[data-sequence-view-status]");
   var emptyState = section.querySelector("[data-sequence-empty]");
-  var ledgerSummary = section.querySelector("[data-sequence-ledger-summary]");
   var description = section.querySelector("[data-sequence-description]");
   var inspectDetail = section.querySelector("[data-sequence-inspect-detail]");
   var inspectDefault = inspectDetail.textContent;
@@ -10979,7 +10925,6 @@ function initializeAgentSequence(section) {{
           event.targetId === focusedThreadId) &&
         (!groupRepeats || event.repeatIndex === 0);
       event.element.classList.toggle("sequence-hidden", !visible);
-      if (event.ledger) event.ledger.classList.toggle("sequence-hidden", !visible);
       if (visible) visibleEvents.push(event);
     }});
     var visibleThoughts = [];
@@ -11067,10 +11012,6 @@ function initializeAgentSequence(section) {{
     description.textContent = visibleEvents.length + " visible events and " +
       visibleThoughts.length + " visible thinking summaries across " +
       visibleParticipants.length + " visible agent lifelines.";
-    ledgerSummary.textContent = visibleEvents.length === events.length
-      ? "Event ledger · " + events.length.toLocaleString() + " recorded events"
-      : "Event ledger · " + visibleEvents.length.toLocaleString() + " of " +
-        events.length.toLocaleString() + " visible events";
     applyDimensions();
   }}
 
