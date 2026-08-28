@@ -1487,7 +1487,7 @@ def test_model_usage_separates_the_same_model_by_effort_level(tmp_path):
     assert '<span class="model-effort">max</span>' in model_usage
     assert '<span class="model-effort">medium</span>' in model_usage
     assert "effort mixed" not in model_usage
-    assert "Each model and effort combination is a separate group." in model_usage
+    assert "Each model and effort combination is a separate group." not in model_usage
 
 
 def test_tool_formatter_config_rejects_unsafe_regex():
@@ -2448,7 +2448,7 @@ def test_native_codex_html_embeds_execution_drilldown_in_agent_rows():
     )
     assert "<th>Input</th>" not in model_usage
     assert "<th>Cache write</th>" not in model_usage
-    assert "Codex telemetry does not report cache-write tokens" in model_usage
+    assert "Codex telemetry does not report cache-write tokens" not in model_usage
     root_overlay = html.split('id="turn-tool-call-list-1-1"', 1)[1].split(
         "</section>", 1
     )[0]

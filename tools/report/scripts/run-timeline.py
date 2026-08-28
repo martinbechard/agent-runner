@@ -6513,14 +6513,6 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
         )
     if not rendered_agent_groups:
         rendered_agent_groups.append('<p class="execution-note">No agent usage was recorded.</p>')
-    usage_note = (
-        "Fresh input excludes cache reads and cache writes."
-        if show_cache_write
-        else (
-            "Fresh input excludes cache reads. Codex telemetry does not report "
-            "cache-write tokens, so that column is omitted."
-        )
-    )
     return (
         '<section id="model-usage">'
         '<div class="agents-heading"><h2>Usage</h2></div>'
@@ -6530,14 +6522,8 @@ def _render_model_usage_section(run: CodexRunMetrics) -> str:
         '<button type="button" data-usage-mode="agent" aria-controls="usage-agent-view" '
         'aria-pressed="false">Agent</button></div>'
         '<div id="usage-model-view" data-usage-panel="model">'
-        '<p class="execution-note">Each model and effort combination is a separate '
-        'group. Expand a group to see the agents that contributed to its total. '
-        f'{usage_note}</p>'
         f'<div class="model-usage-groups">{"".join(rendered_groups)}</div></div>'
         '<div id="usage-agent-view" data-usage-panel="agent" hidden>'
-        '<p class="execution-note">Each agent is a separate group. Expand an agent '
-        'to see its model and effort breakdown. '
-        f'{usage_note}</p>'
         f'<div class="model-usage-groups">{"".join(rendered_agent_groups)}</div></div>'
         '<script>(function(){const section=document.getElementById("model-usage");'
         'if(!section)return;const buttons=section.querySelectorAll("[data-usage-mode]");'
