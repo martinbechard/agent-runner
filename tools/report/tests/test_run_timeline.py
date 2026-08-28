@@ -5335,6 +5335,10 @@ def test_native_codex_sequence_exposes_large_diagram_controls(tmp_path):
         in sequence
     )
     assert 'data-sequence-reset>Reset view</button>' in sequence
+    assert (
+        '<label><input type="checkbox" data-sequence-event-filter="internal">'
+        'Internal</label>' in sequence
+    )
     for category in ("delegation", "message", "followup", "interrupt", "complete"):
         assert f'data-sequence-event-filter="{category}" checked' in sequence
     assert 'data-thread-id="orchestrator"' in sequence
@@ -5438,6 +5442,8 @@ def test_native_codex_sequence_renders_toggleable_privacy_safe_conversation_bubb
     )
     assert sequence.count('class="sequence-conversation-bubble"') == 6
     assert "Internal reasoning (content unavailable)" in sequence
+    assert 'data-activity-category="internal"' in sequence
+    assert 'input.dataset.sequenceEventFilter !== "internal"' in sequence
     assert 'data-thread-id="orchestrator"' in sequence
     assert 'data-thought-index="0"' in sequence
     assert (
@@ -5477,7 +5483,7 @@ def test_native_codex_sequence_renders_toggleable_privacy_safe_conversation_bubb
     assert "visibleThoughtGroups" not in html
     assert "visibleRows" not in html
     assert "bubbleOnRight" not in html
-    assert 'enabledCategories.has("thinking")' in html
+    assert "enabledCategories.has(thought.category)" in html
     assert ".sequence-conversation-bubble { cursor:pointer; }" in html
     assert ".sequence-event-link .sequence-event > * { pointer-events:none; }" in html
     assert (

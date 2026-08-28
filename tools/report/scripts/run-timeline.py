@@ -7068,7 +7068,9 @@ def _render_codex_sequence_section(
         '<label><input type="checkbox" data-sequence-event-filter="complete" checked>'
         'Turn end</label>'
         '<label><input type="checkbox" data-sequence-event-filter="thinking" checked>'
-        'Thinking</label></fieldset>'
+        'Thinking</label>'
+        '<label><input type="checkbox" data-sequence-event-filter="internal">'
+        'Internal</label></fieldset>'
         '<output class="sequence-view-status" data-sequence-view-status '
         f'data-sequence-thinking-count="{thought_count}" '
         f'data-sequence-message-count="{message_count}" aria-live="polite">'
@@ -7416,8 +7418,14 @@ def _render_codex_sequence_section(
         )
     for index, thought in enumerate(thoughts):
         is_message = thought.activity_type == "output"
+        is_internal = (
+            thought.activity_type == "reasoning"
+            and thought.detail == "Internal reasoning (content unavailable)"
+        )
         activity_label = "Agent message" if is_message else "Thinking"
-        activity_category = "message" if is_message else "thinking"
+        activity_category = (
+            "message" if is_message else "internal" if is_internal else "thinking"
+        )
         activity_class = " sequence-agent-message" if is_message else ""
         row_index = thought_row_indexes[index]
         sequence_order = thought_sequence_orders[index]
@@ -11676,12 +11684,9 @@ function initializeAgentSequence(section) {{
       if (visible) visibleEvents.push(event);
     }});
     var visibleThoughts = [];
-    var thinkingEnabled = enabledCategories.has("thinking");
     thoughts.forEach(function(thought) {{
       var visible =
-        (thought.category === "thinking"
-          ? thinkingEnabled
-          : enabledCategories.has(thought.category)) &&
+        enabledCategories.has(thought.category) &&
         visibleThreadIds.has(thought.threadId);
       thought.element.classList.toggle("sequence-hidden", !visible);
       if (visible) visibleThoughts.push(thought);
@@ -11690,7 +11695,7 @@ function initializeAgentSequence(section) {{
       return thought.category === "message";
     }});
     var visibleReasoning = visibleThoughts.filter(function(thought) {{
-      return thought.category === "thinking";
+      return thought.category === "thinking" || thought.category === "internal";
     }});
     var visibleTimelineRows = visibleEvents.map(function(event) {{
       return {{ sequenceOrder: event.sequenceOrder, event: event }};
@@ -11851,7 +11856,9 @@ function initializeAgentSequence(section) {{
     collapsedThreadIds.clear();
     focusedThreadId = "";
     groupRepeats = true;
-    filterInputs.forEach(function(input) {{ input.checked = true; }});
+    filterInputs.forEach(function(input) {{
+      input.checked = input.dataset.sequenceEventFilter !== "internal";
+    }});
     zoom = 1;
     layoutSequence();
     revealFirstActivity();
