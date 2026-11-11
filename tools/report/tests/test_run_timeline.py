@@ -7644,8 +7644,8 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
     assert str(grandchild_path.resolve()) in root_html
     assert "No activity in the selected range" in root_html
     assert 'class="report-range"' in root_html
-    assert "2026-08-25 08:00 inclusive" in root_html
-    assert "2026-08-25 09:00 exclusive" in root_html
+    assert f"{from_time.astimezone():%Y-%m-%d %H:%M} inclusive" in root_html
+    assert f"{to_time.astimezone():%Y-%m-%d %H:%M} exclusive" in root_html
     assert f'href="{module.quote(child_page.name, safe="")}"' in root_html
     assert f'href="{module.quote(root_page.name, safe="")}"' not in root_html
     assert "grandchild-ungenerated-steps.html" not in root_html
