@@ -16,14 +16,14 @@ On Apple Silicon macOS:
 
 ```bash
 python3 -m pip install \
-  ./agent_report_cli-1.1.1-py3-none-macosx_11_0_arm64.whl
+  ./agent_report_cli-1.1.2-py3-none-macosx_11_0_arm64.whl
 ```
 
 On 64-bit Windows PowerShell:
 
 ```powershell
 py -m pip install `
-  .\agent_report_cli-1.1.1-py3-none-win_amd64.whl
+  .\agent_report_cli-1.1.2-py3-none-win_amd64.whl
 ```
 
 Confirm the command is available:
@@ -206,7 +206,7 @@ the required native engine:
 
 ```bash
 python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-cli-v1.1.1/agent_report_cli-1.1.1-py3-none-macosx_11_0_arm64.whl
+  https://github.com/martinbechard/agent-runner/releases/download/agent-report-cli-v1.1.2/agent_report_cli-1.1.2-py3-none-macosx_11_0_arm64.whl
 agent-report <path> --output report.html
 ```
 

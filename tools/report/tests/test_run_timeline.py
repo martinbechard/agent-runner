@@ -3532,7 +3532,12 @@ def test_pricing_registry_contains_current_codex_and_claude_rates():
     pricing = json.loads(module.PRICING_FILE.read_text(encoding="utf-8"))
     models = pricing["models"]
 
-    assert pricing["_updated_at"] == "2026-07-14"
+    assert pricing["_updated_at"] == "2026-11-11"
+    table = module._load_pricing_table()
+    assert table["gpt-6-sol"]["cached_input_per_million"] == 0.2
+    assert table["gpt-6.1-sol"]["cached_input_per_million"] == 0.1
+    assert table["gpt-6.1-terra"]["cached_input_per_million"] == 0.05
+    assert table["gpt-5.3-codex"]["codex_credits_output_per_million"] == 350
     assert models["gpt-5.6-sol"]["input_per_million"] == 5.0
     assert models["gpt-5.6-sol"]["cached_input_per_million"] == 0.5
     assert models["gpt-5.6-sol"]["output_per_million"] == 30.0
