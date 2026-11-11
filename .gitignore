@@ -53,6 +53,8 @@ work/**/.git
 work/pr-021-run/
 
 # Local Agent Report verification outputs (may embed raw task logs)
+/htmlagents.html
+/htmlagents-threads/
 htmltest.html
 htmltest-threads/
 test.csv
