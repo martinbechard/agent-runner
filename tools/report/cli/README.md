@@ -20,20 +20,20 @@ powershell -ExecutionPolicy Bypass -File .\install-agent-report.ps1
 ```
 
 To install a specific release, add `-Version`, for example
-`-Version 1.1.2`.
+`-Version 1.1.3`.
 
 On Apple Silicon macOS 11 or newer:
 
 ```bash
 python3 -m pip install \
-  ./agent_report_cli-1.1.2-py3-none-macosx_11_0_arm64.whl
+  ./agent_report_cli-1.1.3-py3-none-macosx_11_0_arm64.whl
 ```
 
 On 64-bit Windows:
 
 ```powershell
 py -m pip install `
-  .\agent_report_cli-1.1.2-py3-none-win_amd64.whl
+  .\agent_report_cli-1.1.3-py3-none-win_amd64.whl
 ```
 
 Confirm the installation:

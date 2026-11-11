@@ -2,4 +2,4 @@
 
 """Standalone Agent Report command-line distribution."""
 
-__version__ = "1.1.2"
+__version__ = "1.1.3"

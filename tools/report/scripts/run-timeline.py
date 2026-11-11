@@ -2545,6 +2545,7 @@ def parse_codex_rollout(
                 )
                 task_request_seen = bool(task_title)
                 parent_thread_id, agent_path, agent_nickname = _spawn_metadata(payload)
+                agent_nickname = agent_nickname or str(payload.get("agent_nickname") or "")
                 infer_parent_from_delegation = (
                     payload.get("thread_source") == "subagent"
                     or payload.get("source") == "subagent"
@@ -13134,6 +13135,9 @@ def _write_token_summary_html(
             raw_thread_title = (
                 root_thread.task_title
                 or _derived_task_title(root_thread.activities)
+                or root_thread.agent_nickname.strip()
+                or root_thread.agent_path.rstrip("/").rsplit("/", 1)[-1]
+                or (root_thread.agent_role if root_thread.parent_thread_id else "")
                 or "Untitled thread"
             )
             visible_thread_title = _compact_display_text(raw_thread_title, 96)

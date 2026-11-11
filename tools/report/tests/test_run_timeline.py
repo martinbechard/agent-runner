@@ -7377,6 +7377,8 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
             "type": "session_meta",
             "payload": {"id": thread_id, "source": source},
         }
+        if thread_id == "child-generated":
+            metadata["payload"]["agent_nickname"] = "Audit agent"
         path.write_text(
             "\n".join(json.dumps(record) for record in (metadata, *records)) + "\n",
             encoding="utf-8",
@@ -7638,6 +7640,11 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
     assert len(steps_pages) == len(rows)
     root_html = root_page.read_text(encoding="utf-8")
     child_html = child_page.read_text(encoding="utf-8")
+    folder_pages = (output.parent / "usage-threads").glob("*-threads.html")
+    folder_html = "".join(page.read_text(encoding="utf-8") for page in folder_pages)
+    assert "<td>Audit agent</td>" in folder_html
+    assert "<td>one-sided</td>" in folder_html
+    assert "<td>Untitled thread</td>" in folder_html
     assert '<div class="label">Agents used</div><div class="value">3</div>' in root_html
     assert "one-sided" not in root_html
     assert "evidence-only" not in root_html
