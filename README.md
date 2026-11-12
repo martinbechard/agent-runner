@@ -114,12 +114,11 @@ starting work because the runner claims items and creates isolated worktrees.
 
 ### Generate Agent Reports
 
-Install the current macOS Apple-silicon wheel:
+The token usage report shows how much work ran during a selected period and how it was funded. Open a thread to inspect its token ledger, execution heatmap, or agent sequence. [See the illustrated report guide](tools/report/README.md#report-screenshots).
 
-```bash
-python -m pip install \
-  https://github.com/martinbechard/agent-runner/releases/download/agent-report-v0.6.4/agent_report-0.6.4-py3-none-macosx_11_0_arm64.whl
-```
+![Sample Token Usage Report with totals for four threads and a breakdown of subscription and credit usage](tools/report/assets/README/token-summary.png)
+
+[Install the standalone CLI](tools/report/README.md#standalone-agent-report-cli).
 
 Generate one report from a supported run directory or recorded session:
 

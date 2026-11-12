@@ -113,6 +113,40 @@ agent-report --token-summary \
   --threads
 ```
 
+### Report screenshots
+
+These screenshots follow a sample catalog-search task across four threads in a one-hour reporting window.
+
+#### Overall token usage
+
+The run processed 295,680 tokens across four threads. The $0.32 figure estimates what those tokens would cost at API rates. The funding split shows that all of the usage fell under the subscription.
+
+![Token Usage Report showing 295,680 processed tokens, a $0.32 API-equivalent estimate, and zero purchased credits used](assets/README/token-summary.png)
+
+#### Find a thread
+
+Choose **View 4 Threads** in the summary to open the list. The star marks **Improve catalog search** as a parent. Select **Show subagent threads** to see all four rows, then choose **View Usage** or **View Events** for the thread you want to inspect.
+
+![All Threads with the subagent checkbox selected and a star beside Improve catalog search](assets/README/threads.png)
+
+#### Inspect a thread’s token usage
+
+**View Usage** opens a ledger of recorded events. Each row shows the model, funding source, and token counts. Follow a timestamp to inspect the source log lines behind that row.
+
+![Thread Token Usage ledger for Improve catalog search with timestamps, source-line links, subscription usage, and cache reads](assets/README/thread-usage.png)
+
+#### Find a spike in usage
+
+Under **View Events**, the execution heatmap groups activity by time. In this one-minute view, cached input reaches 17K at 09:02. Select a cell to see which events contributed to it.
+
+![Execution heatmap showing one-minute intervals with rows for uncached input, cached input, reasoning, output, and estimated cost](assets/README/execution-heatmap.png)
+
+#### Follow a delegation
+
+Open **Sequence** from the thread events page. Read down the agent columns to follow the handoff. Here the parent starts the ranking agent at T+3m00s, and the return arrow marks the end of its turn.
+
+![Agent sequence with separate columns for the parent and two subagents, showing the ranking agent’s spawn and turn completion](assets/README/agent-sequence.png)
+
 ### YAML configuration
 
 Store repeatable options in a YAML file:

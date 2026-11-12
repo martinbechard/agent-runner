@@ -323,6 +323,10 @@
 - **Filename pattern:** fixed tool-root filenames such as `pyproject.toml` and `README.md`.
 - **Example:** `tools/report/README.md`
 
+### tools/report/assets/README/
+- **Purpose:** Screenshots of synthetic Agent Report examples used in README documentation.
+- **Filename pattern:** descriptive lowercase kebab-case PNG names, such as `token-summary.png`.
+
 ### tools/report/src/
 - **Purpose:** Installable Python package source for the cross-tool reporting utilities. Use this path for the packaged command launcher and other importable report-tool modules.
 - **Signals:** agent-report console entry point, installed report command, Python package code imported as `agent_report`.

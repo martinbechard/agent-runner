@@ -101,6 +101,8 @@ path to write CSV to standard output.
 
 ## HTML Output
 
+See the [illustrated guide to the HTML reports](https://github.com/martinbechard/agent-runner/blob/main/tools/report/README.md#report-screenshots) for examples of the usage summary, thread list, token ledger, heatmap, and agent sequence.
+
 Create a self-contained folder-level report:
 
 ```bash
