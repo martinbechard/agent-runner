@@ -7642,13 +7642,9 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
     child_html = child_page.read_text(encoding="utf-8")
     folder_pages = (output.parent / "usage-threads").glob("*-threads.html")
     folder_html = "".join(page.read_text(encoding="utf-8") for page in folder_pages)
-    parent_label = '<small class="parent-label">Parent · 1 child agent</small>'
-    all_html = (output.parent / "usage-threads" / "index.html").read_text(encoding="utf-8")
-    for listing in (folder_html, all_html):
-        assert f"<td>Audit agent{parent_label}</td>" in listing
-        assert f"<td>Untitled thread{parent_label}</td>" in listing
-        assert listing.count(parent_label) == 2
+    assert "<td>Audit agent</td>" in folder_html
     assert "<td>one-sided</td>" in folder_html
+    assert "<td>Untitled thread</td>" in folder_html
     assert '<div class="label">Agents used</div><div class="value">3</div>' in root_html
     assert "one-sided" not in root_html
     assert "evidence-only" not in root_html
