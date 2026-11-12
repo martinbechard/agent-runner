@@ -7345,12 +7345,20 @@ def test_token_summary_html_writes_local_verification_report(
     assert f"Generating 2 of 2: {ordered_names[1]}" in captured.err
 
 
+@pytest.mark.parametrize("event_format", ["legacy", "nested"])
 def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_window(
     tmp_path,
     monkeypatch,
+    event_format,
 ):
     module = _load_module()
     root = tmp_path / "sessions"
+
+    def subagent_event(child_id):
+        activity = {"agent_thread_id": child_id, "kind": "started"}
+        if event_format == "nested":
+            return {"type": "item_completed", "item": {"type": "SubAgentActivity", **activity}}
+        return {"type": "sub_agent_activity", **activity}
 
     def write_rollout(
         relative_path,
@@ -7413,11 +7421,7 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
             {
                 "timestamp": "2026-08-25T11:55:00Z",
                 "type": "event_msg",
-                "payload": {
-                    "type": "sub_agent_activity",
-                    "agent_thread_id": "child-generated",
-                    "kind": "started",
-                },
+                "payload": subagent_event("child-generated"),
             },
             token_record("2026-08-25T12:05:00Z", 10),
         ),
@@ -7503,11 +7507,7 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
             {
                 "timestamp": "2026-08-25T12:20:00Z",
                 "type": "event_msg",
-                "payload": {
-                    "type": "sub_agent_activity",
-                    "agent_thread_id": "grandchild-ungenerated",
-                    "kind": "started",
-                },
+                "payload": subagent_event("grandchild-ungenerated"),
             },
             {
                 "timestamp": "2026-08-25T13:00:00Z",
@@ -7572,20 +7572,12 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
                 {
                     "timestamp": "2026-08-25T12:17:00Z",
                     "type": "event_msg",
-                    "payload": {
-                        "type": "sub_agent_activity",
-                        "agent_thread_id": "evidence-only",
-                        "kind": "started",
-                    },
+                    "payload": subagent_event("evidence-only"),
                 },
                 {
                     "timestamp": "2026-08-25T13:00:00Z",
                     "type": "event_msg",
-                    "payload": {
-                        "type": "sub_agent_activity",
-                        "agent_thread_id": "late-child",
-                        "kind": "started",
-                    },
+                    "payload": subagent_event("late-child"),
                 },
             )
         )

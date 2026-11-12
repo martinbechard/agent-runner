@@ -3587,18 +3587,21 @@ def _token_summary_discovery_snapshot(
             if timestamp is not None:
                 timestamps.append(timestamp.astimezone(timezone.utc))
             payload = record.get("payload")
-            if (
-                record.get("type") == "event_msg"
-                and isinstance(payload, dict)
-                and payload.get("type") == "sub_agent_activity"
-                and isinstance(payload.get("agent_thread_id"), str)
-                and payload["agent_thread_id"]
-            ):
-                sub_agent_thread_ids.add(payload["agent_thread_id"])
+            if record.get("type") != "event_msg" or not isinstance(payload, dict):
+                continue
+            if payload.get("type") == "item_completed":
+                activity = payload.get("item")
+                if not isinstance(activity, dict) or activity.get("type") != "SubAgentActivity":
+                    continue
+            elif payload.get("type") == "sub_agent_activity":
+                activity = payload
+            else:
+                continue
+            child_id = activity.get("agent_thread_id")
+            if isinstance(child_id, str) and child_id:
+                sub_agent_thread_ids.add(child_id)
                 if timestamp is not None:
-                    sub_agent_started_at.append(
-                        (payload["agent_thread_id"], timestamp.isoformat())
-                    )
+                    sub_agent_started_at.append((child_id, timestamp.isoformat()))
         current = metadata[path]
         enriched[path] = replace(
             current,
