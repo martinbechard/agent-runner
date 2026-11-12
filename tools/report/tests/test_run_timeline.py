@@ -7642,9 +7642,16 @@ def test_token_summary_thread_events_use_confirmed_cross_date_subagents_and_wind
     child_html = child_page.read_text(encoding="utf-8")
     folder_pages = (output.parent / "usage-threads").glob("*-threads.html")
     folder_html = "".join(page.read_text(encoding="utf-8") for page in folder_pages)
-    assert "<td>Audit agent</td>" in folder_html
+    parent_marker = '<span role="img" aria-label="Parent thread" title="Parent thread">★</span>'
+    all_html = (output.parent / "usage-threads" / "index.html").read_text(encoding="utf-8")
+    for listing in (folder_html, all_html):
+        assert '<input id="show-subagents" type="checkbox"> Show subagent threads' in listing
+        html_rows = re.findall(r'<tr data-search="[^"]*" data-parent>(.*?)</tr>', listing)
+        marked = [row for row in html_rows if row.startswith(f'<td class="thread-marker">{parent_marker}</td>')]
+        assert any("<td>Audit agent</td>" in row for row in marked)
+        assert any("<td>Untitled thread</td>" in row for row in marked)
+        assert listing.count(parent_marker) == 2
     assert "<td>one-sided</td>" in folder_html
-    assert "<td>Untitled thread</td>" in folder_html
     assert '<div class="label">Agents used</div><div class="value">3</div>' in root_html
     assert "one-sided" not in root_html
     assert "evidence-only" not in root_html
